@@ -6,9 +6,10 @@ A resend gets the same receipt (R-01, the sequencer's dedupe). Records that arri
 published to the room too, so the timeline carries the whole log (T-01). It keeps `org.han.space` (T-06), creates and keeps
 the watch and read rooms of every live session (T-07), and serves `/_han/v1/...` with HAN authentication.
 
-P-02 (§8.2): a room carries only `org.han.receipt` and header-only `org.han.entry {entry, contentHash}` events, never content. An
-entry's content reaches the service by `POST /_han/v1/content` (before the event) and is read back by `GET /_han/v1/read`, which
-enforces P-02; so a removed member or a late joiner of the room sees headers and receipts but no content.
+P-02 and E4 (§8.2): a room carries only `org.han.entry {id}` (from a client), `org.han.entry {id, kind, author, seq}` (from the
+sequencer), `org.han.receipt {receipt}` and `org.han.reject`, never a header or a body. A client uploads the whole entry (header and
+content) with `POST /_han/v1/entry` before it posts the event, and reads records back with `GET /_han/v1/read`, which enforces P-02; so a
+room member who cannot read the log sees ids, kinds, authors and receipts, nothing else.
 
     python -m han.matrix.appservice --registration REG --homeserver URL --server a.localhost --listen 127.0.0.1:9300 --db seq.db --key key.json"""
 from __future__ import annotations
@@ -18,13 +19,14 @@ from aiohttp import web
 from ..core import P, W, LIMITS, WireError
 from ..seq import Sequencer
 from .api import MatrixAPI, MatrixError, register_appservice_user
-from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, entry_header, relates, service_user, txn_safe
+from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, entry_event, relates, service_user, txn_safe
 from .store import AsStore
 
 log = logging.getLogger("han.matrix")
-CHALLENGE_TTL, MAX_CHALLENGES = 120.0, 4096
-CONTENT_TTL, MAX_CONTENT = 600.0, 1024
-_MISSING = object()
+CHALLENGE_TTL, MAX_CHALLENGES, MAX_CHALLENGES_PER_CLIENT = 120.0, 4096, 64      # E11: open challenges, in all and per remote address
+ENTRY_TTL, MAX_ENTRIES, MAX_ENTRIES_PER_ACTOR, MAX_ENTRIES_PER_CLIENT = 600.0, 1024, 64, 256      # uploaded entries waiting for their event: in all, per uploader, per address
+MAX_ENTRY_BYTES_PER_ACTOR = 4 * 1024 * 1024                                # E11: and the bytes one uploader may have waiting
+DEFAULT_RETRY_MS = 1000
 _RETRY = (MatrixError, aiohttp.ClientError, OSError, asyncio.TimeoutError)      # Matrix is unreachable or erred: let Synapse redeliver
 
 class AppService:
@@ -34,7 +36,7 @@ class AppService:
         self.api = MatrixAPI(homeserver, as_token, as_user=self.user)
         self.hs_token = hs_token
         self.store = AsStore(db_path)
-        self.challenges: dict[str, float] = {}
+        self.challenges: dict[str, tuple[float, str]] = {}    # challenge -> (expiry, remote address that asked)
         self.gate = asyncio.Event(); self.gate.set()          # test hook: clear it to hold back transaction processing
         self.port = None
         self._locks: dict[str, asyncio.Lock] = {}
@@ -42,17 +44,17 @@ class AppService:
         self._dirty: set[str] = set()                         # spaces whose last publish failed
         self._runner = None
         self._pump_task = None
-        self.content: dict[str, tuple[object, float]] = {}   # contentHash -> (content, expiry): uploaded ahead of the entry event
+        self.entries: dict[str, tuple[dict, object, float, str, str, int]] = {}     # entry id -> (entry, content, expiry, uploader, address, bytes): uploaded ahead of the event
         seq.add_ordered_hook(self._on_ordered)                # records appended by any binding reach the room (T-01)
 
     # ── lifecycle ──
     async def start(self, host: str = "127.0.0.1", port: int = 9300) -> "AppService":
         await register_appservice_user(self.api.base, self.api.token, "han-seq")
-        app = web.Application(client_max_size=2 * 1024 * 1024)
+        app = web.Application(client_max_size=LIMITS["maxFrameBytes"])
         app.add_routes([web.put("/_matrix/app/v1/transactions/{txn}", self._txn),
                         web.get("/_matrix/app/v1/users/{user}", self._ok), web.get("/_matrix/app/v1/rooms/{alias}", self._not_found),
                         web.get("/_han/v1/challenge", self._challenge), web.get("/_han/v1/read", self._read),
-                        web.post("/_han/v1/content", self._put_content), web.put("/_han/v1/blob", self._blob_put), web.get("/_han/v1/blob", self._blob_get)])
+                        web.post("/_han/v1/entry", self._put_entry), web.put("/_han/v1/blob", self._blob_put), web.get("/_han/v1/blob", self._blob_get)])
         self._runner = web.AppRunner(app, access_log=None); await self._runner.setup()
         site = web.TCPSite(self._runner, host, port); await site.start()
         self.port = site._server.sockets[0].getsockname()[1]
@@ -89,15 +91,15 @@ class AppService:
                 self._dirty.discard(sp); self._kick(sp)
 
     async def flush(self, space: str):
-        """Publish every record of `space` not yet in its room (header-only entry event if none carried it, then the receipt), then bring the session rooms in line with the state (T-07)."""
+        """Publish every record of `space` not yet in its room (an `{id, kind, author, seq}` entry event if none carried it, then the receipt), then bring the session rooms in line with the state (T-07)."""
         async with self._locks.setdefault(space, asyncio.Lock()):
             room, S = self.store.space_room(space), self.seq.home.spaces.get(space)
             if not room or not S: return
             for rec in S["records"][self.store.published(space):]:
                 r, e = rec["receipt"], rec["entry"]
                 origin = self.store.origin(r["id"])
-                if origin is None:
-                    origin = await self.api.send(room, ENTRY, entry_header(e), f"en-{r['id']}")
+                if origin is None:                                     # ordered by another binding: the room still shows that it exists (T-01)
+                    origin = await self.api.send(room, ENTRY, entry_event(r["id"], rec), f"en-{r['id']}")
                     self.store.add_event(origin, room, r["id"])
                 await self.api.send(room, RECEIPT, {"receipt": r, "m.relates_to": relates(origin)}, f"rc-{txn_safe(origin)}")
                 self.store.set_published(space, r["seq"])
@@ -175,26 +177,32 @@ class AppService:
 
     async def on_entry(self, ev: dict):
         room, ev_id, c = ev["room_id"], ev["event_id"], ev.get("content") or {}
-        entry = c.get("entry")
-        if not isinstance(entry, dict): return await self._reject(room, ev_id, "", "invalid", "no entry in the event")
-        try: eid = P.entry_id(entry)
-        except Exception: return await self._reject(room, ev_id, "", "invalid", "malformed entry")
-        if "content" in c: return await self._reject(room, ev_id, eid, "invalid", "entry events carry no content; POST /_han/v1/content first")
+        eid = c.get("id")
+        if not isinstance(eid, str) or not P._id(eid): return await self._reject(room, ev_id, "", "invalid", "an entry event is {id}")
+        if set(c) != {"id"}: return await self._reject(room, ev_id, eid, "invalid", "entry events carry only the id; POST /_han/v1/entry first")
+        got = self.entries.get(eid)
+        if got is not None and got[2] <= time.monotonic(): self.entries.pop(eid, None); got = None
+        if got is not None: entry, content = got[0], got[1]
+        else:                                                      # not uploaded (or expired): fine if it is already ordered (a resend, R-01)
+            at = self._ordered(eid)
+            if at is None:
+                log.info("entry %s: not uploaded yet (no answer; the client resends, R-06)", eid); return
+            entry, content = at["entry"], None
         sp, bound = entry.get("space"), self.store.room_space(room)
         if bound is None:                                          # T-06: the first entry of a room must open its space
             if entry.get("kind") != "space.create" or not isinstance(sp, str):
-                return await self._reject(room, ev_id, eid, "not_found", "this room is not bound to a space; open it with space.create")
+                return await self._final(room, ev_id, eid, "not_found", "this room is not bound to a space; open it with space.create")
             other = self.store.space_room(sp)
-            if other and other != room: return await self._reject(room, ev_id, eid, "denied", "that space is bound to another room")
+            if other and other != room: return await self._final(room, ev_id, eid, "denied", "that space is bound to another room")
         elif sp != bound:
-            return await self._reject(room, ev_id, eid, "invalid", f"this room is bound to {bound}")
-        content = self._take_content(entry, eid)
-        if content is _MISSING:
-            log.info("entry %s: content not uploaded yet (no answer; the client resends, R-06)", eid); return
-        try: receipt = self.seq.append(entry, content)        # §4.1: dedupe (R-01), shape, profiles, signature, Policy, durable, receipt
+            return await self._final(room, ev_id, eid, "invalid", f"this room is bound to {bound}")
+        try: receipt = self.seq.append(entry, content)        # §4.1: dedupe (R-01), routing, shape, signature, Policy, durable, receipt
         except WireError as ex:
-            if ex.code in ("denied", "invalid", "not_found", "moved"): return await self._reject(room, ev_id, eid, ex.code, ex.message)
+            if ex.code in ("denied", "invalid", "not_found", "moved"): return await self._final(room, ev_id, eid, ex.code, ex.message)
+            if ex.code == "unavailable":                          # not final: the client waits `retryAfterMs`, then sends the event again
+                return await self._reject(room, ev_id, eid, "unavailable", ex.message, ex.retry_after_ms or DEFAULT_RETRY_MS)
             log.info("entry %s: %s (no answer; the client resends, R-06)", eid, ex); return
+        self.entries.pop(eid, None)
         self.store.add_event(ev_id, room, eid)                     # before any await: the ordered hook's flush must find the origin
         if bound is None:
             async with self._locks.setdefault(sp, asyncio.Lock()):    # no receipt before the binding: a client honours receipts only once it has seen org.han.space
@@ -205,24 +213,29 @@ class AppService:
         if self.store.origin(eid) != ev_id:                        # a resend (R-01): same receipt, related to the new event
             await self.api.send(room, RECEIPT, {"receipt": receipt, "m.relates_to": relates(ev_id)}, f"rc-{txn_safe(ev_id)}")
 
-    def _take_content(self, entry: dict, eid: str):
-        """The content an entry's header commits to, from `POST /_han/v1/content`; None for a header with no content; `_MISSING` if it
-        is not here and the entry is not already ordered (a resend of an ordered entry needs none: R-01)."""
-        h = entry.get("contentHash")
-        if h == "" or not isinstance(h, str): return None
-        got = self.content.pop(h, None)
-        if got is not None and got[1] > time.monotonic(): return got[0]
-        return None if eid in self.seq.ids.get(entry.get("space"), {}) else _MISSING
+    def _ordered(self, eid: str):
+        """The record with this id if some space of ours has ordered it, else None."""
+        for sp, ids in self.seq.ids.items():
+            if eid in ids: return self.seq.home.spaces[sp]["records"][ids[eid] - 1]
+        return None
 
-    async def _reject(self, room, ev_id, entry_id, code, reason):
-        await self.api.send(room, REJECT, {"id": entry_id, "code": code, "reason": reason, "m.relates_to": relates(ev_id)}, f"rj-{txn_safe(ev_id)}")
+    async def _final(self, room, ev_id, entry_id, code, reason):
+        """A final refusal: the uploaded entry is not needed any more."""
+        self.entries.pop(entry_id, None)
+        await self._reject(room, ev_id, entry_id, code, reason)
+
+    async def _reject(self, room, ev_id, entry_id, code, reason, retry_after_ms: int | None = None):
+        body = {"id": entry_id, "code": code, "reason": reason} | ({} if retry_after_ms is None else {"retryAfterMs": retry_after_ms})
+        await self.api.send(room, REJECT, body | {"m.relates_to": relates(ev_id)}, f"rj-{txn_safe(ev_id)}")
 
     # ── GET /_han/v1/... ──
     async def _challenge(self, request: web.Request):
         now = time.monotonic()
-        for k in [k for k, t in self.challenges.items() if t < now]: del self.challenges[k]
-        if len(self.challenges) >= MAX_CHALLENGES: return web.json_response({"error": WireError("limit", "too many open challenges").to_wire()}, status=429)
-        ch = W.b64(os.urandom(24)); self.challenges[ch] = now + CHALLENGE_TTL
+        for k in [k for k, (t, _) in self.challenges.items() if t < now]: del self.challenges[k]
+        who = request.remote or ""
+        if len(self.challenges) >= MAX_CHALLENGES or sum(1 for _, w in self.challenges.values() if w == who) >= MAX_CHALLENGES_PER_CLIENT:
+            return self._fail(WireError("limit", "too many open challenges", retry_after_ms=DEFAULT_RETRY_MS))       # E11: per client, and in all
+        ch = W.b64(os.urandom(24)); self.challenges[ch] = (now + CHALLENGE_TTL, who)
         return web.json_response({"challenge": ch, "server": self.server, "versions": [1], "time": self.seq.now_str()})
 
     def _authenticate(self, request: web.Request) -> str:
@@ -233,7 +246,7 @@ class AppService:
         _, actor, key_id, proof = parts
         now = time.monotonic()
         ch = request.headers.get("HAN-Challenge")
-        if self.challenges.get(ch, 0) < now: raise WireError("denied", "HAN-Challenge missing, unknown or expired")
+        if self.challenges.get(ch, (0, ""))[0] < now: raise WireError("denied", "HAN-Challenge missing, unknown or expired")
         del self.challenges[ch]                                    # single use, whatever the outcome
         self.seq.hello(actor, key_id, proof, 1, ch)
         return actor
@@ -245,27 +258,44 @@ class AppService:
             def num(k, default=None):
                 try: return int(p[k]) if k in p else default
                 except ValueError: raise WireError("invalid", f"{k} must be an integer")
-            items, _ = self.seq.read(who, p.get("space"), num("after", 0), False, p.get("state") == "true", num("limit"), None, num("at"))
+            items, _ = self.seq.read(who, p.get("space"), num("after", 0), False, p.get("state") == "true", num("limit"), None, num("at"),
+                                     p.get("cursor"), p.get("effect"))
             return web.Response(text=json.dumps({"items": items}, separators=(",", ":"), ensure_ascii=False), content_type="application/json")
         except WireError as ex: return self._fail(ex)
 
     def _fail(self, ex: WireError):
         status = {"denied": 401, "invalid": 400, "not_found": 404, "limit": 429, "unavailable": 503, "moved": 421}.get(ex.code, 400)
-        return web.json_response({"error": ex.to_wire()}, status=status)
+        if status not in (429, 503): return web.json_response({"error": ex.to_wire()}, status=status)
+        ms = ex.retry_after_ms or DEFAULT_RETRY_MS                  # E11: 503 (and 429) carry `Retry-After` in seconds and `retryAfterMs` in the body
+        return web.json_response({"error": dict(ex.to_wire(), retryAfterMs=ms)}, status=status, headers={"Retry-After": str(max(1, -(-ms // 1000)))})
 
-    async def _put_content(self, request: web.Request):
-        """`POST /_han/v1/content` (body: the entry's content as JSON), HAN-authenticated: held for ten minutes under its hash until the
-        `org.han.entry` event naming that hash arrives. The event, not this call, is what appends."""
+    async def _put_entry(self, request: web.Request):
+        """`POST /_han/v1/entry` (body: `{entry, content?}`, the whole entry), HAN-authenticated: the header and size limits apply. It is held
+        ten minutes under the entry's id until the `org.han.entry {id}` event naming it arrives. The event, not this call, is what appends."""
         try:
-            self._authenticate(request)
-            try: content = await request.json()
-            except ValueError: raise WireError("invalid", "content must be JSON")
-            if not P.json_ok(content) or len(P.jcs(content)) > LIMITS["maxContentBytes"]: raise WireError("invalid", "content too large or not I-JSON")
-            now = time.monotonic()
-            for k in [k for k, (_, t) in self.content.items() if t < now]: del self.content[k]
-            if len(self.content) >= MAX_CONTENT: raise WireError("limit", "too much pending content")
-            self.content[W.content_hash(content)] = (content, now + CONTENT_TTL)
-            return web.json_response({})
+            who = self._authenticate(request)
+            try: b = await request.json()
+            except ValueError: raise WireError("invalid", "the body must be JSON")
+            if not (isinstance(b, dict) and set(b) <= {"entry", "content"} and isinstance(b.get("entry"), dict)): raise WireError("invalid", "body is {entry, content?}")
+            entry, content = b["entry"], b.get("content")
+            if not (P.json_ok(entry) and P.json_ok(content)): raise WireError("invalid", "not I-JSON")
+            if entry.get("author") != who: raise WireError("denied", "the authenticated actor must be the entry's author")
+            size = len(P.jcs(entry))
+            if size > LIMITS["maxHeaderBytes"]: raise WireError("invalid", "header too large")
+            if content is not None:
+                size += len(P.jcs(content))
+                if len(P.jcs(content)) > LIMITS["maxContentBytes"]: raise WireError("invalid", "content too large")
+            try: eid = P.entry_id(entry)
+            except (KeyError, TypeError, ValueError, AttributeError): raise WireError("invalid", "malformed entry")
+            now, remote = time.monotonic(), request.remote or ""
+            for k in [k for k, v in self.entries.items() if v[2] < now]: del self.entries[k]
+            if eid not in self.entries:                                    # E11: bounded per uploader (count and bytes), per address and in all
+                mine = [v for v in self.entries.values() if v[3] == who]
+                if (len(mine) >= MAX_ENTRIES_PER_ACTOR or sum(v[5] for v in mine) + size > MAX_ENTRY_BYTES_PER_ACTOR
+                        or sum(1 for v in self.entries.values() if v[4] == remote) >= MAX_ENTRIES_PER_CLIENT or len(self.entries) >= MAX_ENTRIES):
+                    raise WireError("limit", "too many entries waiting for their event", retry_after_ms=DEFAULT_RETRY_MS)
+            self.entries[eid] = (entry, content, now + ENTRY_TTL, who, remote, size)
+            return web.json_response({"id": eid})
         except WireError as ex: return self._fail(ex)
 
     async def _blob_put(self, request: web.Request):

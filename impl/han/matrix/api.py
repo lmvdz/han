@@ -5,6 +5,10 @@ import asyncio, hashlib, hmac, json
 from urllib.parse import quote
 import aiohttp
 
+def _rate_limited(payload: bytes) -> bool:
+    try: return json.loads(payload).get("errcode") == "M_LIMIT_EXCEEDED"
+    except (ValueError, AttributeError): return False
+
 def q(s: str) -> str: return quote(s, safe="")
 
 class MatrixError(Exception):
@@ -32,7 +36,7 @@ class MatrixAPI:
             async with self._http.request(method, self.base + path, params=params, headers=headers,
                                           timeout=aiohttp.ClientTimeout(total=timeout), **kw) as r:
                 payload = await r.read()
-                if r.status == 429 and attempt < 5:
+                if r.status == 429 and attempt < 5 and _rate_limited(payload):        # Matrix's own limiter only: a HAN `limit` is not retried here
                     await asyncio.sleep(min(5.0, json.loads(payload).get("retry_after_ms", 500) / 1000)); continue
                 if r.status >= 400:
                     try: j = json.loads(payload)

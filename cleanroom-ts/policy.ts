@@ -53,10 +53,11 @@ export function badPolicyDoc(p: A): string | null {
   if (!["local", "replicated"].includes(p.minDurability)) return "policy.minDurability";
   if (!isInt(p.launchWindow) || p.launchWindow < 15 || p.launchWindow > 3600) return "policy.launchWindow";
   if (!["guest", "member", "owner"].includes(p.extensionsMinRole)) return "policy.extensionsMinRole";
-  const se = closed(p.sessions, ["watch", "read", "steer", "modes"]); if (se) return "policy.sessions: " + se;
+  const se = closed(p.sessions, ["watch", "read", "steer", "modes"], ["forceGuarded"]); if (se) return "policy.sessions: " + se;
   for (const k of ["watch", "read", "steer"]) if (!LEVELS.includes(p.sessions[k])) return "policy.sessions." + k;
   if (strict(p.sessions.read) < strict(p.sessions.watch) || strict(p.sessions.steer) < strict(p.sessions.watch)) return "read/steer wider than watch";
   if (!Array.isArray(p.sessions.modes) || p.sessions.modes.length === 0 || !p.sessions.modes.every((m: A) => m === "auto" || m === "guarded")) return "policy.sessions.modes";
+  if ("forceGuarded" in p.sessions && typeof p.sessions.forceGuarded !== "boolean") return "policy.sessions.forceGuarded";
   const sv = closed(p.servers, ["deny"]); if (sv) return "policy.servers: " + sv;
   if (!Array.isArray(p.servers.deny) || p.servers.deny.length > 256 || !p.servers.deny.every(isServerName)) return "policy.servers.deny";
   return null;
@@ -147,9 +148,11 @@ export function badBody(kind: string, b: A): string | null {
       return !("task" in b) || isHex(b.task) ? null : "task";
     case "session.close": return (e = c(["session"])) ? e : isHex(b.session) ? null : "session";
     case "session.input":
-      if ((e = c(["session"], ["release"]))) return e;
+      if ((e = c(["session"], ["release", "unguard"]))) return e;
       if (!isHex(b.session)) return "session";
-      return !("release" in b) || b.release === true ? null : "release";
+      if ("release" in b && b.release !== true) return "release";
+      if ("unguard" in b && (b.unguard !== true || b.release !== true)) return "unguard";
+      return null;
     default:
       if (!isExtensionKind(kind)) return "unknown kind";
       if (!isObj(b)) return "extension body not an object";
@@ -255,6 +258,7 @@ export function guardedNow(s: SpaceState, x: string): ActorId | null {
   for (const sess of Object.values(s.sessions) as A[]) {
     if (sess.actor === x && sess.guard && live(s, sess) && effMode(s, sess) === "guarded") return sess.guard;
   }
+  if (s.policy.sessions.forceGuarded === true && (s.agents as A)[x] && holds(s, x)) return (s.agents as A)[x];
   return null;
 }
 function guardsOf(s: SpaceState, e: A): string[] {
@@ -440,6 +444,7 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     case "session.close": {
       const sess = (s.sessions as A)[b.session];
       if (!sess) return inv("not a session");
+      if (!sess.open) return deny("session already closed");
       return sess.actor === a || isOwner(s, a) ? ok : deny("not the session's actor or an owner");
     }
     case "session.input": return decideInput(s, e, ctx);
@@ -694,7 +699,9 @@ function decideInput(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (!sess) return inv("not a session");
   if (b.release === true) {
     const x = sess.actor;
-    if ((s.held as A)[x] !== a) return deny("not the guard of a held agent");
+    if (b.unguard === true) {
+      if ((s.held as A)[x] !== a && (s.guarded as A)[x] !== a) return deny("not the guard of a guarded or held agent");
+    } else if ((s.held as A)[x] !== a) return deny("not the guard of a held agent");
     if (!holds(s, a)) return deny("guard holds no role");
     if (((s.outside as A)[x] ?? 0) > e.seen) return deny("an outside instruction arrived after seen");
     return ok;
@@ -759,7 +766,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     s = {
       space: e.space, head: 0, home: spaceServer(e.space), policy: structuredClone(b.policy), roles: {}, roleHistory: {}, tasks: {}, effects: {},
       budgetLeft: b.policy.budget ? { unit: b.policy.budget.unit, amount: b.policy.budget.amount } : null,
-      entries: {}, sessions: {}, held: {}, cleared: {}, outside: {}, guarded: {},
+      entries: {}, sessions: {}, held: {}, cleared: {}, outside: {}, guarded: {}, agents: {},
     } as SpaceState;
     if (isProfileSpace(e.space)) {
       s.profile = { actorKind: b.profile.actorKind, operatorConfirmed: false, keys: { [b.profile.key.keyId]: { publicKey: b.profile.key.publicKey, status: "valid" } } };
@@ -783,6 +790,11 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const t = b.actor as string;
       const was = READABLE.includes((s.roles as A)[t] ?? "none");
       if (b.role === "none") delete (s.roles as A)[t]; else (s.roles as A)[t] = b.role;
+      {
+        const v = (ctx.profiles as A)?.[t];
+        if (READABLE.includes(b.role) && v?.actorKind === "agent" && v.operatorConfirmed && v.operator) (s.agents as A)[t] = v.operator;
+        else delete (s.agents as A)[t];
+      }
       const now = READABLE.includes(b.role);
       const hist = ((s.roleHistory as A)[t] ??= []);
       if (!was && now) hist.push({ from: seq });
@@ -939,10 +951,6 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     case "session.close": {
       const sess = (s.sessions as A)[b.session];
       sess.open = false;
-      if (a === sess.actor && sess.steerMode === "guarded" && !(s.held as A)[a] && (s.guarded as A)[a] !== undefined) {
-        const others = (Object.values(s.sessions) as A[]).some((x) => x.actor === a && x.open && x.steerMode === "guarded");
-        if (!others) delete (s.guarded as A)[a];
-      }
       break;
     }
     case "session.input": {
@@ -950,6 +958,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (b.release === true) {
         delete (s.held as A)[sess.actor];
         (s.cleared as A)[sess.actor] = e.seen;
+        if (b.unguard === true) delete (s.guarded as A)[sess.actor];
       } else {
         sess.steers += 1;
         if (!sess.human) instruct(s, sess.actor, a, seq);
@@ -965,6 +974,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
 /** P-15 "after every entry Policy also settles holds in one place". */
 function settle(s: SpaceState, createdId: string, time: string) {
   const agents = new Set<string>([...Object.keys(s.guarded), ...(Object.values(s.sessions) as A[]).map((x) => x.actor)]);
+  if (s.policy.sessions.forceGuarded === true) for (const x of Object.keys(s.agents)) agents.add(x);
   for (const x of agents) {
     const g = guardedNow(s, x);
     if (!g) continue;

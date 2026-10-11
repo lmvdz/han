@@ -19,6 +19,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 import policy as P
 
+CURSOR = re.compile(r"(\d+)\.(\d+)\.(\d+)", re.ASCII)
+EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents")   # §3: what `read {state, effect}` adds to the one effect
+MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: effects and tasks per page of a state read (E8)
 MAX_CLOCK_SKEW = 60        # han.ts Limits.maxClockSkewSeconds: the one future-time tolerance (R-03a)
 
 def secs(t: str) -> int:
@@ -62,7 +65,16 @@ def validate_header(entry: dict) -> str | None:
     if not P._time(entry["time"]): return "time"
     if not (entry["contentHash"] == "" or P._hex(entry["contentHash"])): return "contentHash"
     if not isinstance(entry["sig"], str): return "sig"
-    return P.validate(entry)
+    err = P.validate(entry)
+    if err: return err
+    b = entry["body"]                                           # R-25: the Log owns the canonical form of a public key (Policy checks its grammar only)
+    keys = [b["publicKey"]] if entry["kind"] == "key.add" else [b["profile"]["key"]["publicKey"]] if entry["kind"] == "space.create" and "profile" in b else []
+    for k in keys:
+        try:
+            if len(unb64(k)) != 32: return "publicKey length"
+        except ValueError:
+            return "publicKey not canonical base64url"
+    return None
 
 # ── content (R-09, §5) — mirrored from han.ts Contents ──
 MIME = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$", re.ASCII)
@@ -206,8 +218,10 @@ def blob_refs(kind: str, content) -> list[dict]:
 # ── a reference home ──
 class Home:
     """The §4.1 append pipeline plus the server behaviours G-01, R-15, G-03, G-02, G-04."""
-    def __init__(self, server: str, key: Key, key_id="h1", durability="local", clock=None, network=None, server_keys=None, steady=None):
+    def __init__(self, server: str, key: Key, key_id="h1", durability="local", clock=None, network=None, server_keys=None, steady=None, limiter=None):
         self.server, self.key, self.key_id, self.durability = server, key, key_id, durability
+        self.limiter = limiter    # §4.1 step 6: a callable (author) -> retryAfterMs, 0 when under the limit; None switches rate limits off
+        self.max_state_items = MAX_STATE_ITEMS
         self.steady = steady      # R-16: a callable returning steady-clock seconds; None switches the elapsed-time check off
         self.run_start = steady() if steady else 0       # claims ordered before this run count from here (restart, failover)
         self.claim_steady = {}    # claim id -> steady reading when this run ordered it
@@ -226,6 +240,8 @@ class Home:
         self.supplied = set()     # (space, hash): bytes this server may serve for that space (G-01)
 
     def append(self, entry: dict, content, profiles: dict, skip_policy=False):
+        """§4.1, in the one order of verdicts: 1 dedupe, 2 routing, 3 shape and sizes, 4 profile and signature, 5 Policy,
+        6 rate limit, 7 the moment-dependent `unavailable` (R-16, R-03a, R-08). The first failing check decides."""
         sp = entry.get("space")
         S = self.spaces.get(sp)
         eid = entry_id(entry)
@@ -233,7 +249,8 @@ class Home:
             for rec in S["records"]:
                 if rec["receipt"]["id"] == eid: return "ok", rec["receipt"]
         if sp in self.moved: return "moved", self.moved[sp]                 # 2 not home
-        if not S and P.server_of(sp) != self.server: return "invalid", "space id names another home"
+        named = P.server_of(sp) if isinstance(sp, str) and ":" in sp else None
+        if not S and named and named != self.server: return "moved", named
         err = validate_header(entry)                                        # 3 shape
         if err: return "invalid", err
         if (content is None) != (entry["contentHash"] == ""): return "invalid", "content presence"
@@ -242,27 +259,31 @@ class Home:
         if err: return "invalid", err
         state = S["state"] if S else None
         now = self.clock()                                                  # read once per append
-        pol = state["policy"] if state else entry["body"].get("policy", {})
-        rescue = entry["kind"] in ("policy.set", "space.move")             # R-08: these can always be ordered
-        if pol.get("minDurability") == "replicated" and self.durability != "replicated" and not rescue:
-            return "unavailable", "minDurability not reachable"
-        if entry["kind"] in ("policy.set", "space.create") and entry["body"]["policy"]["minDurability"] == "replicated" \
-                and self.durability != "replicated":
-            return "unavailable", "this home can't meet the requested minDurability"
         if entry["kind"] == "space.move" and S:
             head = S["records"][-1]["receipt"]
             if not verify_accept(self.server_keys, entry["body"]["to"], entry["body"]["accept"], sp, head, now):
                 return "invalid", "no valid acceptance from the target server"
-        pinned = self.pin(state, dict(entry, id=eid), profiles, now)        # 4 profiles (P-01: candidates up to the first valid key)
+        if entry["author"] not in profiles: return "unavailable", "profile"                        # 4 the author's profile
+        if entry["keyId"] not in profiles[entry["author"]]["keys"]: return "denied", "no valid key"       # R-12: nothing to verify against
+        if not verify_entry(entry, profiles[entry["author"]]): return "invalid", "signature"
+        pinned = self.pin(state, dict(entry, id=eid), profiles, now)        # the other actors Policy needs (P-01: candidates up to the first valid key)
         if pinned is None: return "unavailable", "profile"
-        if not verify_entry(entry, profiles[entry["author"]]): return "invalid", "signature"          # 5
-        if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"
         ctx = {"time": now, "profiles": pinned}
         wait = self.abandon_wait(state, entry, eid, pinned, now)                       # R-16: an early owner abandon is `unavailable`, not `denied`
-        if wait > 0 and not skip_policy: return "unavailable", {"reason": "abandon before the launch window closed (R-16)", "retryAfterMs": int(wait * 1000)}
-        if not skip_policy:                                                 # 6
+        if not skip_policy and wait <= 0:                                   # 5
             d = P.decide(state, dict(entry, id=eid), ctx)
             if not d["allow"]: return d["code"], d["reason"]
+        if self.limiter:                                                    # 6
+            retry = self.limiter(entry["author"])
+            if retry: return "limit", {"reason": "rate limit", "retryAfterMs": retry}
+        if wait > 0 and not skip_policy: return "unavailable", {"reason": "abandon before the launch window closed (R-16)", "retryAfterMs": int(wait * 1000)}     # 7
+        if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"
+        pol = state["policy"] if state else entry["body"].get("policy", {})
+        rescue = entry["kind"] in ("policy.set", "space.move")             # R-08: these can always be ordered
+        if pol.get("minDurability") == "replicated" and self.durability != "replicated" and not rescue:
+            return "unavailable", "minDurability not reachable"
+        if entry["kind"] in ("policy.set", "space.create") and entry["body"]["policy"]["minDurability"] == "replicated"                 and self.durability != "replicated":
+            return "unavailable", "this home can't meet the requested minDurability"
         prev = S["records"][-1]["receipt"] if S else None                    # 7
         r = {"space": sp, "seq": (prev["seq"] + 1) if prev else 1, "id": eid, "prev": receipt_hash(prev) if prev else "",
              "home": self.server, "homeKey": self.key_id, "time": ctx["time"], "durability": self.durability,
@@ -352,20 +373,40 @@ class Home:
             st = P.fold(st, {"entry": e, "content": None, "receipt": rec["receipt"]}, {"time": rec["receipt"]["time"], "profiles": pin})
         return st
 
-    def read(self, space, after, as_, state=False, at=None, limit=1000):
-        """§3 read. `at` (with `state`) gives the state after record `at`, and needs read rights at `at` (P-02), not at the head."""
+    def read(self, space, after, as_, state=False, at=None, limit=1000, cursor=None, effect=None):
+        """§3 read. `at` (with `state`) gives the state after record `at`, and needs read rights at `at` (P-02), not at the head.
+        The state item is paged (E8): `effects` and `tasks` beyond `max_state_items` are left for `read {state, cursor}`; `limit`
+        never applies to it. `cursor` and `effect` (both need `state`) answer the state item alone."""
         S = self.spaces.get(space)
         if not S: return "not_found", None
         st = S["state"]
         if not (isinstance(limit, int) and 1 <= limit <= 1000): return "invalid", "limit"
         if at is not None and (not state or not isinstance(at, int) or not 1 <= at <= st["head"]): return "invalid", "at needs state and 1 <= at <= head"
+        if (cursor is not None or effect is not None) and not state: return "invalid", "cursor and effect need state"
+        if cursor is not None and (effect is not None or at is not None): return "invalid", "cursor excludes effect and at"
+        offs = (0, 0)
+        if cursor is not None:
+            m = CURSOR.fullmatch(cursor) if isinstance(cursor, str) else None
+            if not m or not 1 <= int(m[1]) <= st["head"]: return "invalid", "cursor"
+            at, offs = int(m[1]), (int(m[2]), int(m[3]))
         items = []
         if state:
             where = st["head"] if at is None else at
             if not P.can_read(st, as_, where): return "denied", "state needs read rights at " + ("head" if at is None else "at")
-            view = st if at is None else self.state_at(space, at)
+            view = st if at is None or at == st["head"] else self.state_at(space, at)
             if view is None: return "unavailable", "no stored profile pins for this seq"
-            items.append({"type": "state", "state": {k: v for k, v in view.items() if k != "entries"}})
+            view = {k: v for k, v in view.items() if k != "entries"}
+            if effect is not None:
+                if not (isinstance(effect, str) and effect in view["effects"]): return "not_found", "no such effect"
+                one = {k: view[k] for k in EFFECT_VIEW if k in view}
+                return "ok", [{"type": "state", "state": dict(one, effects={effect: view["effects"][effect]})}]
+            n, (oe, ot) = self.max_state_items, offs
+            es, ts_ = list(view["effects"].items()), list(view["tasks"].items())
+            page = dict(view, effects=dict(es[oe:oe + n]), tasks=dict(ts_[ot:ot + n]))
+            item = {"type": "state", "state": page}
+            if len(es) > oe + n or len(ts_) > ot + n: item["next"] = f"{where}.{oe + n}.{ot + n}"
+            if cursor is not None: return "ok", [item]
+            items.append(item)
         items += [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])][:limit]
         return "ok", items
 

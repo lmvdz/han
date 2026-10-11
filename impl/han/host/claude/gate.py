@@ -32,8 +32,45 @@ class Decision:
 NETWORK = re.compile(r"(?i)(?<![\w.-])(curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp|ping|nslookup|dig|invoke-webrequest|iwr|"
                      r"invoke-restmethod|irm|git\s+(push|pull|fetch|clone|remote)|pip3?\s+install|npm\s+(i|install|publish)|"
                      r"npx|yarn\s+add|docker|az|aws|gcloud|gh)(?![\w-])|\b[a-z][a-z0-9+.-]*://")
-LOCAL_BASH = ("ls", "dir", "pwd", "cat", "type", "head", "tail", "wc", "echo", "date", "sort", "uniq", "mkdir", "touch", "grep")
 UNSAFE_CHARS = re.compile(r"[;&|<>$`()\n\r{}*?\"'\\~]")
+
+# E7: Bash is default-deny. A command runs only if it is in COMMANDS and EVERY argument is accounted for: a flag must be one the command
+# lists (an unknown flag is refused), a flag's value is checked by its kind, and every other word is a path, a number or plain text as
+# the command says. Kinds: "bool" (no value), "num" (digits), "text" (a pattern or key; never a path), "path" (read), "wpath" (written).
+# Commands and flags that write are for auto turns only: a strict turn (guarded outside input, or held; R-24) may only read.
+@dataclass(frozen=True)
+class Cmd:
+    short: dict = field(default_factory=dict)        # letter -> kind
+    long: dict = field(default_factory=dict)         # name -> kind (`--name` or `--name=value`)
+    pos: str = "path"                                 # kind of the positional words; "none" for no positional at all
+    max_pos: int = 99
+    first_text: bool = False                          # grep: the first positional is the pattern, unless -e/-f/--regexp/--file gave one
+    digits: bool = False                              # head/tail: `-5`
+    write: bool = False                               # the whole command writes
+
+COMMANDS = {
+    "ls": Cmd({c: "bool" for c in "alhrtSFd1"}, {"all": "bool", "reverse": "bool"}),
+    "dir": Cmd(),
+    "pwd": Cmd(pos="none"),
+    "cat": Cmd({c: "bool" for c in "nbs"}, {"number": "bool", "squeeze-blank": "bool"}),
+    "type": Cmd(),
+    "head": Cmd({"n": "num", "c": "num", "q": "bool"}, {"lines": "num", "bytes": "num"}, digits=True),
+    "tail": Cmd({"n": "num", "c": "num", "q": "bool"}, {"lines": "num", "bytes": "num"}, digits=True),
+    "wc": Cmd({c: "bool" for c in "lwcm"}, {"lines": "bool", "words": "bool", "bytes": "bool", "chars": "bool"}),
+    "echo": Cmd({"n": "bool"}, pos="text"),
+    "date": Cmd({"u": "bool"}, {"utc": "bool"}, pos="none"),
+    "sort": Cmd({**{c: "bool" for c in "rnufbV"}, "k": "text", "t": "text", "o": "wpath"},
+                {"reverse": "bool", "numeric-sort": "bool", "unique": "bool", "ignore-case": "bool", "key": "text", "output": "wpath"}),
+    "uniq": Cmd({c: "bool" for c in "cdui"}, {"count": "bool", "repeated": "bool", "unique": "bool", "ignore-case": "bool"}, max_pos=1),
+    "grep": Cmd({**{c: "bool" for c in "ivncwxFEHhoqsl"}, "e": "text", "f": "path", "m": "num", "A": "num", "B": "num", "C": "num"},
+                {"ignore-case": "bool", "invert-match": "bool", "line-number": "bool", "count": "bool", "word-regexp": "bool",
+                 "line-regexp": "bool", "fixed-strings": "bool", "extended-regexp": "bool", "files-with-matches": "bool",
+                 "only-matching": "bool", "quiet": "bool", "no-messages": "bool", "regexp": "text", "file": "path",
+                 "max-count": "num", "after-context": "num", "before-context": "num", "context": "num"}, first_text=True),
+    "mkdir": Cmd({"p": "bool"}, {"parents": "bool"}, pos="wpath", write=True),
+    "touch": Cmd(pos="wpath", write=True),
+}
+LOCAL_BASH = tuple(COMMANDS)
 
 def inside(root: str, path: str) -> bool:
     """Is `path` (relative to `root` if not absolute; symlinks resolved) within `root`?"""
@@ -70,15 +107,71 @@ class Gate:
 
     def _bash(self, cmd: str, mode: str) -> Decision:
         """No sandbox exists for Bash on Windows, so there is no way to bound what a shell command touches. A command that names the
-        network is a world action (an effect); anything else is denied in strict turns and, in auto turns, allowed only if it is one
-        plain command from a small local allow-list with no shell syntax and no path leaving the workspace."""
+        network is a world action (an effect); anything else is default-deny (E7): one plain command from COMMANDS with no shell syntax,
+        every flag known and every path argument inside the workspace. A strict turn (guarded or held) is limited to what only reads."""
         if NETWORK.search(cmd): return Decision("world", action="bash.network", args={"command": cmd[:2000]})
-        if mode == "strict": return Decision("deny", "Bash is not available in a strict turn (no sandbox)")
         if UNSAFE_CHARS.search(cmd): return Decision("deny", "Bash: shell syntax is not allowed; one plain command only")
-        words = cmd.split()
-        if not words or words[0] not in self.bash_allow: return Decision("deny", f"Bash: only {', '.join(self.bash_allow)} are allowed")
-        for w in words[1:]:
-            if w.startswith("-"): continue
-            if os.path.isabs(w) or re.match(r"^[A-Za-z]:", w) or ".." in re.split(r"[\\/]", w) or not inside(self.cwd, w):
-                return Decision("deny", "Bash: path leaves the workspace")
-        return Decision("allow")
+        words, strict = cmd.split(), mode == "strict"
+        spec = COMMANDS.get(words[0]) if words and words[0] in self.bash_allow else None
+        if not spec or (strict and spec.write):
+            avail = [n for n in self.bash_allow if n in COMMANDS and not (strict and COMMANDS[n].write)]
+            return Decision("deny", f"Bash: only {', '.join(avail)} are allowed" + (" in a strict turn" if strict else ""))
+        why = self._check_args(spec, words[1:], strict)
+        return Decision("deny", f"Bash: {why}") if why else Decision("allow")
+
+    def path_ok(self, p: str) -> bool:
+        """E7: a path argument names something inside the workspace. `~` (home expansion), UNC (`\\\\`, `//`), drive letters, absolute
+        paths and `..` are refused outright; anything else must resolve inside (symlinks resolved)."""
+        if not p or "~" in p or "//" in p or "\\\\" in p: return False
+        if os.path.isabs(p) or re.match(r"^[A-Za-z]:", p) or ".." in re.split(r"[\\/]", p): return False
+        return inside(self.cwd, p)
+
+    def _check_value(self, kind: str, v: str, strict: bool) -> str | None:
+        """Why the value `v` of kind `kind` is refused, else None."""
+        if kind == "num": return None if v.isdigit() else f"{v!r} is not a number"
+        if kind == "text": return None
+        if kind == "wpath" and strict: return "writing is not available in a strict turn"
+        if kind in ("path", "wpath"): return None if self.path_ok(v) else "path leaves the workspace"
+        return "unexpected value"
+
+    def _check_args(self, spec: Cmd, args: list[str], strict: bool) -> str | None:
+        """Why the arguments are refused, else None: each word is a flag the command lists, a value of one, or a positional."""
+        pos, i, pattern_given, ended = [], 0, False, False
+        while i < len(args):
+            w = args[i]; i += 1
+            if ended or not w.startswith("-") or w == "-":
+                if w == "-": return "'-' (standard input) is not allowed"
+                pos.append(w); continue
+            if w == "--": ended = True; continue
+            if w.startswith("--"):
+                name, eq, val = w[2:].partition("=")
+                kind = spec.long.get(name)
+                if kind is None: return f"unknown flag --{name}"
+                if kind == "bool":
+                    if eq: return f"--{name} takes no value"
+                    continue
+                if not eq:
+                    if i >= len(args): return f"--{name} needs a value"
+                    val = args[i]; i += 1
+                if (why := self._check_value(kind, val, strict)): return f"--{name}: {why}"
+                pattern_given |= name in ("regexp", "file")
+                continue
+            if spec.digits and w[1:].isdigit(): continue
+            j = 1
+            while j < len(w):
+                kind = spec.short.get(w[j])
+                if kind is None: return f"unknown flag -{w[j]}"
+                if kind == "bool": j += 1; continue
+                val = w[j + 1:]                                   # `-n5` or `-n 5`
+                if not val:
+                    if i >= len(args): return f"-{w[j]} needs a value"
+                    val = args[i]; i += 1
+                if (why := self._check_value(kind, val, strict)): return f"-{w[j]}: {why}"
+                pattern_given |= w[j] in "ef"
+                break
+        if spec.pos == "none" and pos: return "no arguments are allowed"
+        if len(pos) > spec.max_pos: return "too many arguments"
+        for n, v in enumerate(pos):
+            kind = "text" if spec.pos == "text" or (spec.first_text and n == 0 and not pattern_given) else spec.pos
+            if (why := self._check_value(kind, v, strict)): return why
+        return None

@@ -5,14 +5,17 @@ The ghost is derived from the invariant sentence of P-15, not from Policy's rule
     While an agent is guarded, any instruction to it from anyone but its guard holds it; while it is held, nothing it
     proposes or is named executor of runs without its guard's own approval; only its guard ends a hold.
 
-"Guarded" = the agent's own sticky choice (it opened a guarded session; only it, while not held, undoes that), or forced
-by owners (one of its live sessions is effectively guarded). "Instruction" = a steer into any of its sessions, a task
-naming it, a proposal naming it as executor. Two agents, BOT (operator OP) and BOT2 (operator OP2), both of which can
-become guarded; owner O and member P instruct; OP's role and key vary; the approval rule and allowed modes vary.
+"Guarded" = the agent's own sticky choice (it opened a guarded session; only its guard ends that, with a release that
+unguards, never the agent itself and never by closing), or forced by owners (one of its live sessions is effectively
+guarded, or `forceGuarded` is on and it is an agent holding a role: no session needed). "Instruction" = a steer into any
+of its sessions, a task naming it, a proposal naming it as executor. Three agents, BOT (operator OP), BOT2 (operator OP2)
+and the session-less BOT3 (operator OP); a service X (also with an operator) is never forced. Owner O and member P
+instruct; OP's role and key vary; the approval rule, allowed modes and forceGuarded vary.
 
 Properties: GuardedClaimsNeedTheirHuman, HeldInstructNoOne (no task, approval or steer of another's session by a held
 agent), NeverLooser (no outside steer into a dead session), GuardRightsNeedRole, OneOpenApprovalPerAuthor, and
-ExactHolds (Policy holds exactly the agents the invariant holds: never fewer, never more).
+ExactHolds (Policy holds exactly the agents the invariant holds: never fewer, never more); NeverLooser also covers
+unguarding (allowed exactly for the agent's guard while it holds a role, never for the agent itself).
 States are deduplicated on content (Policy state minus history, plus the ghost).
 
 Usage: python ref/model_guard.py [--depth N] [--all-mutations]"""
@@ -24,8 +27,8 @@ SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.py")
 DEPTH = 5                      # full runs (run_all, §10); --quick runs depth 4; mutations run at depth 4
 SP = "sg:a.example"
 O, P, OP, OP2, X = "@o:a.example", "@p:a.example", "@op:b.example", "@op2:b.example", "@x:c.example"
-BOT, BOT2 = "@bot:b.example", "@bot2:b.example"
-GUARD = {BOT: OP, BOT2: OP2}
+BOT, BOT2, BOT3 = "@bot:b.example", "@bot2:b.example", "@bot3:b.example"
+GUARD = {BOT: OP, BOT2: OP2, BOT3: OP}
 T0 = "2026-10-10T12:00:00Z"
 DG = "d" * 64
 MODESETS = (("auto", "guarded"), ("guarded",), ("auto",))
@@ -33,24 +36,25 @@ MODESETS = (("auto", "guarded"), ("guarded",), ("auto",))
 def H(label): return hashlib.sha256(label.encode()).hexdigest()
 def human(rev=False): return {"actorKind": "human", "operatorConfirmed": False, "keys": {"k1": {"publicKey": "pk", "status": "revoked" if rev else "valid"}}}
 def agent(op): return {"actorKind": "agent", "operator": op, "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
-XS = {"actorKind": "service", "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
+XS = {"actorKind": "service", "operator": OP, "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
 
-def policy(rule=False, modes=MODESETS[0]):
+def policy(rule=False, modes=MODESETS[0], force=False):
     return {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any",
             "approvals": [{"action": "pay", "approvers": ["member"]}] if rule else [], "separateApprover": True, "budget": None,
             "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member",
-            "sessions": {"watch": "member", "read": "member", "steer": "member", "modes": list(modes)}, "servers": {"deny": []}}
+            "sessions": {"watch": "member", "read": "member", "steer": "member", "modes": list(modes), "forceGuarded": force}, "servers": {"deny": []}}
 
 def E(label, kind, author, body):
     return {"id": H(label), "v": 1, "space": SP, "kind": kind, "author": author, "keyId": "k1", "body": body,
             "contentHash": "", "refs": [], "seen": 0, "nonce": label, "time": T0}
 
-S1, S2, S3, S4 = H("s1"), H("s2"), H("s3"), H("s4")
-SESS = {S1: ("s1", BOT, "guarded"), S2: ("s2", BOT2, "auto"), S3: ("s3", BOT, "auto"), S4: ("s4", BOT2, "guarded")}
-OPENED_AT_START = (S1, S2, S3)                                   # S4: BOT2 may open it later (becoming guarded)
-PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT), "pr4": (BOT, BOT2), "pr5": (OP, BOT)}   # pr5: its own guard's
-CLAIMABLE = ("pr0", "pr1", "pr2", "pr3", "pr4", "pr5")
-TASKS = {"P tasks BOT": (P, [BOT]), "P tasks BOT2+BOT": (P, [BOT2, BOT]), "BOT tasks BOT2": (BOT, [BOT2]), "BOT2 tasks BOT": (BOT2, [BOT])}
+S1, S2, S3, S4, S5 = H("s1"), H("s2"), H("s3"), H("s4"), H("s5")
+SESS = {S1: ("s1", BOT, "guarded"), S2: ("s2", BOT2, "auto"), S3: ("s3", BOT, "auto"), S4: ("s4", BOT2, "guarded"), S5: ("s5", BOT3, "auto")}
+OPENED_AT_START = (S1, S2, S3)                                   # S4: BOT2 may open it later (becoming guarded); S5: session-less BOT3 may open an auto one
+PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT), "pr4": (BOT, BOT2), "pr5": (OP, BOT), "pr6": (P, BOT3)}   # pr5: its own guard's
+CLAIMABLE = ("pr0", "pr1", "pr2", "pr3", "pr4", "pr5", "pr6")
+TASKS = {"P tasks BOT": (P, [BOT]), "P tasks BOT2+BOT": (P, [BOT2, BOT]), "BOT tasks BOT2": (BOT, [BOT2]), "BOT2 tasks BOT": (BOT2, [BOT]),
+         "P tasks BOT3": (P, [BOT3])}
 
 def fz(d): return tuple(sorted(d.items()))
 
@@ -65,7 +69,7 @@ class M:
         d = {k: getattr(self, k) for k in self.__slots__}; d.update(kw); return M(**d)
 
 def ctx(m):
-    return {"time": T0, "profiles": {O: human(), P: human(), OP: human(m.oprev), OP2: human(), X: XS, BOT: agent(OP), BOT2: agent(OP2)}}
+    return {"time": T0, "profiles": {O: human(), P: human(), OP: human(m.oprev), OP2: human(), X: XS, BOT: agent(OP), BOT2: agent(OP2), BOT3: agent(OP)}}
 
 def apply(pol, m, e, label):
     d = pol.decide(m.state, e, ctx(m))
@@ -92,7 +96,8 @@ def alive(state, sid):
     return mode == "auto" or state["roles"].get(GUARD[actor]) is not None
 
 def guarded(m, a):
-    return dict(m.gd).get(a, False) or any(SESS[sid][1] == a and alive(m.state, sid) and mode_now(m.state, sid) == "guarded" for sid in SESS)
+    forced = m.state["policy"]["sessions"].get("forceGuarded", False) and m.state["roles"].get(a) is not None
+    return dict(m.gd).get(a, False) or forced or any(SESS[sid][1] == a and alive(m.state, sid) and mode_now(m.state, sid) == "guarded" for sid in SESS)
 
 def instruct(m, author, a):
     """The ghost's held map after `author` instructs agent `a`."""
@@ -126,7 +131,7 @@ def required(m, pr, proposer, executor):
 def init(pol):
     m = M(labels=(), state=None, oprev=False, gd=(), held=(), need=frozenset(), covered=(), used=(), lastk=(), cl=())
     m, d = apply(pol, m, E("C", "space.create", O, {"policy": policy()}), "C"); assert m, d
-    for lab, a in (("m1", P), ("m2", X), ("m3", OP), ("m4", OP2), ("m5", BOT), ("m6", BOT2)):
+    for lab, a in (("m1", P), ("m2", X), ("m3", OP), ("m4", OP2), ("m5", BOT), ("m6", BOT2), ("m7", BOT3)):
         m, d = apply(pol, m, E(lab, "member.set", O, {"actor": a, "role": "member"}), lab); assert m, (lab, d)
     for sid in OPENED_AT_START:
         lab, a, mode = SESS[sid]
@@ -155,10 +160,16 @@ def successors(pol, m):
             go(f"{author} steers {lab}", "session.input", author, {"session": sid},
                lambda n, a=author, x=actor: n.with_(held=instruct(m, a, x)))
     for author in (OP, OP2, O):
-        for sid, a in ((S1, BOT), (S2, BOT2)):
+        for sid, a in ((S1, BOT), (S2, BOT2), (S5, BOT3)):
+            if sid not in m.state["sessions"]: continue
             go(f"{author} releases {SESS[sid][0]}", "session.input", author, {"session": sid, "release": True},
                (lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}), cl=setk(m.cl, a, m.state["head"])))
                if dict(m.held).get(a) == author else None)
+    for author in (OP, OP2, BOT):                                # E1: only the guard unguards, with a release
+        for sid, a in ((S1, BOT), (S2, BOT2), (S5, BOT3)):
+            if sid not in m.state["sessions"]: continue
+            go(f"{author} unguards {SESS[sid][0]}", "session.input", author, {"session": sid, "release": True, "unguard": True},
+               lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}), gd=setk(m.gd, a, False), cl=setk(m.cl, a, m.state["head"])))
     for name, (author, to) in TASKS.items():
         def after(n, author=author, to=to):
             mm = m
@@ -169,11 +180,10 @@ def successors(pol, m):
         def opened(n):
             return n.with_(gd=setk(m.gd, BOT2, True))          # becoming guarded; settle() applies open outside instructions
         go("BOT2 opens s4 guarded", "session.open", BOT2, {"steerMode": "guarded"}, opened, label="s4")
+    if S5 not in m.state["sessions"]:
+        go("BOT3 opens s5", "session.open", BOT3, {"steerMode": "auto"}, label="s5")
     for author in (BOT, O):
-        def closed(n, author=author):
-            if author != BOT or BOT in dict(m.held): return n
-            return n.with_(gd=setk(m.gd, BOT, False))          # S1 is BOT's only guarded session
-        go(f"{author} closes s1", "session.close", author, {"session": S1}, closed)
+        go(f"{author} closes s1", "session.close", author, {"session": S1})      # E1: closing never unguards, whoever closes
     for pr, (author, executor) in PROPS.items():
         if H(pr) in m.state["effects"]: continue
         body = {"executor": executor, "action": "pay", "planDigest": DG, "repeatable": pr == "pr1"}
@@ -201,10 +211,11 @@ def successors(pol, m):
     if not m.oprev:
         out.append(("OP key revoked", "key", OP, {}, m.with_(oprev=True, labels=m.labels + ("OP key revoked",)), {"allow": True}))
     pol_now = m.state["policy"]
-    rule, modes = bool(pol_now["approvals"]), tuple(pol_now["sessions"]["modes"])
-    go("O toggles approval rule", "policy.set", O, {"policy": policy(not rule, modes)})
+    rule, modes, force = bool(pol_now["approvals"]), tuple(pol_now["sessions"]["modes"]), pol_now["sessions"]["forceGuarded"]
+    go("O toggles approval rule", "policy.set", O, {"policy": policy(not rule, modes, force)})
+    go("O toggles forceGuarded", "policy.set", O, {"policy": policy(rule, modes, not force)})
     for ms_ in MODESETS:
-        if ms_ != modes: go(f"O sets modes {'/'.join(ms_)}", "policy.set", O, {"policy": policy(rule, ms_)})
+        if ms_ != modes: go(f"O sets modes {'/'.join(ms_)}", "policy.set", O, {"policy": policy(rule, ms_, force)})
     return out
 
 def check_state(pol, m):
@@ -218,6 +229,11 @@ def check_state(pol, m):
     return None
 
 def check(m, name, kind, author, body, d):
+    if kind == "session.input" and body.get("unguard"):
+        a = SESS[body["session"]][1]
+        should = author == GUARD[a] and m.state["roles"].get(author) is not None and not (author == OP and m.oprev) and (guarded(m, a) or a in dict(m.held))
+        if d["allow"] and not should: return f"{author} unguarded {a}, which only its guard {GUARD[a]} may, while guarded or held"
+        if should and not d["allow"]: return f"guard {author} refused when unguarding {a}: {d.get('reason')}"
     if not d["allow"]: return None
     if kind == "session.input" and not body.get("release") and author != SESS[body["session"]][1] and not alive(m.state, body["session"]):
         return f"outside steer allowed into a dead session {SESS[body['session']][0]}"
@@ -285,16 +301,24 @@ MUTATIONS = {
     "settled-holds-ignore-effects": ('        if (tasks or effs) and x not in s["held"]: s["held"][x] = g', '        if tasks and x not in s["held"]: s["held"][x] = g'),
     "settled-tasks-first-assignee-only": ('        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"]', '        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"][:1]'),
     "executor-guard-not-recorded": ('                e.setdefault("guards", []).append(g)', '                pass'),
-    "release-does-not-clear": ('        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = e["seen"]', '        if b.get("release"): s["held"].pop(x, None)'),
+    "release-does-not-clear": ('s["held"].pop(x, None); s["cleared"][x] = e["seen"]', 's["held"].pop(x, None)'),
     "owner-forced-guarding-ignored": ('    for se in state["sessions"].values():\n        if se["actor"] == x and "guard" in se and live(state, se) and effective_mode(state, se) == "guarded": return se["guard"]\n    return None', '    return None'),
-    "guarded-not-sticky": ('                s["guarded"][author] = p["operator"]                            # sticky until it unguards itself', '                pass'),
-    "anyone-closing-unguards": ('        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"', '        if (x not in s["held"] and sess["steerMode"] == "guarded"'),
+    "guarded-not-sticky": ('                s["guarded"][author] = p["operator"]                            # sticky: only its guard unguards it', '                pass'),
+    "agent-closing-unguards-itself": ('        sess["open"] = False\n', '        sess["open"] = False\n        if author == sess["actor"]: s["guarded"].pop(author, None)\n'),
+    "anyone-closing-unguards": ('        sess["open"] = False\n', '        sess["open"] = False\n        s["guarded"].pop(sess["actor"], None)\n'),
+    "agent-may-unguard-itself": ('(b.get("unguard") and guarded_now(state, x) == entry["author"])', '(b.get("unguard") and x == entry["author"])'),
+    "anyone-unguards": ('(b.get("unguard") and guarded_now(state, x) == entry["author"])', '(b.get("unguard"))'),
+    "unguard-does-nothing": ('            if b.get("unguard"): s["guarded"].pop(x, None) ', '            if False: s["guarded"].pop(x, None) '),
+    "forcing-ignored-for-session-less-agents": ('and x in state["agents"]: return state["agents"][x]', 'and x in state["agents"] and any(se["actor"] == x for se in state["sessions"].values()): return state["agents"][x]'),
+    "forcing-ignored": ('    if state["policy"]["sessions"].get("forceGuarded") and x in state["agents"]: return state["agents"][x]\n', ''),
+    "services-forced": ('pr.get("actorKind") == "agent" and', 'pr.get("actorKind") in ("agent", "service") and'),
+    "forced-agents-not-settled": ('agents = set(s["guarded"]) | set(s["agents"]) |', 'agents = set(s["guarded"]) |'),
     "guards-not-required": ('        if res == "none": return deny("E3 a guard hasn\'t approved")', '        pass'),
     "guard-approval-needs-no-role": ('    if role_of(state, g) not in READ_ROLES: return "none", None\n    for a in eff["approvals"]:\n        if a["author"] != g', '    for a in eff["approvals"]:\n        if a["author"] != g'),
     "owners-stand-in": [('    is_guard = author in guards and role in READ_ROLES', '    is_guard = (author in guards or role == "owner") and role in READ_ROLES'),
                         ('        if a["author"] != g or a.get("consumedBy")', '        if (a["author"] != g and role_of(state, a["author"]) != "owner") or a.get("consumedBy")')],
     "guard-key-ignored": ('        if st == "valid": return "ok", a\n    return "none", None\n\ndef live', '        return "ok", a\n    return "none", None\n\ndef live'),
-    "anyone-releases": ('        if state["held"].get(sess["actor"]) != entry["author"]: return deny("only the guard holding this agent releases it")', '        pass'),
+    "anyone-releases": ('        if not (state["held"].get(x) == entry["author"] or (b.get("unguard") and guarded_now(state, x) == entry["author"])):', '        if False:'),
     "modes-ignored-for-open-sessions": ('    return next((m for m in CAUTION[CAUTION.index(sess["steerMode"]):] if m in allowed), None)', '    return sess["steerMode"]'),
     "owners-may-loosen-modes": ('    return next((m for m in CAUTION[CAUTION.index(sess["steerMode"]):] if m in allowed), None)', '    return next((m for m in CAUTION if m in allowed), None)'),
     "guarded-without-guard-stays-live": (' or role_of(state, sess.get("guard")) in READ_ROLES))', ' or "guard" in sess))'),

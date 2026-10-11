@@ -13,7 +13,8 @@ P, W = policy, wire
 
 LIMITS = {"maxFrameBytes": 1310720, "maxHeaderBytes": 16384, "maxContentBytes": 65536, "maxBlobBytes": 4294967296,
           "maxBlobPartBytes": 786432, "maxBlobRangeBytes": 786432, "maxStreamItemBytes": 65536, "maxFollows": 256,
-          "maxClockSkewSeconds": W.MAX_CLOCK_SKEW}   # han.ts Limits, all nine (D9)
+          "maxClockSkewSeconds": W.MAX_CLOCK_SKEW,
+          "maxStateItems": getattr(W, "MAX_STATE_ITEMS", 1000)}   # han.ts Limits (D9, E8): effects and tasks per page of a state read
 
 
 class WireError(Exception):

@@ -2,7 +2,7 @@
 fan-out, blobs, notices and session streams. han.seq.server is only the WebSocket framing around this.
 Everything here is synchronous (one event loop, so each call is atomic, like the per-space serial transaction of §4.1)."""
 from __future__ import annotations
-import asyncio, hashlib, logging, math, time
+import asyncio, hashlib, logging, re, time
 from ..core import P, W, LIMITS, WireError
 from ..entries import fmt_time, make_entry, default_policy
 from ..verify.chains import Chains
@@ -10,6 +10,9 @@ from .store import Store, BlobStore
 
 log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
+CURSOR = re.compile(r"(\d+)\.(\d+)\.(\d+)", re.ASCII)       # E8: `<seq>.<effects offset>.<tasks offset>` of the next page of a state read
+EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents")      # what `read {state, effect}` adds to the one effect
+MAX_OPEN_UPLOADS = 16        # E11: unfinished blob uploads one actor may hold at a time
 OWN_BLOB_SECONDS = 86400      # G-01 / D3: an uploader may read its own unreferenced blob this long
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)
 
@@ -68,14 +71,15 @@ def wire_state(state: dict) -> dict:
                                 for pid, e in state["effects"].items()})
 
 class Sequencer:
-    def __init__(self, server: str, key, db_path: str, clock=None):
+    def __init__(self, server: str, key, db_path: str, clock=None, limiter=None):
         self.server, self.key, self.key_id = server, key, key.key_id
         self.clock = clock or Clock()
         self._anchor_wall, self._anchor_mono = self.clock.wall(), self.clock.mono()     # R-03a: a clock anchored at startup...
         self.boot_mono = self._anchor_mono                                              # ...and R-16: when this run began
         self.store = Store(db_path)
         self.server_keys = {server: self._own_keys()}      # {server: {keyId: {publicKey, from, until?, compromised?}}}; peers' keys join via .fed
-        self.home = W.Home(server, key, key.key_id, "local", clock=self.now_str, server_keys=self.server_keys)
+        self.home = W.Home(server, key, key.key_id, "local", clock=self.now_str, server_keys=self.server_keys,
+                            steady=self.clock.mono, limiter=limiter)           # R-16 is Home's, on the steady clock; `limiter(author)` -> retryAfterMs (§4.1 step 6)
         self.home.blobs, self.home.inbox = BlobStore(self.store), Inbox(self)
         self.home.uploads, self.home.supplied = self.store.uploads(), self.store.supplied()
         self.part_refs: dict[tuple, tuple] = {}                                         # (hash, uploader) → (size, type) of the first part (D8)
@@ -86,7 +90,6 @@ class Sequencer:
         self.notice_subs: dict[str, set] = {}       # actor → subscriptions to its own profile (notices)
         self.watchers: dict[tuple, set] = {}        # (space, session) → watch subscriptions
         self.ids: dict[str, dict] = {}              # space → {entry id: seq}  (R-01 without a scan)
-        self.claim_mono: dict[str, float] = {}      # claim id → steady time when this run ordered it (R-16)
         self.stream_n: dict[tuple, int] = {}        # (space, session) → last accepted StreamItem n
         self.stream_last: dict[tuple, dict] = {}
         self.broken = False
@@ -246,22 +249,25 @@ class Sequencer:
             sp = entry.get("space")
             hit = self.ids.get(sp, {}).get(eid) if isinstance(sp, str) else None
             if hit: return self.home.spaces[sp]["records"][hit - 1]["receipt"]           # 1 dedupe, before any other check (R-01)
-            err = W.validate_header(entry)                                               # 3 shape (Home repeats it; this precedes the profile lookup)
+            self.route(sp)                                                               # 2 not home: moved (D1), for space.create too
+            err = W.validate_header(entry)                                               # 3 shape and size (Home repeats it)
             if err: raise _invalid(err)
             if len(P.jcs(entry)) > LIMITS["maxHeaderBytes"]: raise _invalid("header too large")
             if content is not None and len(P.jcs(content)) > LIMITS["maxContentBytes"]: raise _invalid("content too large")
-            self.route(sp)                                                               # 2 not home: moved (D1), for space.create too
+            author = self.profile(entry["author"])                                       # 4 the author's profile (pinned or cached), then the signature
+            if author is None: raise WireError("unavailable", "profile")               # the only `unavailable` before Policy: no verdict without it
+            if entry["keyId"] not in author["keys"]: raise WireError("denied", "no valid key")      # R-12: nothing to verify against
+            if not W.verify_entry(entry, author): raise _invalid("signature")
             S = self.home.spaces.get(sp)
             state = S["state"] if S else None
-            need = self.pin_actors(state, dict(entry, id=eid))                           # 4 profiles (all of P-01)
+            need = self.pin_actors(state, dict(entry, id=eid))                           # the profiles to pin (all of P-01)
         except WireError: raise
         except (TypeError, KeyError, ValueError, AttributeError, RecursionError) as ex:
             raise _invalid(f"malformed: {type(ex).__name__}")
         profiles = {a: v for a in need if (v := self.profile(a))}
-        if state and entry["kind"] == "effect.outcome": self._r16(state, entry)
         before = len(S["records"]) if S else 0
         try:
-            code, res = self.home.append(entry, content, profiles)
+            code, res = self.home.append(entry, content, profiles)                       # 5 Policy, 6 rate limit, 7 the moment-dependent `unavailable`
         except (TypeError, KeyError, ValueError, AttributeError) as ex:                 # a shape the validators let through: invalid, not a crash
             raise _invalid(f"malformed: {type(ex).__name__}")
         if code != "ok":
@@ -269,6 +275,8 @@ class Sequencer:
             if code == "unavailable" and isinstance(res, str) and res.startswith("clock behind"):
                 last = P.ts(S["records"][-1]["receipt"]["time"])
                 raise WireError("unavailable", res, retry_after_ms=max(1000, int((last - self.now() + 1) * 1000)))
+            if isinstance(res, dict):                                                     # R-16, a rate limit: {reason, retryAfterMs}
+                raise WireError(code, res.get("reason", ""), retry_after_ms=res.get("retryAfterMs"))
             raise WireError(code, res if isinstance(res, str) else str(res))
         S = self.home.spaces[sp]
         if len(S["records"]) == before: return res
@@ -285,7 +293,6 @@ class Sequencer:
             self.broken = True                                                            # memory is ahead of disk: stop serving
             raise WireError("unavailable", "storage failure; restart")
         self.ids.setdefault(sp, {})[eid] = res["seq"]
-        if entry["kind"] == "effect.claim": self.claim_mono[eid] = self.clock.mono()
         st = S["state"]
         for sub in list(self.subs.get(sp, ())):                                           # 9 fan out (T-01), P-02 per record
             if res["seq"] > sub.cutoff and P.can_read(st, sub.actor, res["seq"]): sub.push({"type": "record", "record": rec})
@@ -309,25 +316,6 @@ class Sequencer:
         out.extend(P.guards_of(state, eff))
         return list(dict.fromkeys(out))
 
-    def _r16(self, state, entry):
-        """R-16: an owner's abandon (P-09) needs A seconds of this sequencer's own steady clock since it ordered the claim;
-        a claim ordered before this run began counts from the start of this run. `unavailable` only if Policy would allow the
-        abandon once claim.time + A has passed (latest claim, phase claimed, right author and key); otherwise Policy answers now."""
-        b = entry["body"]
-        pid, eff, c = P.find_claim(state, b["claim"])
-        if not c or (entry["author"] == eff["executor"] and entry["keyId"] == c["instance"]): return
-        if not (b.get("result") == "unknown" and b.get("started") == "unknown" and "cost" not in b): return
-        if state["roles"].get(entry["author"]) != "owner": return                          # Policy denies everyone else
-        if c is not P.latest_claim(eff) or eff["phase"] != "claimed": return               # Policy: claim not open, denied now
-        try:
-            at = fmt_time(P.ts(c["time"]) + P.abandon_after(c["window"]))
-            if not P.decide(state, dict(entry, id=P.entry_id(entry)), {"time": at, "profiles": {entry["author"]: self.profile(entry["author"])}})["allow"]: return
-        except (KeyError, TypeError, ValueError, AttributeError): return
-        due = self.claim_mono.get(c["id"], self.boot_mono) + P.abandon_after(c["window"])
-        wait = due - self.clock.mono()
-        if wait > 0:
-            raise WireError("unavailable", "R-16: an abandon needs a full launch window of steady time", retry_after_ms=math.ceil(wait * 1000))
-
     # ── read (§3) ──
     def _readable_somewhere(self, st, who):
         return st["policy"]["visibility"] == "public" or any(P.can_read(st, who, s) for s in range(1, st["head"] + 1))
@@ -341,29 +329,53 @@ class Sequencer:
             st = P.fold(st, {"entry": dict(rec["entry"], id=r["id"]), "content": None, "receipt": r}, {"time": r["time"], "profiles": pinned})
         return st
 
-    def read(self, who, space, after, follow=False, state=False, limit=None, known_heads=None, at=None):
+    def read(self, who, space, after, follow=False, state=False, limit=None, known_heads=None, at=None, cursor=None, effect=None):
         """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing.
-        `at` (with `state`): the state after record `at` instead of the head; the read right is judged on the CURRENT state (P-02)."""
+        `at` (with `state`): the state after record `at` instead of the head; the read right is judged on the CURRENT state (P-02).
+        The state item is paged (E8): `effects` and `tasks` beyond `maxStateItems` are left out and `next` is the cursor for
+        `read {state, cursor}`; `read {state, effect}` answers one effect with the rest of the state it needs. `limit` is never the
+        answer to a big state. Both alone answer the state item and nothing else."""
         if not (isinstance(space, str) and P._space(space) and P._int(after)): raise _invalid("read args")
         self.route(space)
         if at is not None and not (state and P._int(at) and at >= 1): raise _invalid("at needs state and a seq >= 1")
+        if (cursor is not None or effect is not None) and not state: raise _invalid("cursor and effect need state")
+        if cursor is not None and (effect is not None or at is not None or follow): raise _invalid("cursor excludes effect, at and follow")
+        if effect is not None and (follow or not isinstance(effect, str)): raise _invalid("effect")
         limit = 1000 if limit is None else limit
         if not (P._int(limit) and 1 <= limit <= 1000): raise _invalid("limit")
+        offs = (0, 0)
+        if cursor is not None:
+            m = CURSOR.fullmatch(cursor) if isinstance(cursor, str) else None
+            if not m: raise _invalid("cursor")
+            at, offs = int(m[1]), (int(m[2]), int(m[3]))
+            if at < 1: raise _invalid("cursor")
         S = self.home.spaces.get(space)
         if not S and self.fed and space.startswith("profile:") and P.server_of(space) != self.server:
+            if cursor is not None or effect is not None: raise _invalid("cursor and effect are for spaces this server orders")
             return self.fed.read_profile(space, after, state, limit), None             # another server's profile, as verified here (§4.3)
         if not S or not self._readable_somewhere(S["state"], who): raise WireError("not_found", "no such space")
         st = S["state"]
-        code, items = self.home.read(space, after, who, state and at is None)
+        if at is not None and at > st["head"]: raise _invalid("at is beyond the head" if cursor is None else "cursor")
+        out = []
+        if state:
+            where = st["head"] if at is None else at
+            if not P.can_read(st, who, where): raise WireError("denied", "state needs read rights at " + ("the head" if at is None else "that seq"))
+            view = wire_state(st if where == st["head"] else self._state_at(S, where))
+            view = {k: v for k, v in view.items() if k != "entries"}
+            if effect is not None:
+                if effect not in view["effects"]: raise WireError("not_found", "no such effect")
+                one = {k: view[k] for k in EFFECT_VIEW if k in view}
+                return [{"type": "state", "state": dict(one, effects={effect: view["effects"][effect]})}], None
+            n, (oe, ot) = LIMITS["maxStateItems"], offs
+            es, ts = list(view["effects"].items()), list(view["tasks"].items())
+            item = {"type": "state", "state": dict(view, effects=dict(es[oe:oe + n]), tasks=dict(ts[ot:ot + n]))}
+            if len(es) > oe + n or len(ts) > ot + n: item["next"] = f"{where}.{oe + n}.{ot + n}"
+            if cursor is not None: return [item], None
+            out.append(item)
+        code, items = self.home.read(space, after, who, False)
         if code != "ok": raise WireError(code, items or "")
-        if at is not None:
-            if at > st["head"]: raise _invalid("at is beyond the head")
-            past = self._state_at(S, at)
-            if not P.can_read(st, who, at): raise WireError("denied", "state needs read rights at that seq")
-            items = [{"type": "state", "state": {k: v for k, v in wire_state(past).items() if k != "entries"}}] + items
-        head = [{"type": "state", "state": wire_state(i["state"])} for i in items if i["type"] == "state"]
         recs = [i for i in items if i["type"] == "record"]
-        out = head + ([{"type": "heads", "heads": self._heads_for(who, known_heads)}] if known_heads is not None else []) + recs[:limit]
+        out += ([{"type": "heads", "heads": self._heads_for(who, known_heads)}] if known_heads is not None else []) + recs[:limit]
         sub = None
         if follow:
             sub = Sub(who, space, st["head"]); self.subs.setdefault(space, set()).add(sub)
@@ -407,6 +419,8 @@ class Sequencer:
         if who in self.home.uploads.get(ref["hash"], ()):                                # this uploader already completed it
             return {"have": ref["size"], "complete": True}
         key = (ref["hash"], who)
+        if key not in self.home.parts and sum(1 for k in self.home.parts if k[1] == who) >= MAX_OPEN_UPLOADS:
+            raise WireError("limit", "too many uploads in progress", retry_after_ms=1000)             # E11: per client
         if self.part_refs.setdefault(key, (ref["size"], ref["type"])) != (ref["size"], ref["type"]): raise _invalid("ref.size and ref.type must repeat")
         buf = self.home.parts.setdefault(key, bytearray())
         if offset > len(buf): raise _invalid(f"gap: part starts after the bytes held ({len(buf)})")       # D8: parts are contiguous

@@ -121,8 +121,9 @@ def _policy(v):
     if not (_int(v["launchWindow"]) and 15 <= v["launchWindow"] <= 3600): return False
     if v["extensionsMinRole"] not in READ_ROLES: return False
     ss = v["sessions"]
-    if not (isinstance(ss, dict) and set(ss) == {"watch", "read", "steer", "modes"}
-            and all(ss[k] in SESSION_LEVELS for k in ("watch", "read", "steer"))): return False
+    if not (isinstance(ss, dict) and set(ss) - {"forceGuarded"} == {"watch", "read", "steer", "modes"}
+            and all(ss[k] in SESSION_LEVELS for k in ("watch", "read", "steer"))
+            and isinstance(ss.get("forceGuarded", False), bool)): return False
     L = SESSION_LEVELS.index
     if L(ss["watch"]) > L(ss["read"]) or L(ss["watch"]) > L(ss["steer"]): return False   # read and steer need watch
     m = ss["modes"]
@@ -170,7 +171,7 @@ SCHEMA = {
     "redact": {"target": (_id, True)},
     "session.open": {"task": (_id, False), "steerMode": (lambda v: v in STEER_MODES, True)},
     "session.close": {"session": (_id, True)},
-    "session.input": {"session": (_id, True), "release": (lambda v: v is True, False)},
+    "session.input": {"session": (_id, True), "release": (lambda v: v is True, False), "unguard": (lambda v: v is True, False)},
     "space.move": {"to": (lambda v: isinstance(v, str) and bool(SERVER.fullmatch(v)), True),
                    "accept": (lambda v: isinstance(v, dict) and set(v) == {"keyId", "sig"} and _keyid(v["keyId"]) and isinstance(v["sig"], str), True)},
 }
@@ -624,9 +625,11 @@ def held_may(state, entry):
 CAUTION = STEER_MODES                          # least to most cautious
 
 def guarded_now(state, x):
-    """P-15: the guard of agent `x` if `x` is guarded now, else None. Guarded = its own sticky choice (`guarded[x]`), or
-    forced by owners: one of its live sessions is effectively guarded (its mode no longer allowed as auto)."""
+    """P-15: the guard of agent `x` if `x` is guarded now, else None. Guarded = its own choice (`guarded[x]`, ended only
+    by its guard), or forced by owners: `forceGuarded` and `x` is an agent with a confirmed operator (`agents[x]`), or one
+    of its live sessions is effectively guarded (its mode no longer allowed as auto)."""
     if x in state["guarded"]: return state["guarded"][x]
+    if state["policy"]["sessions"].get("forceGuarded") and x in state["agents"]: return state["agents"][x]
     for se in state["sessions"].values():
         if se["actor"] == x and "guard" in se and live(state, se) and effective_mode(state, se) == "guarded": return se["guard"]
     return None
@@ -646,7 +649,7 @@ def settle_holds(s):
     hasn't cleared (a task naming it, or an unfinished effect naming it as executor, from anyone but itself and its guard,
     since its last release) is held; such effects record the guard. One place, so every way of becoming guarded
     (choosing it, owners forcing it, a guard regaining its role) behaves alike."""
-    agents = set(s["guarded"]) | {se["actor"] for se in s["sessions"].values() if "guard" in se}
+    agents = set(s["guarded"]) | set(s["agents"]) | {se["actor"] for se in s["sessions"].values() if "guard" in se}
     for x in sorted(agents):
         g = guarded_now(s, x)
         if not g: continue
@@ -730,15 +733,19 @@ def _session_open(state, entry, ctx, role):
 def _session_close(state, entry, ctx, role):
     sess = state["sessions"].get(entry["body"]["session"])
     if not sess: return invalid("no such session")
-    if not sess["open"] and entry["author"] != sess["actor"]: return deny("session already closed")
+    if not sess["open"]: return deny("session already closed")
     if entry["author"] != sess["actor"] and role != "owner": return deny("only the session's actor or an owner closes it")
     return ALLOW
 
 def _session_input(state, entry, ctx, role):
     sess = state["sessions"].get(entry["body"]["session"])
     if not sess: return invalid("no such session")
-    if entry["body"].get("release"):
-        if state["held"].get(sess["actor"]) != entry["author"]: return deny("only the guard holding this agent releases it")
+    b = entry["body"]
+    if b.get("unguard") and not b.get("release"): return invalid("unguard needs release")
+    if b.get("release"):
+        x = sess["actor"]
+        if not (state["held"].get(x) == entry["author"] or (b.get("unguard") and guarded_now(state, x) == entry["author"])):
+            return deny("only the guard holding this agent releases it")
         if state["outside"].get(sess["actor"], 0) > entry["seen"]:
             return deny("stale release: an outside instruction arrived after what the guard had seen")
         return ALLOW if role in READ_ROLES else deny("guard holds no role")
@@ -772,6 +779,9 @@ def fold(state, record, ctx) -> dict:
         if new == "none": s["roles"].pop(tgt, None)
         else: s["roles"][tgt] = new
         now = new in READ_ROLES
+        pr = ctx["profiles"].get(tgt, {})                                   # pinned at this entry (P-01)
+        if now and pr.get("actorKind") == "agent" and pr.get("operatorConfirmed") and pr.get("operator"): s["agents"][tgt] = pr["operator"]
+        else: s["agents"].pop(tgt, None)                                    # no role, or no confirmed operator: not forceable
         if now and not before: hist.append({"from": seq})
         if before and not now and hist: hist[-1]["to"] = seq
     elif kind == "member.set":
@@ -893,20 +903,18 @@ def fold(state, record, ctx) -> dict:
             p = ctx["profiles"][author]
             if p.get("operatorConfirmed") and p.get("operator"): s["sessions"][eid]["guard"] = p["operator"]
             if b["steerMode"] == "guarded":
-                s["guarded"][author] = p["operator"]                            # sticky until it unguards itself
+                s["guarded"][author] = p["operator"]                            # sticky: only its guard unguards it
         if "task" in b: s["sessions"][eid]["task"] = b["task"]
     elif kind == "session.close":
         sess = s["sessions"][b["session"]]
         sess["open"] = False
-        x = sess["actor"]
-        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"
-                and not any(se["actor"] == x and se["open"] and se["steerMode"] == "guarded" for se in s["sessions"].values())):
-            s["guarded"].pop(x, None)                                  # the agent itself stops being guarded
     elif kind == "session.input":
         sess = s["sessions"][b["session"]]
         sess["steers"] += 1
         x = sess["actor"]
-        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = e["seen"]   # reviewed: what the guard had seen
+        if b.get("release"):
+            s["held"].pop(x, None); s["cleared"][x] = e["seen"]                 # reviewed: what the guard had seen
+            if b.get("unguard"): s["guarded"].pop(x, None)                       # only the guard loosens its agent
         else:
             hold_on_instruction(s, x, author)
             note_outside(s, x, author, rc["seq"])
@@ -938,7 +946,7 @@ def _credit(s, task_id, amount):
 def _fold_create(e, rc, ctx, eid):
     b, author, space = e["body"], e["author"], e["space"]
     base = {"space": space, "head": rc["seq"], "home": server_of(space), "policy": b["policy"], "roles": {}, "roleHistory": {},
-            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "cleared": {}, "outside": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
+            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "agents": {}, "cleared": {}, "outside": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
             "entries": {eid: {"author": author, "kind": "space.create"}}}
     if space.startswith("profile:"):
         actor = space[len("profile:"):]

@@ -7,7 +7,14 @@ try:
 except Exception:
     pass
 
-MUTATIONS = [  # (rule, description, exact text in wire.py, replacement)
+SIG = '        if not verify_entry(entry, profiles[entry["author"]]): return "invalid", "signature"\n'
+POLICY5 = '        if not skip_policy and wait <= 0:                                   # 5'
+LIMIT6 = """        if self.limiter:                                                    # 6
+            retry = self.limiter(entry["author"])
+            if retry: return "limit", {"reason": "rate limit", "retryAfterMs": retry}
+"""
+RECEIPT7 = '        prev = S["records"][-1]["receipt"] if S else None                    # 7'
+MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text and replacement may both be tuples of several edits
     ("R-01", "dedupe after validation", '''        if S:                                                               # 1 dedupe first (R-01)
             for rec in S["records"]:
                 if rec["receipt"]["id"] == eid: return "ok", rec["receipt"]''', '''        pass'''),
@@ -43,7 +50,7 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement)
     ("R-16", "an abandon that can never be allowed is still unavailable", '        if not P.decide(state, dict(entry, id=eid), {"time": fmt(due), "profiles": pinned})["allow"]: return 0', "        pass"),
     ("P-01", "all approval candidates are pinned", '            if found_valid and a not in required: continue', "            pass"),
     ("P-02", "state at judged on the state at `at`", 'if not P.can_read(st, as_, where):', 'if not P.can_read(self.state_at(space, where) or st, as_, where):'),
-    ("§3", "state at ignores `at`", 'view = st if at is None else self.state_at(space, at)', 'view = st'),
+    ("§3", "state at ignores `at`", 'view = st if at is None or at == st["head"] else self.state_at(space, at)', 'view = st'),
     ("§3", "state at needs rights at the head", 'where = st["head"] if at is None else at', 'where = st["head"]'),
     ("§3", "follow ignores limit", 'if P.can_read(st, as_, r["receipt"]["seq"])][:limit]', 'if P.can_read(st, as_, r["receipt"]["seq"])]'),
     ("R-15", "fault adopted without checking its proof", 'if pr.get("kind") == "equivocation" and len(rs) == 2 and equivocation_proof(rs[0], rs[1], server_keys): return "adopted", "equivocation"',
@@ -52,19 +59,43 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement)
     ("R-03a", "future tolerance is 600 s", "MAX_CLOCK_SKEW = 60 ", "MAX_CLOCK_SKEW = 600 "),
     ("G-01", "context blobs readable by watchers", 'P.session_access(S["state"], as_, sid)["read"]', 'P.session_access(S["state"], as_, sid)["watch"]'),
     ("G-01", "context blobs supplied by anyone's upload", 'if as_ in self.uploads.get(h, ()): self.supplied.add((item["space"], h))', 'self.supplied.add((item["space"], h))'),
+    # round 22: one order of verdicts (§4.1, E5), paged state (E8)
+    ("§4.1", "routing answered before dedupe", '        if S:                                                               # 1 dedupe first (R-01)', '        if S and sp not in self.moved:                                      # 1 dedupe first (R-01)'),
+    ("§4.1", "a foreign create is invalid, not moved", 'if not S and named and named != self.server: return "moved", named', 'if not S and named and named != self.server: return "invalid", "space id names another home"'),
+    ("§4.1", "shape judged before a moved space", 'if sp in self.moved: return "moved", self.moved[sp]', 'if sp in self.moved and not validate_header(entry): return "moved", self.moved[sp]'),
+    ("§4.1", "shape judged before a foreign space", 'if not S and named and named != self.server: return "moved", named', 'if not S and named and named != self.server and not validate_header(entry): return "moved", named'),
+    ("§4.1", "the author's profile before shape", '        err = validate_header(entry)                                        # 3 shape', '        err = validate_header(entry) if entry.get("author") in profiles else None                    # 3 shape'),
+    ("R-12", "an unknown keyId is invalid", 'return "denied", "no valid key"', 'return "invalid", "no valid key"'),
+    ("§4.1", "signature after Policy", (SIG, LIMIT6), ("", '        if not verify_entry(entry, profiles[entry["author"]]): return "invalid", "signature"\n' + LIMIT6)),
+    ("§4.1", "other profiles pinned before the signature", (SIG, '        if pinned is None: return "unavailable", "profile"\n'), ("", '        if pinned is None: return "unavailable", "profile"\n' + SIG)),
+    ("§4.1", "rate limit before Policy", POLICY5, '        if self.limiter and self.limiter(entry["author"]): return "limit", {"reason": "rate limit", "retryAfterMs": 1500}\n' + POLICY5),
+    ("§4.1", "rate limit after the moment-dependent unavailable", (LIMIT6, RECEIPT7), ("", LIMIT6 + RECEIPT7)),
+    ("§4.1", "durability judged before Policy", POLICY5, '        if (state or {}).get("policy", {}).get("minDurability") == "replicated" and self.durability != "replicated" and entry["kind"] not in ("policy.set", "space.move"): return "unavailable", "minDurability not reachable"\n' + POLICY5),
+    ("§4.1", "slow clock judged before Policy", POLICY5, '        if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"\n' + POLICY5),
+    ("§3", "state pages ignore maxStateItems", 'page = dict(view, effects=dict(es[oe:oe + n]), tasks=dict(ts_[ot:ot + n]))', 'page = dict(view)'),
+    ("§3", "state page size taken from limit", 'n, (oe, ot) = self.max_state_items, offs', 'n, (oe, ot) = limit, offs'),
+    ("§3", "cursor pages restart from the first", 'at, offs = int(m[1]), (int(m[2]), int(m[3]))', 'at, offs = int(m[1]), (0, 0)'),
+    ("§3", "cursor head not checked", 'if not m or not 1 <= int(m[1]) <= st["head"]: return "invalid", "cursor"', 'if not m: return "invalid", "cursor"'),
+    ("§3", "effect read returns every effect", 'dict(one, effects={effect: view["effects"][effect]})', 'dict(one, effects=view["effects"])'),
+    ("R-25", "a non-canonical public key is accepted", 'return "publicKey not canonical base64url"', 'pass'),
+    ("R-25", "a public key of the wrong length is accepted", 'if len(unb64(k)) != 32: return "publicKey length"', 'pass'),
+    ("§3", "effect read of an unknown effect is empty", 'if not (isinstance(effect, str) and effect in view["effects"]): return "not_found", "no such effect"', 'pass'),
 ]
 
 def main():
     src = open(os.path.join(HERE, "wire.py"), encoding="utf-8").read()
     missed = 0
     for rule, desc, old, new in MUTATIONS:
-        if src.count(old) != 1:
+        olds, news = (old, new) if isinstance(old, tuple) else ((old,), (new,))
+        if any(src.count(o) != 1 for o in olds):
             print(f"BAD ANCHOR {rule} {desc}"); missed += 1; continue
+        mutated = src
+        for o, n_ in zip(olds, news): mutated = mutated.replace(o, n_)
         d = tempfile.mkdtemp()
         try:
             for f in ("policy.py", "run_wire.py"):
                 shutil.copy(os.path.join(HERE, f), d)
-            open(os.path.join(d, "wire.py"), "w", encoding="utf-8").write(src.replace(old, new))
+            open(os.path.join(d, "wire.py"), "w", encoding="utf-8").write(mutated)
             r = subprocess.run([sys.executable, os.path.join(d, "run_wire.py")], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
             last = (r.stdout.strip().splitlines() or ["(no output)"])[-1]

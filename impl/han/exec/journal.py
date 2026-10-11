@@ -7,6 +7,11 @@ import json, os, sqlite3, time, uuid
 class StartRefused(Exception):
     """The instance may not start (X-07)."""
 
+def elapsed_clock_name() -> str:
+    """Which clock `elapsed_clock` reads, for the start-up log (X-02)."""
+    if hasattr(time, "CLOCK_BOOTTIME"): return "CLOCK_BOOTTIME"
+    return "time.monotonic (QueryPerformanceCounter on Windows, mach_continuous_time-backed on macOS)"
+
 def elapsed_clock():
     """The elapsed-time clock of X-02: it must keep counting through suspend. CLOCK_BOOTTIME where the platform has it,
     otherwise time.monotonic (on Windows the QueryPerformanceCounter-based clock)."""

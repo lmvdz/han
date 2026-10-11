@@ -46,8 +46,8 @@ def ticking(start=0):
     t = iter(range(start, 100000))
     return lambda: "2026-10-10T12:%02d:%02dZ" % divmod(next(t), 60)
 
-def base_home(network=None, clock=None, server="a.example", key=HOME_A, space=S, steady=None):
-    h = W.Home(server, key, clock=clock or ticking(), network=network, server_keys=SERVER_KEYS, steady=steady)
+def base_home(network=None, clock=None, server="a.example", key=HOME_A, space=S, steady=None, limiter=None):
+    h = W.Home(server, key, clock=clock or ticking(), network=network, server_keys=SERVER_KEYS, steady=steady, limiter=limiter)
     for kind, author, body, content in [("space.create", O, {"policy": POLICY}, {"name": "room"}),
                                         ("member.set", O, {"actor": M, "role": "member"}, None),
                                         ("member.set", O, {"actor": X, "role": "member"}, None)]:
@@ -582,6 +582,127 @@ def _():
     stranger = h.read(S, 0, Z, state=True, at=2)[0]
     return (code == "ok" and state2["head"] == 2 and X not in state2["roles"] and early == [1, 2, 3, 4] and stranger == "denied",
             f"{code} head={state2['head']} X-in-roles={X in state2['roles']} records={early} stranger={stranger}")
+
+# ── round 22: one order of verdicts (§4.1, E5) — one scenario per adjacent pair — and paged state (E8) ──
+def msg(author=M, text="x", **kw): return entry("message", author, {}, {"text": text}, **kw)
+def replicated_home():
+    """A home that ordered a `replicated` policy while it could, and can't reach that level now (R-08)."""
+    h = base_home(); h.durability = "replicated"
+    e, c = entry("policy.set", O, {"policy": dict(POLICY, minDurability="replicated")}); assert h.append(e, c, profiles())[0] == "ok"
+    h.durability = "local"
+    return h
+def bad_nonce(e): return dict(e, nonce="NOT-BASE32")
+
+@scenario("verdict order 1/2: dedupe before routing", "§4.1 steps 1-2, R-01", "a stored entry sent again after the space moved away gets its receipt, not `moved`; a new entry gets `moved`")
+def _():
+    h = base_home(); e, c = msg(); code1, r1 = h.append(e, c, profiles())
+    mv, cm = move(h, "b.example"); h.append(mv, cm, profiles())
+    again = h.append(e, c, profiles()); e2, c2 = msg(text="y"); fresh = h.append(e2, c2, profiles())
+    return (code1, again[0], again[1] == r1, fresh) == ("ok", "ok", True, ("moved", "b.example")), f"{code1} {again[0]} same={again[1] == r1} fresh={fresh}"
+
+@scenario("verdict order 2/3: routing before shape", "§4.1 steps 2-3", "a malformed entry for a foreign or a moved space is `moved`; a well-formed `space.create` naming a foreign server is `moved`, never `invalid`; a bad shape or a non-create into an unknown local space is `invalid`")
+def _():
+    h = base_home()
+    ec, cc = entry("space.create", O, {"policy": POLICY}, {"name": "x"}, space="q1:b.example")
+    foreign_create = h.append(ec, cc, profiles())
+    foreign_bad = h.append(bad_nonce(ec), cc, profiles())[0]
+    eu, cu = msg(space="q2:a.example"); unknown_local = h.append(eu, cu, profiles())[0]
+    em, cm_ = msg(); own_bad = h.append(bad_nonce(em), cm_, profiles())[0]
+    mv, cmv = move(h, "b.example"); h.append(mv, cmv, profiles())
+    moved_bad = h.append(bad_nonce(em), cm_, profiles())[0]
+    got = (foreign_create, foreign_bad, unknown_local, own_bad, moved_bad)
+    return got == (("moved", "b.example"), "moved", "invalid", "invalid", "moved"), f"{got}"
+
+@scenario("verdict order 3/4: shape before profile and key", "§4.1 steps 3-4", "a malformed entry is `invalid` even when the author's profile is missing or its keyId is unknown; a well-formed one is `unavailable` / `denied`")
+def _():
+    h = base_home(); p = profiles(); del p[Z]
+    e, c = msg(Z); e9 = W.sign_entry(dict(e, keyId="k9"), KEYS[Z])
+    got = (h.append(e, c, p)[0], h.append(bad_nonce(e), c, p)[0], h.append(e9, c, profiles())[0], h.append(bad_nonce(e9), c, profiles())[0])
+    return got == ("unavailable", "invalid", "denied", "invalid"), f"{got}"
+
+@scenario("verdict order 4/5: signature before Policy", "§4.1 steps 4-5, R-12", "a forged signature is `invalid` even from a non-member, a genuine one is Policy's `denied`; in a `replicated` space on a home that can't reach it, neither becomes `unavailable`; the signature is judged before the other actors' profiles are pinned")
+def _():
+    h = base_home(); e, c = msg(Z); forged = W.sign_entry(dict(e), KEYS[O])
+    plain = (h.append(e, c, profiles())[0], h.append(forged, c, profiles())[0])
+    r = replicated_home(); e2, c2 = msg(Z); forged2 = W.sign_entry(dict(e2), KEYS[O]); e3, c3 = msg(M); forged3 = W.sign_entry(dict(e3), KEYS[O])
+    rep = (r.append(e2, c2, profiles())[0], r.append(forged2, c2, profiles())[0], r.append(forged3, c3, profiles())[0], r.append(e3, c3, profiles())[0])
+    ha, pid = approved_home(); p = profiles(); del p[M]                              # the claim needs the proposer's profile, which is missing
+    ec, cc = entry("effect.claim", X, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30})
+    pins = (ha.append(W.sign_entry(dict(ec), KEYS[O]), cc, p)[0], ha.append(ec, cc, p)[0])
+    return (plain, rep, pins) == (("denied", "invalid"), ("denied", "invalid", "invalid", "unavailable"), ("invalid", "unavailable")), f"{plain} {rep} {pins}"
+
+@scenario("verdict order 5/6: Policy before the rate limit", "§4.1 steps 3, 5-6", "with the author over its limit, a malformed entry is `invalid` and a forbidden one `denied`; only a well-formed, allowed entry is `limit`, with retryAfterMs")
+def _():
+    h = base_home(); h.limiter = lambda author: 1500
+    e, c = msg(Z); em, cm_ = msg(); ok_e, ok_c = msg()
+    got = (h.append(bad_nonce(em), cm_, profiles())[0], h.append(e, c, profiles())[0], h.append(ok_e, ok_c, profiles()))
+    h.limiter = None; after = h.append(ok_e, ok_c, profiles())[0]
+    return (got[0], got[1], got[2], after) == ("invalid", "denied", ("limit", {"reason": "rate limit", "retryAfterMs": 1500}), "ok"), f"{got} then {after}"
+
+@scenario("verdict order 5/7: Policy before the moment-dependent unavailable", "§4.1 steps 5, 7, R-08, R-03a", "a forbidden entry is `denied` in a `replicated` space on a home that can't reach it, and on a home whose clock is behind the chain; an allowed one is `unavailable`")
+def _():
+    r = replicated_home()
+    nonmember = r.append(*msg(Z), profiles())[0]
+    e1, c1 = entry("policy.set", M, {"policy": dict(POLICY, minDurability="replicated")}); member_policy = r.append(e1, c1, profiles())[0]
+    allowed = r.append(*msg(M), profiles())[0]
+    r2 = base_home(); r2.durability = "local"
+    e2, c2 = entry("policy.set", M, {"policy": dict(POLICY, minDurability="replicated")}); nonowner_create = r2.append(e2, c2, profiles())[0]
+    e3, c3 = entry("policy.set", O, {"policy": dict(POLICY, minDurability="replicated")}); owner_create = r2.append(e3, c3, profiles())[0]
+    slow = base_home(clock=ticking(100)); slow.clock = lambda: "2026-10-10T12:00:00Z"
+    slow_denied = slow.append(*msg(Z), profiles())[0]; slow_ok = slow.append(*msg(M), profiles())[0]
+    got = (nonmember, member_policy, allowed, nonowner_create, owner_create, slow_denied, slow_ok)
+    return got == ("denied", "denied", "unavailable", "denied", "unavailable", "denied", "unavailable"), f"{got}"
+
+@scenario("verdict order 6/7: the rate limit before the moment-dependent unavailable", "§4.1 steps 6-7, R-16, R-03a, R-08", "an allowed entry from an author over its limit is `limit` even where the home would answer `unavailable` (durability, clock, early abandon); once under the limit it is `unavailable`")
+def _():
+    lim = lambda author: 800
+    r = replicated_home(); r.limiter = lim; e, c = msg(); a = r.append(e, c, profiles())[0]
+    r.limiter = None; b = r.append(e, c, profiles())[0]
+    slow = base_home(clock=ticking(100)); slow.clock = lambda: "2026-10-10T12:00:00Z"; slow.limiter = lim
+    e2, c2 = msg(); c1 = slow.append(e2, c2, profiles())[0]; slow.limiter = None; c2_ = slow.append(e2, c2, profiles())[0]
+    wall, steady = [0], [0.0]
+    h, claim = claimed_home(wall, steady); steady[0], wall[0] = 5.0, 5
+    h.limiter = lim; d1 = abandon(h, claim)[0]; h.limiter = None; d2 = abandon(h, claim)[0]
+    got = (a, b, c1, c2_, d1, d2)
+    return got == ("limit", "unavailable", "limit", "unavailable", "limit", "unavailable"), f"{got}"
+
+@scenario("state is paged, never refused", "§3 read, E8", "`read {state}` returns effects and tasks in pages of maxStateItems with `next`; `cursor` pages join to the full state; `limit` does not shrink it; `effect` returns that one effect with policy, roles, sessions, held, guarded; bad cursors are invalid, a stranger is denied")
+def _():
+    h = base_home(); h.max_state_items = 2
+    plan = {"action": "git.push", "target": "repo"}
+    body = {"executor": X, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}
+    pids = []
+    for _i in range(5):
+        e, c = entry("effect.propose", M, body, {"plan": plan}); assert h.append(e, c, profiles())[0] == "ok"; pids.append(W.entry_id(e))
+    for i in range(3):
+        e, c = entry("task", O, {"to": [M]}, {"ask": str(i)}); assert h.append(e, c, profiles())[0] == "ok"
+    code, items = h.read(S, 0, O, state=True, limit=1)
+    first = items[0]
+    pages, cur = [first], first.get("next")
+    while cur and len(pages) < 10:
+        c2, it = h.read(S, 0, O, state=True, cursor=cur); assert c2 == "ok" and len(it) == 1, (c2, it)
+        pages.append(it[0]); cur = it[0].get("next")
+    effects = {k: v for pg in pages for k, v in pg["state"]["effects"].items()}; tasks = {k: v for pg in pages for k, v in pg["state"]["tasks"].items()}
+    sizes = [(len(pg["state"]["effects"]), len(pg["state"]["tasks"])) for pg in pages]
+    head = h.spaces[S]["state"]["head"]
+    bad = (h.read(S, 0, O, cursor="0.0.0")[0], h.read(S, 0, O, state=True, cursor="junk")[0], h.read(S, 0, O, state=True, cursor=f"{head + 5}.0.0")[0],
+           h.read(S, 0, O, state=True, cursor="3.0.0", effect=pids[0])[0], h.read(S, 0, O, state=True, cursor="3.0.0", at=2)[0],
+           h.read(S, 0, O, state=True, effect="0" * 64)[0], h.read(S, 0, Z, state=True, cursor=first["next"])[0])
+    h.max_state_items = 1000
+    full = h.read(S, 0, O, state=True)[1][0]
+    ce, one = h.read(S, 0, O, state=True, effect=pids[3]); one = one[0]["state"]
+    return (code == "ok" and sizes == [(2, 2), (2, 1), (1, 0)] and effects == full["state"]["effects"] and tasks == full["state"]["tasks"]
+            and "next" not in full and list(one["effects"]) == [pids[3]] and "tasks" not in one and {"policy", "roles", "sessions", "held", "guarded"} <= set(one)
+            and bad == ("invalid", "invalid", "invalid", "invalid", "invalid", "not_found", "denied")), f"{code} sizes={sizes} bad={bad}"
+
+
+@scenario("public keys are canonical base64url", "R-25, §2", "a key.add whose publicKey is padded, non-canonical or not 32 bytes is `invalid` at the Log (step 3), before any signature or Policy; a canonical one reaches Policy (`denied` in a plain space)")
+def _():
+    h = base_home(); good = KEYS[M].pub
+    cases = {"padded": good + "=", "short": good[:-4], "alphabet": good[:-1] + "+", "non-canonical": good[:-1] + "B"}      # "B": the unused low bits of the 43rd character are not zero
+    out = {k: h.append(*entry("key.add", M, {"keyId": "k2", "publicKey": v}), profiles())[0] for k, v in cases.items()}
+    out["canonical"] = h.append(*entry("key.add", M, {"keyId": "k2", "publicKey": good}), profiles())[0]
+    return out == {"padded": "invalid", "short": "invalid", "alphabet": "invalid", "non-canonical": "invalid", "canonical": "denied"}, str(out)
 
 def main():
     bad = 0

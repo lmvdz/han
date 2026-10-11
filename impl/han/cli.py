@@ -7,7 +7,7 @@
   member set SP ACTOR ROLE                  message SP TEXT [--to ACTOR]…
   task SP ASK --to ACTOR… [--deadline T]    propose SP --executor A --plan FILE [--repeatable] [--cost UNIT=N]
   approve SP PROPOSAL [--note T]            cancel SP ID [--task]
-  session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session release SP SESSION     session close SP SESSION
+  session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session release SP SESSION [--unguard]     session close SP SESSION
   watch SP SESSION [--count N]              read SP [--after N] [--follow] [--json]        status SP
 Ids may be given as a unique prefix (8+ hex digits)."""
 from __future__ import annotations
@@ -118,7 +118,8 @@ async def cmd_session(c, a):
     sid = await resolve(c, a.space, a.session, recs)
     if a.action == "steer": await put(c, "session.input", a.space, {"session": sid}, {"text": a.text})
     elif a.action == "release":
-        e, ct = c.make_entry("session.input", a.space, {"session": sid, "release": True}, {"text": a.note}, seen=a.seen)
+        body = {"session": sid, "release": True} | ({"unguard": True} if a.unguard else {})       # E1: only the guard's `unguard` ends a guarded choice
+        e, ct = c.make_entry("session.input", a.space, body, {"text": a.note}, seen=a.seen)
         r = await c.append(e, ct); out(f"seq {r['seq']} id {r['id']}")
     else: await put(c, "session.close", a.space, {"session": sid})
 
@@ -143,9 +144,8 @@ async def cmd_read(c, a):
         for rec in await records(c, a.space, a.after): await show(rec)
 
 async def cmd_status(c, a):
-    items = await c.read_all(a.space, 0, state=True, limit=1)
-    st = next((i["state"] for i in items if i["type"] == "state"), None)
-    if not st: return die("no state (needs read rights at the head)")
+    try: st = await c.read_state(a.space)
+    except WireError: return die("no state (needs read rights at the head)")
     pol = st["policy"]
     out(f"{a.space}  head {st['head']}  home {st['home']}  visibility {pol['visibility']}  join {pol['join']}")
     out("members: " + (", ".join(f"{x} {r}" for x, r in sorted(st["roles"].items()) if r != "none") or "none"))
@@ -190,7 +190,8 @@ def parser() -> argparse.ArgumentParser:
     ss = sub.add_parser("session").add_subparsers(dest="action", required=True)
     cmd("open", cmd_session, "space", ("--mode", {"choices": ["auto", "guarded"], "default": "auto"}), ("--task", {}), ("--title", {}), parent=ss)
     cmd("steer", cmd_session, "space", "session", "text", parent=ss)
-    cmd("release", cmd_session, "space", "session", ("--note", {"default": "released"}), ("--seen", {"type": int, "help": "what the guard has seen (default: the head)"}), parent=ss)
+    cmd("release", cmd_session, "space", "session", ("--note", {"default": "released"}), ("--seen", {"type": int, "help": "what the guard has seen (default: the head)"}),
+        ("--unguard", {"action": "store_true", "help": "also end the agent's guarded state (the guard only; closing sessions never does)"}), parent=ss)
     cmd("close", cmd_session, "space", "session", parent=ss)
     cmd("watch", cmd_watch, "space", "session", ("--count", {"type": int, "default": 0}), ("--timeout", {"type": float, "default": 0}), ("--json", {"action": "store_true"}))
     cmd("read", cmd_read, "space", ("--after", {"type": int, "default": 0}), ("--follow", {"action": "store_true"}), ("--json", {"action": "store_true"}))

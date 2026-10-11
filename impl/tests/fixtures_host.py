@@ -19,12 +19,12 @@ async def until(pred, timeout=5.0):
             await asyncio.sleep(0.02)
     return await asyncio.wait_for(poll(), timeout)
 
-async def world(env, steer="member"):
+async def world(env, steer="member", force=False):
     """Register the actors, create the space, confirm alice as bot's operator. Returns the clients by name (bot's is made by start_host)."""
     for n in ("alice", "carol", "dave"): env.actor(n)
     env.actor("bot", "agent", operator=ALICE); env.actor("exec", "service")
     cl = {n: await env.client(n) for n in ("alice", "carol", "dave", "exec")}
-    pol = default_policy(sessions={"watch": "member", "read": "owner", "steer": steer, "modes": ["auto", "guarded"]})
+    pol = default_policy(sessions={"watch": "member", "read": "owner", "steer": steer, "modes": ["auto", "guarded"]} | ({"forceGuarded": True} if force else {}))
     await mkspace(cl["alice"], policy=pol)
     for a in (CAROL, DAVE): await member(cl["alice"], a)
     bot = await env.client("bot")

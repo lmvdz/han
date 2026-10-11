@@ -9,14 +9,15 @@ from .. import keys
 from ..core import P, W, LIMITS, WireError
 from ..entries import make_entry
 from .outbox import Outbox
+from .state import StateReads
 
 _CLOSED = object()
 PATH = "/han"                 # D7: the generic binding's WebSocket path
 _NET = (ConnectionError, OSError, ConnectionClosed, WebSocketException, asyncio.TimeoutError)
 
-class Client:
+class Client(StateReads):
     def __init__(self, url: str, actor: str, key_path: str, outbox_db: str, server: str | None = None,
-                 retry_delay: float = 0.2, max_retry_delay: float = 5.0, key=None):
+                 retry_delay: float = 1.0, max_retry_delay: float = 30.0, key=None):
         self.url, self.actor = (url.rstrip("/") + PATH if urlsplit(url).path in ("", "/") else url), actor      # D7: never a bare host
         self.server = server or P.server_of(actor)               # the name we dial: bound into the hello proof
         self.key = key or keys.load(key_path)                     # `key`: an already loaded key (a server's own, for @:server connections)
@@ -167,12 +168,12 @@ class Client:
                 return receipt
 
     # ── reading ──
-    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None):
+    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None, cursor=None, effect=None):
         """ReadItems after `after`. `state=True, at=N`: the StateView after record N (needs read rights at N). With `follow`
         a backlog cut by `limit` is re-read from the last seq seen, so a follower never skips a record; a lost
         connection ends the stream with an error, as before."""
         args = {"space": space, "after": after} | {k: v for k, v in (("follow", follow or None), ("state", state or None), ("limit", limit),
-                                                                       ("knownHeads", known_heads), ("at", at)) if v is not None}
+                                                                       ("knownHeads", known_heads), ("at", at), ("cursor", cursor), ("effect", effect)) if v is not None}
         last, got = after, 0
         async for it in self._stream("read", args):
             if it["type"] == "record":

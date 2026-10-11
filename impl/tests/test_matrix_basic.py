@@ -1,4 +1,5 @@
 """The Matrix binding against a real Synapse (podman): T-01/T-06, T-02, reject spoofing, R-01, read, redaction."""
+import asyncio, json
 import pytest
 from fixtures_matrix import synapse, mx, until, open_space, say, verify_room, LOOP     # noqa: F401  (fixtures)
 from han.core import P, W, WireError
@@ -23,8 +24,8 @@ async def test_room_bound_to_space_two_users_verify(mx):
     assert m.spaces[space]["state"]["head"] == 4
 
 async def test_authorship_is_the_han_signature_not_the_sender(mx):
-    """T-02, R-12: bob posts an entry that says it is alice's but is signed with bob's key: rejected. Bob relaying an entry
-    alice really signed is accepted (authorship is the signature; the Matrix sender does not matter)."""
+    """T-02, R-12: bob posts an entry that says it is alice's but is signed with bob's key: rejected. Bob cannot even upload an entry
+    alice really signed (E4: the authenticated actor of `POST /_han/v1/entry` is the entry's author); alice's own append is accepted."""
     alice, bob = await mx.person("alice"), await mx.person("bob")
     room, space = await open_space(mx, alice, invite=[bob])
     forged, ct = make_entry(bob.client.key, alice.actor, "message", space, {}, {"text": "alice says pay me"}, seen=2)
@@ -34,7 +35,9 @@ async def test_authorship_is_the_han_signature_not_the_sender(mx):
     await alice.client.fill_content(room)
     assert not [r for r in alice.client.records(room) if r["entry"]["kind"] == "message"]
     real, ct = alice.client.make_entry("message", space, {}, {"text": "genuinely alice"})
-    receipt = await bob.client.append(real, ct, room=room, timeout=30)            # relayed by bob, signed by alice
+    with pytest.raises(WireError) as ex: await bob.client.append(real, ct, room=room, timeout=30)             # relayed by bob, signed by alice
+    assert ex.value.code == "denied"
+    receipt = await alice.client.append(real, ct, room=room, timeout=30)
     assert receipt["id"] == P.entry_id(real)
     await until(lambda: any(r["entry"]["author"] == alice.actor and r["entry"]["kind"] == "message" for r in alice.client.records(room)))
     await verify_room(mx, alice.client, room)
@@ -136,8 +139,8 @@ async def test_read_endpoint_needs_han_auth_and_read_rights(mx):
     await svc.close()
 
 async def test_redact_over_matrix_keeps_headers_and_proof(mx):
-    """P-12, R-04 on Matrix (P-02 binding): the room never held the content, so a redact leaves nothing to strip there; the header stays,
-    and the HTTP read gives the record marked redacted with its proof, which a late joiner verifies."""
+    """P-12, R-04 on Matrix (P-02 binding): the room never held a header or a body, so a redact leaves nothing to strip there; the HTTP
+    read gives the record marked redacted with its proof. A late joiner with no HAN role sees the receipts and no record."""
     alice = await mx.person("alice")
     room, space = await open_space(mx, alice)
     r = await say(alice, room, space, "secret text")
@@ -146,16 +149,18 @@ async def test_redact_over_matrix_keeps_headers_and_proof(mx):
     assert "secret text" not in str((await alice.client.api.messages(room, None, 100))["chunk"])
     carol = await mx.person("carol")
     await alice.client.api.invite(room, carol.actor); await carol.client.join(room)
-    await until(lambda: len(carol.client.records(room)) == 3, what="carol sees all three records")
+    await until(lambda: len(carol.client.rooms[room].receipts) == 3, what="carol sees the three receipts")
+    assert carol.client.records(room) == []                                       # no role: no header, no body (E4)
     items = await alice.client.read_http(space, 0)
     rec = next(x["record"] for x in items if x["record"]["receipt"]["id"] == r["id"])
     assert rec["redacted"] and rec["content"] is None and rec["redactedBy"]["entry"]["kind"] == "redact"
     await verify_room(mx, alice.client, room)
 
 async def test_room_carries_no_content_and_no_reader_beyond_p02(mx):
-    """P-02 (§8.2): `org.han.entry` events are `{entry, contentHash}` and receipts carry no content, so the room shows none. Bob, removed
-    from the space, sees headers and receipts of what came after but gets content only for the seqs he held a role at (HTTP read); carol,
-    who joined the Matrix room late with no HAN role, sees no content at all and the HTTP read says not_found."""
+    """P-02, E4 (§8.2): `org.han.entry` events are `{id}` (a client's) or `{id, kind, author, seq}` (the sequencer's) and receipts carry
+    no header or body, so the room shows none. Bob, removed from the space, reads only the seqs he held a role at (HTTP read) and has the
+    receipts of what came after; carol, who joined the Matrix room late with no HAN role, has receipts and ids, no record at all, and the
+    HTTP read says not_found."""
     alice, bob = await mx.person("alice"), await mx.person("bob")
     room, space = await open_space(mx, alice, invite=[bob])
     await say(alice, room, space, "while bob was a member")
@@ -167,11 +172,12 @@ async def test_room_carries_no_content_and_no_reader_beyond_p02(mx):
     chunk = (await alice.client.api.messages(room, None, 100))["chunk"]
     assert "while bob" not in str(chunk) and "after bob" not in str(chunk)
     entry_events = [ev["content"] for ev in chunk if ev["type"] == ENTRY]
-    assert entry_events and all(set(c) == {"entry", "contentHash"} and c["contentHash"] == c["entry"]["contentHash"] for c in entry_events)
-    await until(lambda: len(bob.client.records(room)) == 5 and len(carol.client.records(room)) == 5, what="both see all five headers")
+    assert entry_events and all(set(c) in ({"id"}, {"id", "kind", "author", "seq"}) for c in entry_events)
+    await until(lambda: len(bob.client.rooms[room].receipts) == 5 and len(carol.client.rooms[room].receipts) == 5, what="both see all five receipts")
     await bob.client.fill_content(room)
     texts = {r["receipt"]["seq"]: (r["content"] or {}).get("text") for r in bob.client.records(room) if r["entry"]["kind"] == "message"}
-    assert texts == {3: "while bob was a member", 5: None}                      # removed: the content after his role ended stays unread
+    assert texts == {3: "while bob was a member"}                               # removed: what came after his role ended is not his to read
+    assert carol.client.records(room) == []
     with pytest.raises(WireError) as ex: await carol.client.read_http(space, 0)
     assert ex.value.code == "not_found"
     assert all(r["content"] is None for r in carol.client.records(room))
@@ -216,3 +222,97 @@ async def test_records_ordered_while_matrix_was_unreachable_are_published_on_res
     mx.svc = await AppService(mx.seq, mx.syn.base_url, mx.syn.as_token, mx.syn.hs_token, os.path.join(mx.tmp, "as.db")).start("127.0.0.1", mx.as_port)
     await until(lambda: any(r["receipt"]["id"] == P.entry_id(e) for r in alice.client.records(room)), what="the record reaches the room")
     await verify_room(mx, alice.client, room)
+
+# ── E4: the whole entry goes to the service, the room gets only ids ──
+SECRET = "the launch code is 12345"
+HEADER_FIELDS = {"entry", "content", "contentHash", "sig", "nonce", "keyId", "body", "refs", "seen", "time", "space", "v"}
+
+async def test_e4_member_who_cannot_read_the_log_sees_no_header_or_body(mx):
+    """E4, P-02: carol is in the Matrix room with no HAN role. In no room event she can read is there a header field or a body: client
+    entry events are `{id}`, the sequencer's are `{id, kind, author, seq}` (also for a record ordered over another binding, T-01),
+    receipts carry ids and hashes. She holds no record, and the service answers her read with not_found."""
+    alice = await mx.person("alice")
+    room, space = await open_space(mx, alice)
+    carol = await mx.person("carol")
+    await alice.client.api.invite(room, carol.actor); await carol.client.join(room)
+    await say(alice, room, space, SECRET)
+    e, ct = alice.client.make_entry("message", space, {}, {"text": SECRET + " (generic binding)"})
+    mx.seq.append(e, ct)                                                           # ordered by another binding: flushed to the room by the service
+    await until(lambda: P.entry_id(e) in alice.client.rooms[room].receipts, what="the generic-binding record reaches the room")
+    chunk = (await carol.client.api.messages(room, None, 100))["chunk"]
+    assert "launch code" not in str(chunk)
+    entry_events = [ev["content"] for ev in chunk if ev["type"] == ENTRY]
+    assert len(entry_events) >= 3 and all(set(c) in ({"id"}, {"id", "kind", "author", "seq"}) for c in entry_events)
+    assert any(set(c) == {"id", "kind", "author", "seq"} and c["id"] == P.entry_id(e) for c in entry_events)       # the flush, not {entry, ...}
+    for ev in chunk:
+        c = ev["content"]
+        if ev["type"] == RECEIPT: assert set(c["receipt"]) <= {"space", "seq", "id", "prev", "home", "homeKey", "time", "durability", "profiles", "homeSig"}
+        if ev["type"] in (ENTRY, RECEIPT, REJECT): assert not HEADER_FIELDS & set(c) - {"receipt"}, ev
+    await until(lambda: len(carol.client.rooms[room].receipts) >= 3, what="carol sees the receipts")
+    assert carol.client.records(room) == [] and carol.client.rooms[room].entries == {}
+    with pytest.raises(WireError) as ex: await carol.client.read_http(space, 0)
+    assert ex.value.code == "not_found"
+
+async def test_e4_unavailable_is_a_reject_that_is_not_final(mx):
+    """E4: `unavailable` is posted as `org.han.reject {id, code: "unavailable", retryAfterMs}`. The client treats it as non-final: it
+    keeps no reject for the entry, waits retryAfterMs (far less than its 10 s resend timer) and gets the receipt."""
+    alice = await mx.person("alice")
+    room, space = await open_space(mx, alice)
+    real, fails = mx.seq.append, [2]
+    def flaky(entry, content=None):
+        if entry["kind"] == "message" and fails[0] > 0:
+            fails[0] -= 1; raise WireError("unavailable", "storage is catching up", retry_after_ms=400)
+        return real(entry, content)
+    mx.seq.append = flaky
+    try:
+        e, ct = alice.client.make_entry("message", space, {}, {"text": "eventually"})
+        t0 = asyncio.get_running_loop().time()
+        receipt = await alice.client.append(e, ct, room=room, timeout=8)
+        took = asyncio.get_running_loop().time() - t0
+    finally: mx.seq.append = real
+    assert receipt["id"] == P.entry_id(e) and fails[0] == 0 and took < 8
+    rv = alice.client.rooms[room]
+    assert P.entry_id(e) not in rv.rejects                                         # not final: nothing remembered as a refusal
+    rejects = [ev["content"] for ev in (await alice.client.api.messages(room, None, 100))["chunk"] if ev["type"] == REJECT]
+    assert len(rejects) == 2 and all(r["code"] == "unavailable" and r["retryAfterMs"] == 400 and r["id"] == P.entry_id(e) for r in rejects)
+    assert alice.client.outbox.get(P.entry_id(e))["state"] == "done"
+
+async def test_e4_entry_upload_is_authenticated_and_bounded(mx):
+    """E4: `POST /_han/v1/entry` needs HAN authentication and applies the header and content limits; the old `/content` is gone."""
+    alice = await mx.person("alice")
+    room, space = await open_space(mx, alice)
+    svc = alice.client.service
+    with pytest.raises(MatrixError) as mex: await svc.request("POST", "/_han/v1/entry", body={"entry": {}})
+    assert mex.value.status == 401
+    e, ct = alice.client.make_entry("message", space, {}, {"text": "x"})
+    assert (await alice.client._han("POST", "/_han/v1/entry", body={"entry": e, "content": ct})) == {"id": P.entry_id(e)}
+    big, _ = alice.client.make_entry("message", space, {"pad": "p" * 17000}, {"text": "x"})
+    with pytest.raises(WireError) as ex: await alice.client._han("POST", "/_han/v1/entry", body={"entry": big, "content": ct})
+    assert ex.value.code == "invalid" and "header" in ex.value.message
+    e2, _ = alice.client.make_entry("message", space, {}, {"text": "y" * 70000})
+    with pytest.raises(WireError) as ex: await alice.client._han("POST", "/_han/v1/entry", body={"entry": e2, "content": {"text": "y" * 70000}})
+    assert ex.value.code == "invalid" and "content" in ex.value.message
+    with pytest.raises(MatrixError) as mex: await alice.client._han("POST", "/_han/v1/content", body={"text": "x"})
+    assert mex.value.status in (404, 405)
+
+# ── E11: Retry-After, per-client limits ──
+async def test_e11_503_has_retry_after_and_limits_are_per_client(mx):
+    from han.matrix.appservice import AppService, MAX_CHALLENGES_PER_CLIENT, MAX_ENTRIES_PER_ACTOR
+    r = AppService._fail(None, WireError("unavailable", "later", retry_after_ms=2500))
+    assert r.status == 503 and r.headers["Retry-After"] == "3" and json.loads(r.body)["error"]["retryAfterMs"] == 2500
+    assert AppService._fail(None, WireError("unavailable", "later")).headers["Retry-After"] == "1"
+    assert "Retry-After" not in AppService._fail(None, WireError("denied", "no")).headers
+    alice = await mx.person("alice")
+    room, space = await open_space(mx, alice)
+    svc = alice.client.service
+    mx.svc.challenges.clear()
+    for _ in range(MAX_CHALLENGES_PER_CLIENT): await svc.request("GET", "/_han/v1/challenge")
+    with pytest.raises(MatrixError) as mex: await svc.request("GET", "/_han/v1/challenge")             # one more open challenge from this address
+    assert mex.value.status == 429 and mex.value.body["error"]["code"] == "limit"
+    mx.svc.challenges.clear()
+    for i in range(MAX_ENTRIES_PER_ACTOR):
+        e, ct = alice.client.make_entry("message", space, {}, {"text": f"pending {i}"})
+        await alice.client._han("POST", "/_han/v1/entry", body={"entry": e, "content": ct})
+    e, ct = alice.client.make_entry("message", space, {}, {"text": "one too many"})
+    with pytest.raises(WireError) as ex: await alice.client._han("POST", "/_han/v1/entry", body={"entry": e, "content": ct})
+    assert ex.value.code == "limit" and ex.value.retry_after_ms

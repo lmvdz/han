@@ -10,7 +10,7 @@ from .. import keys
 from ..client import Client
 from ..core import P, WireError
 from .actions import Actions, Refused
-from .journal import Journal, StartRefused, elapsed_clock
+from .journal import Journal, StartRefused, elapsed_clock, elapsed_clock_name
 
 STALL_BOUND = 10          # seconds (§4.5)
 log = logging.getLogger("han.exec")
@@ -21,7 +21,7 @@ class Crash(BaseException):
 class Executor:
     def __init__(self, url: str, actor: str, key_path: str, journal: str, spaces, sandbox: str, actions=("file.write", "http.post"),
                  allow_urls=(), instance: str | None = None, server: str | None = None, clock=None, hook=None,
-                 retry_delay: float = 0.2, max_retry_delay: float = 2.0, backoff_base: float = 1.0, backoff_cap: float = 60.0, client=None):
+                 retry_delay: float = 1.0, max_retry_delay: float = 30.0, backoff_base: float = 1.0, backoff_cap: float = 60.0, client=None):
         """`clock` is the elapsed-time clock (X-02); `hook(point, **info)` may be sync or async and may raise Crash (tests).
         After a `failed`/`not started` outcome the effect is re-claimed no sooner than `backoff_base` * 2^(failures - 1)
         seconds later, at most `backoff_cap` (X-11). `client`: any han.client.ClientProtocol (e.g. a MatrixClient); by default a
@@ -30,6 +30,7 @@ class Executor:
         self.spaces, self.instance, self.server = list(spaces), instance, server
         self.actions = Actions(sandbox, allow_urls, actions)
         self.clock, self.hook = clock or elapsed_clock(), hook
+        self.clock_name = "injected by the caller" if clock else elapsed_clock_name()
         self.retry = (retry_delay, max_retry_delay)
         self.backoff = (backoff_base, backoff_cap)
         self._fails: dict[str, int] = {}               # proposal id → consecutive failed/not-started outcomes
@@ -50,6 +51,7 @@ class Executor:
         kp = keys.load(self.key_path)
         if self.instance and self.instance != kp.key_id: raise StartRefused(f"--instance {self.instance} is not the key's id {kp.key_id}")
         self.instance = kp.key_id
+        log.info("%s: elapsed-time clock (X-02): %s", self.actor, self.clock_name)
         self.journal = Journal(self.journal_path, kp.key_id, self.key_path + ".used")       # X-07: lock, marker (may refuse)
         try:
             self.client = self._given or Client(self.url, self.actor, self.key_path, self.journal_path + ".outbox.db", server=self.server,
@@ -131,8 +133,13 @@ class Executor:
             if it["type"] == "record": ev.set()
 
     async def _reconcile(self, space) -> int:
-        items = await self.client.read_all(space, 2 ** 31, state=True)
-        st = items[0]["state"]
+        head = 0
+        async for page in self.client.state_pages(space):          # E8: a big state arrives in pages; look at every effect
+            st = page["state"]; head = st["head"]
+            self._start_jobs(space, st)
+        return head
+
+    def _start_jobs(self, space, st):
         for pid, eff in st["effects"].items():
             if (eff["executor"] != self.actor or eff["phase"] != "ready" or pid in self._jobs or pid in self._skip
                     or self._denied.get(pid, -1) >= st["head"]): continue
@@ -145,7 +152,6 @@ class Executor:
                 asyncio.get_running_loop().call_later(wait + 0.01, self._wake[space].set)
                 continue
             self._jobs[pid] = asyncio.create_task(self._guard(self._job, space, pid, eff, st))
-        return st["head"]
 
     async def _decline(self, space, pid, eff, why):
         """X-11: an effect this executor won't run is never claimed; one `message` citing the proposal tells its proposer."""
@@ -236,7 +242,7 @@ class Executor:
         """X-10: our outcome was refused. If an owner abandoned the claim, say what really happened with effect.resolve."""
         evs = self.journal.events(cid); names = [e for e, _ in evs]; data = dict(evs)
         info = data["claiming"]; space, pid = info["space"], info["proposal"]
-        st = (await self.client.read_all(space, 2 ** 31, state=True))[0]["state"]
+        st = await self.client.read_state(space, effect=pid)           # E8: this one effect, not the whole state
         eff = st["effects"].get(pid)
         claim = next((c for c in (eff or {}).get("claims", []) if c["id"] == cid), None)
         if not (eff and claim and eff["phase"] == "unknown" and eff["claims"][-1]["id"] == cid and claim.get("outcome") == "unknown"):

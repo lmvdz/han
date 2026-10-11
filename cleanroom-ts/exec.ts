@@ -19,6 +19,7 @@ const alive = new Set<string>();       // lock tokens of executors in this proce
 
 /** X-02: the elapsed-time clock must keep counting through suspend, sleep and VM pause (CLOCK_BOOTTIME). Node has no direct API;
  *  os.uptime() is boot-based on Linux (/proc/uptime) and counts sleep on Windows (GetTickCount64). Other platforms are refused. */
+export const CLOCK_NAME = process.platform === "linux" ? "CLOCK_BOOTTIME (os.uptime, /proc/uptime)" : "GetTickCount64 (os.uptime)";
 export function elapsedMs(): number {
   if (process.platform !== "linux" && process.platform !== "win32") throw new Error("X-02: no suspend-aware elapsed clock on " + process.platform);
   return os.uptime() * 1000;
@@ -33,6 +34,7 @@ export interface ExecOptions {
   spaces: string[];
   crashAt?: "after-claiming-journal" | "after-receipt" | "after-launching-journal" | "after-launch" | "after-reporting-journal";
   backoffBaseMs?: number; backoffCapMs?: number;   // X-11: exponential back-off before claiming the same effect again after failed/not started (default 1 s, cap 60 s)
+  serverUrls?: Record<string, string>;   // X-12: ws URL of other servers, for a space that moved there (else han-peers, then /.well-known/han)
   retryMs?: number;              // D5: first back-off when a followed space is not_found/moved (default 1 s, doubling to 30 s)
   stallBeforeCheckMs?: number;   // test hook: simulate a stalled platform between the receipt and the deadline check
   onEvent?: (e: string) => void;
@@ -44,6 +46,9 @@ export class Executor {
   private journalFd = -1;
   private lockPath: string; private lockToken = "";
   private client!: HanClient;
+  private homes = new Map<string, HanClient>();   // a space that moved: the connection to its new home (X-12)
+  /** the connection that serves a space */
+  private cl(space: string): HanClient { return this.homes.get(space) ?? this.client; }
   private states = new Map<string, SpaceState>();
   private plans = new Map<string, A>();              // proposal id -> plan (null if redacted)
   private claimed = new Set<string>();               // proposals this instance has ever journaled a claim for
@@ -114,6 +119,7 @@ export class Executor {
     this.acquire();
     try {
       this.loadJournal();
+      this.ev("X-02 elapsed clock: " + CLOCK_NAME);
       this.client = await HanClient.connect(this.o.url, this.o.server, this.o.actor, this.key);
       await this.recover();                           // X-06, before anything new
       for (const sp of this.o.spaces) void this.followSpace(sp);
@@ -123,21 +129,43 @@ export class Executor {
   /** D5: a follow of a space that does not exist yet (or has moved) is answered at once; retry with back-off (1 s, doubling to 30 s), never treat it as final. */
   private async followSpace(sp: string) {
     let delay = this.o.retryMs ?? 1000;
-    while (!this.dead && !this.client.closed) {
-      const s = this.client.stream("read", { space: sp, after: 0, follow: true }, (item) => this.enqueue(item));
+    while (!this.dead && !this.cl(sp).closed) {
+      const s = this.cl(sp).stream("read", { space: sp, after: 0, follow: true }, (item) => this.enqueue(item));
       this.streamsToCancel.push(s.cancel);
       try { await s.done; return; }
       catch (e) {
         if (!(e instanceof WireFault) || (e.code !== "not_found" && e.code !== "moved" && e.code !== "unavailable") || e.message.includes("connection closed")) return;   // denied, or the connection is lost: restart recovers
+        if (e.code === "moved" && e.movedTo) await this.followMove(sp, e.movedTo);
         await new Promise((r) => setTimeout(r, delay));
         delay = Math.min(delay * 2, 30000);
       }
     }
   }
+  /** X-12: a `moved` follow is retried at `movedTo`. Its URL comes from the options (`serverUrls`), from the han-peers of the server dialed, or from
+   *  `https://<movedTo>/.well-known/han`; an executor that cannot look it up keeps retrying the URL it has. */
+  private async followMove(sp: string, to: string) {
+    if (this.cl(sp) !== this.client && this.homes.get(sp) && (this.homes.get(sp) as any).dialed === to) return;
+    if (to === this.o.server && this.homes.has(sp)) { this.homes.delete(sp); return; }
+    try {
+      let url = this.o.serverUrls?.[to];
+      if (!url) {
+        const base = this.o.url.replace(/^ws/, "http").replace(/\/[^/]*$/, "");
+        const peers = await (await fetch(base + "/.well-known/han-peers")).json() as A;
+        const doc = (peers.peers ?? []).find((x: A) => x.server === to)?.url ?? `https://${to}/.well-known/han`;
+        url = ((await (await fetch(doc)).json()) as A).sequencer;
+      }
+      if (!url) return;
+      const c = await HanClient.connect(url, to, this.o.actor, this.key);
+      (c as any).dialed = to;
+      this.homes.get(sp)?.close();
+      this.homes.set(sp, c);
+      this.ev(`following ${sp} at its new home ${to}`);
+    } catch (e) { this.ev(`moved to ${to}: no usable URL yet (${(e as Error).message})`); }
+  }
   async idle() { let q; do { q = this.queue; await q; } while (q !== this.queue); }
-  async stop() { this.dead = true; for (const tm of this.timers) clearTimeout(tm); this.timers.clear(); this.client?.close(); this.releaseLock(); try { fs.closeSync(this.journalFd); } catch { /* */ } }
+  async stop() { this.dead = true; for (const tm of this.timers) clearTimeout(tm); this.timers.clear(); this.client?.close(); for (const c of this.homes.values()) c.close(); this.releaseLock(); try { fs.closeSync(this.journalFd); } catch { /* */ } }
   /** Simulated process death: no cleanup, the lock file stays (its owner is no longer alive). */
-  crash() { this.dead = true; for (const tm of this.timers) clearTimeout(tm); this.timers.clear(); alive.delete(this.lockToken); this.client?.terminate(); try { fs.closeSync(this.journalFd); } catch { /* */ } }
+  crash() { this.dead = true; for (const tm of this.timers) clearTimeout(tm); this.timers.clear(); alive.delete(this.lockToken); this.client?.terminate(); for (const c of this.homes.values()) c.terminate(); try { fs.closeSync(this.journalFd); } catch { /* */ } }
 
   // M5 `deliver(item)`: the executor is fed every record of the spaces it follows.
   async deliver(item: ReadItem): Promise<void> {
@@ -172,7 +200,7 @@ export class Executor {
     if (!st || !ef) return;
     const m = makeEntry(this.key, { space, kind: "message", author: this.o.actor, body: { to: [ef.proposer] }, content: { text: `cannot run ${pid.slice(0, 8)}: ${why}` }, refs: [pid], seen: st.head });
     this.j({ t: "refusal", proposal: pid, entry: m.entry, content: m.content });
-    try { await this.client.appendReliable(m.entry, m.content); } catch (e) { this.ev("refusal message failed: " + e); }
+    try { await this.cl(space).appendReliable(m.entry, m.content); } catch (e) { this.ev("refusal message failed: " + e); }
   }
   /** fold a record into the executor's view of the space (and remember plans); idempotent per seq */
   private ingest(rec: LogRecord) {
@@ -208,9 +236,9 @@ export class Executor {
     const { entry, id } = makeEntry(this.key, { space, kind: "effect.claim", author: this.o.actor, body: { proposal: pid, attempt: 1 + ef.claims.length, instance: this.key.keyId, window: W }, seen: st.head });
     const firstSend = elapsedMs();
     // X-02: durably journal claiming(claimId) with the signed claim and the elapsed-clock reading, before the first send (R-07)
-    this.j({ t: "claiming", claimId: id, space, proposal: pid, entry, firstSend, boot: os.uptime() });
+    this.j({ t: "claiming", claimId: id, space, proposal: pid, entry, firstSend, boot: os.uptime(), clock: CLOCK_NAME });
     this.crashPoint("after-claiming-journal");
-    try { await this.client.appendReliable(entry); }
+    try { await this.cl(space).appendReliable(entry); }
     catch (e) {
       if (e instanceof WireFault && (e.code === "denied" || e.code === "invalid")) { this.j({ t: "refused", claimId: id, code: e.code }); this.ev("claim refused: " + e.message); return; }
       throw e;
@@ -239,11 +267,11 @@ export class Executor {
   }
 
   // ───────────── reporting (X-05, X-10) ─────────────
-  private async evidence(obj: unknown): Promise<A> { return this.client.blobPut(Buffer.from(JSON.stringify(obj), "utf8"), "application/json"); }
+  private async evidence(space: string, obj: unknown): Promise<A> { return this.cl(space).blobPut(Buffer.from(JSON.stringify(obj), "utf8"), "application/json"); }
 
   private async report(space: string, pid: string, claimId: string, result: "succeeded" | "failed" | "unknown", started: "yes" | "no" | "unknown", note: string, chk?: A) {
     const st = this.states.get(space);
-    const ev = await this.evidence({ action: "file.write", claim: claimId, result, started, note, path: chk?.plan?.target, sha256: chk ? sha256(chk.content) : undefined, bytes: chk ? Buffer.byteLength(chk.content) : undefined });
+    const ev = await this.evidence(space, { action: "file.write", claim: claimId, result, started, note, path: chk?.plan?.target, sha256: chk ? sha256(chk.content) : undefined, bytes: chk ? Buffer.byteLength(chk.content) : undefined });
     const { entry, content } = makeEntry(this.key, { space, kind: "effect.outcome", author: this.o.actor, body: { claim: claimId, result, started }, content: { evidence: ev }, seen: st?.head ?? 0 });
     // R-07: the signed report is stored before its first send
     this.j({ t: "reporting", claimId, entry, content });
@@ -252,7 +280,7 @@ export class Executor {
   }
   private async send(space: string, pid: string, claimId: string, entry: A, content: A, result: string, started: string) {
     try {
-      await this.client.appendReliable(entry, content); this.j({ t: "reported", claimId }); this.ev(`reported ${result}/${started}`);
+      await this.cl(space).appendReliable(entry, content); this.j({ t: "reported", claimId }); this.ev(`reported ${result}/${started}`);
       if (result === "failed" && started === "no") this.scheduleRetry(space, pid);
     }
     catch (e) {
@@ -263,19 +291,19 @@ export class Executor {
         const ran = this.journal.some((x) => x.t === "launched" && x.claimId === claimId);
         const ok = this.journal.some((x) => x.t === "launched" && x.claimId === claimId && x.result === "succeeded");
         const jtext = fs.readFileSync(path.join(this.o.dir, "journal.jsonl"), "utf8");
-        const evid = await this.client.blobPut(Buffer.from(jtext, "utf8"), "application/x-ndjson");   // the journal itself is the evidence
+        const evid = await this.cl(space).blobPut(Buffer.from(jtext, "utf8"), "application/x-ndjson");   // the journal itself is the evidence
         const st = this.states.get(space);
         const r = makeEntry(this.key, { space, kind: "effect.resolve", author: this.o.actor, body: { proposal: pid, result: ok ? "succeeded" : "failed" }, content: { evidence: evid }, seen: st?.head ?? 0 });
         this.j({ t: "resolving", claimId, entry: r.entry, content: r.content, ran });
-        await this.client.appendReliable(r.entry, r.content);
+        await this.cl(space).appendReliable(r.entry, r.content);
         this.j({ t: "resolved", claimId });
         this.ev("outcome refused after abandon; resolved " + (ok ? "succeeded" : "failed"));
       } else { this.j({ t: "reported", claimId, refused: e.code }); this.ev("outcome refused: " + e.message); }
     }
   }
   private async freshEffect(space: string, pid: string): Promise<A> {
-    const items = await this.client.read(space, this.states.get(space)?.head ?? 0);
-    for (const r of this.client.records(items)) this.ingest(r);
+    const items = await this.cl(space).read(space, this.states.get(space)?.head ?? 0);
+    for (const r of this.cl(space).records(items)) this.ingest(r);
     return this.states.get(space)?.effects[pid];
   }
 
@@ -294,10 +322,10 @@ export class Executor {
       const { space, proposal: pid, entry } = c.claiming;
       this.ev(`recover claim ${c.claimId.slice(0, 8)}`);
       if (c.reporting) { await this.send(space, pid, c.claimId, c.reporting.entry, c.reporting.content, "recovered", "recovered"); continue; }
-      if (c.resolving) { try { await this.client.appendReliable(c.resolving.entry, c.resolving.content); this.j({ t: "resolved", claimId: c.claimId }); } catch { /* definitive */ } continue; }
+      if (c.resolving) { try { await this.cl(space).appendReliable(c.resolving.entry, c.resolving.content); this.j({ t: "resolved", claimId: c.claimId }); } catch { /* definitive */ } continue; }
       if (!c.launching) {
         // claiming without launching: finish the claim's append (R-06); if it has a receipt, report failed / not started
-        try { await this.client.appendReliable(entry); }
+        try { await this.cl(space).appendReliable(entry); }
         catch (e) { if (e instanceof WireFault && (e.code === "denied" || e.code === "invalid")) { this.j({ t: "refused", claimId: c.claimId, code: e.code }); continue; } throw e; }
         await this.syncState(space);
         await this.report(space, pid, c.claimId, "failed", "no", "restart before launch (X-06)");
@@ -319,8 +347,8 @@ export class Executor {
   private async syncState(space: string) { await this.freshEffect(space, ""); }
   private async lookup(space: string, pid: string): Promise<boolean> {
     // plans come from the log: re-read the proposal record
-    const items = await this.client.read(space, 0);
-    for (const r of this.client.records(items)) if (r.receipt.id === pid && r.content?.plan) this.plans.set(pid, r.content.plan);
+    const items = await this.cl(space).read(space, 0);
+    for (const r of this.cl(space).records(items)) if (r.receipt.id === pid && r.content?.plan) this.plans.set(pid, r.content.plan);
     const ef = this.states.get(space)?.effects[pid];
     const chk = ef ? this.checkPlan(pid, ef) : { ok: false as const, why: "" };
     if (!chk.ok) return false;

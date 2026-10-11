@@ -1,5 +1,6 @@
 """Lists the implementation's tests (impl/tests/*.py), the clean-room TypeScript interop scenarios (cleanroom-ts/interop.ts) and the wire
 conformance vectors (ref/wire-vectors/) with the rule tags found in their docstrings or names, so architecture.md §10 can be checked against what actually exists.
+ref/sync_docs.py imports py_tests, ts_scenarios and wire_vectors from here to derive the counts in the docs.
   python ref/list_tests.py            one line per test, then totals per file
   python ref/list_tests.py --rules    rule -> tests (the reverse index)
 Reads source only; imports and runs nothing."""

@@ -1,8 +1,9 @@
-"""A HAN actor's client over the Matrix binding (architecture.md §8.2): entries are header-only `org.han.entry` room events (their
-content goes ahead by `POST /_han/v1/content`), answered by `org.han.receipt` or `org.han.reject` from the sequencer's
-application-service user. Matrix's sender field is never authority: a reject or receipt counts only from the user named in the room's
+"""A HAN actor's client over the Matrix binding (architecture.md §8.2): the whole entry goes to the service by `POST /_han/v1/entry`
+and only `org.han.entry {id}` goes to the room (E4), answered by `org.han.receipt` or `org.han.reject` from the sequencer's
+application-service user. A reject `unavailable` is not final: the client waits `retryAfterMs` and sends the event again. Matrix's sender field is never authority: a reject or receipt counts only from the user named in the room's
 `org.han.space` state, and only when that state itself was sent by that user and names the conventional service user of the space's
-server (NOTES.md, "binding trust"). Content is read back through `GET /_han/v1/read`, which enforces P-02; the room never shows it.
+server (NOTES.md, "binding trust"). Headers and content come back through `GET /_han/v1/read`, which enforces P-02; the room never
+shows them, so a member who cannot read the log has receipts and ids and no records.
 The class also satisfies `han.client.ClientProtocol` (append, read, subscribe, signal, blob_put, blob_get, stream, watch), so
 han-exec and han-host run over it.
 
@@ -20,7 +21,8 @@ from ..client.outbox import Outbox
 from ..entries import make_entry, fmt_time
 from . import media
 from .api import MatrixAPI, MatrixError
-from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, SIGNAL, entry_header, service_user
+from ..client.state import StateReads
+from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, SIGNAL, entry_event, service_user
 
 log = logging.getLogger("han.matrix.client")
 MAX_MATRIX_ENTRY = 60 * 1024         # header + content (JCS bytes) above this go over the generic binding
@@ -34,7 +36,10 @@ class RoomView:
     """What this client has seen of one room."""
     def __init__(self):
         self.space = self.sequencer = None                   # the pinned binding (org.han.space)
-        self.entries: dict[str, dict] = {}                   # entry id → {entry, content, redacted}
+        self.entries: dict[str, dict] = {}                   # entry id → {entry, content, redacted}: our own, or read over HTTP (never from the room)
+        self.stubs: dict[str, dict] = {}                     # entry id → {id, kind, author, seq} the sequencer posted
+        self.catching = False                                # a catch-up read over HTTP is running
+        self.retry_at: dict[str, float] = {}                 # entry id → monotonic time before which a resend is pointless (reject `unavailable`)
         self.receipts: dict[str, dict] = {}                  # entry id → receipt (from the sequencer only)
         self.rejects: dict[str, dict] = {}                   # entry id → org.han.reject content (from the sequencer only)
         self.sent: dict[str, str] = {}                       # our event id → entry id
@@ -46,13 +51,17 @@ class RoomView:
         self.ignored: list[tuple] = []                       # (kind, sender, why): events we refused to honour
         self.stream: list[tuple[str, dict, dict]] = []       # (sender, StreamItem, event content) in a session room
 
+class Retry(Exception):
+    """The sequencer answered `unavailable` (a reject that is not final): resend after `not_before` (monotonic time)."""
+    def __init__(self, not_before: float): super().__init__("unavailable"); self.not_before = not_before
+
 class Submission:
     """One sent entry event, not yet answered."""
     def __init__(self, room, event_id, entry_id, fut): self.room, self.event_id, self.entry_id, self.future = room, event_id, entry_id, fut
     async def result(self, timeout: float | None = None) -> dict:
         return await asyncio.wait_for(asyncio.shield(self.future), timeout)
 
-class MatrixClient:
+class MatrixClient(StateReads):
     def __init__(self, homeserver: str, user_id: str, access_token: str, key_path: str, outbox_db: str, service_url: str | None = None,
                  resend_after: float = 10.0, sequencer_for=default_sequencer_for):
         self.actor = user_id                                 # T-02: the HAN actor is the Matrix user of the same id
@@ -69,6 +78,7 @@ class MatrixClient:
         self.sync_events = asyncio.Event()
         self._since = None
         self._sync_task = None
+        self._fetches: set[asyncio.Task] = set()
         self._stop = False
 
     # ── lifecycle ──
@@ -93,6 +103,7 @@ class MatrixClient:
     async def close(self):
         self._stop = True
         if self._sync_task: self._sync_task.cancel()
+        for t in list(self._fetches): t.cancel()
         await self.api.close()
         if self.service: await self.service.close()
         self.outbox.close()
@@ -151,12 +162,10 @@ class MatrixClient:
         rv.space, rv.sequencer = sp, seqr
 
     def _on_entry(self, rv: RoomView, sender, c):
-        entry = c.get("entry")
-        if not isinstance(entry, dict) or c.get("contentHash") != entry.get("contentHash"): return      # junk, or not a header-only event
-        try: eid = P.entry_id(entry)
-        except Exception: return
-        rv.entries.setdefault(eid, {"entry": entry, "content": None, "redacted": False})        # content comes from fill_content, never from the room
-        self._try_emit(rv, eid)
+        """`{id}` from a client, `{id, kind, author, seq}` from the sequencer: ids only. No header or body is ever read from the room."""
+        eid = c.get("id")
+        if isinstance(eid, str) and self._from_sequencer(rv, sender) and all(k in c for k in ("kind", "author", "seq")):
+            rv.stubs.setdefault(eid, {k: c[k] for k in ("id", "kind", "author", "seq")})
 
     def _from_sequencer(self, rv: RoomView, sender) -> bool:
         return rv.sequencer is not None and sender == rv.sequencer
@@ -169,7 +178,36 @@ class MatrixClient:
         if isinstance(r.get("seq"), int) and r["seq"] > self.heads.get(r["space"], 0): self.heads[r["space"]] = r["seq"]
         for f in rv.waiters.pop(r["id"], []):
             if not f.done(): f.set_result(r)
-        self._try_emit(rv, r["id"])
+        if r["id"] in rv.entries: self._try_emit(rv, r["id"])
+        self._catch_up(rv)
+
+    def _catch_up(self, rv: RoomView):
+        """Receipts for entries we did not send have no record yet: read them over HTTP (P-02: the service gives only the seqs we may
+        read now, so a record we cannot read stays missing, and is asked for again when a later receipt may have changed that)."""
+        if rv.catching or not self._started or rv.space is None: return
+        rv.catching = True
+        async def go():
+            try:
+                while True:
+                    top = max(r["seq"] for r in rv.receipts.values())
+                    missing = [r["seq"] for e, r in rv.receipts.items() if e not in rv.entries]
+                    if not missing: return
+                    last = min(missing) - 1
+                    while True:
+                        recs = [i["record"] for i in await self.read_http(rv.space, last, limit=1000) if i["type"] == "record"]
+                        for rec in recs:
+                            eid = rec["receipt"]["id"]
+                            if eid in rv.receipts and eid not in rv.entries:
+                                rv.entries[eid] = {"entry": rec["entry"], "content": rec.get("content"), "redacted": False}
+                                self._try_emit(rv, eid)
+                        if len(recs) < 1000: break
+                        last = recs[-1]["receipt"]["seq"]
+                    if max(r["seq"] for r in rv.receipts.values()) <= top: return       # nothing new arrived meanwhile
+            except asyncio.CancelledError: raise
+            except (WireError, MatrixError, aiohttp.ClientError, OSError, asyncio.TimeoutError) as ex:
+                log.debug("records not readable now: %s", ex)           # not ours to read (P-02), or the service is away: no records yet
+            finally: rv.catching = False
+        t = asyncio.get_running_loop().create_task(go()); self._fetches.add(t); t.add_done_callback(self._fetches.discard)
 
     def _on_reject(self, rv: RoomView, sender, ev, c):
         eid = c.get("id") or rv.sent.get(((c.get("m.relates_to") or {}).get("event_id")))
@@ -178,6 +216,12 @@ class MatrixClient:
         if not (self._from_sequencer(rv, sender) or (rv.sequencer is None and eid and sender == rv.provisional.get(eid))):
             return rv.ignored.append(("reject", sender, "not from the bound sequencer"))
         if not eid: return
+        if c.get("code") == "unavailable":                         # E4: not final. Wait `retryAfterMs`, then send the event again.
+            ms = c.get("retryAfterMs")
+            rv.retry_at[eid] = time.monotonic() + (ms / 1000 if isinstance(ms, int) and ms >= 0 else 1.0)
+            for f in rv.waiters.pop(eid, []):
+                if not f.done(): f.set_exception(Retry(rv.retry_at[eid]))
+            return
         rv.rejects.setdefault(eid, c)
         for f in rv.waiters.pop(eid, []):
             if not f.done(): f.set_exception(WireError(c.get("code", "invalid"), c.get("reason", "")))
@@ -222,8 +266,8 @@ class MatrixClient:
         while True:
             recs = [i["record"] for i in await self.read_http(rv.space, last, limit=1000) if i["type"] == "record"]
             for rec in recs:
-                have = rv.entries.get(rec["receipt"]["id"])
-                if have and have["content"] is None and rec.get("content") is not None: have["content"] = rec["content"]
+                have = rv.entries.setdefault(rec["receipt"]["id"], {"entry": rec["entry"], "content": None, "redacted": False})
+                if have["content"] is None and rec.get("content") is not None: have["content"] = rec["content"]
             if len(recs) < 1000: return
             last = recs[-1]["receipt"]["seq"]
 
@@ -288,12 +332,13 @@ class MatrixClient:
             try: rv.provisional[eid] = self.sequencer_for(entry["space"])
             except Exception: pass
         self.outbox.add(eid, entry["space"], entry, content)
-        if content is not None: await self._han("POST", "/_han/v1/content", body=content)       # P-02: content never enters the room
+        rv.entries.setdefault(eid, {"entry": entry, "content": content, "redacted": False})     # ours: no need to read it back
+        await self._han("POST", "/_han/v1/entry", body={"entry": entry} | ({} if content is None else {"content": content}))        # E4: the room gets only the id
         fut = asyncio.get_running_loop().create_future()
         if eid in rv.receipts: fut.set_result(rv.receipts[eid])
         elif eid in rv.rejects: fut.set_exception(WireError(rv.rejects[eid].get("code", "invalid"), rv.rejects[eid].get("reason", "")))
         else: rv.waiters.setdefault(eid, []).append(fut)
-        ev_id = await self.api.send(room, ENTRY, entry_header(entry), txn or f"{eid}-{time.time_ns()}")
+        ev_id = await self.api.send(room, ENTRY, entry_event(eid), txn or f"{eid}-{time.time_ns()}")
         rv.sent[ev_id] = eid
         return Submission(room, ev_id, eid, fut)
 
@@ -321,6 +366,10 @@ class MatrixClient:
             try:
                 receipt = await sub.result(max(wait, 0.01))
                 self.outbox.done(eid, receipt); return receipt
+            except Retry as r:                                  # `unavailable`: not final; wait as long as the sequencer said, then resend
+                left = r.not_before - time.monotonic()
+                if deadline is not None and time.monotonic() + max(left, 0) >= deadline: await asyncio.sleep(max(deadline - time.monotonic(), 0)); raise asyncio.TimeoutError()
+                await asyncio.sleep(max(left, 0.0))
             except asyncio.TimeoutError:
                 if deadline is not None and time.monotonic() >= deadline: raise
             except WireError as ex:
@@ -339,21 +388,23 @@ class MatrixClient:
             if "error" in ex.body: raise WireError.from_wire(ex.body["error"]) from None
             raise
 
-    async def read_http(self, space: str, after: int = 0, state: bool = False, limit: int | None = None, at: int | None = None) -> list[dict]:
+    async def read_http(self, space: str, after: int = 0, state: bool = False, limit: int | None = None, at: int | None = None,
+                        cursor: str | None = None, effect: str | None = None) -> list[dict]:
         """GET /_han/v1/read → `{items: [ReadItem]}`; P-02 is enforced by the service, so this is where content comes from."""
         params = {"space": space, "after": str(after)} | ({"state": "true"} if state else {}) | ({} if limit is None else {"limit": str(limit)}) \
-            | ({} if at is None else {"at": str(at)})
+            | ({} if at is None else {"at": str(at)})             | ({} if cursor is None else {"cursor": cursor}) | ({} if effect is None else {"effect": effect})
         return (await self._han("GET", "/_han/v1/read", params))["items"]
 
     # ── ClientProtocol: read, subscribe (records through the HTTP read, signals from the room) ──
-    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None):
+    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None, cursor=None, effect=None):
         """ReadItems after `after`, as the generic binding gives them. With `follow`, waits for the room's receipts (polling once a
         second as a fallback) and reads what is new; a backlog cut by `limit` is read on at once. Ends only when closed."""
         if known_heads is not None: raise WireError("invalid", "knownHeads is not served by the HTTP read")
         last, first = after, True
         while True:
             seen = self.heads.get(space, 0)
-            try: items = await self.read_http(space, last, state=state and first, limit=limit, at=at if first else None)
+            try: items = await self.read_http(space, last, state=state and first, limit=limit, at=at if first else None,
+                                             cursor=cursor if first else None, effect=effect if first else None)
             except (aiohttp.ClientError, OSError, asyncio.TimeoutError):
                 if not follow: raise
                 await asyncio.sleep(0.5); continue
@@ -489,7 +540,7 @@ class MatrixClient:
         kind = "read" if item["type"] == "context" else "watch"
         deadline = time.monotonic() + wait
         while True:
-            st = (await self.read_http(space, 2 ** 31, state=True))[0]["state"]
+            st = await self.read_state(space)
             cands = set(st["roles"]) | {st["sessions"][sid]["actor"]} | ({st["sessions"][sid]["guard"]} if st["sessions"][sid].get("guard") else set())
             want = {a for a in cands if P.session_access(st, a, sid)[kind]}
             have = {u for u, m in (await self.api.members(rooms[kind])).items() if m in ("join", "invite")} - {service_user(P.server_of(space))}
