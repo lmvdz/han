@@ -11,12 +11,17 @@ dependencies = ["websockets>=13", "cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
+claude = ["claude-agent-sdk"]
 
 [project.scripts]
 han-seq = "han.seq.__main__:main"
+han-exec = "han.exec.__main__:main"
+han-host = "han.host.__main__:main"
+han-verify = "han.verify.__main__:main"
+han = "han.cli:main"
 
 [tool.setuptools]
-packages = ["han", "han.seq", "han.client"]
+packages = ["han", "han.seq", "han.client", "han.exec", "han.host", "han.verify"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
