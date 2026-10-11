@@ -1,10 +1,6 @@
-Traceback (most recent call last):
-  File "H:\HAN\v1\ref\model_guard.py", line 350, in <module>
-    main()
-  File "H:\HAN\v1\ref\model_guard.py", line 343, in main
-    n, v, path, g, gd = explore(POL, a.depth)
-                        ^^^^^^^^^^^^^^^^^^^^^
-  File "H:\HAN\v1\ref\model_guard.py", line 276, in explore
-    seen.add(k); nxt.append((m2, path + (name,)))
-    ^^^^^^^^^^^
-MemoryError
+model_guard.py --depth 5 on the round-22 Policy: NOT COMPLETED.
+The round-22 model adds a session-less agent (BOT3), session s5, a forceGuarded toggle and unguard moves,
+which grows depth 5 roughly 25x over round 16's 5.2M transitions. The content-deduplicated seen set holds a
+JSON copy of every state, so the run reached ~80 GB of committed memory without finishing and was stopped.
+Evidence for round 22 is the depth-4 run (933,044 transitions, all six properties hold, 35/35 mutations caught;
+see ref/RESULTS.md). Running depth 5 needs a leaner state encoding (e.g. hashing states) and a memory cap.
