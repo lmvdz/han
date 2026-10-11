@@ -418,7 +418,8 @@
    "time": "2026-10-10T12:00:15Z",
    "expect": "allow",
    "check": {
-    "tasks.de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8.open": false
+    "tasks.de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8.open": false,
+    "tasks.de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8.state": "cancelled"
    }
   },
   {

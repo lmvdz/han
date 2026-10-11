@@ -20,7 +20,7 @@ export interface Entry<K extends KindName = KindName> {
   author: ActorId;
   keyId: KeyId;          // which of the author's keys signed
   body: Bodies[K];       // permanent; the only part Policy reads
-  contentHash: Hex | ""; // sha256(JCS(content)); "" iff the kind has no content
+  contentHash: Hex | ""; // sha256(JCS(content)); "" iff no content is sent (allowed when the kind's content fields are all optional)
   refs: EntryId[];       // same-space only (R-05)
   seen: Seq;             // ≤ head at append (R-17)
   nonce: string;         // 26 chars [a-z2-7]; reused only when resending the same entry (R-06)
@@ -50,7 +50,7 @@ export interface LogRecord<K extends KindName = KindName> {
   receipt: Receipt;
 }
 
-export interface BlobRef { hash: Hex; size: number; type: string }    // size ≤ 4 GiB; type: a media type, each half [a-z0-9][a-z0-9!#$&^_.+-]{0,63}
+export interface BlobRef { hash: Hex; size: number; type: string; uri?: string }    // size ≤ 4 GiB; type: a media type, each half [a-z0-9][a-z0-9!#$&^_.+-]{0,63}; uri: transport locator (T-03), e.g. mxc://…
 export interface Link { space: SpaceId; seq: Seq; id: EntryId }   // cross-space pointer; content only (R-05)
 export interface Budget { unit: string; amount: number }
 export type SignedInt = number;     // integer in (−2^53, 2^53); used only where stated (budgetLeft)
@@ -80,7 +80,7 @@ export interface Bodies {
   "task.cancel": { task: EntryId };
   "effect.propose": { executor: ActorId; action: string; planDigest: Hex; cost?: Budget; repeatable: boolean; task?: EntryId; expiresAt?: Time };
   "effect.approve": { proposal: EntryId; planDigest: Hex; expiresAt?: Time };
-  "effect.claim": { proposal: EntryId; attempt: number; instance: KeyId };
+  "effect.claim": { proposal: EntryId; attempt: number; instance: KeyId; window: number };   // window must equal policy.launchWindow (E5, X-03)
   "effect.cancel": { proposal: EntryId };
   "effect.outcome": { claim: EntryId; result: EffectResult; started: Started; cost?: Budget };
   "effect.resolve": { proposal: EntryId; result: "succeeded" | "failed"; cost?: Budget };
@@ -157,7 +157,7 @@ export interface SpaceState {
   roles: { [actor: ActorId]: Role };
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02)
   tasks: {
-    [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; cancelRequested: boolean; depth: number;
+    [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number;
                      parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
@@ -191,7 +191,7 @@ export interface Limits {
   maxFrameBytes: 1310720;      // 1.25 MiB of JSON text
   maxHeaderBytes: 16384; maxContentBytes: 65536;
   maxBlobBytes: 4294967296;
-  maxBlobPartBytes: 786432;    // 768 KiB → 1,048,576 base64 chars, fits a frame with its envelope
+  maxBlobPartBytes: 786432;    // generic binding's file transport (T-03): 768 KiB → 1,048,576 base64 chars, fits a frame
   maxBlobRangeBytes: 786432;   // blobGet answers at most this many bytes per call
   maxFollows: 256;
 }
@@ -201,17 +201,14 @@ export type ReadItem =
   | { type: "state"; state: StateView }                  // first item when `state: true` and the reader may read at head
   | { type: "heads"; heads: Receipt[] }                  // the server's latest receipts, when the reader sent knownHeads (R-15)
   | { type: "record"; record: LogRecord }
-  | { type: "signal"; from: ActorId; body: Json };       // ephemeral, on follow streams only, unordered with records (R-22)
+  | { type: "signal"; from: ActorId; body: Json };       // from the transport (T-05): ephemeral, unordered with records, never authority
 
 export interface Calls {
   hello: { args: { who: ActorId; keyId: KeyId; proof: Sig; version: 1; knownHeads?: Receipt[] };
            ok: { limits: Limits; durability: Durability; time: Time; knownHeads: Receipt[] } };
   append: { args: { entry: Entry; content?: Json }; ok: Receipt };
   read: { args: { space: SpaceId; after: Seq; follow?: boolean; state?: boolean; limit?: number /* 1–1000, default 1000 */; knownHeads?: Receipt[] /* ≤ 256 */ }; item: ReadItem };
-  signal: { args: { space: SpaceId; body: Json }; ok: null };
-  blobPut: { args: { ref: BlobRef; offset: number; bytes: string }; ok: { have: number; complete: boolean } };
-  blobGet: { args: { ref: BlobRef; space: SpaceId; start?: number; end?: number /* half-open [start, end); default whole blob; > 768 KiB → limit */ }; ok: { bytes: string } };
-}
+}   // the three sequencer calls (§3); signals, files and invites are the transport's (§8, T-01…T-06)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
 export type ReplyFrame =
@@ -227,35 +224,31 @@ export interface Policy {                                // M2 — four pure fun
   decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision;
   fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState;
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
-  relevantActors(state: SpaceState | undefined, entry: Entry): ActorId[];         // P-01
+  relevantActors(state: SpaceState | undefined, entry: Entry, time: Time): ActorId[];   // P-01
 }
 export interface Identity {                              // M3
   profile(actor: ActorId, minSeq?: Seq): Promise<ProfileView>;
   verify(entry: Entry, view: ProfileView): Decision;
 }
-export interface Blobs {                                 // M4
-  put(ref: BlobRef, offset: number, bytes: Uint8Array, as: ActorId): Promise<{ have: number; complete: boolean }>;
-  get(ref: BlobRef, space: SpaceId, as: ActorId, range?: { start: number; end: number }): Promise<Uint8Array>;
+export interface Verifier {                              // M4
+  verify(space: SpaceId): Promise<VerifierStatus>;       // pull, check (R-14), retain profiles and keys, gossip heads (R-15)
 }
-export interface Federation {                            // M5
-  forward(entry: Entry, content: Json | undefined): Promise<Receipt>;
-  mirror(space: SpaceId): Promise<MirrorStatus>;         // pull, verify (R-14), store, gossip (R-15); resolves when stopped or faulty
-}
-export type MirrorStatus =
+export type VerifierStatus =
   | { state: "stopped"; through: Seq }
-  | { state: "faulty"; through: Seq; proof: { kind: "equivocation" | "wrong-home" | "forbidden-accept" | "bad-signature" | "chain" | "bad-redaction" | "bad-move"; receipts: Receipt[]; record?: LogRecord } }
+  | { state: "faulty"; through: Seq; proof: { kind: "equivocation" | "wrong-home" | "forbidden-accept" | "bad-signature" | "chain" | "bad-redaction" | "bad-move" | "future-time"; receipts: Receipt[]; record?: LogRecord } }
   | { state: "moved"; through: Seq; to: ServerName };
-export interface Signals {                               // M6
-  publish(space: SpaceId, from: ActorId, body: Json): void;
-  subscribe(space: SpaceId, as: ActorId): AsyncIterable<{ from: ActorId; body: Json }>;
+/** M7: what HAN needs from a transport (T-01…T-06). The Matrix binding implements it with org.han.* room events. */
+export interface TransportBinding {
+  publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order
+  subscribe(space: SpaceId, as: ActorId): AsyncIterable<ReadItem>;  // records and signals (T-05) for this actor
 }
-/** The client an actor is built with: the six calls, authenticated as that actor. */
+/** The client an actor is built with: the sequencer calls plus the transport, authenticated as that actor. */
 export interface Client {
   append(entry: Entry, content?: Json): Promise<Receipt>;              // outbox + R-06 retry are the client's job (R-07)
   read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean }): AsyncIterable<ReadItem>;
-  signal(space: SpaceId, body: Json): Promise<void>;
-  blobPut(ref: BlobRef, bytes: Uint8Array): Promise<void>;
-  blobGet(ref: BlobRef, space: SpaceId): Promise<Uint8Array>;
+  signal(space: SpaceId, body: Json): Promise<void>;                    // via the transport (T-05)
+  blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
+  blobGet(ref: BlobRef): Promise<Uint8Array>;                           // via the transport; the caller verifies the hash
 }
 /** M7 and M8 (and human apps) are actors: fed every record and signal of the spaces they follow (and the notices on their
  *  own profile), they answer only through their Client. */
@@ -263,7 +256,7 @@ export interface Actor {
   deliver(item: ReadItem): Promise<void>;
 }
 export type ActorFactory = (client: Client, self: ActorId) => Actor;
-export type Executor = Actor;                            // M7: hides X-01…X-07, sandboxes, workspaces, the journal
-export type AgentHost = Actor;                           // M8: hides models, prompts, memory, the agent framework
+export type Executor = Actor;                            // M5: hides X-01…X-10, sandboxes, workspaces, the journal
+export type AgentHost = Actor;                           // M6: hides models, prompts, memory, the agent framework
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };

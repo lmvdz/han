@@ -43,13 +43,16 @@ BASE = datetime(2026, 10, 10, 12, 0, 0, tzinfo=timezone.utc)
 W = 20                       # initial policy.launchWindow (seconds)
 MODEL_DRIFT_PPM = 200_000    # ±20% in the model (spec: ±1%); P.abandon_after is evaluated with this bound
 W_SHORT = 15                 # what the owner may shorten it to
+W_LONG = 30                  # ... or lengthen it to
 STALL = POL.STALL_BOUND      # 10 s
 DS = 10                      # model time unit: tenths of a second
 # scenario → bounds. "timing": clock offset, network delay and stall (one attempt); "single": two attempts with
 # revocation, cancel and abandon; "successor": home death and successors from any mirror head.
 # clocks: (executor offset ds, home rate num/den, executor rate num/den)
-BOUNDS = {"timing": {"attempts": 1, "crashes": 1, "ticks": 4, "ticksizes": (9, 91, 109), "delay": True, "setwindow": True,
-                     "clocks": ((0, (1, 1), (1, 1)), (-100, (1, 1), (1, 1)), (0, (6, 5), (4, 5)))},
+BOUNDS = {"timing": {"attempts": 1, "crashes": 1, "ticks": 4, "ticksizes": (9, 91), "delay": True, "setwindow": True,
+                     "clocks": ((0, (1, 1), (1, 1)), (-100, (1, 1), (1, 1)))},
+          "drift":  {"attempts": 1, "crashes": 1, "ticks": 4, "ticksizes": (9, 91, 109), "delay": True, "setwindow": False,
+                     "clocks": ((0, (6, 5), (4, 5)),)},
           "single": {"attempts": 2, "crashes": 1, "ticks": 2, "ticksizes": (50, 250), "delay": False, "setwindow": False,
                      "clocks": ((0, (1, 1), (1, 1)),)}}
 def bound(k): return BOUNDS[SCENARIO][k]
@@ -108,7 +111,7 @@ def patch():
                 ctx = dict(ctx, profiles=dict(ctx["profiles"], **{eff["proposer"]: prof(eff["proposer"])}))
             return _orig_claim(state, entry, ctx, role)
         POL._claim = claim
-    POL.DRIFT_PPM = MODEL_DRIFT_PPM
+    POL.DRIFT_PPM = MODEL_DRIFT_PPM if SCENARIO == "drift" else 10_000     # the exaggerated bound only where rates differ
     if MUT == "no-quantization-margin":
         POL.abandon_after = lambda w, drift_ppm=None: w
     if MUT == "one-sided-drift-margin":
@@ -178,7 +181,10 @@ def claim_receipt_time(st, space, a):
         if json.loads(x[0])["id"] == claim_id(space, a): return secs(json.loads(x[1])["time"])
     return None
 
-def claim_entry(sp, a): return E(f"cl-{sp[:2]}-{a}", sp, "effect.claim", X, {"proposal": PR, "attempt": a, "instance": "k1"})
+def claim_entry(st, sp, a):
+    """The executor's claim states the window it read when it sent the claim (X-03); Policy accepts it only if it is still
+    the space's launchWindow (E5), and then pins it."""
+    return E(f"cl-{sp[:2]}-{a}", sp, "effect.claim", X, {"proposal": PR, "attempt": a, "instance": "k1", "window": dict(st.wset)[(sp, a)]})
 
 def pinned_window(st, sp, a):
     eff = state_of(st.logs, sp)["effects"][PR]
@@ -188,7 +194,7 @@ def deadline_ok(st, sp, a):
     """X-04: elapsed on the executor's own clock since the claim was first sent < (pinned window − stall bound)."""
     local_now = exec_now(st)
     w = pinned_window(st, sp, a)
-    if MUT == "executor-uses-current-window": w = dict(st.wset).get((sp, a), w)
+    if MUT == "executor-uses-current-window": w = state_of(st.logs, sp)["policy"]["launchWindow"]   # reads policy instead of its claim
     if MUT == "deadline-from-receipt-time":
         return local_now < (claim_receipt_time(st, sp, a) + w - STALL) * DS
     return local_now - dict(st.sent)[(sp, a)] < (w - STALL) * DS
@@ -228,7 +234,8 @@ def successors(st):
         out.append(("O remove P", append(st, E("rmP", A, "member.set", O, {"actor": P, "role": "none"}))))
         if not st.keyrev: out.append(("P key revoked", (st.with_(keyrev=True), "allow")))
     if bound("setwindow") and state_of(st.logs, A)["policy"]["launchWindow"] == W:
-        out.append(("O shortens launchWindow", append(st, E("w15", A, "policy.set", O, {"policy": POLICY(W_SHORT)}))))
+        for nw in (W_SHORT, W_LONG):                      # the owner may shorten or lengthen the window mid-claim
+            out.append((f"O sets launchWindow {nw}", append(st, E(f"w{nw}", A, "policy.set", O, {"policy": POLICY(nw)}))))
     if st.ticks < bound("ticks"):
         for dt in bound("ticksizes"):
             # the stall assumption (X-04): at most STALL seconds between a passed deadline check and the launch
@@ -239,7 +246,7 @@ def successors(st):
     # network: deliver an in-flight claim at any time (delay is arbitrary)
     for key in sorted(st.inflight):
         sp, a = key
-        s2, res = append(st, claim_entry(sp, a))
+        s2, res = append(st, claim_entry(st, sp, a))
         s2 = s2.with_(inflight=st.inflight - {key})
         if res not in ("allow", "dup") and j.get(key) == "claiming":
             s2 = s2.with_(journal=freeze({**j, key: "refused"}))
@@ -253,12 +260,12 @@ def successors(st):
             for a in range(1, bound("attempts") + 1):
                 key = (sp, a); cid = claim_id(sp, a)
                 if key not in j and eff and eff["phase"] == "ready" and len(eff["claims"]) + 1 == a:
-                    out.append((f"X journal claiming {sp[:2]}{a}", (st.with_(journal=freeze({**j, key: "claiming"})), "allow")))
+                    out.append((f"X journal claiming {sp[:2]}{a}", (st.with_(journal=freeze({**j, key: "claiming"}),
+                                                                             wset=freeze({**dict(st.wset), key: S["policy"]["launchWindow"]})), "allow")))
                 if j.get(key) == "claiming" and key not in sent:
-                    s2 = st.with_(sent=freeze({**sent, key: exec_now(st)}), inflight=st.inflight | {key},
-                                  wset=freeze({**dict(st.wset), key: S["policy"]["launchWindow"]}))
+                    s2 = st.with_(sent=freeze({**sent, key: exec_now(st)}), inflight=st.inflight | {key})
                     if not bound("delay"):                  # immediate delivery: send and home append in one step
-                        s3, res = append(s2, claim_entry(sp, a)); s2 = s3.with_(inflight=s2.inflight - {key})
+                        s3, res = append(s2, claim_entry(s2, sp, a)); s2 = s3.with_(inflight=s2.inflight - {key})
                         if res not in ("allow", "dup"): s2 = s2.with_(journal=freeze({**j, key: "refused"}))
                     out.append((f"X send claim {sp[:2]}{a}", (s2, "allow")))
                 if j.get(key) in ("claiming", "launching") and key not in st.x_seen and rec_index(st, sp, cid) >= 0:
@@ -296,7 +303,7 @@ def successors(st):
             cid = claim_id(sp, a)
             jj = dict(s.journal)
             if phase == "claiming":
-                s, res = append(s, claim_entry(sp, a))                     # finish the claim's append (R-06)
+                s, res = append(s, claim_entry(s, sp, a))                  # finish the claim's append (R-06)
                 if res in ("allow", "dup"):
                     if MUT == "launch-after-restart":
                         ww, ll = dict(s.world), dict(s.launch_at)
@@ -370,13 +377,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mutation", choices=sorted(MUTATIONS))
     ap.add_argument("--all-mutations", action="store_true")
-    ap.add_argument("--scenario", choices=["timing", "single", "all"], default="all")
+    ap.add_argument("--scenario", choices=["timing", "drift", "single", "all"], default="all")
     args = ap.parse_args()
     if args.all_mutations:
         ok = True
         for m in sorted(MUTATIONS):
             sc = {"deadline-from-receipt-time": "timing", "no-window-check": "timing", "window-not-pinned": "timing",
-                  "executor-uses-current-window": "timing", "no-quantization-margin": "timing", "one-sided-drift-margin": "timing"}.get(m, "single")
+                  "executor-uses-current-window": "timing", "no-quantization-margin": "timing", "one-sided-drift-margin": "drift"}.get(m, "single")
             r = subprocess.run([sys.executable, __file__, "--mutation", m, "--scenario", sc], capture_output=True, text=True, encoding="utf-8")
             caught = r.returncode == 1 and "VIOLATION" in r.stdout and "VACUOUS" not in r.stdout
             print(f"{'caught ' if caught else 'MISSED '} {m:28} {r.stdout.strip().splitlines()[0] if r.stdout.strip() else r.stderr[-300:]}")
@@ -384,7 +391,7 @@ def main():
         print("all mutations caught" if ok else "SOME MUTATIONS MISSED")
         return 0 if ok else 2
     MUT = args.mutation
-    for sc in (["timing", "single"] if args.scenario == "all" else [args.scenario]):
+    for sc in (["timing", "drift", "single"] if args.scenario == "all" else [args.scenario]):
         SCENARIO = sc
         n, err, trace = explore()
         if err:
@@ -392,8 +399,9 @@ def main():
             print("  trace: " + " → ".join(trace))
             return 1
         b = BOUNDS[sc]
-        extra = {"timing": f"clocks {b['clocks']} (offset ds, home rate, executor rate; drift exaggerated to ±20%), arbitrary claim delay, "
-                           f"stall<={STALL}s on the executor clock, whole-second receipts, launchWindow shortened {W}→{W_SHORT} s at any time, abandon",
+        extra = {"timing": f"executor clock offsets {[c[0] / DS for c in b['clocks']]} s, arbitrary claim delay, "
+                           f"stall<={STALL}s on the executor clock, whole-second receipts, launchWindow changed {W}→{W_SHORT} or {W_LONG} s at any time, abandon",
+                 "drift": f"clocks {b['clocks']} (home 1.2x fast, executor 0.8x slow: drift exaggerated to ±20%), arbitrary claim delay, stall<={STALL}s on the executor clock, whole-second receipts, abandon",
                  "single": "revocation of membership and key, cancel, abandon"}[sc]
         print(f"[{sc}] {n} states explored; ALL PROPERTIES HOLD (attempts<={b['attempts']}, crashes<={b['crashes']}, "
               f"ticks<={b['ticks']} of {'/'.join('+%gs' % (t / DS) for t in b['ticksizes'])}; {extra})", flush=True)

@@ -181,7 +181,8 @@
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
