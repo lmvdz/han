@@ -4,7 +4,7 @@
   "P-08",
   "P-01"
  ],
- "description": "one open approval per author, at most 16 per proposal; a guard is never shut out by the cap",
+ "description": "an author's new approval supersedes its old one; at most 16 per proposal besides the guard's, who is never shut out",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -479,8 +479,11 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:11Z",
-   "expect": "denied",
-   "note": "M already has an open approval"
+   "expect": "allow",
+   "check": {
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.approvals.0.dropped": true
+   },
+   "note": "a new approval supersedes M's own"
   },
   {
    "entry": {
@@ -513,7 +516,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -555,7 +559,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -597,7 +602,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -639,7 +645,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -681,7 +688,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -723,7 +731,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -765,7 +774,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -807,7 +817,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -849,7 +860,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -891,7 +903,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -933,7 +946,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -975,7 +989,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -1017,7 +1032,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -1059,7 +1075,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -1101,7 +1118,8 @@
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
     },
     "contentHash": "",
     "refs": [],
@@ -1155,6 +1173,28 @@
    "time": "2026-10-10T12:00:43Z",
    "expect": "allow",
    "note": "the guard is exempt"
+  },
+  {
+   "entry": {
+    "id": "53eed196daa7ad35e6528ad8a7a028ae8041a6a20f8ac2951c96ca4bd04eb17e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a17",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T13:06:40Z",
+   "expect": "allow",
+   "note": "15 of them expired: they no longer count"
   }
  ],
  "ids": {
@@ -1169,6 +1209,7 @@
   "a14": "f665a238b4e777d27ca1ca23df649d259bd1a886910932f7f1b67c6d1da066ee",
   "a15": "62b6ddcca7ac8e508176a0e90a0ba738dfc6bc2bf1d9c887973035551edf9cbb",
   "a16": "4f35c8bdd32644614d05e48530d26115f7b07fe219a3c965f4716b3969735445",
+  "a17": "53eed196daa7ad35e6528ad8a7a028ae8041a6a20f8ac2951c96ca4bd04eb17e",
   "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
   "a3": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
   "a4": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",

@@ -55,7 +55,7 @@ export interface Link { space: SpaceId; seq: Seq; id: EntryId }   // cross-space
 export interface Budget { unit: string; amount: number }
 export type SignedInt = number;     // integer in (−2^53, 2^53); used only where stated (budgetLeft)
 // Numbers anywhere else, including inside opaque Json (plan.args, extension bodies), are integers in [0, 2^53);
-// fractional or negative numbers there are invalid (R-09), so JCS stays exact.          // integer minor units, e.g. { unit: "USD-cent", amount: 500 }
+// fractional or negative numbers there are invalid (R-09), so JCS stays exact. Budget amounts are integer minor units.
 
 // ───────────────────────── entry kinds ─────────────────────────
 export type Role = "owner" | "member" | "guest" | "banned";
@@ -177,7 +177,8 @@ export interface SpaceState {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
       expiresAt?: Time;                             // E5: no claim at or after this time
-      guards?: ActorId[];                           // the holding human, if its proposer was held (P-15); besides any approval rule
+      guards?: ActorId[];                           // the proposer's guard if it was held when proposing (P-15); the executor's
+                                                    // guard, if it is held now, is added at claim time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId; dropped?: true }[];
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;

@@ -9,10 +9,10 @@ HAN doesn't replace chat. Conversations run on an existing network (Matrix first
 - **Accountable agents:** every agent has a human operator who vouches for it, re-checked at every action.
 - **Budgets** reserved before an action and settled after it, delegated down task trees. Agents can't spend outside their allocation.
 - **Approvals bound to the exact plan**, with expiry and separation of duties.
-- **Live sessions you can watch, read and steer** across silos, while the work happens, not after the PR. Owners set who may watch, read or steer per space. Every steer is signed and sequenced. An agent can be *guarded*: an outside steer then puts it on hold for its own human, so it can't delegate, relay or approve, and the effects it proposes wait for that human's approval. Local actions in its sandbox, effects proposed before the hold, and what it says in messages are host matters ([§7.5](architecture.md)).
+- **Live sessions you can watch, read and steer** across silos, while the work happens, not after the PR. Owners set who may watch, read or steer per space. Every steer is signed and sequenced. An agent can be *guarded*: any outside instruction (a steer or a task) then puts it on hold for its own human, so it can't delegate, relay or approve, and nothing it proposes or executes runs without that human's approval. Local actions in its sandbox, effects proposed before the hold, and what it says in messages are host matters ([§7.5](architecture.md)).
 - **Replayable policy:** Policy is five pure functions, so any participant re-checks every decision. A cheating sequencer leaves a portable proof.
 
-> **Status: design draft (v1, round 12).** This is a specification with an executable reference and checkers. There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](grading-rubric.md)) scored rounds 1–6 from 57.8 to 76.6 / 100, and rounds 8–11 (after the scope change) 67.8, 67.5, 69.8, 69.2; see [HISTORY.md](HISTORY.md). Expect breaking changes.
+> **Status: design draft (v1, round 13).** This is a specification with an executable reference and checkers. There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](grading-rubric.md)) scored rounds 1–6 from 57.8 to 76.6 / 100, and rounds 8–11 (after the scope change) 67.8, 67.5, 69.8, 69.2, 71.1; see [HISTORY.md](HISTORY.md). Expect breaking changes.
 
 ## Read
 

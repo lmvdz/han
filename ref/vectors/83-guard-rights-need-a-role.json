@@ -4,7 +4,7 @@
   "P-15",
   "P-02"
  ],
- "description": "a guard who lost its role loses its rights on its agent's sessions; owners may then release the agent",
+ "description": "a guard who lost its role loses its rights on its agent's sessions; the hold waits for it",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -446,17 +446,60 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:14Z",
+   "expect": "denied",
+   "note": "nobody stands in for a guard"
+  },
+  {
+   "entry": {
+    "id": "37440d76b0b926ac0d24b985b8a3ee5afdb7e17cfac5238344d75f79155ad1a5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@op:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-back",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "06d6bf041103dfbd46e6c464f64240bf1bb6b6a2d4adb9d0389d9f5e5c879178",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.input",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
+     "release": true
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-r2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
    "expect": "allow",
    "check": {
     "held": {}
-   },
-   "note": "the guard is gone: an owner recovers"
+   }
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
+  "back": "37440d76b0b926ac0d24b985b8a3ee5afdb7e17cfac5238344d75f79155ad1a5",
   "ban": "fd1cf34df16c45a46c5d69a257786ffb6efdc2f733be0169502b12fc554cf766",
   "in": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
@@ -466,6 +509,7 @@
   "q": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
   "r0": "cc05e6dcadb12728c242423a3ce9ca6e6ce2b30c3d178f6dca53b5a8c1985fab",
   "r1": "98a7b13f6218fe6e3f84ce6eda37943da85bcc3aeb39c803706f825498926ea5",
+  "r2": "06d6bf041103dfbd46e6c464f64240bf1bb6b6a2d4adb9d0389d9f5e5c879178",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
   "s2": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c"
  }
