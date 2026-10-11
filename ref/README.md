@@ -5,12 +5,12 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
 | File | What it is |
 |---|---|
 | `policy.py` | Reference Policy: `decide`, `fold`, `can_read`, `relevant_actors`, `session_access`, closed body schemas (R-09). Pure Python, no dependencies. |
-| `vectors/*.json` | 132 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
+| `vectors/*.json` | 133 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
 | `run_vectors.py` | Runs the vectors against `policy.py`, or any implementation exposing the same five functions. Also checks purity and determinism (R-11) on every step. |
-| `mutate_vectors.py` | Breaks one Policy rule at a time (173 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
-| `wire.py` | Signed layer with real Ed25519 (`cryptography` package): ids, signatures, receipts, header **and content** validation, a reference **home** (the §4.1 append pipeline) and a verifying **mirror** (R-14), equivocation and wrong-home proofs, notices, signal rights, per-space blob supply and transfer. |
-| `run_wire.py` | 30 scenarios over `wire.py`, each with its expected result stated from the spec. |
-| `mutate_wire.py` | Breaks one wire-layer rule at a time (24 mutations) and requires the scenarios to fail. |
+| `mutate_vectors.py` | Breaks one Policy rule at a time (175 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
+| `wire.py` | Signed layer with real Ed25519 (`cryptography` package): ids, signatures, receipts, header **and content** validation, a reference **home** (the §4.1 append pipeline, a steady clock for the R-16 abandon wait, `read` with `at`, `limit` and follow, context blobs) and a verifying **mirror** (R-14, including the 60 s future-time tolerance), equivocation and wrong-home proofs, gossip signals (R-15), notices, signal rights, per-space blob supply and transfer. |
+| `run_wire.py` | 38 scenarios over `wire.py`, each with its expected result stated from the spec. |
+| `mutate_wire.py` | Breaks one wire-layer rule at a time (35 mutations) and requires the scenarios to fail. |
 | `fuzz_fold.py` | 2,000 random histories × 200 steps. Whenever `decide` allows an entry, `fold` must not raise and must stay pure. Budgets must stay within bounds, and final phases must never change. |
 | `model_check.py` | Exhaustive bounded state exploration that drives the **real** `policy.py`, in three scenarios. *Timing*: executor clock offsets, arbitrary network delay, sub-second arrival with whole-second receipts, bounded stall, and launchWindow shortened or lengthened mid-claim. *Drift*: the sequencer's clock 20% fast and the executor's 20% slow. *Single*: revocation, cancel, abandon, two attempts. 10 mutations must each produce a counterexample. A **non-vacuity guard** fails any run in which nothing is ever launched. |
 | `model_guard.py` | Exhaustive bounded exploration of P-15 (guarded steering) against the real `policy.py`, with a ghost derived from the invariant sentence. Two agents, six properties (including ExactHolds: Policy holds exactly whom the invariant holds), 27 mutations each caught by a property at depth 4; depth 5 (5.2M transitions) takes about 10 min, `--quick` runs depth 4. |
@@ -69,7 +69,7 @@ An implementation that rejects these is checking the wrong layer, and will fail 
 
 ## What these checks do **not** cover
 
-- Durability under real storage faults (R-03), the agent-host obligations (R-17, R-18) and key custody (X-07). These need a running implementation.
+- Durability under real storage faults (R-03), the agent-host obligations (R-17, R-18) and key custody (X-07) need a running implementation. [impl/](../impl/) tests them in part (kill -9 and restart, a scripted agent killed mid-turn, an instance-key lock) but not a power cut, a real model-driven agent or a sandbox; see architecture.md §10.
 - The model has one proposer, one proposal and one executor instance. X-01 (instance binding) is checked by vectors, not by the model. Clock offset, delay, rounding and window changes are explored only in the timing scenario (one attempt), to keep the state space tractable.
-- The wire scenarios run in-process with no network. The gossip *schedule* (R-15) is specified but not exercised; the proofs it produces are.
+- The wire scenarios run in-process with no network. The gossip *schedule* (R-15) is specified but not exercised; the proofs it produces and the signals that carry them are. The wire home models the R-16 wait with an injected steady clock, not a real one.
 - Bounded exploration is evidence, not proof for unbounded runs.
