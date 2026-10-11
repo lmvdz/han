@@ -37,30 +37,30 @@ def verify_sig(pub: str, sig: str, msg: bytes) -> bool:
 
 # ── header (R-09) ──
 ENTRY_FIELDS = {"v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig"}
-NONCE = re.compile(r"^[a-z2-7]{26}$")
+NONCE = re.compile(r"^[a-z2-7]{26}$", re.ASCII)
 
 def validate_header(entry: dict) -> str | None:
     """Exact wire header (han.ts Entry): no missing or extra fields, every field in its grammar."""
     if not isinstance(entry, dict) or set(entry) != ENTRY_FIELDS: return "header fields"
-    if not (isinstance(entry["nonce"], str) and NONCE.match(entry["nonce"])): return "nonce"
+    if not (isinstance(entry["nonce"], str) and NONCE.fullmatch(entry["nonce"])): return "nonce"
     if not P._time(entry["time"]): return "time"
     if not (entry["contentHash"] == "" or P._hex(entry["contentHash"])): return "contentHash"
     if not isinstance(entry["sig"], str): return "sig"
     return P.validate(entry)
 
 # ── content (R-09, §5) — mirrored from han.ts Contents ──
-MIME = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$")
+MIME = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$", re.ASCII)
 def _str(n): return lambda v: isinstance(v, str) and len(v.encode("utf-8")) <= n
 def _blobref(v):
     return (isinstance(v, dict) and {"hash", "size", "type"} <= set(v) <= {"hash", "size", "type", "uri"}
             and ("uri" not in v or (isinstance(v["uri"], str) and len(v["uri"].encode("utf-8")) <= 1024)) and P._hex(v["hash"]) and P._int(v["size"])
-            and v["size"] <= 4 * 2**30 and isinstance(v["type"], str) and bool(MIME.match(v["type"])))
+            and v["size"] <= 4 * 2**30 and isinstance(v["type"], str) and bool(MIME.fullmatch(v["type"])))
 def _blobs(v): return isinstance(v, list) and len(v) <= 64 and all(_blobref(b) for b in v)
 def _links(v): return isinstance(v, list) and len(v) <= 64 and all(
     isinstance(l, dict) and set(l) == {"space", "seq", "id"} and P._space(l["space"]) and P._int(l["seq"]) and P._id(l["id"]) for l in v)
 def _plan(v):
     return (isinstance(v, dict) and {"action", "target"} <= set(v) <= {"action", "target", "args", "argsBlob"}
-            and isinstance(v["action"], str) and bool(P.ACTION.match(v["action"])) and _str(1024)(v["target"])
+            and isinstance(v["action"], str) and bool(P.ACTION.fullmatch(v["action"])) and _str(1024)(v["target"])
             and ("argsBlob" not in v or _blobref(v["argsBlob"])) and ("args" not in v or P.json_ok(v["args"])))
 
 CONTENT = {   # kind → {field: (validator, required)};  None = the kind has no content

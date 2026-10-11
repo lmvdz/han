@@ -143,7 +143,9 @@ def successors(pol, m):
     out = []
     def go(name, kind, author, body, after=None, label=None):
         lab = label or (name + "#" + str(sum(1 for x in m.labels if x == name)))
-        m2, d = apply(pol, m, E(lab, kind, author, body), name)
+        e = E(lab, kind, author, body)
+        if body.get("release"): e["seen"] = m.state["head"]      # the guard reviewed everything so far
+        m2, d = apply(pol, m, e, name)
         if m2 and after: m2 = after(m2)
         if m2: m2 = settle(m2)
         out.append((name, kind, author, body, m2, d))
@@ -155,7 +157,7 @@ def successors(pol, m):
     for author in (OP, OP2, O):
         for sid, a in ((S1, BOT), (S2, BOT2)):
             go(f"{author} releases {SESS[sid][0]}", "session.input", author, {"session": sid, "release": True},
-               (lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}), cl=setk(m.cl, a, n.state["head"])))
+               (lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}), cl=setk(m.cl, a, m.state["head"])))
                if dict(m.held).get(a) == author else None)
     for name, (author, to) in TASKS.items():
         def after(n, author=author, to=to):
@@ -283,7 +285,7 @@ MUTATIONS = {
     "settled-holds-ignore-effects": ('        if (tasks or effs) and x not in s["held"]: s["held"][x] = g', '        if tasks and x not in s["held"]: s["held"][x] = g'),
     "settled-tasks-first-assignee-only": ('        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"]', '        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"][:1]'),
     "executor-guard-not-recorded": ('                e.setdefault("guards", []).append(g)', '                pass'),
-    "release-does-not-clear": ('        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = rc["seq"]', '        if b.get("release"): s["held"].pop(x, None)'),
+    "release-does-not-clear": ('        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = e["seen"]', '        if b.get("release"): s["held"].pop(x, None)'),
     "owner-forced-guarding-ignored": ('    for se in state["sessions"].values():\n        if se["actor"] == x and "guard" in se and live(state, se) and effective_mode(state, se) == "guarded": return se["guard"]\n    return None', '    return None'),
     "guarded-not-sticky": ('                s["guarded"][author] = p["operator"]                            # sticky until it unguards itself', '                pass'),
     "anyone-closing-unguards": ('        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"', '        if (x not in s["held"] and sess["steerMode"] == "guarded"'),

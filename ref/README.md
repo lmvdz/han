@@ -5,9 +5,9 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
 | File | What it is |
 |---|---|
 | `policy.py` | Reference Policy: `decide`, `fold`, `can_read`, `relevant_actors`, `session_access`, closed body schemas (R-09). Pure Python, no dependencies. |
-| `vectors/*.json` | 107 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
+| `vectors/*.json` | 111 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
 | `run_vectors.py` | Runs the vectors against `policy.py`, or any implementation exposing the same five functions. Also checks purity and determinism (R-11) on every step. |
-| `mutate_vectors.py` | Breaks one Policy rule at a time (112 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
+| `mutate_vectors.py` | Breaks one Policy rule at a time (116 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
 | `wire.py` | Signed layer with real Ed25519 (`cryptography` package): ids, signatures, receipts, header **and content** validation, a reference **home** (the §4.1 append pipeline) and a verifying **mirror** (R-14), equivocation and wrong-home proofs, notices, signal rights, per-space blob supply and transfer. |
 | `run_wire.py` | 30 scenarios over `wire.py`, each with its expected result stated from the spec. |
 | `mutate_wire.py` | Breaks one wire-layer rule at a time (24 mutations) and requires the scenarios to fail. |
@@ -33,7 +33,7 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
   ] }
 ```
 
-Every vector is fully expanded: every entry field, every profile, the whole policy. Entry ids are real 64-hex strings, but they're derived from labels (listed in `ids`) rather than from the entry hash. That keeps vectors stable and readable, and Policy never recomputes ids. `00-entry-id.json` tests the real id derivation byte for byte, and `wire.py` uses real ids throughout. Checks read the state of the space named by the step's entry. Dotted keys may contain dots (actor ids); resolve them greedily. Receipts inside `succeeds.through` are structurally complete, but their signatures aren't checked by Policy (`wire.py` checks signatures).
+Every vector is fully expanded: every entry field, every profile, the whole policy. Entry ids are real 64-hex strings, but they're derived from labels (listed in `ids`) rather than from the entry hash. That keeps vectors stable and readable, and Policy never recomputes ids. `00-entry-id.json` tests the real id derivation byte for byte, and `wire.py` uses real ids throughout. Checks read the state of the space named by the step's entry. Dotted keys may contain dots (actor ids); resolve them greedily. Policy checks no signatures; `wire.py` does.
 
 ## Model-checked properties
 
