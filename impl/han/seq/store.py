@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS uploads (hash TEXT NOT NULL, actor TEXT NOT NULL, PRIMARY KEY (hash, actor));
 CREATE TABLE IF NOT EXISTS supplied (space TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (space, hash));
 CREATE TABLE IF NOT EXISTS notices (n INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, item TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS peer_records (space TEXT NOT NULL, seq INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY (space, seq));
 CREATE TABLE IF NOT EXISTS stream_items (space TEXT NOT NULL, session TEXT NOT NULL, n INTEGER NOT NULL, item TEXT NOT NULL,
   PRIMARY KEY (space, session, n));
 """
@@ -73,9 +74,18 @@ class Store:
         for a, i in self.db.execute("SELECT actor, item FROM notices ORDER BY n"): out.setdefault(a, []).append(json.loads(i))
         return out
 
+    # verified profile records of actors on other servers (federation, §4.3)
+    def add_peer_record(self, rec: dict):
+        r = rec["receipt"]
+        self.db.execute("INSERT OR IGNORE INTO peer_records VALUES (?,?,?)", (r["space"], r["seq"], _j(rec)))
+    def peer_records(self) -> list[dict]:
+        return [json.loads(r) for (r,) in self.db.execute("SELECT record FROM peer_records ORDER BY space, seq")]
+
     # session streams (G-05)
     def add_stream_item(self, space, session, n, item):
         self.db.execute("INSERT INTO stream_items VALUES (?,?,?,?)", (space, session, n, _j(item)))
+    def stream_items(self, space, session) -> list:
+        return [json.loads(i) for (i,) in self.db.execute("SELECT item FROM stream_items WHERE space=? AND session=? ORDER BY n", (space, session))]
     def last_stream_n(self, space, session) -> int:
         r = self.db.execute("SELECT MAX(n) FROM stream_items WHERE space=? AND session=?", (space, session)).fetchone()
         return r[0] or 0

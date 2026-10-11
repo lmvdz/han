@@ -82,3 +82,32 @@ I flipped these one at a time; all 1115 steps still passed, so two conforming im
 - B31 whether a release needs the guard to hold a role.
 - Many invalid-vs-denied choices (B3, B12): wrong-kind references, empty `to`, profile-space member.set rules, revoking an unknown key.
 Flipping B24 ("abandon needs an owner") was caught by one vector step, so that one is pinned.
+
+## Part D: re-run against the CURRENT spec (round 18 text, 133 vectors / 1,370 steps)
+
+Before any change, the Policy from Parts A-C scored 1,340 of 1,370 steps (121 of 133 vectors). Every one of the 30 failing steps was a place where the text moved after I wrote the first version, and every one is now settled by the spec text. After fixing them: 1,370 of 1,370 steps, 133 of 133 vectors, purity and determinism checks included. Policy was restructured to follow P-16's common steps 1-10 and its kind table literally (`decide` in policy.ts).
+
+Resolved by spec (failing step -> the text that settles it):
+- D1. 110#9, #14 roleHistory `to` bound. P-02 now says "from ≤ seq < to". (Was B6.) Fixed: exclusive.
+- D2. 112#3 owner-servers rule. The P-16 table row says "D every current owner's server is in it"; P-11 says "can't leave every current owner on a denied server (denying some owners' servers is allowed)". My B27 read it as "any owner". Fixed.
+- D3. 113#6 agent check only on grant. P-03: only when a readable role is granted to a target that "holds none (no role, or banned)". I applied it on every readable role. Fixed.
+- D4. 115#7 owner who is also an assignee. The task.update row orders "allow: owner and not an assignee, final" before "D assignee, final, effect claimed/unknown". Fixed.
+- D5. 116#6-#16 (9 steps) wrong-kind and missing references are `invalid`, and so is an empty `to`. P-16's definition of `invalid` ("names something that isn't there, or is there as another kind") and P-05 settle it. (Was A2/B3.) Fixed.
+- D6. 117#2, #7, #8 profile spaces: `roles` holds the actor and `@:server` as owners from creation, and the actor itself cannot withdraw its operator. P-03 "Profile spaces" paragraph. (Was B10.) Fixed.
+- D7. 124#7, #10 re-arm. §6.4 "Re-arm" defines it (cancelled / ready if the rule's approvals and every guard's are unconsumed and undropped / else awaiting-approval) and says a repeatable own `unknown`, a repeatable `failed`/`yes`, `started:no` and a failed resolve all use it. I had set `ready` unconditionally in two of those paths. Fixed.
+- D8. 126#5, #6, #7, #11 and 127#12, #15, #20 order of checks. P-16 lists the common steps (shape, pins, author key, no-state, exists, denied server, profile space, held, extension, kind list) and the kind lists "in the order ref/policy.py runs them". I had refs/ids resolved before the key check and `(result, started)` pairs and cost/started rules at body level. Fixed; the pair/cost rules moved into the `effect.outcome` and `effect.resolve` lists.
+- D9. 129#6, #8 naming a task. P-06 "Naming a task": denied unless the author is an assignee or an owner, budget or not. (Was A5.) Fixed.
+- D10. 130#4 Policy must not read contentHash, nonce, header time, sig or extra header fields. R-25 states it. (Was A1.) `badHeader` now checks only v, space, kind, author, keyId, refs, seen.
+- D11. 131#1 `space.create` whose policy denies its own home is `invalid`, a non-human creator is `denied`. P-03 "Creation". Fixed (order between the two when both apply: invalid first, see E2).
+- D12. Missing profile in `ctx.profiles` is `invalid` (P-16 step 2, R-25), not "treat as human" (was B4). Fixed via `relevantActors` pins.
+- D13. A1/A4 (header and `accept.sig` grammar belong to the Log), A2, A3, A6, A7, A8 (executor guard and phase) and A9: all now stated in R-25, P-16, the kind table, §6.4/P-15. Still passing.
+
+Still ambiguous after the re-read (Policy side; the vectors do not pin them):
+- E1. `space.create` whose policy denies only the CREATOR's server (not the home). P-03 "Creation" names only the home. I allow it. (policy.set refuses leaving every owner on a denied server, so the invariant would suggest refusing here too.) Proposed: "`space.create` is `denied` if the creator's server is in `servers.deny`."
+- E2. Order between the two `space.create` verdicts (deny-own-home is `invalid`, non-human creator is `denied`) when both apply. I run `invalid` first. Proposed: say so in the P-16 table; the table has no `space.create` row at all.
+- E3. `task` with an empty `to`: P-05 says "an empty list is `invalid`" (a shape rule) but the `task` row starts "D no role". If both apply (no role AND empty `to`) the verdict differs by reading. I treat it as a body-shape error (step 1). Proposed: add "I `to` is empty" as the first item of the `task` row, or state that it is an R-09 body error.
+- E4. `session.close`, `session.input`, `session.open {task}` naming something that is not a session/task: P-16's general definition makes it `invalid`, but §6.6 gives no list and the table says only "§6.6". I use `invalid`. Proposed: give the three kinds a table row.
+- E5. At claim, a GUARD whose profile is not pinned: P-16 step 2 says a candidate or guard "is checked when E3 reaches it" and the claim row says `invalid` for a candidate. For a guard I also use `invalid`. Proposed: say "a candidate or guard without a pinned profile is `invalid`".
+- E6. `fold` needs profile views, contrary to han.ts ("fold reads from the receipt only seq and time"): `session.open` stores `human` and the guard from the author's view (`actorKind`, `operatorConfirmed`, `operator`). A follower that folds without profiles (my executor) gets `sessions` wrong. The author is always pinned in the receipt, so the data exists; the sentence should say "from the receipt: seq, time and the author's pinned view".
+- E7. The generated vector 112 carries spurious profile entries named ".", "a", "e", "h", "l", "m", "o", "p", "s", "t", "x" (looks like a string iterated as a list in the generator). Harmless, but a consumer that validates actor ids in `profiles` would trip on it.
+- E8. The Part C items that are now pinned by vectors: B6 (D1), B8 (D3), B13 (vector 114), B15 (D4), B20 (vector 111), B27 (D2). Still unpinned: B31 (does a release need the guard to hold a role: I require it), B3/B12 leftovers listed above.

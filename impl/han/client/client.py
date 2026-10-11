@@ -14,10 +14,10 @@ _NET = (ConnectionError, OSError, ConnectionClosed, WebSocketException, asyncio.
 
 class Client:
     def __init__(self, url: str, actor: str, key_path: str, outbox_db: str, server: str | None = None,
-                 retry_delay: float = 0.2, max_retry_delay: float = 5.0):
+                 retry_delay: float = 0.2, max_retry_delay: float = 5.0, key=None):
         self.url, self.actor = url, actor
         self.server = server or P.server_of(actor)               # the name we dial: bound into the hello proof
-        self.key = keys.load(key_path)
+        self.key = key or keys.load(key_path)                     # `key`: an already loaded key (a server's own, for @:server connections)
         self.outbox = Outbox(outbox_db)
         self.retry_delay, self.max_retry_delay = retry_delay, max_retry_delay
         self.heads: dict[str, int] = {}                          # space → highest seq seen (for `seen`, R-17)
@@ -162,12 +162,38 @@ class Client:
                 return receipt
 
     # ── reading ──
-    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None):
+    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None):
+        """ReadItems after `after`. `state=True, at=N`: the StateView after record N (needs read rights at N). With `follow`
+        a backlog cut by `limit` is re-read from the last seq seen, so a follower never skips a record; a lost
+        connection ends the stream with an error, as before."""
         args = {"space": space, "after": after} | {k: v for k, v in (("follow", follow or None), ("state", state or None), ("limit", limit),
-                                                                       ("knownHeads", known_heads)) if v is not None}
+                                                                       ("knownHeads", known_heads), ("at", at)) if v is not None}
+        last, got = after, 0
         async for it in self._stream("read", args):
-            if it["type"] == "record": self._note(space, it["record"]["receipt"]["seq"])
+            if it["type"] == "record":
+                seq = it["record"]["receipt"]["seq"]
+                if follow and seq > last + 1:                      # a live record after a gap: fill it first
+                    async for g in self._fill(space, last, limit, seq):
+                        last = g["record"]["receipt"]["seq"]; yield g
+                if seq <= last: continue
+                last, got = seq, got + 1
+                self._note(space, seq)
+                yield it
+                if follow and limit and got == limit:              # the backlog may have been cut here: catch up now, not at the next live record
+                    got = -1
+                    async for g in self._fill(space, last, limit, None):
+                        last = g["record"]["receipt"]["seq"]; yield g
+                continue
             yield it
+
+    async def _fill(self, space, last, limit, below):
+        """Re-read records after `last` (below seq `below`, or up to the head) in pages of `limit`; a hole nobody may read ends it (P-02)."""
+        while True:
+            page = [g async for g in self.read(space, last, limit=limit)
+                    if g["type"] == "record" and (below is None or g["record"]["receipt"]["seq"] < below)]
+            if not page: return
+            for g in page: self._note(space, g["record"]["receipt"]["seq"]); yield g
+            last = page[-1]["record"]["receipt"]["seq"]
 
     async def read_all(self, space, after=0, **kw) -> list:
         return [it async for it in self.read(space, after, **kw)]
@@ -190,8 +216,9 @@ class Client:
             if last is None: last = self.heads.get(space)
 
     # ── the transport (T-03, T-05, T-07) ──
-    async def signal(self, space, body):
-        await self._request("signal", {"space": space, "body": body})
+    async def signal(self, space, body, relay_from: str | None = None):
+        """`relay_from`: a server connection (@:S) signals on behalf of its own actor (G-04); the home accepts it only for S's actors."""
+        await self._request("signal", {"space": space, "body": body} | ({} if relay_from is None else {"from": relay_from}))
 
     async def blob_put(self, data: bytes, type: str = "application/octet-stream") -> dict:
         ref = {"hash": hashlib.sha256(data).hexdigest(), "size": len(data), "type": type}

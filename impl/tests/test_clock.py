@@ -104,3 +104,17 @@ async def test_r16_executor_outcome_is_not_delayed(env):
     a, b, x, claim = await _claimed(env)
     r = await x.append(*x.make_entry("effect.outcome", S, {"claim": claim["id"], "result": "failed", "started": "no"}))
     assert r["seq"] == 6
+
+async def test_r16_error_code_is_unavailable_with_retry_after(env):
+    """R-16: an early abandon is answered `unavailable` with retryAfterMs (the wait that is left), never `denied`; at the end of the wait the same entry is ordered."""
+    from han.core import WireError
+    a, b, x, claim = await _claimed(env)
+    A = P.abandon_after(15)
+    e, c = _abandon(a, claim)
+    with pytest.raises(WireError) as ex: env.seq.append(e, c)
+    assert ex.value.code == "unavailable" and ex.value.to_wire()["retryAfterMs"] == A * 1000
+    env.clock.advance(A - 1)
+    with pytest.raises(WireError) as ex: env.seq.append(e, c)
+    assert ex.value.code == "unavailable" and 0 < ex.value.retry_after_ms <= 1000
+    env.clock.advance(1)
+    assert env.seq.append(e, c)["seq"] == 6

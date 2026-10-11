@@ -11,7 +11,8 @@ import json, time as _time
 from ..core import P, W
 from .chains import Chains, classify, KINDS
 
-SKEW = 300          # seconds a receipt may lead the verifier's clock (§7.5: "receipts dated in the future")
+MAX_CLOCK_SKEW_SECONDS = 60      # how far a receipt may lead the verifier's clock (spec: maxClockSkewSeconds; §7.5 "receipts dated in the future")
+SKEW = MAX_CLOCK_SKEW_SECONDS
 
 def make(kind: str, space: str, through: int, reason: str, receipts: list, server_keys: dict, record=None, chain=None,
          profiles=None, observed_at: str | None = None) -> dict:

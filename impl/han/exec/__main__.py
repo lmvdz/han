@@ -1,5 +1,6 @@
 """python -m han.exec --url ws://… --actor @x:… --key KEYFILE --instance k1 --journal PATH --spaces s1:a.localhost[,…]
---actions file.write,http.post [--allow-url PREFIX]… [--sandbox DIR]"""
+--actions file.write,http.post [--allow-url PREFIX]… [--sandbox DIR]
+[--backoff-base S] [--backoff-cap S]"""
 import argparse, asyncio, os, sys
 from .executor import Executor
 from .journal import StartRefused
@@ -16,6 +17,8 @@ def main(argv=None):
     ap.add_argument("--allow-url", action="append", default=[], help="URL prefix http.post may reach (repeatable)")
     ap.add_argument("--sandbox", default="han-exec-sandbox", help="directory file.write is confined to")
     ap.add_argument("--server", help="server name to dial (default: the actor's)")
+    ap.add_argument("--backoff-base", type=float, default=1.0, help="seconds before re-claiming an effect after failed/not started; doubles each time")
+    ap.add_argument("--backoff-cap", type=float, default=60.0, help="longest such wait, seconds")
     ap.add_argument("--crash-at", help="test hook: die (os._exit 77) at the named journal point, e.g. after-launching")
     a = ap.parse_args(argv)
     hook = None
@@ -23,7 +26,8 @@ def main(argv=None):
         def hook(point, **_):
             if point == a.crash_at: os._exit(77)
     ex = Executor(a.url, a.actor, a.key, a.journal, [s for s in a.spaces.split(",") if s], a.sandbox,
-                  [x for x in a.actions.split(",") if x], a.allow_url, a.instance, a.server, hook=hook)
+                  [x for x in a.actions.split(",") if x], a.allow_url, a.instance, a.server, hook=hook,
+                  backoff_base=a.backoff_base, backoff_cap=a.backoff_cap)
     async def go():
         await ex.start()
         print(f"han-exec {a.actor} instance {ex.instance} ready", flush=True)

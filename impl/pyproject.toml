@@ -7,7 +7,7 @@ name = "han"
 version = "0.1.0"
 description = "HAN v1 minimal reference implementation: sequencer (han-seq) and client over the generic binding"
 requires-python = ">=3.11"
-dependencies = ["websockets>=13", "cryptography>=42"]
+dependencies = ["websockets>=13", "cryptography>=42", "aiohttp"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
@@ -21,9 +21,10 @@ han-verify = "han.verify.__main__:main"
 han = "han.cli:main"
 
 [tool.setuptools]
-packages = ["han", "han.seq", "han.client", "han.exec", "han.host", "han.verify"]
+packages = ["han", "han.seq", "han.client", "han.exec", "han.host", "han.host.claude", "han.verify", "han.matrix"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = ["live: drives the real Claude Agent SDK (needs HAN_LIVE=1; spends Claude usage)"]

@@ -39,6 +39,11 @@ class Inbox(dict):
         if k not in self: self[k] = Notices(self.seq, k)
         return self[k]
 
+def key_list(keys: dict) -> list[dict]:
+    """A server's key set as published (§4.3): [{keyId, publicKey, from, until?, compromised?}]."""
+    return [{"keyId": k, "publicKey": v["publicKey"], "from": v["from"]} | {f: v[f] for f in ("until", "compromised") if v.get(f)}
+            for k, v in keys.items()]
+
 def _invalid(why): return WireError("invalid", why)
 
 class Sequencer:
@@ -48,7 +53,7 @@ class Sequencer:
         self._anchor_wall, self._anchor_mono = self.clock.wall(), self.clock.mono()     # R-03a: a clock anchored at startup...
         self.boot_mono = self._anchor_mono                                              # ...and R-16: when this run began
         self.store = Store(db_path)
-        self.server_keys = {server: {key.key_id: {"publicKey": key.pub, "from": EPOCH}}}
+        self.server_keys = {server: self._own_keys()}      # {server: {keyId: {publicKey, from, until?, compromised?}}}; peers' keys join via .fed
         self.home = W.Home(server, key, key.key_id, "local", clock=self.now_str, server_keys=self.server_keys)
         self.home.blobs, self.home.inbox = BlobStore(self.store), Inbox(self)
         self.home.uploads, self.home.supplied = self.store.uploads(), self.store.supplied()
@@ -61,6 +66,8 @@ class Sequencer:
         self.stream_n: dict[tuple, int] = {}        # (space, session) → last accepted StreamItem n
         self.stream_last: dict[tuple, dict] = {}
         self.broken = False
+        self.fed = None                             # han.seq.federation.Federation, when this server talks to peers
+        self.on_ordered = None                      # (entry, content, state, receipt) after a record is ordered: federation duties (G-02, G-03)
         self._load()
 
     # ── clock (R-03a) ──
@@ -68,6 +75,35 @@ class Sequencer:
         """Steady, slewed: the wall clock read once at startup plus elapsed steady time. A later wall step has no effect."""
         return self._anchor_wall + (self.clock.mono() - self._anchor_mono)
     def now_str(self) -> str: return fmt_time(self.now())
+
+    # ── this server's keys (§4.3): a window per key, published at /.well-known/han ──
+    def _own_keys(self) -> dict:
+        ks = self.store.get_meta("own_keys", {})
+        cur = ks.get(self.key_id)
+        if cur and (cur.get("until") or cur.get("compromised") or cur["publicKey"] != self.key.pub):
+            raise RuntimeError(f"server key {self.key_id} is retired or belongs to another key; start with the current key file")
+        ks.setdefault(self.key_id, {"publicKey": self.key.pub, "from": EPOCH})
+        self.store.set_meta("own_keys", ks); self.store.commit()
+        return ks
+
+    def rotate_key(self, key):
+        """Sign from now on with `key` (a new keyId); the old key's window ends now. The caller keeps `key` in the key file."""
+        ks = self.server_keys[self.server]
+        if key.key_id in ks: raise ValueError("keyIds are single-use")
+        now = self.now_str()
+        ks[self.key_id]["until"] = now; ks[key.key_id] = {"publicKey": key.pub, "from": now}
+        self.key, self.key_id, self.home.key, self.home.key_id = key, key.key_id, key, key.key_id
+        self.store.set_meta("own_keys", ks); self.store.commit()
+
+    def mark_compromised(self, key_id: str):
+        """Publish `compromised` for a retired key (peers then trust only the receipts they recorded before they saw the mark)."""
+        if key_id == self.key_id: raise ValueError("rotate away from the key first")
+        self.server_keys[self.server][key_id]["compromised"] = True
+        self.store.set_meta("own_keys", self.server_keys[self.server]); self.store.commit()
+
+    def wellknown(self, endpoint: str) -> dict:
+        """The document served at /.well-known/han (§4.3)."""
+        return {"server": self.server, "sequencer": endpoint, "keys": key_list(self.server_keys[self.server])}
 
     # ── startup: reload the chain, check it, rebuild state ──
     def _load(self):
@@ -93,10 +129,10 @@ class Sequencer:
     def profile(self, actor: str, seq: int | None = None):
         """ProfileView of `actor` at profile seq `seq` (default: now), or None if this server can't produce it."""
         if actor.startswith("@:"):
-            if actor[2:] != self.server: return None
+            if actor[2:] != self.server: return self.fed.server_view(actor) if self.fed else None
             return {"actor": actor, "seq": 0, "actorKind": "service", "operatorConfirmed": False,
                     "keys": {self.key_id: {"publicKey": self.key.pub, "status": "valid"}}}
-        if P.server_of(actor) != self.server: return None                 # no federation in v1-minimal
+        if P.server_of(actor) != self.server: return self.fed.profile(actor, seq) if self.fed else None     # a verified copy of the other server's chain
         S = self.home.spaces.get("profile:" + actor)
         if not S: return None
         st = S["state"]
@@ -194,6 +230,7 @@ class Sequencer:
         st = S["state"]
         for sub in list(self.subs.get(sp, ())):                                           # 9 fan out (T-01), P-02 per record
             if res["seq"] > sub.cutoff and P.can_read(st, sub.actor, res["seq"]): sub.push({"type": "record", "record": rec})
+        if self.on_ordered: self.on_ordered(entry, content, st, res)
         return res
 
     def _r16(self, state, entry):
@@ -213,16 +250,34 @@ class Sequencer:
     def _readable_somewhere(self, st, who):
         return st["policy"]["visibility"] == "public" or any(P.can_read(st, who, s) for s in range(1, st["head"] + 1))
 
-    def read(self, who, space, after, follow=False, state=False, limit=None, known_heads=None):
-        """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing."""
+    def _state_at(self, S, at):
+        """The SpaceState after record `at`: the chain folded through `at` with the profile views its receipts pinned."""
+        st = None
+        for rec in S["records"][:at]:
+            r = rec["receipt"]
+            pinned = {a: self.profile(a, n) for a, n in r["profiles"].items()}
+            st = P.fold(st, {"entry": dict(rec["entry"], id=r["id"]), "content": None, "receipt": r}, {"time": r["time"], "profiles": pinned})
+        return st
+
+    def read(self, who, space, after, follow=False, state=False, limit=None, known_heads=None, at=None):
+        """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing.
+        `at` (with `state`): the state after record `at` instead of the head; it needs the read right at `at`."""
         if not (isinstance(space, str) and P._space(space) and P._int(after)): raise _invalid("read args")
+        if at is not None and not (state and P._int(at) and at >= 1): raise _invalid("at needs state and a seq >= 1")
         limit = 1000 if limit is None else limit
         if not (P._int(limit) and 1 <= limit <= 1000): raise _invalid("limit")
         S = self.home.spaces.get(space)
+        if not S and self.fed and space.startswith("profile:") and P.server_of(space) != self.server:
+            return self.fed.read_profile(space, after, state, limit), None             # another server's profile, as verified here (§4.3)
         if not S or not self._readable_somewhere(S["state"], who): raise WireError("not_found", "no such space")
         st = S["state"]
-        code, items = self.home.read(space, after, who, state)
+        code, items = self.home.read(space, after, who, state and at is None)
         if code != "ok": raise WireError(code, items or "")
+        if at is not None:
+            if at > st["head"]: raise _invalid("at is beyond the head")
+            past = self._state_at(S, at)
+            if not P.can_read(past, who, at): raise WireError("denied", "state needs read rights at that seq")
+            items = [{"type": "state", "state": {k: v for k, v in past.items() if k != "entries"}}] + items
         head = [i for i in items if i["type"] == "state"]
         recs = [i for i in items if i["type"] == "record"]
         out = head + ([{"type": "heads", "heads": self._heads_for(who, known_heads)}] if known_heads is not None else []) + recs[:limit]
@@ -271,13 +326,35 @@ class Sequencer:
             self.store.add_upload(ref["hash"], who); self.store.commit()
         return res
 
+    def supply(self, space, ref, data: bytes):
+        """G-02: bytes fetched from another server and already hash-checked are held for `space` from now on."""
+        self.home.blobs[ref["hash"]] = data
+        self.home.supplied.add((space, ref["hash"])); self._supplied_saved.add((space, ref["hash"]))
+        self.store.add_supplied(space, ref["hash"]); self.store.commit()
+
     def blob_get(self, who, ref, space, offset=0, length=None):
         length = LIMITS["maxBlobRangeBytes"] if length is None else length
         if not (W._blobref(ref) and isinstance(space, str) and P._space(space) and P._int(offset) and P._int(length) and length >= 1):
             raise _invalid("blobGet args")
         code, data = self.home.blob_get(ref, space, who)
+        if code != "ok" and self._context_blob(who, ref, space): code, data = "ok", self.home.blobs[ref["hash"]]
         if code != "ok": raise WireError(code, "blob not available")
+        return self.blob_range(data, offset, length)
+
+    @staticmethod
+    def blob_range(data: bytes, offset: int, length: int) -> dict:
         return {"data": data[offset:offset + min(length, LIMITS["maxBlobRangeBytes"])], "size": len(data), "offset": offset}
+
+    def _context_blob(self, who, ref, space) -> bool:
+        """A `context` StreamItem's blob is served to actors holding the read right on its live session (T-07, G-05); the
+        bytes must have been uploaded by the session's actor, who supplies them."""
+        S = self.home.spaces.get(space)
+        if not S or ref["hash"] not in self.home.blobs: return False
+        st = S["state"]
+        for sid, sess in st["sessions"].items():
+            if sess["actor"] not in self.home.uploads.get(ref["hash"], ()) or not P.session_access(st, who, sid)["read"]: continue
+            if any(i["type"] == "context" and i["blob"]["hash"] == ref["hash"] for i in self.store.stream_items(space, sid)): return True
+        return False
 
     # ── session streams (G-05) ──
     def _session(self, space, session):
