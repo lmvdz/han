@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio, hashlib, time
 from ..core import P, WireError
 from ..entries import fmt_time
-from .agent import Agent, Say, Steer, Task, TurnInput, World
+from .agent import ADVISORY, Agent, Say, Steer, Task, TurnInput, World
 from .journal import Journal
 
 MAX_DATA = 50
@@ -44,6 +44,10 @@ class Host:
     def held(self) -> bool: return bool(self.state) and self.me in self.state["held"]
     @property
     def guarded_now(self) -> str | None: return P.guarded_now(self.state, self.me) if self.state else None
+
+    def _guarded_session(self) -> bool:
+        sess = ((self.state or {}).get("sessions") or {}).get(self.session)
+        return self.steer_mode == "guarded" or bool(sess and P.effective_mode(self.state, sess) == "guarded")
 
     def _crash(self, point, key=None):
         if self.crash: self.crash(point, key)
@@ -252,6 +256,8 @@ class Host:
     async def _emit(self, fields: dict):
         """Journal the next item (n and time fixed), then send it; an unsent item is resent after a restart (a resend of the last item is
         harmless, NOTES 20)."""
+        if fields["type"] == "status" and "detail" not in fields and self._guarded_session() and not self.agent.sandboxed:
+            fields = fields | {"detail": ADVISORY}                       # §8.4: without an OS sandbox `guarded` is advisory, and the status says so
         self.j.add_item(lambda n: {"space": self.space, "session": self.session, "n": n, "time": fmt_time(time.time())} | fields)
         await self._flush_items()
 

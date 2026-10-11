@@ -2,11 +2,12 @@
 fan-out, blobs, notices and session streams. han.seq.server is only the WebSocket framing around this.
 Everything here is synchronous (one event loop, so each call is atomic, like the per-space serial transaction of §4.1)."""
 from __future__ import annotations
-import asyncio, math, time
+import asyncio, logging, math, time
 from ..core import P, W, LIMITS, WireError
 from ..entries import fmt_time, make_entry, default_policy
 from .store import Store, BlobStore
 
+log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)
 
@@ -68,7 +69,15 @@ class Sequencer:
         self.broken = False
         self.fed = None                             # han.seq.federation.Federation, when this server talks to peers
         self.on_ordered = None                      # (entry, content, state, receipt) after a record is ordered: federation duties (G-02, G-03)
+        self.ordered_hooks: list = []               # more (entry, content, state, receipt) callbacks, added by bindings (add_ordered_hook)
         self._load()
+
+    def add_ordered_hook(self, fn):
+        """Call `fn(entry, content, state, receipt)` after every newly ordered record, whichever binding appended it (not on a dedupe hit)."""
+        self.ordered_hooks.append(fn)
+
+    def remove_ordered_hook(self, fn):
+        if fn in self.ordered_hooks: self.ordered_hooks.remove(fn)
 
     # ── clock (R-03a) ──
     def now(self) -> float:
@@ -194,7 +203,7 @@ class Sequencer:
             if content is not None and len(P.jcs(content)) > LIMITS["maxContentBytes"]: raise _invalid("content too large")
             S = self.home.spaces.get(sp)
             state = S["state"] if S else None
-            need = P.relevant_actors(state, dict(entry, id=eid))                         # 4 profiles (all of P-01)
+            need = self.pin_actors(state, dict(entry, id=eid))                           # 4 profiles (all of P-01)
         except WireError: raise
         except (TypeError, KeyError, ValueError, AttributeError, RecursionError) as ex:
             raise _invalid(f"malformed: {type(ex).__name__}")
@@ -230,17 +239,40 @@ class Sequencer:
         st = S["state"]
         for sub in list(self.subs.get(sp, ())):                                           # 9 fan out (T-01), P-02 per record
             if res["seq"] > sub.cutoff and P.can_read(st, sub.actor, res["seq"]): sub.push({"type": "record", "record": rec})
-        if self.on_ordered: self.on_ordered(entry, content, st, res)
+        for hook in ([self.on_ordered] if self.on_ordered else []) + list(self.ordered_hooks):
+            try: hook(entry, content, st, res)
+            except Exception: log.exception("ordered hook failed")        # the record is durable and receipted; a hook cannot undo it
         return res
+
+    def pin_actors(self, state, entry, fetch=None) -> list[str]:
+        """P-01: the actors whose profiles the receipt pins. For a claim: the author, the proposer, the approval candidates in
+        E3 order up to and including the first whose key is valid (later ones are never consulted, so an unreachable one
+        cannot block the claim), then the guards. `fetch(actor)` gives a ProfileView or None (default: self.profile)."""
+        fetch = fetch or self.profile
+        eff = state["effects"].get(entry["body"].get("proposal")) if state and entry["kind"] == "effect.claim" else None
+        if not eff: return P.relevant_actors(state, entry)
+        out = [entry["author"], eff["proposer"]]
+        for a in P.approval_candidates(state, eff, self.now_str()):
+            out.append(a["author"])
+            v = fetch(a["author"])
+            if v is None or v["keys"].get(a["keyId"], {}).get("status") == "valid": break      # no view: the pipeline answers unavailable
+        out.extend(P.guards_of(state, eff))
+        return list(dict.fromkeys(out))
 
     def _r16(self, state, entry):
         """R-16: an owner's abandon (P-09) needs A seconds of this sequencer's own steady clock since it ordered the claim;
-        a claim ordered before this run began counts from the start of this run."""
+        a claim ordered before this run began counts from the start of this run. `unavailable` only if Policy would allow the
+        abandon once claim.time + A has passed (latest claim, phase claimed, right author and key); otherwise Policy answers now."""
         b = entry["body"]
-        _, eff, c = P.find_claim(state, b["claim"])
+        pid, eff, c = P.find_claim(state, b["claim"])
         if not c or (entry["author"] == eff["executor"] and entry["keyId"] == c["instance"]): return
         if not (b.get("result") == "unknown" and b.get("started") == "unknown" and "cost" not in b): return
         if state["roles"].get(entry["author"]) != "owner": return                          # Policy denies everyone else
+        if c is not P.latest_claim(eff) or eff["phase"] != "claimed": return               # Policy: claim not open, denied now
+        try:
+            at = fmt_time(P.ts(c["time"]) + P.abandon_after(c["window"]))
+            if not P.decide(state, dict(entry, id=P.entry_id(entry)), {"time": at, "profiles": {entry["author"]: self.profile(entry["author"])}})["allow"]: return
+        except (KeyError, TypeError, ValueError, AttributeError): return
         due = self.claim_mono.get(c["id"], self.boot_mono) + P.abandon_after(c["window"])
         wait = due - self.clock.mono()
         if wait > 0:
@@ -261,7 +293,7 @@ class Sequencer:
 
     def read(self, who, space, after, follow=False, state=False, limit=None, known_heads=None, at=None):
         """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing.
-        `at` (with `state`): the state after record `at` instead of the head; it needs the read right at `at`."""
+        `at` (with `state`): the state after record `at` instead of the head; the read right is judged on the CURRENT state (P-02)."""
         if not (isinstance(space, str) and P._space(space) and P._int(after)): raise _invalid("read args")
         if at is not None and not (state and P._int(at) and at >= 1): raise _invalid("at needs state and a seq >= 1")
         limit = 1000 if limit is None else limit
@@ -276,7 +308,7 @@ class Sequencer:
         if at is not None:
             if at > st["head"]: raise _invalid("at is beyond the head")
             past = self._state_at(S, at)
-            if not P.can_read(past, who, at): raise WireError("denied", "state needs read rights at that seq")
+            if not P.can_read(st, who, at): raise WireError("denied", "state needs read rights at that seq")
             items = [{"type": "state", "state": {k: v for k, v in past.items() if k != "entries"}}] + items
         head = [i for i in items if i["type"] == "state"]
         recs = [i for i in items if i["type"] == "record"]

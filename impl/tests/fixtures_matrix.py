@@ -106,8 +106,10 @@ async def say(p, room, space, text):
     e, ct = p.client.make_entry("message", space, {}, {"text": text})
     return await p.client.append(e, ct, room=room, timeout=30)
 
-def verify_room(mx, client, room):
-    """Feed every record the client sees in `room` to a Mirror (R-14). Returns the Mirror."""
+async def verify_room(mx, client, room):
+    """Feed every record the client sees in `room` to a Mirror (R-14); the room has headers only (P-02), so the content is
+    fetched through the HTTP read first. Returns the Mirror."""
+    await client.fill_content(room)
     m = mx.mirror()
     for rec in client.records(room):
         ok, why = m.ingest(rec)

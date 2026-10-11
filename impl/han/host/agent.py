@@ -40,7 +40,10 @@ class Steer:
 
 Action = Say | World | Task | Steer
 
+ADVISORY = "guarded: advisory (no sandbox)"      # §8.4: the status detail of a guarded session whose tools run without an OS sandbox
+
 class Agent:
+    sandboxed = False       # True only for a driver whose tools run under an OS sandbox; otherwise `guarded` is advisory (§8.4) and says so
     propose = None          # set by Host: called with a World action while the turn runs; returns the model's answer ("proposed as <id>") or None
 
     async def turn(self, input: TurnInput, mode: Mode) -> list[Action]:
@@ -83,13 +86,14 @@ class ClaudeCodeAgent(Agent):
       Settings    setting_sources=[] and no allow rules; the built-in `tools` are limited to the file tools, Bash and the two web tools;
                   the only MCP server is HAN's in-process one that declares the world tools (`deploy`, `http_post`), with
                   strict_mcp_config so no external server is read. max_turns is small.
-      Gate        `can_use_tool` asks han.host.claude.gate.Gate: file tools inside cwd are allowed; Bash per mode; WebFetch, WebSearch,
-                  network Bash and the declared world tools become `World` actions. For those the host's `propose` hook (set by Host)
-                  signs the effect.propose at once and returns the id, so the model is answered "proposed as <id>[, waiting for
-                  <guard>]" without blocking. A denied call tells the model why.
+      Gate        a `PreToolUse` hook sees EVERY tool call (also in-cwd reads and edits that the CLI would allow without asking) and asks
+                  han.host.claude.gate.Gate: file tools inside cwd are allowed; Bash per mode; WebFetch, WebSearch, network Bash and
+                  the declared world tools become `World` actions. For those the host's `propose` hook (set by Host) signs the
+                  effect.propose at once and returns the id, so the model is answered "proposed as <id>[, waiting for <guard>]" without
+                  blocking (the hook denies the call with that text). A denied call tells the model why. `can_use_tool` asks the same
+                  Gate for the calls the CLI still asks about: a second line.
       Output      the model's text blocks become `Say` actions (the host streams them as `output` items).
-    Limits (NOTES): the SDK calls can_use_tool only when the CLI's rules say "ask" (Read and in-workspace edits in the matching modes
-    never reach it); there is no Bash sandbox on Windows, so Bash is the Gate's allow-list; the model API is the only egress."""
+    Limits (NOTES): there is no Bash sandbox on Windows, so Bash is the Gate's allow-list; the model API is the only egress."""
     BUILTIN_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"]
     PROMPT = ("You are an agent in a shared HAN session, working in the current directory. Use the deploy tool to publish a file "
               "to the shared output directory (target is a path relative to it). Be brief.")
@@ -108,14 +112,15 @@ class ClaudeCodeAgent(Agent):
         self.results: list = []                       # the SDK's ResultMessage per turn (turns, cost, usage)
         self._client = None
         self._world: list[World] = []
+        self._hooked: set[str] = set()                # tool_use_ids the PreToolUse hook already allowed (can_use_tool then re-checks without tracing)
 
     def options(self):
-        from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+        from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, create_sdk_mcp_server, tool
         async def never(args):
             return {"content": [{"type": "text", "text": "this tool only proposes an effect; it never runs here"}], "is_error": True}
         tools = [tool(t.name, t.description, t.params)(never) for t in self.world_tools]
         return ClaudeAgentOptions(cwd=self.cwd, permission_mode=self.auto_mode, setting_sources=[], can_use_tool=self._can_use_tool,
-                                  allowed_tools=[], tools=self.BUILTIN_TOOLS, mcp_servers={"han": create_sdk_mcp_server("han", tools=tools)},
+                                  hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[self._pre_tool_use])]}, allowed_tools=[], tools=self.BUILTIN_TOOLS, mcp_servers={"han": create_sdk_mcp_server("han", tools=tools)},
                                   strict_mcp_config=True, max_turns=self.max_turns, model=self.model, system_prompt=self.PROMPT)
 
     async def _ensure(self):
@@ -129,16 +134,30 @@ class ClaudeCodeAgent(Agent):
     async def close(self):
         if self._client: await self._client.disconnect(); self._client = None
 
-    async def _can_use_tool(self, tool_name, tool_input, context=None):
-        from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+    def _decide(self, tool_name, tool_input, trace=True):
+        """The Gate's verdict for one call: (allowed, message for the model if not). A world call is proposed here, once."""
         d = self.gate.decide(tool_name, tool_input, self.mode)
-        self.trace.append((tool_name, d.kind))
-        if d.kind == "allow": return PermissionResultAllow()
-        if d.kind == "deny": return PermissionResultDeny(message=d.message)
+        if trace: self.trace.append((tool_name, d.kind))
+        if d.kind == "allow": return True, ""
+        if d.kind == "deny": return False, d.message
         w = World(d.action, d.args)
         self._world.append(w)
         answer = self.propose(w) if self.propose else None
-        return PermissionResultDeny(message=answer or f"{tool_name} reaches the world: proposed as {d.action}, waiting")
+        return False, answer or f"{tool_name} reaches the world: proposed as {d.action}, waiting"
+
+    async def _pre_tool_use(self, hook_input, tool_use_id=None, context=None):
+        """PreToolUse hook: the Gate decides for every tool call, including those the CLI would run without asking (in-cwd edits in
+        acceptEdits). An allowed call continues through the CLI's normal permission flow (and `can_use_tool`, if it asks)."""
+        ok, message = self._decide(hook_input.get("tool_name", ""), hook_input.get("tool_input") or {})
+        if ok:
+            if tool_use_id: self._hooked.add(tool_use_id)
+            return {}
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": message}}
+
+    async def _can_use_tool(self, tool_name, tool_input, context=None):
+        from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+        ok, message = self._decide(tool_name, tool_input, trace=getattr(context, "tool_use_id", None) not in self._hooked)
+        return PermissionResultAllow() if ok else PermissionResultDeny(message=message)
 
     async def turn(self, input: TurnInput, mode: Mode) -> list[Action]:
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock

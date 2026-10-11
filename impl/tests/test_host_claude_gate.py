@@ -145,3 +145,44 @@ async def test_host_auto_agent_is_told_just_the_id(env, ws):
     assert made[0].answers[0].message == f"proposed as {props[0]['receipt']['id']}" and made[0].modes == ["acceptEdits"]
     assert props[0]["entry"]["body"]["action"] == "web.fetch"
     task.cancel()
+
+# ── the PreToolUse hook sees every call (the CLI asks can_use_tool only for some) ──
+class HookedClient(FakeClient):
+    """Like the real CLI: every call goes through the PreToolUse hook first; only calls flagged `asks` then reach can_use_tool."""
+    async def receive_response(self):
+        hook = self.options.hooks["PreToolUse"][0].hooks[0]
+        for i, (tool, inp, asks) in enumerate(self.script):
+            out = await hook({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": inp, "tool_use_id": f"t{i}"}, f"t{i}", None)
+            self.answers.append(out)
+            if not out and asks: self.answers.append(await self.options.can_use_tool(tool, inp, type("Ctx", (), {"tool_use_id": f"t{i}"})()))
+        yield ResultMessage("success", 1, 1, False, 2, "sid", total_cost_usd=0.01)
+
+def hooked_agent(ws, script):
+    made = []
+    def factory(options): made.append(HookedClient(options, script)); return made[0]
+    return ClaudeCodeAgent(ws, sdk_client=factory), made
+
+async def test_pre_tool_use_hook_decides_every_call_including_in_cwd_edits(ws):
+    """Section 8.4: the options carry a PreToolUse hook for all tools. In acceptEdits the CLI would run an in-cwd Write without asking, yet the
+    Gate decides it (allow) and an out-of-cwd Write (deny); a world call is proposed once, in the hook, and never reaches can_use_tool; a call
+    the CLI still asks about is re-checked by can_use_tool without a second trace entry."""
+    script = [("Write", {"file_path": "notes.txt", "content": "x"}, False), ("Write", {"file_path": "../evil.txt", "content": "x"}, False),
+              ("mcp__han__deploy", {"target": "hello.txt", "content": "hi"}, True), ("Bash", {"command": "ls"}, True)]
+    agent, made = hooked_agent(ws, script)
+    proposed = []
+    agent.propose = lambda w: proposed.append(w) or f"proposed as {len(proposed)}"
+    out = await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "auto")
+    o = made[0].options
+    assert list(o.hooks) == ["PreToolUse"] and o.hooks["PreToolUse"][0].matcher is None and o.can_use_tool is not None    # both lines kept
+    ans = made[0].answers
+    assert ans[0] == {}                                                                        # in-cwd edit: allowed, not asked
+    assert ans[1]["hookSpecificOutput"]["permissionDecision"] == "deny" and "outside the workspace" in ans[1]["hookSpecificOutput"]["permissionDecisionReason"]
+    assert ans[2]["hookSpecificOutput"]["permissionDecisionReason"] == "proposed as 1" and len(proposed) == 1
+    assert ans[3] == {} and isinstance(ans[4], PermissionResultAllow)                           # Bash ls: the hook allows, can_use_tool allows again
+    assert agent.trace == [("Write", "allow"), ("Write", "deny"), ("mcp__han__deploy", "world"), ("Bash", "allow")]
+    assert [w.action for w in out if isinstance(w, World)] == ["file.write"]
+
+async def test_pre_tool_use_hook_denies_what_strict_mode_forbids(ws):
+    agent, made = hooked_agent(ws, [("Bash", {"command": "ls"}, False)])
+    await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
+    assert "Bash is not available" in made[0].answers[0]["hookSpecificOutput"]["permissionDecisionReason"]

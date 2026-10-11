@@ -13,13 +13,13 @@ Each entry says where the spec is silent or ambiguous, what `impl/` does (always
 
 5. **Profiles of actors on other servers (federation, section below).** An actor of another server has a pinnable profile once this server has read, verified and cached its profile space (`han.seq.federation`). Without a `Federation` attached (a bare `Sequencer`), or while a peer cannot be reached, appends needing it answer `unavailable` (§4.1 step 4). The key window `from` of this server's own key is `1970-01-01T00:00:00Z`.
 6. **How a profile space is first created is not specified over the wire.** §4.3 only says the server actor appends `space.create` with `profile`. Here the server signs it with its own home key as `@:S` (the synthetic view of `@:S` lists the home key as valid), through the normal pipeline. Trigger: `python -m han.seq register …`, `--register` at startup, or `Sequencer.register()`.
-7. The pinned profile seq is the profile space's head at append time (fresh by construction, R-10). Records store the pinned views so a reload replays `fold` without the profile spaces.
+7. The pinned profile seq is the profile space's head at append time (fresh by construction, R-10). For a claim the sequencer pins the approval candidates in E3 order only up to and including the first whose key is valid (`Sequencer.pin_actors`, matching `Home.pin`); an unreachable later approver cannot make the claim `unavailable`, and federation prefetches them one at a time in the same order. Records store the pinned views so a reload replays `fold` without the profile spaces.
 8. `hello` accepts `@:S` (this server's actor) with the server key. This is the "home reads its own space" actor (P-02); it equals root on this server, which is what it is.
 
 ## Clock and time (R-03a, R-16)
 
 9. **R-03a "refuse with `unavailable` if the clock is behind"**: no tolerance. The receipt clock is `wall at startup + steady elapsed`; if it is earlier than the space's last receipt time, every append that is not a dedupe hit answers `unavailable` with `retryAfterMs` = the gap, until it catches up. After a restart on a clock that is hours behind, the server is unavailable for hours (as written). The "persisted last receipt time" is the chain itself (per space, which is what R-03a requires), not a separate global value.
-10. **R-16 error code (now the spec).** The spec says the sequencer "MUST NOT order" an abandon before A steady seconds; it does not say what the sender sees. Answer: `unavailable` with `retryAfterMs` (the same request succeeds later), not `denied`, so a client's R-06 retry delivers it when due. It applies only to an owner's `effect.outcome` with `unknown/unknown` by someone other than the claiming instance (P-09); everyone else is left to Policy (`denied`). A claim ordered in an earlier run counts from the start of this run.
+10. **R-16 error code (now the spec).** The spec says the sequencer "MUST NOT order" an abandon before A steady seconds; it does not say what the sender sees. Answer: `unavailable` with `retryAfterMs` (the same request succeeds later), not `denied`, so a client's R-06 retry delivers it when due. It applies only to an owner's `effect.outcome` with `unknown/unknown` by someone other than the claiming instance (P-09) that Policy would allow once claim.time + A has passed (the claim is the latest, its phase `claimed`); anything else, e.g. an abandon after `succeeded`, gets Policy's verdict (`denied`) at once. A claim ordered in an earlier run counts from the start of this run.
 11. The R-16 check runs after dedupe (R-01 first) and before Policy, so an early abandon is `unavailable` instead of Policy's `denied "abandon before the launch window closed"`.
 
 ## Reads, follow, limits (§3)
@@ -41,7 +41,7 @@ Each entry says where the spec is silent or ambiguous, what `impl/` does (always
 
 ## State at a past seq
 
-27. `read(space, after, {state: true, at: N})` returns the state after record `N` (folded from the chain with the profile views each receipt pinned) instead of the head state. It needs the read right at `N` in that state (`denied` otherwise), `1 <= N <= head` and `state` set (`invalid` otherwise). The records returned are still those after `after`.
+27. `read(space, after, {state: true, at: N})` returns the state after record `N` (folded from the chain with the profile views each receipt pinned) instead of the head state. It needs the read right at `N`, judged on the CURRENT state (P-02: a member who joined at seq 3 reads the state at seq 2; a server denied now reads nothing) (`denied` otherwise), `1 <= N <= head` and `state` set (`invalid` otherwise). The records returned are still those after `after`.
 
 ## Verification (R-14, R-15)
 

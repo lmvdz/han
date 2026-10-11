@@ -7,7 +7,7 @@ han/core.py      policy + wire from ref/, LIMITS, WireError
 han/keys.py      Ed25519 key files (JSON): generate, load, public_of
 han/entries.py   make_entry (id-relevant fields, nonce, time, contentHash, keyId, sig), default_policy
 han/seq/         sequencer.py (pipeline, clock, R-16, fan-out, blobs, notices, streams) · store.py (SQLite) · server.py (frames, /.well-known) · federation.py (peers) · __main__.py
-han/client/      client.py (Client, outbox + retry) · outbox.py (SQLite)
+han/client/      client.py (Client, outbox + retry) · outbox.py (SQLite) · protocol.py (ClientProtocol: what actors need from a client; Client and MatrixClient satisfy it)
 tests/           pytest-asyncio, a real server on a free port; each docstring names the rule it checks
 ```
 
@@ -106,4 +106,6 @@ Options added in the fix round:
 - Wire/client: `read(space, after, {state: true, at: seq})` (`Client.read(..., state=True, at=seq)`) returns the state after record `seq`; `blobGet` serves a live session's `context` blob to actors with the read right; `Client.read(..., follow=True, limit=N)` re-reads gaps by itself.
 - Verifier: receipts may lead its clock by 60 s (`han.verify.MAX_CLOCK_SKEW_SECONDS`, the spec's `maxClockSkewSeconds`); in-space gossip is `{type: "heads", receipts}` and `{type: "fault", proof}`.
 
-Tests: `python -m pytest -q` from `impl/` runs everything (steps 1 and 2); 91 in all.
+Tests: `python -m pytest -q` from `impl/` runs everything (steps 1 and 2, the Matrix binding against Synapse, round 20): 143 passed, 1 skipped (the live Claude run) in about 2 minutes.
+
+Round 20: `Sequencer.add_ordered_hook` (bindings subscribe to every newly ordered record; the Matrix appservice no longer wraps `append`); `Executor(..., client=)` takes any `ClientProtocol`, so han-exec runs over `MatrixClient`; `tests/test_round20.py` covers read-at on the current state, R-16 and approver pinning.

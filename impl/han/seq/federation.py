@@ -237,13 +237,22 @@ class Federation:
         be had is left out: the pipeline then answers `unavailable` itself (§4.1 step 4)."""
         try:
             S = self.seq.home.spaces.get(entry["space"])
-            need = P.relevant_actors(S["state"] if S else None, dict(entry, id=P.entry_id(entry)))
             author, key_id = entry["author"], entry["keyId"]
+            state, e = (S["state"] if S else None), dict(entry, id=P.entry_id(entry))
         except (KeyError, TypeError, ValueError, AttributeError): return
-        for a in need:
-            if a.startswith("@:") or P.server_of(a) == self.seq.server: continue
+        got = set()
+        async def have(a):
+            if a in got or a.startswith("@:") or P.server_of(a) == self.seq.server: return
+            got.add(a)
             try: await self.ensure_profile(a, key_id if a == author and isinstance(key_id, str) else None)
             except WireError as ex: log.info("profile of %s unavailable: %s", a, ex.message)
+        try:
+            for _ in range(P.MAX_OPEN_APPROVALS + 4):                  # E3 order: fetch candidates one by one, stop at the first valid key
+                before = len(got)
+                need = self.seq.pin_actors(state, e)
+                for a in need: await have(a)
+                if len(got) == before: break
+        except (KeyError, TypeError, ValueError, AttributeError): return
 
     async def prepare_read(self, space):
         if isinstance(space, str) and space.startswith("profile:") and P._space(space) and P.server_of(space) != self.seq.server \
