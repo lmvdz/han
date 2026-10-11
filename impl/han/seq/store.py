@@ -26,6 +26,7 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
+        if "at" not in [c[1] for c in self.db.execute("PRAGMA table_info(uploads)")]: self.db.execute("ALTER TABLE uploads ADD COLUMN at REAL")
         self.db.commit()
 
     def commit(self): self.db.commit()
@@ -55,12 +56,15 @@ class Store:
             yield rec, json.loads(p)
 
     # blobs, uploads, supply (G-01)
-    def add_upload(self, h, actor): self.db.execute("INSERT OR IGNORE INTO uploads VALUES (?,?)", (h, actor))
+    def add_upload(self, h, actor, at=None): self.db.execute("INSERT OR IGNORE INTO uploads (hash, actor, at) VALUES (?,?,?)", (h, actor, at))
     def add_supplied(self, space, h): self.db.execute("INSERT OR IGNORE INTO supplied VALUES (?,?)", (space, h))
     def uploads(self) -> dict:
         out = {}
         for h, a in self.db.execute("SELECT hash, actor FROM uploads"): out.setdefault(h, set()).add(a)
         return out
+    def upload_times(self) -> dict:
+        """(hash, actor) → epoch seconds the upload completed (D3); rows from before this column have none and are not eligible."""
+        return {(h, a): at for h, a, at in self.db.execute("SELECT hash, actor, at FROM uploads") if at is not None}
     def supplied(self) -> set:
         return set(self.db.execute("SELECT space, hash FROM supplied"))
 

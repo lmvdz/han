@@ -1,0 +1,414 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "read.state",
+ "description": "read with state:true -> state item, record items, end",
+ "rules": [
+  "§3",
+  "G-09",
+  "P-02"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "read",
+    "args": {
+     "space": "s1:a.localhost",
+     "after": 0,
+     "state": true
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "state",
+     "state": {
+      "space": "s1:a.localhost",
+      "head": 6,
+      "home": "a.localhost",
+      "policy": {
+       "visibility": "members",
+       "join": "invite",
+       "membersMayInvite": false,
+       "allowAgents": "any",
+       "approvals": [
+        {
+         "action": "file.write",
+         "approvers": [
+          "owner"
+         ]
+        }
+       ],
+       "separateApprover": true,
+       "budget": null,
+       "maxDelegationDepth": 2,
+       "minDurability": "local",
+       "launchWindow": 15,
+       "extensionsMinRole": "member",
+       "sessions": {
+        "watch": "member",
+        "read": "member",
+        "steer": "owner",
+        "modes": [
+         "auto",
+         "guarded"
+        ]
+       },
+       "servers": {
+        "deny": []
+       }
+      },
+      "roles": {
+       "@alice:a.localhost": "owner",
+       "@bob:a.localhost": "member",
+       "@vera:a.localhost": "member",
+       "@x:a.localhost": "member"
+      },
+      "roleHistory": {
+       "@alice:a.localhost": [
+        {
+         "from": 1
+        }
+       ],
+       "@bob:a.localhost": [
+        {
+         "from": 2
+        }
+       ],
+       "@vera:a.localhost": [
+        {
+         "from": 3
+        }
+       ],
+       "@x:a.localhost": [
+        {
+         "from": 4
+        }
+       ]
+      },
+      "tasks": {},
+      "effects": {},
+      "sessions": {},
+      "held": {},
+      "guarded": {},
+      "cleared": {},
+      "outside": {},
+      "budgetLeft": null
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "space.create",
+       "author": "@alice:a.localhost",
+       "keyId": "k1",
+       "body": {
+        "policy": {
+         "visibility": "members",
+         "join": "invite",
+         "membersMayInvite": false,
+         "allowAgents": "any",
+         "approvals": [
+          {
+           "action": "file.write",
+           "approvers": [
+            "owner"
+           ]
+          }
+         ],
+         "separateApprover": true,
+         "budget": null,
+         "maxDelegationDepth": 2,
+         "minDurability": "local",
+         "launchWindow": 15,
+         "extensionsMinRole": "member",
+         "sessions": {
+          "watch": "member",
+          "read": "member",
+          "steer": "owner",
+          "modes": [
+           "auto",
+           "guarded"
+          ]
+         },
+         "servers": {
+          "deny": []
+         }
+        }
+       },
+       "contentHash": "947ee5c99dca1177714f79a6252c59551522828f153152da23befd90be8e2bb9",
+       "refs": [],
+       "seen": 0,
+       "nonce": "slqhohp3sz27ipwlb55wy5hymo",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "hDn3IotQW08eaLshykmJLvhnN-Tl2CDttwBxeBfxmUrjwN56MCFGYOsV22bxoeGZUYugZUzyfJ1Seq5ASO7TCg"
+      },
+      "content": {
+       "name": "interop room"
+      },
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 1,
+       "id": "6e43de031efd439457d778d9fa45849415c8e0f990138bcd92571cc93556fd7a",
+       "prev": "",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1
+       },
+       "homeSig": "2HU35R4FgkNDXZa_q8JE99K4aXucwT4IgeUk-o4kCO0E-IAzbaZkAfH6f5P_H7sHM58ePrWpk2MSK8gzVoPxDw"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "member.set",
+       "author": "@alice:a.localhost",
+       "keyId": "k1",
+       "body": {
+        "actor": "@bob:a.localhost",
+        "role": "member"
+       },
+       "contentHash": "",
+       "refs": [],
+       "seen": 1,
+       "nonce": "dkteupp67ud4sq54t3n5ovckml",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "cUBC1x4XkbWCF-D-Hu2qFezRDkYlW3WlGBgl4DykzHGLeLqmqf8M53HycW_S7IkNF0vdGMLGdmvJ4RuXNjDXDw"
+      },
+      "content": null,
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 2,
+       "id": "5c45394cd98ad2dec92c2ac726c2293783d38085cab642bf9ba730268259503a",
+       "prev": "d0989501fb6265f95c76461d3690f840db2174ea9a51e58fd9a0dd637e83f579",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1,
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "SKfqN64xFmydTXgE5O8mtW77n-Psg5IHCoJtkanxGOTSZdSEqsoCVEDMJ1ce2ZFwhT-CiuTjHfWitkOGjo67Dw"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "member.set",
+       "author": "@alice:a.localhost",
+       "keyId": "k1",
+       "body": {
+        "actor": "@vera:a.localhost",
+        "role": "member"
+       },
+       "contentHash": "",
+       "refs": [],
+       "seen": 2,
+       "nonce": "zoaux3owdpbqkhvugzsbsprrdu",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "IuhPu9g3FZIO3EdpdCuaAnmsWpg78LZGJPDo_0LVxEy-xUK7GUgOHrj3Io91O7iPTaOe269XqH_SQ0t_De3gBQ"
+      },
+      "content": null,
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 3,
+       "id": "8ec139ed6c1efea1bb28981bcbc1fe67e21a95c85532347c14ff16e7cf55d9d4",
+       "prev": "f33cd50a312073c051dbda256f0d3d2591c6d9a45472a70fd15dbbdd7186b92f",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1,
+        "@vera:a.localhost": 1
+       },
+       "homeSig": "_TO48QOWEd2q27JFqYdUW5ecW7VrxzYFBXR4Ncz8i6GmtC1OSkrm7OyHSZ2hEi2u-iOWc8oJKruDLCDXpvabDw"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "member.set",
+       "author": "@alice:a.localhost",
+       "keyId": "k1",
+       "body": {
+        "actor": "@x:a.localhost",
+        "role": "member"
+       },
+       "contentHash": "",
+       "refs": [],
+       "seen": 3,
+       "nonce": "snff7yhmzhwxocwmnmdnxvgahd",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "BryWbHyfvfT5xmHOoklakgeUQpsM-_prIxaIaD9l1X_D2_ZlsoPkeNpcnTgu6ziMOkbM1OV-NmlIx7AVrqeCBQ"
+      },
+      "content": null,
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 4,
+       "id": "b3ecfa432985044e8bacdbef12bd404552383bc0bb4c594b71c4aa4b691abb11",
+       "prev": "4792cf4972ff6fefec0bb2a298c0b1e2551b16f75414e2cfcfa95b26fb784778",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1,
+        "@x:a.localhost": 1
+       },
+       "homeSig": "fKn8DPa_WNiY-Fpwy_rYlzp4B5NuWKkHCHvonMgkSSDTccKJNss8Pa9ln5ri2Vi11_ca_kOjjmprm07OxLoBBg"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "message",
+       "author": "@bob:a.localhost",
+       "keyId": "k1",
+       "body": {
+        "to": [
+         "@alice:a.localhost"
+        ]
+       },
+       "contentHash": "c7ed77193149b875a87c0b02e7a40ecba23e92af26a538092e050105958758ca",
+       "refs": [],
+       "seen": 4,
+       "nonce": "ekvz7uh3rajjw4cts4mdqwzwjz",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "JlCgvVDbvU2IUBsmk0M8OosSMvKxq6VqNmzQIPSCxNJqEyBIqjmvJPKWTpWjiQxp_tDjRbA_omuNxfMHURdbBg"
+      },
+      "content": {
+       "text": "hello alice"
+      },
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 5,
+       "id": "5f5111c1d3062559c8a9e2cf1763dddd2d00d08c2dfb313c3b202fae358fa57c",
+       "prev": "0fee04da5a6421edc1c002a36c5cf33f5ad22c04bd8befa886e0b33bc4a1d9ab",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "RSmOJmi9ylGLt_3MRAfhpqosxIMEMGbF7hfqz3BWJNpWsKRpQ7u4ZKCefVMBmQtYdMNezKL9KmIEWZcuI6taAQ"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "message",
+       "author": "@bob:a.localhost",
+       "keyId": "k1",
+       "body": {},
+       "contentHash": "398a2d7e67e573772cf379ec9f4eac819c8642bd9018527d08eb176cd4d72be1",
+       "refs": [],
+       "seen": 5,
+       "nonce": "kcoh3g7dyv77qwoolvlwrmz7d4",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "H1EWs5Zfsp0uJcoZpkhih7heOTHqSWdFSIam07K0DTGXbEJ_vm4MciBseklx7kI5NqAZpK4JXlxr59hck_38DQ"
+      },
+      "content": {
+       "text": "café ✓ 😀 \"q\" \\ \n\t      <&>"
+      },
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 6,
+       "id": "5a508988bb04136c6d1c507deb9c269f5bba6baf15bff893ae6920721414d4ac",
+       "prev": "27b533b7c84856073dea6a060565e049b615fd042c38b23146b47764af05864d",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "6iapCbir1c7HkeWi0TfO0cFwbxCt4delbvUPqHi3386uEAXCJsHyqnu-hzh2S9s9uAxrdVlmEK2V-EeNo_cIBA"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "end": true
+   }
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+{
+ "format": "han-wire-index/1",
+ "config": "config.json",
+ "note": "Run the files in this order against one fresh server in test mode: each builds on the state the earlier ones left.",
+ "files": [
+  "01-hello.json",
+  "02-space.create.json",
+  "03-member.set.json",
+  "04-message.json",
+  "05-read.json",
+  "06-read.state.json",
+  "07-follow.json",
+  "08-subscribe.json",
+  "09-signal.json",
+  "10-propose.json",
+  "11-approve.json",
+  "12-blobPut.json",
+  "13-blobGet.json",
+  "14-blobPut.multipart.json",
+  "15-blobGet.multipart.json",
+  "16-session.open.json",
+  "17-session.input.json",
+  "18-stream_watch.json",
+  "19-session.close.json",
+  "20-task.json",
+  "21-redact.json",
+  "probes.json",
+  "probes-decided.json"
+ ]
+}

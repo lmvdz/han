@@ -17,9 +17,10 @@ async def test_context_blob_is_fetched_by_readers_only(env):
     assert await cl["bob"].blob_get(ref, S) == b"the transcript"      # the session's actor
     for who in ("carol", "dave"):                                     # members watch but don't read
         with pytest.raises(WireError) as ex: await cl[who].blob_get(ref, S)
-        assert ex.value.code in ("denied", "unavailable")
-    other = await cl["alice"].blob_put(b"unrelated")                  # a blob no item or record names is not served
+        assert ex.value.code in ("not_found", "unavailable")           # G-01: the answer never confirms that a blob exists
+    other = await cl["bob"].blob_put(b"unrelated")                    # a blob no item or record names is served to its uploader only (D3)
     with pytest.raises(WireError): await cl["alice"].blob_get(other, S)
+    assert await cl["bob"].blob_get(other, S) == b"unrelated"
     await cl["bob"].append(*cl["bob"].make_entry("session.close", S, {"session": sid}))
     with pytest.raises(WireError): await cl["alice"].blob_get(ref, S)
 

@@ -11,13 +11,13 @@ def get(url):
 def is_notice(space, seq=None): return lambda i: i["type"] == "signal" and i["body"].get("type") == "notice" and i["body"]["space"] == space and seq in (None, i["body"]["seq"])
 
 async def test_well_known_served_on_the_websocket_port(pair):
-    """§4.3: GET /.well-known/han on the sequencer's own port gives server name, sequencer endpoint and keys with windows; /han-peers gives the key sets used."""
+    """§4.3: GET /.well-known/han on the sequencer's own port gives server name, sequencer endpoint and keys with windows; /han-peers lists the peers it verifies with."""
     st, doc = await asyncio.to_thread(get, pair.peers[A] + "/.well-known/han")
     assert st == 200 and doc["server"] == A and doc["sequencer"] == pair.a.srv.url
     assert doc["keys"] == [{"keyId": "h1", "publicKey": pair.a.seq.key.pub, "from": "1970-01-01T00:00:00Z"}]
     await pair.a.fed.ensure_keys(B)                                   # a has now used b's keys for verification
     _, peers = await asyncio.to_thread(get, pair.peers[A] + "/.well-known/han-peers")
-    assert set(peers) == {A, B} and peers[B][0]["publicKey"] == pair.b.seq.key.pub
+    assert peers == {"peers": [{"server": B, "url": pair.peers[B] + "/.well-known/han"}]}           # D13: the others, not itself
     pair.actor("alice", A)
     c = await pair.client("alice", A)                                  # the same port still speaks HAN
     assert (await mkspace(c))["seq"] == 1

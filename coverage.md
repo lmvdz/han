@@ -1,7 +1,7 @@
 # HAN v1 — coverage of v0.4
 
-Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–20): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
-v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-11, T-01…T-07, G-01…G-06 (the generic binding, §8.3).
+Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–21): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
+v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-12, T-01…T-07, G-01…G-11 (the generic binding, §8.3: G-07…G-11 are its frames, `hello`, reads, server-to-server and wire conformance).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
 ## Invariants (12/12 accounted for: 10 kept, 2 weakened with a stated qualification)
@@ -39,7 +39,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | events.snapshot | `read(…, {state:true[, at]})` | **weakened:** a state too large for one frame is refused with `limit`, and the reader replays records instead |
 | view.get / subscribe / resync / unsubscribe | live sessions: the session stream rides the transport (T-07, G-05) and what it may show is `sessionAccess` (P-15); truth stays in `read`. No view-reset protocol: a stream carries no state to resync. | moved to transport |
 | document.open / sync.exchange | **dropped from the v1 core:** shared documents are the transport's (T-03 files, e.g. Matrix rooms) or a future extension | dropped |
-| presence.update / subscribe / unsubscribe | transport `signal` + `follow` (T-05, G-04) | moved to transport |
+| presence.update / subscribe / unsubscribe | transport `signal` + `subscribe` (T-05, G-04, G-09: signals ride `subscribe`, never `read`) | moved to transport |
 | artifact.begin / write / commit | transport files (T-03). Generic binding: `blobPut(ref, offset, bytes)` on the uploader's own server, complete only when the uploader's own bytes hash-match (G-01, G-02). Not a sequencer call. | moved to transport |
 | artifact.read | transport (T-03). Generic binding: `blobGet(ref, space)` under G-01 | moved to transport |
 

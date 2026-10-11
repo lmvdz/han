@@ -1,4 +1,4 @@
-"""python -m han.exec --url ws://… --actor @x:… --key KEYFILE --instance k1 --journal PATH --spaces s1:a.localhost[,…]
+"""python -m han.exec --url ws://…/han --actor @x:… --key KEYFILE --instance k1 --journal PATH --spaces s1:a.localhost[,…]
 --actions file.write,http.post [--allow-url PREFIX]… [--sandbox DIR]
 [--backoff-base S] [--backoff-cap S]"""
 import argparse, asyncio, os, sys

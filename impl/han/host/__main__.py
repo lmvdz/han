@@ -1,4 +1,4 @@
-"""han-host:  python -m han.host --url ws://127.0.0.1:8701 --actor @bot:a.localhost --key KEYFILE --space s1:a.localhost
+"""han-host:  python -m han.host --url ws://127.0.0.1:8701/han --actor @bot:a.localhost --key KEYFILE --space s1:a.localhost
                  --mode auto|guarded --agent scripted|claude --state PATH [--executor @exec:a.localhost] [--cost UNIT:AMOUNT] [--outbox PATH] [--cwd DIR]"""
 import argparse, asyncio, os
 from ..client import Client

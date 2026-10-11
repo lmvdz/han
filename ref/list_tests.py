@@ -1,9 +1,9 @@
-"""Lists the implementation's tests (impl/tests/*.py) and the clean-room TypeScript interop scenarios (cleanroom-ts/interop.ts)
-with the rule tags found in their docstrings or names, so architecture.md §10 can be checked against what actually exists.
+"""Lists the implementation's tests (impl/tests/*.py), the clean-room TypeScript interop scenarios (cleanroom-ts/interop.ts) and the wire
+conformance vectors (ref/wire-vectors/) with the rule tags found in their docstrings or names, so architecture.md §10 can be checked against what actually exists.
   python ref/list_tests.py            one line per test, then totals per file
   python ref/list_tests.py --rules    rule -> tests (the reverse index)
 Reads source only; imports and runs nothing."""
-import ast, glob, os, re, sys
+import ast, glob, json, os, re, sys
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -45,14 +45,27 @@ def ts_scenarios():
     names = re.findall(r'scenario\(\s*(?:"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)', src)
     return [(a or b, tags(a or b)) for a, b in names]
 
+def wire_vectors():
+    """(file::id, rule tags) for every wire conformance vector (ref/wire-vectors/, architecture.md G-11)."""
+    d = os.path.join(HERE, "wire-vectors")
+    if not os.path.exists(os.path.join(d, "index.json")): return []
+    out = []
+    for fn in json.load(open(os.path.join(d, "index.json"), encoding="utf-8"))["files"]:
+        doc = json.load(open(os.path.join(d, fn), encoding="utf-8"))
+        for v in (doc["vectors"] if "vectors" in doc else [dict(doc, id=doc["name"])]):
+            out.append((f"{fn}::{v['id']}", sorted({t for r in v.get("rules", []) for t in TAG.findall(r)})))
+    return out
+
 def main():
-    tests, scen = py_tests(), ts_scenarios()
+    tests, scen, wires = py_tests(), ts_scenarios(), wire_vectors()
     if "--rules" in sys.argv:
         idx = {}
         for f, n, t, *_ in tests:
             for x in t: idx.setdefault(x, []).append(f"{f}::{n}")
         for n, t in scen:
             for x in t: idx.setdefault(x, []).append(f"interop.ts: {n}")
+        for n, t in wires:
+            for x in t: idx.setdefault(x, []).append(f"wire-vectors/{n}")
         for x in sorted(idx): print(f"{x:8} {len(idx[x]):3}  " + "; ".join(idx[x][:4]) + (" …" if len(idx[x]) > 4 else ""))
         return 0
     for f, n, t, live, k in tests:
@@ -60,12 +73,14 @@ def main():
     print()
     for n, t in scen: print(f"interop.ts: {n}  [{' '.join(t) or '-'}]")
     print()
+    for n, t in wires: print(f"wire-vectors/{n}  [{' '.join(t) or '-'}]")
+    print()
     per = {}
     for f, _n, _t, _l, k in tests: per[f] = per.get(f, 0) + k
     for f, c in per.items(): print(f"{c:4}  {f}")
     print(f"{sum(t[4] for t in tests)} impl tests collected by pytest ({len(tests)} test functions) in {len(per)} files "
           f"({sum(t[4] for t in tests if t[3])} skipped by default as live); "
-          f"{len(scen)} cleanroom-ts interop scenarios; {sum(1 for t in tests if not t[2])} tests carry no rule tag")
+          f"{len(scen)} cleanroom-ts interop scenarios; {len(wires)} wire conformance vectors; {sum(1 for t in tests if not t[2])} tests carry no rule tag")
     return 0
 
 if __name__ == "__main__":

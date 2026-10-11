@@ -1,0 +1,61 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "hello",
+ "description": "challenge from the server, hello with proof, hello ok (limits, durability, time, knownHeads)",
+ "rules": [
+  "G-07",
+  "G-08",
+  "W-01",
+  "W-02",
+  "D9",
+  "D12"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "challenge": "<challenge>",
+    "server": "a.localhost",
+    "versions": [
+     1
+    ],
+    "time": "2026-01-01T00:00:00Z"
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "hello",
+    "args": {
+     "who": "@alice:a.localhost",
+     "keyId": "k1",
+     "proof": "<proof>",
+     "version": 1
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "limits": {
+      "maxFrameBytes": 1310720,
+      "maxHeaderBytes": 16384,
+      "maxContentBytes": 65536,
+      "maxBlobBytes": 4294967296,
+      "maxBlobPartBytes": 786432,
+      "maxBlobRangeBytes": 786432,
+      "maxStreamItemBytes": 65536,
+      "maxFollows": 256,
+      "maxClockSkewSeconds": 60
+     },
+     "durability": "local",
+     "time": "2026-01-01T00:00:00Z",
+     "knownHeads": []
+    }
+   }
+  }
+ ]
+}

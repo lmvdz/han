@@ -1,0 +1,37 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "blobPut",
+ "description": "blobPut a 2000-byte blob in one part",
+ "rules": [
+  "G-01",
+  "W-27"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "blobPut",
+    "args": {
+     "ref": {
+      "hash": "55384c31cb0f7eb9abb8e18719553b259f83c506083a7156e123ad613d43fbef",
+      "size": 2000,
+      "type": "application/octet-stream"
+     },
+     "offset": 0,
+     "data": "<b64u len=2667 sha256=55576617d9ba8cd0>"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "have": 2000,
+     "complete": true
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,127 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "subscribe",
+ "description": "subscribe after head; a live record arrives; cancel",
+ "rules": [
+  "G-09"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "subscribe",
+    "args": {
+     "space": "s1:a.localhost",
+     "after": 7
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "append",
+    "args": {
+     "entry": {
+      "v": 1,
+      "space": "s1:a.localhost",
+      "kind": "message",
+      "author": "@bob:a.localhost",
+      "keyId": "k1",
+      "body": {},
+      "contentHash": "d6b8d3a72094f335b19e80dab15849e15aaa172864732835a4a8e5f4f9a0c886",
+      "refs": [],
+      "seen": 7,
+      "nonce": "g36gulm76mzl7vxbzbqfp7jkse",
+      "time": "2026-01-01T00:00:00Z",
+      "sig": "ikG0Gz9iTd2hFZoCdbb3HTGyM0vpKNfN-Ds3stMPPuj98gC8fFdYlyIpIvhq__6bYRaTAc92TYVYHBlDJB51Dw"
+     },
+     "content": {
+      "text": "live two (subscribe)"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "space": "s1:a.localhost",
+     "seq": 8,
+     "id": "e127d14bf7531e069487e86d2a4bd64685d7587e5acb4b49f173d709bad29369",
+     "prev": "3a171f8053cb1dea99bc531292dcc082c4bc46f0cac1fc1e9292d2ac7f4c13be",
+     "home": "a.localhost",
+     "homeKey": "h1",
+     "time": "2026-01-01T00:00:00Z",
+     "durability": "local",
+     "profiles": {
+      "@bob:a.localhost": 1
+     },
+     "homeSig": "bqTtQkCY5rgCXIUCiYWMDbtJob-8wjMo3CNBN2azPR-e9RWcdZheWNj4W6FfNrnyaHpILEdy75wAiougzzrbAg"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "record",
+     "record": {
+      "entry": {
+       "v": 1,
+       "space": "s1:a.localhost",
+       "kind": "message",
+       "author": "@bob:a.localhost",
+       "keyId": "k1",
+       "body": {},
+       "contentHash": "d6b8d3a72094f335b19e80dab15849e15aaa172864732835a4a8e5f4f9a0c886",
+       "refs": [],
+       "seen": 7,
+       "nonce": "g36gulm76mzl7vxbzbqfp7jkse",
+       "time": "2026-01-01T00:00:00Z",
+       "sig": "ikG0Gz9iTd2hFZoCdbb3HTGyM0vpKNfN-Ds3stMPPuj98gC8fFdYlyIpIvhq__6bYRaTAc92TYVYHBlDJB51Dw"
+      },
+      "content": {
+       "text": "live two (subscribe)"
+      },
+      "redacted": false,
+      "receipt": {
+       "space": "s1:a.localhost",
+       "seq": 8,
+       "id": "e127d14bf7531e069487e86d2a4bd64685d7587e5acb4b49f173d709bad29369",
+       "prev": "3a171f8053cb1dea99bc531292dcc082c4bc46f0cac1fc1e9292d2ac7f4c13be",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "bqTtQkCY5rgCXIUCiYWMDbtJob-8wjMo3CNBN2azPR-e9RWcdZheWNj4W6FfNrnyaHpILEdy75wAiougzzrbAg"
+      }
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 2,
+    "call": "cancel",
+    "args": {
+     "target": 1
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 2,
+    "ok": null
+   }
+  }
+ ]
+}

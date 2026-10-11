@@ -7,7 +7,7 @@ import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Limits, LogRecord, PolicyCtx, ProfileView, Receipt, SpaceState } from "./han.js";
 import {
-  isActorId, isHex, isInt, isKeyId, isNonce, isServerName, isSig, isSpaceId, isTime, isProfileSpace, profileActorOf, serverOf, spaceServer,
+  isActorId, isHex, isInt, isKeyId, isNonce, isServerName, isSig, isCanonB64u, isSpaceId, isTime, isProfileSpace, profileActorOf, serverOf, spaceServer,
   jcs, sha256, entryId, parseStrict, validateContent, validBlobRef, utf8len, JsonError, isKind,
 } from "./wire.js";
 import { badBody, canRead, claimPinPlan, decide, fold, profileViewOf, relevantActors, sessionAccess } from "./policy.js";
@@ -25,6 +25,7 @@ export const LIMITS: Limits = {
   maxFrameBytes: 1310720, maxHeaderBytes: 16384, maxContentBytes: 65536, maxBlobBytes: 4294967296, maxBlobPartBytes: 786432,
   maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60,
 };
+const CALLS = ["hello", "append", "read", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
 const READABLE = ["owner", "member", "guest"];
 const HEADER_FIELDS = ["v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig"];
 
@@ -42,6 +43,9 @@ export interface SeqOptions {
   profileProvider?: (actor: string) => ProfileView | null | undefined;
   /** TEST ONLY: replaces the steady clock with a settable one (vector replay needs the vectors' receipt times). */
   testClock?: { ms: number; base: number };
+  peerUrls?: Record<string, string>;                // served in /.well-known/han-peers; default https://<server>/.well-known/han
+  /** G-06: does this server take over hosting this space (a move handover)? Default yes. */
+  acceptHosting?: (space: string, from: string) => boolean;
 }
 
 interface Space {
@@ -54,7 +58,7 @@ interface Sub { conn: Conn; reqId: number; space: string; who: string; signals: 
 interface Watch { conn: Conn; reqId: number; space: string; session: string; who: string }
 
 class Conn {
-  who?: string; challenge: string; open = new Map<number, () => void>(); follows = 0;
+  who?: string; challenge: string; challengeAt = Date.now(); challengeUsed = false; open = new Map<number, () => void>(); follows = 0;
   bucket = { t: Date.now(), n: 0 };
   constructor(public ws: WebSocket) { this.challenge = b64u(randomBytes(32)); }
   send(f: unknown) { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(f)); }
@@ -71,6 +75,8 @@ export class Sequencer {
   private logFd = -1; private contentFd = -1; private supplyFd = -1;
   private subs = new Set<Sub>(); private watches = new Set<Watch>();
   private conns = new Set<Conn>();
+  private hosting = new Map<string, Space>();            // G-06: chains received by `host` for spaces this server is not (yet) the home of
+
   private claimSteady = new Map<string, number>();     // R-16: steady-clock ms at which this process ordered a claim
   private wall0: number; private h0 = process.hrtime.bigint();
   private blobs: Blobs;
@@ -306,6 +312,9 @@ export class Sequencer {
     if (typeof entry.body !== "object" || entry.body === null || Array.isArray(entry.body)) throw err("invalid", "body");
     if (utf8len(jcs(entry)) > LIMITS.maxHeaderBytes) throw err("invalid", "header over 16 KiB");
     const bb = badBody(entry.kind, entry.body); if (bb) throw err("invalid", "body: " + bb);
+    // D4: public keys are canonical base64url too (Policy sees only the grammar)
+    const pks = entry.kind === "key.add" ? [entry.body.publicKey] : entry.kind === "space.create" && entry.body.profile ? [entry.body.profile.key?.publicKey] : [];
+    if (!pks.every((k) => k === undefined || isCanonB64u(k))) throw err("invalid", "publicKey is not canonical base64url");
     // content present iff contentHash ≠ "", matches it, fits the kind's schema
     const none = content === undefined || content === null;
     if (entry.contentHash === "") { if (!none) throw err("invalid", "content sent but contentHash is empty"); }
@@ -425,12 +434,10 @@ export class Sequencer {
   }
   private httpHandler(req: http.IncomingMessage, res: http.ServerResponse) {
     const url = req.url ?? "";
-    const out = (j: unknown) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(j)); };
-    if (url === "/.well-known/han") return out({ sequencer: `ws://127.0.0.1:${this.port}/han`, keys: [{ keyId: this.key.keyId, publicKey: this.key.publicKey, from: this.keyFrom }] });
+    const out = (j: unknown) => { res.writeHead(200, { "content-type": "application/json; charset=utf-8" }); res.end(JSON.stringify(j)); };
+    if (url === "/.well-known/han") return out({ server: this.server, sequencer: `ws://127.0.0.1:${this.port}/han`, keys: [{ keyId: this.key.keyId, publicKey: this.key.publicKey, from: this.keyFrom }] });
     if (url === "/.well-known/han-peers") {
-      const o: A = {};
-      for (const [s, ks] of Object.entries(this.opts.peers ?? {})) o[s] = Object.entries(ks).map(([keyId, publicKey]) => ({ keyId, publicKey, from: this.keyFrom }));
-      return out(o);
+      return out({ peers: Object.keys(this.opts.peers ?? {}).filter((server) => server !== this.server).map((server) => ({ server, url: this.opts.peerUrls?.[server] ?? `https://${server}/.well-known/han` })) });
     }
     res.writeHead(404); res.end();
   }
@@ -455,20 +462,34 @@ export class Sequencer {
   private onFrame(conn: Conn, text: string) {
     let f: A;
     try { f = parseStrict(text); } catch (e) {
-      // best effort: plain JSON that is not I-JSON (e.g. 1.5) is answered on its own request id, anything else on id 0 (§8.3)
-      let id = 0; try { const j = JSON.parse(text); if (isInt(j?.id)) id = j.id; } catch { /* not JSON at all */ }
-      return conn.send({ id, error: { code: "invalid", message: "frame does not parse as I-JSON" } });
+      // D2: a frame that is not I-JSON: error with id 0, and the connection is closed
+      conn.send({ id: 0, error: { code: "invalid", message: "frame does not parse as I-JSON" } });
+      conn.ws.close(1007, "not I-JSON");
+      return;
     }
-    const bad = typeof f !== "object" || f === null || Array.isArray(f) || !isInt(f.id) || typeof f.call !== "string" || typeof f.args !== "object" || f.args === null || Array.isArray(f.args)
-      || Object.keys(f).length !== 3;
-    if (bad) return conn.send({ id: 0, error: { code: "invalid", message: "frame needs exactly id, call, args" } });
+    // G-07 (1): text that is not an I-JSON object (an array, a scalar) is treated like unparseable text
+    if (typeof f !== "object" || f === null || Array.isArray(f)) {
+      conn.send({ id: 0, error: { code: "invalid", message: "frame is not an object" } });
+      conn.ws.close(1007, "not an object");
+      return;
+    }
+    // D2: exactly {id, call, args}; id a positive integer, args an object. Otherwise an error on the request's own id (0 if unusable)
+    const obj = true;
+    const usableId = obj && isInt(f.id) && f.id >= 1;
+    const bad = !obj || !usableId || typeof f.call !== "string" || typeof f.args !== "object" || f.args === null || Array.isArray(f.args) || Object.keys(f).length !== 3;
+    if (bad) return conn.send({ id: usableId ? f.id : 0, error: { code: "invalid", message: "frame needs exactly id, call, args" } });
     const { id, call, args } = f as { id: number; call: string; args: A };
+    if (!CALLS.includes(call)) return conn.send({ id, error: { code: "invalid", message: "unknown call " + call } });   // G-07 (2): before authentication
     const streaming = call === "read" || call === "subscribe" || call === "watch";
     if (streaming && conn.open.has(id)) return conn.send({ id, error: { code: "invalid", message: "request id is still open" } });
     if (call === "hello") return this.reply(conn, id, () => this.hello(conn, args));
     if (!conn.who) return conn.send({ id, error: { code: "denied", message: "hello first" } });
     switch (call) {
-      case "append": return this.reply(conn, id, () => this.append(conn, args.entry, args.content));
+      case "append": return this.reply(conn, id, () => {
+        if (!("entry" in args) || !Object.keys(args).every((k) => k === "entry" || k === "content")) throw err("invalid", "append args");
+        return this.append(conn, args.entry, args.content);
+      });
+      case "host": return this.reply(conn, id, () => this.doHost(conn, args));
       case "read": return this.doRead(conn, id, args);
       case "subscribe": return this.doSubscribe(conn, id, args);
       case "signal": return this.reply(conn, id, () => this.doSignal(conn, args));
@@ -477,7 +498,7 @@ export class Sequencer {
       case "stream": return this.reply(conn, id, () => this.doStream(conn, args));
       case "watch": return this.doWatch(conn, id, args);
       case "cancel": return this.reply(conn, id, () => {
-        if (!isInt(args.target)) throw err("invalid", "target");
+        if (!("target" in args) || Object.keys(args).length !== 1 || !isInt(args.target)) throw err("invalid", "target");
         const c = conn.open.get(args.target); if (c) c();
         return null;
       });
@@ -491,7 +512,12 @@ export class Sequencer {
     if (!["who", "keyId", "proof", "version"].every((k) => k in a) || !keys.every((k) => ["who", "keyId", "proof", "version", "knownHeads"].includes(k))) throw err("invalid", "hello args");
     if (a.version !== 1) throw err("invalid", "unsupported version");
     if (!isActorId(a.who) || !isKeyId(a.keyId) || !isSig(a.proof)) throw err("invalid", "hello args");
-    const view = this.profile(a.who);
+    // G-08: the challenge is single use (consumed by the first hello that names it, successful or not) and valid for 60 s
+    if (conn.challengeUsed || Date.now() - conn.challengeAt > 60_000) throw err("denied", "challenge used or expired");
+    conn.challengeUsed = true;
+    // D11: unknown actor is not_found; a bad proof or an unknown/revoked key is denied
+    let view: ProfileView;
+    try { view = this.profile(a.who); } catch (e) { if (e instanceof HanError && e.code === "invalid" && e.message.startsWith("unknown actor")) throw err("not_found", e.message); throw e; }
     const k = view.keys[a.keyId];
     if (!k || k.status !== "valid") throw err("denied", "key is not valid");
     if (!verifyBytes(k.publicKey, helloMessage(conn.challenge, this.server), a.proof)) throw err("denied", "bad proof");
@@ -500,13 +526,19 @@ export class Sequencer {
     return { limits: LIMITS, durability: "local", time: this.now(), knownHeads: heads };
   }
 
-  private spaceFor(who: string, id: unknown): Space {
+  /** D1: a server with no record of a space answers `moved` (to the server in the space id) for every call naming it, unless it is that server (`not_found`). */
+  private route(id: unknown): Space {
     if (!isSpaceId(id)) throw err("invalid", "space");
     const sp = this.spaces.get(id);
-    if (!sp?.state) throw err("not_found", "no such space");
-    void who;
+    if (!sp?.state) {
+      const home = spaceServer(id);
+      if (home !== this.server) throw err("moved", "this server does not host the space", { movedTo: home });
+      throw err("not_found", "no such space");
+    }
+    if (sp.state.home !== this.server) throw err("moved", "the space moved", { movedTo: sp.state.home });
     return sp;
   }
+  private spaceFor(who: string, id: unknown): Space { void who; return this.route(id); }
 
   private doRead(conn: Conn, id: number, a: A) {
     try {
@@ -530,7 +562,7 @@ export class Sequencer {
         const at = a.at ?? st.head;       // with `at`: the StateView after record `at`, readable by whoever may read seq `at` (P-02)
         if (!canRead(st, who, at)) throw err("denied", "state needs read rights at " + (a.at === undefined ? "the head" : "`at`"));
         const { entries, ...view } = (at === st.head ? st : this.stateAt(sp, at)) as A;
-        items.push({ type: "state", state: view });
+        items.push({ type: "state", state: withSettled(view) });
       }
       const heads = this.headsFor(who, a.knownHeads);
       if (a.knownHeads !== undefined) items.push({ type: "heads", heads });
@@ -545,7 +577,7 @@ export class Sequencer {
       // without follow the stream ends here; with follow a longer backlog leaves a visible gap in seq (the client re-reads it)
       if (!a.follow) { conn.send({ id, end: true }); return; }
       void more;
-      this.addSub(conn, id, sp.id, who, true);
+      this.addSub(conn, id, sp.id, who, false);       // G-09: `read` with `follow` never carries signals
     } catch (e) { conn.send({ id, error: this.toWire(e) }); }
   }
   /** the SpaceState after record `at`, by replay */
@@ -566,29 +598,118 @@ export class Sequencer {
       if (a.after !== undefined && !isInt(a.after)) throw err("invalid", "after");
       const who = conn.who!;
       const sp = this.spaceFor(who, a.space);
-      let any = false; for (let s = 1; s <= sp.state!.head && !any; s++) if (canRead(sp.state!, who, s)) any = true;
-      if (!any) throw err("denied", "you may not read this space");
+      // G-09: a reader who may not read the space at its head is denied; anyone may subscribe to a profile space, but only its actor gets signals (G-04)
+      const prof = isProfileSpace(sp.id);
+      if (!prof && !canRead(sp.state!, who, sp.state!.head)) throw err("denied", "you may not read this space");
       if (a.after !== undefined) for (const r of this.readableUpTo(sp, who, a.after, Infinity)) conn.send({ id, item: { type: "record", record: r } });
-      this.addSub(conn, id, sp.id, who, true);   // registered in the same synchronous turn as the replay: no gap
+      this.addSub(conn, id, sp.id, who, !prof || who === profileActorOf(sp.id));   // registered in the same synchronous turn as the replay: no gap
     } catch (e) { conn.send({ id, error: this.toWire(e) }); }
+  }
+
+  // ───────────── move handover, receiving side (§7.3, G-06) ─────────────
+  /** `host {space, records, head?}`: only from a server actor `@:A` that is the home of `space` at the last record we hold. */
+  private doHost(conn: Conn, a: A): A {
+    if (!("space" in a) || !("records" in a) || !Object.keys(a).every((k) => k === "space" || k === "records" || k === "head")) throw err("invalid", "host args");
+    if (!isSpaceId(a.space) || !Array.isArray(a.records)) throw err("invalid", "host args");
+    if (!conn.who!.startsWith("@:")) throw err("denied", "host is for server actors");
+    const from = serverOf(conn.who!);
+    this.rateLimit(conn);
+    const own = this.spaces.get(a.space);
+    if (own?.state) {
+      if (own.state.home === this.server) return { have: own.state.head };         // already the home: nothing to take
+      throw err("denied", "this server holds the space as a former home");
+    }
+    let sp = this.hosting.get(a.space);
+    const have = sp?.state?.head ?? 0;
+    const homeNow = sp?.state ? sp.state.home : spaceServer(a.space);
+    if (homeNow !== from) throw err("denied", "the caller is not the home of the space at the last record held");
+    if (this.opts.acceptHosting && !this.opts.acceptHosting(a.space, from)) throw err("denied", "this server will not host that space");
+    const recs = a.records as A[];
+    if (a.head !== undefined && (typeof a.head !== "object" || a.head === null)) throw err("invalid", "head");
+    // verify the whole batch against a scratch copy; adopt it only if every record checks (R-14)
+    const work: Space = sp ? { ...sp, records: [...sp.records], views: [...sp.views] } : { id: a.space, records: [], state: undefined, lastTime: "", views: [], streams: new Map(), contextBlobs: new Map() };
+    for (let i = 0; i < recs.length; i++) {
+      const r = recs[i];
+      if (typeof r !== "object" || r === null || typeof r.entry !== "object" || r.entry === null || typeof r.receipt !== "object" || r.receipt === null) throw err("invalid", "record");
+      const e = r.entry as A, rc = r.receipt as A;
+      const expectSeq = (work.state?.head ?? 0) + 1;
+      if (rc.seq !== expectSeq) throw err("invalid", `records must be contiguous from ${expectSeq}`);
+      if (e.space !== a.space || rc.space !== a.space) throw err("invalid", "record of another space");
+      let id: string; try { id = entryId(e); } catch { throw err("invalid", "entry is not canonicalizable"); }
+      if (rc.id !== id) throw err("invalid", "receipt id is not the entry id");
+      const prevHash = work.state ? receiptHash(work.records[work.state.head - 1].receipt as A) : "";
+      if (rc.prev !== prevHash) throw err("invalid", "prev does not link");
+      const rcHome = work.state ? work.state.home : spaceServer(a.space);
+      if (rc.home !== rcHome) throw err("invalid", "receipt by a server that was not the home");
+      const pk = rc.home === this.server ? this.key.publicKey : this.opts.peers?.[rc.home]?.[rc.homeKey];
+      if (!pk) throw err("invalid", "no known key for " + rc.home);
+      if (!verifyBytes(pk, homeSigMessage(receiptHash(rc)), rc.homeSig)) throw err("invalid", "homeSig does not verify");
+      if (work.lastTime && rc.time < work.lastTime) throw err("invalid", "receipt time decreases");
+      const content = r.content ?? null;
+      if (!r.redacted && (e.contentHash === "" ? content !== null : (() => { try { return sha256(jcs(content)) !== e.contentHash; } catch { return true; } })())) throw err("invalid", "content does not match contentHash");
+      const profiles: A = {};
+      for (const [actor, seq] of Object.entries(rc.profiles ?? {})) {
+        const v = this.viewAt(actor, seq as number) ?? (actor.startsWith("@:") ? null : this.opts.remoteProfile?.(actor) ?? null);
+        if (v && v.seq === seq) profiles[actor] = v;
+      }
+      const authorKey = (work.state?.profile !== undefined && e.author === profileActorOf(a.space) ? work.state.profile.keys : profiles[e.author]?.keys)?.[e.keyId];
+      if (authorKey && !verifyBytes(authorKey.publicKey, sigMessage(id), e.sig)) throw err("invalid", "entry signature does not verify");
+      const rec: LogRecord = { entry: e, content: r.redacted ? null : content, redacted: !!r.redacted, receipt: rc };
+      try {
+        const ctx: PolicyCtx = { time: rc.time, profiles };
+        if (!work.state) work.state = fold(undefined, rec, ctx); else work.state = fold(work.state, rec, ctx);
+      } catch (x) { throw err("invalid", "record does not fold: " + String((x as A)?.message ?? x)); }
+      work.records.push(rec); work.lastTime = rc.time;
+    }
+    const held = work.state?.head ?? 0;
+    if (recs.length) this.hosting.set(a.space, work); sp = this.hosting.get(a.space);
+    const out: A = { have: held };
+    if (a.head !== undefined) {
+      const hd = a.head as A;
+      if (!sp?.state || hd.space !== a.space || hd.seq !== held || receiptHash(hd) !== receiptHash(sp.records[held - 1].receipt as A)) throw err("invalid", "head is not the last record held");
+      out.accept = { keyId: this.key.keyId, sig: signBytes(this.key, acceptMessage(a.space, receiptHash(hd))) };
+    }
+    // a chain whose last record moves the space to us makes us the home (§7.3 step 4)
+    if (sp?.state && sp.state.home === this.server) this.adoptHosted(sp);
+    return out;
+  }
+  private adoptHosted(sp: Space) {
+    this.hosting.delete(sp.id);
+    for (const r of sp.records) {
+      if (r.content !== null && !r.redacted) this.writeSync(this.contentFd, JSON.stringify({ id: r.receipt.id, content: r.content }));
+      this.writeSync(this.logFd, JSON.stringify({ entry: r.entry, receipt: r.receipt }));
+      this.ids.set(r.receipt.id, { space: sp.id, seq: r.receipt.seq });
+    }
+    this.spaces.set(sp.id, sp);
   }
 
   // ───────────── signals (T-05, G-03, G-04) ─────────────
   private doSignal(conn: Conn, a: A): null {
-    if (!("space" in a) || !("body" in a) || Object.keys(a).length !== 2) throw err("invalid", "signal args");
+    if (!("space" in a) || !("body" in a) || !Object.keys(a).every((k) => k === "space" || k === "body" || k === "from")) throw err("invalid", "signal args");
     if (!isSpaceId(a.space)) throw err("invalid", "space");
-    const who = conn.who!;
+    // D10: `from` only on a connection authenticated as a server actor, for an actor on that server
+    let who = conn.who!;
+    if ("from" in a) {
+      if (!conn.who!.startsWith("@:")) throw err("invalid", "`from` is accepted only from a server actor");
+      if (!isActorId(a.from) || a.from.startsWith("@:")) throw err("invalid", "from");
+      if (serverOf(a.from) !== serverOf(conn.who!)) throw err("denied", "a server may relay signals only from its own actors");
+      who = a.from;
+    }
+    try { if (utf8len(jcs(a.body)) > 65536) throw err("invalid", "signal body over 64 KiB"); } catch (e) { if (e instanceof HanError) throw e; throw err("invalid", "signal body is not canonicalizable"); }
     const sp = this.spaces.get(a.space);
+    if (!sp?.state && spaceServer(a.space) !== this.server) throw err("moved", "this server does not host the space", { movedTo: spaceServer(a.space) });
     if (isProfileSpace(a.space)) {
       // only G-03 notices from server actors are accepted into a profile space
-      if (!who.startsWith("@:")) throw err("denied", "only server actors may signal a profile space");
+      if (!conn.who!.startsWith("@:") || "from" in a) throw err("denied", "only server actors may signal a profile space");
       if (a.body?.type !== "notice") throw err("denied", "profile spaces accept only notices");
-      this.deliverNotice(profileActorOf(a.space), who, a.body);
+      this.deliverNotice(profileActorOf(a.space), conn.who!, a.body);
       return null;
     }
     if (!sp?.state) throw err("not_found", "no such space");
+    if (sp.state.home !== this.server) throw err("moved", "the space moved", { movedTo: sp.state.home });
     if (!canRead(sp.state, who, sp.state.head)) throw err("denied", "only actors who may read the space at its head may signal it");
-    for (const s of this.subs) if (s.signals && s.space === sp.id && s.who !== who && canRead(sp.state, s.who, sp.state.head)) s.conn.send({ id: s.reqId, item: { type: "signal", from: who, body: a.body } });
+    this.rateLimit(conn);
+    for (const s of this.subs) if (s.signals && s.space === sp.id && s.conn !== conn && canRead(sp.state, s.who, sp.state.head)) s.conn.send({ id: s.reqId, item: { type: "signal", from: who, body: a.body } });
     return null;
   }
 
@@ -606,11 +727,11 @@ export class Sequencer {
     const e = validBlobRef(a.ref); if (e) throw err("invalid", e);
     if (!isSpaceId(a.space)) throw err("invalid", "space");
     if (a.offset !== undefined && !isInt(a.offset)) throw err("invalid", "offset");
-    if (a.length !== undefined && !isInt(a.length)) throw err("invalid", "length");
+    if (a.length !== undefined && (!isInt(a.length) || a.length < 1)) throw err("invalid", "length");
     const who = conn.who!;
-    const sp = this.spaces.get(a.space);
+    const sp = this.route(a.space);
     let allowed = false;
-    if (sp?.state) {
+    if (sp.state) {
       // 1. access: a record the caller may read references the blob. 2. supply: the server holds the bytes for that space.
       for (const r of sp.records) {
         if (!this.referencedBlobs(r).some((b: A) => b.hash === a.ref.hash && b.size === a.ref.size)) continue;
@@ -618,14 +739,14 @@ export class Sequencer {
         if (this.blobs.hasSupply(r.entry.author, a.ref.hash, sp.id)) { allowed = true; break; }
       }
     }
-    if (!allowed && sp?.state) {
+    if (!allowed && sp.state) {
       // a context blob of a live session on which the caller has `read` (G-01 access 1); supply is the session's actor's own upload
       for (const [sid, m] of sp.contextBlobs) {
         const ref = m.get(a.ref.hash); const sess = sp.state.sessions[sid] as A;
         if (ref && ref.size === a.ref.size && sess && sessionAccess(sp.state, who, sid).read && this.blobs.hasSupply(sess.actor, a.ref.hash, sp.id)) { allowed = true; break; }
       }
     }
-    if (!allowed && this.blobs.ownRecent(who, a.ref.hash)) allowed = true;   // uploaders read their own blobs for 24 h
+    if (!allowed && sp.state && canRead(sp.state, who, sp.state.head) && this.blobs.ownRecent(who, a.ref.hash)) allowed = true;   // D3: uploaders read their own blobs for 24 h, via a space they can read
     if (!allowed) throw err("not_found", "no such blob for this reader and space");
     return this.blobs.get(a.ref.hash, a.offset ?? 0, a.length);
   }
@@ -648,11 +769,11 @@ export class Sequencer {
     } else throw err("invalid", "StreamItem.type");
     if (!Object.keys(it).every((k) => base.includes(k) || extra.includes(k))) throw err("invalid", "unknown StreamItem field");
     if (utf8len(jcs(it)) > LIMITS.maxStreamItemBytes) throw err("invalid", "StreamItem over 64 KiB");
-    const sp = this.spaces.get(it.space);
-    if (!sp?.state || !(it.session in sp.state.sessions)) throw err("not_found", "no such session");
-    const sess = sp.state.sessions[it.session] as A;
+    const sp = this.route(it.space);
+    if (!(it.session in sp.state!.sessions)) throw err("not_found", "no such session");
+    const sess = sp.state!.sessions[it.session] as A;
     if (sess.actor !== conn.who) throw err("denied", "only the session's actor may stream");
-    if (!sessionAccess(sp.state, conn.who!, it.session).steer) throw err("denied", "the session is not live");
+    if (!sessionAccess(sp.state!, conn.who!, it.session).steer) throw err("denied", "the session is not live");
     const st = sp.streams.get(it.session) ?? { n: 0, last: "" };
     const text = jcs(it);
     if (it.n === st.n && text === st.last) return null;       // a repeat of the last item is ok
@@ -661,7 +782,7 @@ export class Sequencer {
     if (it.type === "context") { const m = sp.contextBlobs.get(it.session) ?? new Map(); m.set(it.blob.hash, it.blob); sp.contextBlobs.set(it.session, m); }
     for (const w of this.watches) {
       if (w.space !== it.space || w.session !== it.session) continue;
-      const acc = sessionAccess(sp.state, w.who, it.session);     // evaluated at the head when each item is delivered
+      const acc = sessionAccess(sp.state!, w.who, it.session);     // evaluated at the head when each item is delivered
       if (it.type === "context" ? acc.read : acc.watch) w.conn.send({ id: w.reqId, item: it });
     }
     return null;
@@ -765,6 +886,12 @@ class Blobs {
     const fd = fs.openSync(f, "r"); try { fs.readSync(fd, buf, 0, n, offset); } finally { fs.closeSync(fd); }
     return { data: b64u(buf), size, offset };
   }
+}
+/** D14: every claim in a StateView carries `settled` (true once its outcome or a resolve settled it, else false). */
+function withSettled(view: A): A {
+  const v = JSON.parse(JSON.stringify(view)) as A;
+  for (const ef of Object.values(v.effects ?? {}) as A[]) for (const c of ef.claims ?? []) c.settled = c.settled === true;
+  return v;
 }
 const sha256Bytes = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 void parseTimeMs; void isServerName; void JsonError;

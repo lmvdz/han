@@ -861,7 +861,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     case "effect.claim": {
       const ef = (s.effects as A)[b.proposal];
       const r = e3(s, ef, ctx);
-      const claim: A = { id, attempt: b.attempt, instance: b.instance, time, window: b.window };
+      const claim: A = { id, attempt: b.attempt, instance: b.instance, time, window: b.window, settled: false };
       if (r.ok) {
         if (r.approval) claim.approval = r.approval;
         if (r.guardApprovals.length) claim.guardApprovals = r.guardApprovals;

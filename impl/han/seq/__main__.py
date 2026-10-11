@@ -1,5 +1,5 @@
 """han-seq:  python -m han.seq --server a.localhost --port 8701 --db PATH --key PATH [--host 127.0.0.1] [--register ACTOR=KEYFILE[,kind[,operator]]]...
-                [--peers han-peers.json] [--peer NAME=URL]... [--advertise ws://host:port]
+                [--peers han-peers.json] [--peer NAME=URL]... [--advertise ws://host:port/han]
             python -m han.seq register --server S --db PATH --key PATH --actor @x:S --pub KEYFILE|PUBKEY [--kind human] [--operator @o:S]   (server stopped)"""
 import argparse, asyncio, logging, sys
 from .. import keys
@@ -32,7 +32,7 @@ def main(argv=None):
     ap.add_argument("--register", action="append", default=[], metavar="ACTOR=KEYFILE[,kind[,operator]]")
     ap.add_argument("--peers", help="han-peers config: JSON {server name: http(s) base URL of its /.well-known/han}")
     ap.add_argument("--peer", action="append", default=[], metavar="NAME=URL", help="one peer, as in --peers")
-    ap.add_argument("--advertise", help="the sequencer endpoint published in /.well-known/han (default ws://HOST:PORT)")
+    ap.add_argument("--advertise", help="the sequencer endpoint published in /.well-known/han (default ws://HOST:PORT/han)")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     seq = Sequencer(a.server, keys.load_or_generate(a.key, "h1"), a.db)

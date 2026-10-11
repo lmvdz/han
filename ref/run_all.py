@@ -21,6 +21,7 @@ CHECKS = [
     ("Guard model (P-15), depth 5 (~10 min)", [PY, os.path.join(HERE, "model_guard.py")], "full"),
     ("Guard model mutations must each give a counterexample, depth 4 (~30 s)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4", "--all-mutations"]),
     ("Signed layer (real Ed25519): home pipeline, content validation, mirror verification, proofs, blobs, notices", [PY, os.path.join(HERE, "run_wire.py")]),
+    ("Wire conformance vectors (ref/wire-vectors) are well formed: signatures, receipts, one chain (offline; live runs need a server: run_wire_vectors.py --url)", [PY, os.path.join(HERE, "run_wire_vectors.py"), "--check"]),
     ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")]),
     ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"]),
 ]

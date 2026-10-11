@@ -125,7 +125,8 @@ async def test_blob_access_and_parts(env):
     r = await c._request("blobPut", {"ref": ref, "offset": 0, "data": W.b64(b"")})
     assert r["complete"] is False                                           # claiming a known hash without bytes
     bad = {"hash": hashlib.sha256(b"abc").hexdigest(), "size": 3, "type": "text/plain"}
-    assert (await c._request("blobPut", {"ref": bad, "offset": 0, "data": W.b64(b"xyz")}))["complete"] is False
+    with pytest.raises(WireError) as ex: await c._request("blobPut", {"ref": bad, "offset": 0, "data": W.b64(b"xyz")})
+    assert ex.value.code == "invalid"                                       # D8: the bytes do not hash to the ref
     await env.bounce()
     assert await a.blob_get(ref, S) == data                                 # blobs and supply persist
 
@@ -135,8 +136,8 @@ async def test_blob_put_empty_and_mismatch(env):
     ref = await b.blob_put(b"")
     assert ref["size"] == 0
     bad = {"hash": hashlib.sha256(b"abc").hexdigest(), "size": 3, "type": "text/plain"}
-    r = await b._request("blobPut", {"ref": bad, "offset": 0, "data": W.b64(b"xyz")})
-    assert r == {"have": 3, "complete": False}
+    with pytest.raises(WireError) as ex: await b._request("blobPut", {"ref": bad, "offset": 0, "data": W.b64(b"xyz")})
+    assert ex.value.code == "invalid"                                       # D8: and the uploader's parts for the ref are discarded
     with pytest.raises(WireError) as ex: await b._request("blobPut", {"ref": bad, "offset": 3, "data": W.b64(b"more")})
     assert ex.value.code == "invalid"
 

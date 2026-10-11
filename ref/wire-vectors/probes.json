@@ -1,0 +1,1833 @@
+{
+ "format": "han-wire-vectors/1",
+ "kind": "agreed",
+ "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).",
+ "vectors": [
+  {
+   "id": "P01",
+   "title": "hello with a proof over another challenge",
+   "expect": "denied",
+   "rules": [
+    "G-08"
+   ],
+   "source": "golden P01",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof challenge=another-challenge>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 1,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P02",
+   "title": "read before hello",
+   "expect": "denied",
+   "rules": [
+    "G-07"
+   ],
+   "source": "golden P02",
+   "steps": [
+    {
+     "conn": "raw:1",
+     "send": {
+      "id": 1,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 0
+      }
+     }
+    },
+    {
+     "conn": "raw:1",
+     "expect": {
+      "id": 1,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P03",
+   "title": "second hello on an authenticated connection",
+   "expect": "invalid",
+   "rules": [
+    "G-08"
+   ],
+   "source": "golden P03",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@bob:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256,
+        "maxClockSkewSeconds": 60
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "hello",
+      "args": {
+       "who": "@bob:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P04",
+   "title": "hello version 2",
+   "expect": "invalid",
+   "rules": [
+    "G-08",
+    "R-08"
+   ],
+   "source": "golden P04",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 2
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P06",
+   "title": "hello with an unknown keyId",
+   "expect": "denied",
+   "rules": [
+    "G-08",
+    "W-03"
+   ],
+   "source": "golden P06",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "nokey",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 1,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P07",
+   "title": "hello with a proof over another server name (dialed != server)",
+   "expect": "denied",
+   "rules": [
+    "G-08",
+    "W-02"
+   ],
+   "source": "golden P07",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof dialed=other.localhost>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 1,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P08",
+   "title": "a frame that is not JSON",
+   "expect": "{id:0, error:invalid}",
+   "rules": [
+    "G-07"
+   ],
+   "source": "golden P08",
+   "steps": [
+    {
+     "conn": "raw:1",
+     "send_raw": "not json {"
+    },
+    {
+     "conn": "raw:1",
+     "expect": {
+      "id": 0,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P12",
+   "title": "unknown call",
+   "expect": "invalid",
+   "rules": [
+    "G-07"
+   ],
+   "source": "golden P12",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "frobnicate",
+      "args": {}
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P13",
+   "title": "binary frame closes the connection",
+   "expect": "connection closes",
+   "rules": [
+    "G-07"
+   ],
+   "source": "golden P13",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send_binary": "00ff10"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect_close": true
+    }
+   ]
+  },
+  {
+   "id": "P14",
+   "title": "re-append of a stored entry returns the same receipt (R-01)",
+   "expect": "same receipt",
+   "rules": [
+    "R-01"
+   ],
+   "source": "golden P14",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@bob:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "to": [
+          "@alice:a.localhost"
+         ]
+        },
+        "contentHash": "c7ed77193149b875a87c0b02e7a40ecba23e92af26a538092e050105958758ca",
+        "refs": [],
+        "seen": 4,
+        "nonce": "ekvz7uh3rajjw4cts4mdqwzwjz",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "JlCgvVDbvU2IUBsmk0M8OosSMvKxq6VqNmzQIPSCxNJqEyBIqjmvJPKWTpWjiQxp_tDjRbA_omuNxfMHURdbBg"
+       },
+       "content": {
+        "text": "hello alice"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 5,
+       "id": "5f5111c1d3062559c8a9e2cf1763dddd2d00d08c2dfb313c3b202fae358fa57c",
+       "prev": "0fee04da5a6421edc1c002a36c5cf33f5ad22c04bd8befa886e0b33bc4a1d9ab",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "RSmOJmi9ylGLt_3MRAfhpqosxIMEMGbF7hfqz3BWJNpWsKRpQ7u4ZKCefVMBmQtYdMNezKL9KmIEWZcuI6taAQ"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P15",
+   "title": "re-append of a stored entry without its content returns the same receipt (W-16d)",
+   "expect": "same receipt",
+   "rules": [
+    "R-01",
+    "W-16"
+   ],
+   "source": "golden P15",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@bob:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "to": [
+          "@alice:a.localhost"
+         ]
+        },
+        "contentHash": "c7ed77193149b875a87c0b02e7a40ecba23e92af26a538092e050105958758ca",
+        "refs": [],
+        "seen": 4,
+        "nonce": "ekvz7uh3rajjw4cts4mdqwzwjz",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "JlCgvVDbvU2IUBsmk0M8OosSMvKxq6VqNmzQIPSCxNJqEyBIqjmvJPKWTpWjiQxp_tDjRbA_omuNxfMHURdbBg"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 5,
+       "id": "5f5111c1d3062559c8a9e2cf1763dddd2d00d08c2dfb313c3b202fae358fa57c",
+       "prev": "0fee04da5a6421edc1c002a36c5cf33f5ad22c04bd8befa886e0b33bc4a1d9ab",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "RSmOJmi9ylGLt_3MRAfhpqosxIMEMGbF7hfqz3BWJNpWsKRpQ7u4ZKCefVMBmQtYdMNezKL9KmIEWZcuI6taAQ"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P16",
+   "title": "append by a non-member",
+   "expect": "denied",
+   "rules": [
+    "P-03"
+   ],
+   "source": "golden P16",
+   "steps": [
+    {
+     "conn": "@carol:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@carol:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "cfb7e720cd39437ae049fe3d079d8ee36a7173ce2734e163305715c5cfabbcda",
+        "refs": [],
+        "seen": 0,
+        "nonce": "44jbwbvypm6qmgrctqqk7kqem3",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "RRgYiDuDuyvLHeek248jWZdqRcu0WdnD51ZcnnclZsAJtgAuewi_zagUq88K8q_Jd5BibFqrt8EDI_6_QjIMBg"
+       },
+       "content": {
+        "text": "carol is not a member"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@carol:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P17",
+   "title": "non-create first entry in an unknown local space",
+   "expect": "invalid",
+   "rules": [
+    "§4.1",
+    "W-13"
+   ],
+   "source": "golden P17",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "nospace:a.localhost",
+        "kind": "message",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "81ef913da43972caf447369ac88fa6df90acf8417624c4e1a4e3c607fe08a068",
+        "refs": [],
+        "seen": 0,
+        "nonce": "bllceo4vnqpkvk4xudwg6gywux",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "vT9WPEGiOkJpEOxZRG8Tzor3AstjrV-8l8e0383JBxyKoFFPSP33XGFot_Se0uX4xfcWbbYqd8XmjohGiJaLAA"
+       },
+       "content": {
+        "text": "into nowhere"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P19",
+   "title": "read of an unknown local space",
+   "expect": "not_found",
+   "rules": [
+    "§4.1",
+    "W-13"
+   ],
+   "source": "golden P19",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "nospace:a.localhost",
+       "after": 0
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P20",
+   "title": "read of a members-only space by a non-member",
+   "expect": "not_found",
+   "rules": [
+    "§3",
+    "P-02"
+   ],
+   "source": "golden P20",
+   "steps": [
+    {
+     "conn": "@carol:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 0
+      }
+     }
+    },
+    {
+     "conn": "@carol:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P21",
+   "title": "read with after at the head, and beyond it",
+   "expect": "no records, then end",
+   "rules": [
+    "G-09"
+   ],
+   "source": "golden P21",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 18
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "end": true
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 999999
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "end": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "P23",
+   "title": "cancel of an unknown target",
+   "expect": "ok null",
+   "rules": [
+    "G-07",
+    "W-06"
+   ],
+   "source": "golden P23",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "cancel",
+      "args": {
+       "target": 999999
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "P24",
+   "title": "streaming call reusing an open request id",
+   "expect": "invalid",
+   "rules": [
+    "G-07"
+   ],
+   "source": "golden P24",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "subscribe",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "subscribe",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P25",
+   "title": "subscribe by a non-reader",
+   "expect": "denied",
+   "rules": [
+    "G-09",
+    "P-02"
+   ],
+   "source": "golden P25",
+   "steps": [
+    {
+     "conn": "@carol:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "subscribe",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@carol:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P26",
+   "title": "signal into an unknown space",
+   "expect": "not_found",
+   "rules": [
+    "G-04",
+    "W-24"
+   ],
+   "source": "golden P26",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "signal",
+      "args": {
+       "space": "nospace:a.localhost",
+       "body": {
+        "a": 1
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P28",
+   "title": "append with a flipped bit in the middle of the signature",
+   "expect": "invalid",
+   "rules": [
+    "R-12",
+    "§4.1"
+   ],
+   "source": "golden P28",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "b349d5ac53a7082b8d04671a959807190bfb5d7777da84d1dddd24c762f80847",
+        "refs": [],
+        "seen": 0,
+        "nonce": "7sm64wa7gvs622nzl64rwzkuuo",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "Kh-9M-JIXkj45bVNVWj-q1sCsshw8BnbBzd7cyvmBXl0PceWgmpI6YOsh3xnbtHSr6WmHEUC7xU4vWiFn_hjBQ"
+       },
+       "content": {
+        "text": "flipped bit"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P29",
+   "title": "append with content but contentHash \"\"",
+   "expect": "invalid",
+   "rules": [
+    "§4.1",
+    "W-16"
+   ],
+   "source": "golden P29",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "",
+        "refs": [],
+        "seen": 0,
+        "nonce": "65dkuiymvr7c3dlgahc22yqenp",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "K4CdvF0u5UJrcO03dSiu0mDm-BVFdvdtewGOZisqSZdcFxwCWHzSxIL0-MZSCe_rCkFfETYMNEEmv4LsfYq_Bw"
+       },
+       "content": {
+        "text": "content but no hash"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P30",
+   "title": "member.set with content",
+   "expect": "invalid",
+   "rules": [
+    "§4.1",
+    "W-16"
+   ],
+   "source": "golden P30",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "member.set",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "actor": "@carol:a.localhost",
+         "role": "none"
+        },
+        "contentHash": "5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
+        "refs": [],
+        "seen": 0,
+        "nonce": "azgkmgcfffmdizca2xwytxipqm",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "d_T6VPi30Bjo2uTGjj45Sf7wnv1qwbZtl1amL4Kod4YTvjHbC5EOiV8d5L2FdZ1h2LDhk_SypOsRsPuiCIBcCQ"
+       },
+       "content": {
+        "x": 1
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P52",
+   "title": "message whose content is over maxContentBytes (65536)",
+   "expect": "invalid",
+   "rules": [
+    "§2",
+    "R-09"
+   ],
+   "source": "golden P52",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "1986dc94c09fc492cc38e6e22b2295c3f0547531dbca039aee986ae9a1e31891",
+        "refs": [],
+        "seen": 0,
+        "nonce": "jq7q6kibjg373yai2pkf4qwt5m",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "rrCDf8fKSFQQFZb8euwS-GgfraYESOh8m7f659EwkXDtv3Qk0Nnbs4mieXwLZybr3lHh8sGSFqEl8m-L183PCQ"
+       },
+       "content": {
+        "text": "<repeat a 70000>"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P53",
+   "title": "read with limit 2 from the start (no follow)",
+   "expect": "2 records then end",
+   "rules": [
+    "§3",
+    "G-09"
+   ],
+   "source": "golden P53",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 0,
+       "limit": 2
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "item": {
+       "type": "record",
+       "record": {
+        "entry": {
+         "v": 1,
+         "space": "s1:a.localhost",
+         "kind": "space.create",
+         "author": "@alice:a.localhost",
+         "keyId": "k1",
+         "body": {
+          "policy": {
+           "visibility": "members",
+           "join": "invite",
+           "membersMayInvite": false,
+           "allowAgents": "any",
+           "approvals": [
+            {
+             "action": "file.write",
+             "approvers": [
+              "owner"
+             ]
+            }
+           ],
+           "separateApprover": true,
+           "budget": null,
+           "maxDelegationDepth": 2,
+           "minDurability": "local",
+           "launchWindow": 15,
+           "extensionsMinRole": "member",
+           "sessions": {
+            "watch": "member",
+            "read": "member",
+            "steer": "owner",
+            "modes": [
+             "auto",
+             "guarded"
+            ]
+           },
+           "servers": {
+            "deny": []
+           }
+          }
+         },
+         "contentHash": "947ee5c99dca1177714f79a6252c59551522828f153152da23befd90be8e2bb9",
+         "refs": [],
+         "seen": 0,
+         "nonce": "slqhohp3sz27ipwlb55wy5hymo",
+         "time": "2026-01-01T00:00:00Z",
+         "sig": "hDn3IotQW08eaLshykmJLvhnN-Tl2CDttwBxeBfxmUrjwN56MCFGYOsV22bxoeGZUYugZUzyfJ1Seq5ASO7TCg"
+        },
+        "content": {
+         "name": "interop room"
+        },
+        "redacted": false,
+        "receipt": {
+         "space": "s1:a.localhost",
+         "seq": 1,
+         "id": "6e43de031efd439457d778d9fa45849415c8e0f990138bcd92571cc93556fd7a",
+         "prev": "",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@alice:a.localhost": 1
+         },
+         "homeSig": "2HU35R4FgkNDXZa_q8JE99K4aXucwT4IgeUk-o4kCO0E-IAzbaZkAfH6f5P_H7sHM58ePrWpk2MSK8gzVoPxDw"
+        }
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "item": {
+       "type": "record",
+       "record": {
+        "entry": {
+         "v": 1,
+         "space": "s1:a.localhost",
+         "kind": "member.set",
+         "author": "@alice:a.localhost",
+         "keyId": "k1",
+         "body": {
+          "actor": "@bob:a.localhost",
+          "role": "member"
+         },
+         "contentHash": "",
+         "refs": [],
+         "seen": 1,
+         "nonce": "dkteupp67ud4sq54t3n5ovckml",
+         "time": "2026-01-01T00:00:00Z",
+         "sig": "cUBC1x4XkbWCF-D-Hu2qFezRDkYlW3WlGBgl4DykzHGLeLqmqf8M53HycW_S7IkNF0vdGMLGdmvJ4RuXNjDXDw"
+        },
+        "content": null,
+        "redacted": false,
+        "receipt": {
+         "space": "s1:a.localhost",
+         "seq": 2,
+         "id": "5c45394cd98ad2dec92c2ac726c2293783d38085cab642bf9ba730268259503a",
+         "prev": "d0989501fb6265f95c76461d3690f840db2174ea9a51e58fd9a0dd637e83f579",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@alice:a.localhost": 1,
+          "@bob:a.localhost": 1
+         },
+         "homeSig": "SKfqN64xFmydTXgE5O8mtW77n-Psg5IHCoJtkanxGOTSZdSEqsoCVEDMJ1ce2ZFwhT-CiuTjHfWitkOGjo67Dw"
+        }
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "end": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "P54",
+   "title": "read with limit 0 (outside 1-1000)",
+   "expect": "invalid",
+   "rules": [
+    "§3"
+   ],
+   "source": "golden P54",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 0,
+       "limit": 0
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P35",
+   "title": "blobPut complete, then repeat (idempotent)",
+   "expect": "ok complete both times",
+   "rules": [
+    "G-01",
+    "W-27"
+   ],
+   "source": "golden P35",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "cHJvYmUgYmxvYiBieXRlcw"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": {
+       "have": 16,
+       "complete": true
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "cHJvYmUgYmxvYiBieXRlcw"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": {
+       "have": 16,
+       "complete": true
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P31",
+   "title": "two appends pipelined without waiting",
+   "expect": "two receipts, consecutive seq, in send order",
+   "rules": [
+    "G-07",
+    "W-05",
+    "R-07"
+   ],
+   "source": "golden P31",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@bob:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "67ee85b4a95107c6b240dc9f3494d5de5daa7cd46744958ae59b44e4f8a953dd",
+        "refs": [],
+        "seen": 0,
+        "nonce": "ausfpe6zphvdu4htszbnzmfjto",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "30RKt7fmkwzPRCDDOknfW-StAw6rLvx3DcPmVUT5My_Lba0U0PHqfB9L-5suLhF7BU-_M1dxF7f8y2IFkbWHAQ"
+       },
+       "content": {
+        "text": "pipelined one"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@bob:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "bc2024f3d0dc400fcf253891db0d266f4ae341fd1a4805a7d984ca152e490b84",
+        "refs": [],
+        "seen": 0,
+        "nonce": "giopxgxlyn35nis5ezxxqfcsit",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "QUn-wVy1pFnyo255qrv00EhLxPPXh4hakDs1Gmubwi_QWuuRAVgUi7tGnAc_ZzwQVGQ131bL0uXq5Bp9DJY2Cw"
+       },
+       "content": {
+        "text": "pipelined two"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": "<receipt seq=19>"
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": "<receipt seq=20>"
+     }
+    }
+   ]
+  },
+  {
+   "id": "P40-setup",
+   "title": "setup: alice opens sessions A, B and C and closes B (state for P40-P48, P57)",
+   "rules": [
+    "P-15"
+   ],
+   "source": "maker",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.open",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "steerMode": "auto"
+        },
+        "contentHash": "34af88585349e650cc1d0f0f449d19d693772688d54bcb57abe858af1c50a7b7",
+        "refs": [],
+        "seen": 20,
+        "nonce": "l6citkmuckcijrhtksirhevcuz",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "hKW8LTKfLNFZkfIVkLDWpPv7lZNh4NjLFcZlZeOPEOL9StUABQySP8NlFQbrkOpG-NzORFCTrNQFWIDKPNWDDw"
+       },
+       "content": {
+        "title": "probe session A"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": "<receipt seq=21>"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.open",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "steerMode": "auto"
+        },
+        "contentHash": "f90375f0d95f89f58757a78d0d9852b8519d3453828b9f81001744aa98ebfd88",
+        "refs": [],
+        "seen": 21,
+        "nonce": "4qwn527modph2l5d5aed4yw4vk",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "uFGEu_UNmyCzi86pt3mwWuckbOASfOZW6g-3FZ29kwAY1SsdTmaLWFFto_W8AjBEYhGA5U2a6BbJ4RyWzqa3Ag"
+       },
+       "content": {
+        "title": "probe session B"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": "<receipt seq=22>"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 4,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.close",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "session": "96c3fde4e5e188e8fd2d4352089da7f9355ee12983429bc8d41f59e65e4d547b"
+        },
+        "contentHash": "",
+        "refs": [],
+        "seen": 22,
+        "nonce": "ndnglbh6ymz7qpvwp63a65ewzi",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "zyvZs7F3wq9eaIvKM-bnoLio5p3U7LBFocEyqnGxepCTRSqk3vPHjT45b_eBsg4E3qVugNYu6hU0tsUIjG9xDg"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 4,
+      "ok": "<receipt seq=23>"
+     }
+    }
+   ]
+  },
+  {
+   "id": "P40",
+   "title": "stream item for a closed session",
+   "expect": "denied",
+   "rules": [
+    "G-05"
+   ],
+   "source": "golden P40",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "96c3fde4e5e188e8fd2d4352089da7f9355ee12983429bc8d41f59e65e4d547b",
+        "n": 1,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "late"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P41",
+   "title": "stream n=1 by the session actor",
+   "expect": "ok",
+   "rules": [
+    "G-05"
+   ],
+   "source": "golden P41",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "01189b4edf95a1dc4286187f92af8eb68092c5ab7928b285870fdcab46e00684",
+        "n": 1,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "t1"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "P42",
+   "title": "stream n=1 repeated (identical)",
+   "expect": "ok",
+   "rules": [
+    "G-05",
+    "W-31"
+   ],
+   "source": "golden P42",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "01189b4edf95a1dc4286187f92af8eb68092c5ab7928b285870fdcab46e00684",
+        "n": 1,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "t1"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "P43",
+   "title": "stream n=1 repeated with different text",
+   "expect": "invalid",
+   "rules": [
+    "G-05",
+    "W-31"
+   ],
+   "source": "golden P43",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "01189b4edf95a1dc4286187f92af8eb68092c5ab7928b285870fdcab46e00684",
+        "n": 1,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "different"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P44",
+   "title": "stream n=5 (gap)",
+   "expect": "invalid",
+   "rules": [
+    "G-05",
+    "W-31"
+   ],
+   "source": "golden P44",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "01189b4edf95a1dc4286187f92af8eb68092c5ab7928b285870fdcab46e00684",
+        "n": 5,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "t5"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P45",
+   "title": "stream by a member who is not the session's actor",
+   "expect": "denied",
+   "rules": [
+    "G-05"
+   ],
+   "source": "golden P45",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "01189b4edf95a1dc4286187f92af8eb68092c5ab7928b285870fdcab46e00684",
+        "n": 2,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "t2"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P46",
+   "title": "stream for an unknown session",
+   "expect": "not_found",
+   "rules": [
+    "G-05",
+    "W-31"
+   ],
+   "source": "golden P46",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "0000000000000000000000000000000000000000000000000000000000000000",
+        "n": 1,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "t1"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P47",
+   "title": "watch of an unknown session",
+   "expect": "not_found",
+   "rules": [
+    "G-05",
+    "W-32"
+   ],
+   "source": "golden P47",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "watch",
+      "args": {
+       "space": "s1:a.localhost",
+       "session": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P48",
+   "title": "watch by a non-reader",
+   "expect": "denied",
+   "rules": [
+    "G-05"
+   ],
+   "source": "golden P48",
+   "steps": [
+    {
+     "conn": "@carol:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "watch",
+      "args": {
+       "space": "s1:a.localhost",
+       "session": "01189b4edf95a1dc4286187f92af8eb68092c5ab7928b285870fdcab46e00684"
+      }
+     }
+    },
+    {
+     "conn": "@carol:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P57",
+   "title": "watch stays open and silent when its session is closed",
+   "expect": "stays open, no frame",
+   "rules": [
+    "G-05",
+    "W-32"
+   ],
+   "source": "golden P57",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.open",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "steerMode": "auto"
+        },
+        "contentHash": "f9a57f7bc33068ac4f883e07f08661057d5b7a98129c3e2874d5075f7961e50e",
+        "refs": [],
+        "seen": 23,
+        "nonce": "ld3fmkxqohxjvcuxukvn27nuzt",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "uf5P3JSoIf87aNe2vqvOH2aAa5BU09LXuv5hVR_HiDkq3hM_9QLCS8T7S0rtIY5sl2onD6uzk2uldQNAFIlTBA"
+       },
+       "content": {
+        "title": "probe session C"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": "<receipt seq=24>"
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "watch",
+      "args": {
+       "space": "s1:a.localhost",
+       "session": "441272d8288bde168ed011dea934778b89931c46e4e12fa741bbdef28d41c0d3"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.close",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "session": "441272d8288bde168ed011dea934778b89931c46e4e12fa741bbdef28d41c0d3"
+        },
+        "contentHash": "",
+        "refs": [],
+        "seen": 24,
+        "nonce": "yy5jgbkmrzs4yknazdj7uj2oe5",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "WbpZiKCSKKQ_ZxDGD2YvYmLahfj7aDdc4gWb5Mc5EeHEV8lX2-iLRTtwGfC8bzxr3BjxQ8KyGTvxkKr4rVVgAA"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": "<receipt seq=25>"
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect_silence": true
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "cancel",
+      "args": {
+       "target": 2
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": null
+     }
+    }
+   ]
+  }
+ ]
+}

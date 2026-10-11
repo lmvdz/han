@@ -828,7 +828,7 @@ def fold(state, record, ctx) -> dict:
         if eff["phase"] == "awaiting-approval" and approvals_complete(s, eff): eff["phase"] = "ready"
     elif kind == "effect.claim":
         eff = s["effects"][b["proposal"]]
-        c = {"id": eid, "attempt": b["attempt"], "instance": b["instance"], "time": rc["time"], "window": b["window"]}
+        c = {"id": eid, "attempt": b["attempt"], "instance": b["instance"], "time": rc["time"], "window": b["window"], "settled": False}
         chosen = []
         if approval_rule(s["policy"], eff["action"]):
             _, a = pick_approval(s, eff, ctx)
@@ -918,9 +918,11 @@ def _debit(s, src, amount):
     else: s["budgetLeft"]["amount"] -= amount
 
 def _settle(s, claim, spent):
-    """Settle a reservation once: spent=None → charge it all; spent=n → refund reserved−n (P-06)."""
-    if not claim or not claim.get("reserved") or claim.get("settled"): return
+    """Settle a claim once (D14: `settled` is on every claim): spent=None → charge the reservation in full; spent=n → refund reserved−n (P-06).
+    A claim without a reservation is marked settled and nothing moves."""
+    if not claim or claim.get("settled"): return
     claim["settled"] = True
+    if not claim.get("reserved"): return
     refund = 0 if spent is None else claim["reserved"]["amount"] - spent
     if refund: _credit(s, claim["source"][1] if claim["source"][0] == "task" else None, refund)
 

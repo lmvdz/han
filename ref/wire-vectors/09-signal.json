@@ -1,0 +1,72 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "signal",
+ "description": "subscribe live-only; another actor signals; signal item with `from`; cancel",
+ "rules": [
+  "G-04",
+  "G-09",
+  "W-24"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "subscribe",
+    "args": {
+     "space": "s1:a.localhost"
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "signal",
+    "args": {
+     "space": "s1:a.localhost",
+     "body": {
+      "typing": true
+     }
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": null
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "type": "signal",
+     "from": "@bob:a.localhost",
+     "body": {
+      "typing": true
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 2,
+    "call": "cancel",
+    "args": {
+     "target": 1
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 2,
+    "ok": null
+   }
+  }
+ ]
+}

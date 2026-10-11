@@ -36,7 +36,7 @@ State is in the `--db` file (SQLite, WAL, `synchronous=FULL`: records, receipts,
 
 ## Federation: several servers
 
-Each server serves `GET /.well-known/han` (`{server, sequencer, keys: [{keyId, publicKey, from, until?, compromised?}]}`) and `GET /.well-known/han-peers` (`{server: keys}`, the key sets it verifies with) **on the same port as the WebSocket**, over plain HTTP here (TLS is deployment). Servers find each other through a **han-peers config**, a JSON map from server name to the base URL of its `.well-known` (a name not listed is looked up at `https://<name>`):
+Each server serves `GET /.well-known/han` (`{server, sequencer, keys: [{keyId, publicKey, from, until?, compromised?}]}`) and `GET /.well-known/han-peers` (`{peers: [{server, url}]}`, the other servers it verifies with) **on the same port as the WebSocket**, over plain HTTP here (TLS is deployment). Servers find each other through a **han-peers config**, a JSON map from server name to the base URL of its `.well-known` (a name not listed is looked up at `https://<name>`):
 
 ```
 python -m han.seq --server a.localhost --port 8701 --db a.db --key a-key.json --peers han-peers.json      # {"b.localhost": "http://127.0.0.1:8702"}
@@ -64,7 +64,7 @@ from han.client import Client, default_policy
 
 async def main():
     keys.generate("alice.json")                         # once; register its public key with the server as above
-    c = Client("ws://127.0.0.1:8701", "@alice:a.localhost", "alice.json", "alice-outbox.db")   # dials server name a.localhost
+    c = Client("ws://127.0.0.1:8701/han", "@alice:a.localhost", "alice.json", "alice-outbox.db")   # dials server name a.localhost
     await c.connect()                                   # authenticates, then finishes any unconfirmed outbox entries (R-07)
     e, content = c.make_entry("space.create", "s1:a.localhost", {"policy": default_policy()}, {"name": "room"})
     receipt = await c.append(e, content)                # outbox first, send, retry with the same entry (R-06)
@@ -94,7 +94,7 @@ The reference checks stay as they were: `python ref/run_wire.py`, `python ref/ru
 
 | Program | Run | Details |
 |---|---|---|
-| `han-exec` | `python -m han.exec --url ws://… --actor @x:S --key KEY --instance k1 --journal PATH --spaces SPACE --actions file.write,http.post [--allow-url PREFIX] [--sandbox DIR]` | X-01…X-10; refuses to start (exit 3) if its instance is already running or its journal is missing. [han/exec/NOTES.md](han/exec/NOTES.md) |
+| `han-exec` | `python -m han.exec --url ws://…/han --actor @x:S --key KEY --instance k1 --journal PATH --spaces SPACE --actions file.write,http.post [--allow-url PREFIX] [--sandbox DIR]` | X-01…X-10; refuses to start (exit 3) if its instance is already running or its journal is missing. [han/exec/NOTES.md](han/exec/NOTES.md) |
 | `han-host` | `python -m han.host --url … --actor @bot:S --key KEY --space SPACE --mode auto\|guarded --agent scripted\|claude --state PATH [--executor @x:S]` | P-15 and R-24 host duties, R-17/R-18 recovery; `claude` drives Claude Code through the Agent SDK (run live: [demo/README.md](demo/README.md)). [han/host/NOTES.md](han/host/NOTES.md) |
 | `han-verify` | `python -m han.verify follow --url … --actor … --key … --space SPACE --state PATH --server-key S=KEYFILE` · `python -m han.verify proof FILE` | R-14/R-15 mirror; exit 0 ok, 2 faulty (writes a portable proof), 3 stopped, 4 moved. [han/verify/NOTES.md](han/verify/NOTES.md) |
 | `han` | `python -m han.cli <keygen\|space create\|member set\|message\|task\|propose\|approve\|cancel\|session …\|watch\|read\|status>` (or `HAN_URL`, `HAN_ACTOR`, `HAN_KEY`, `HAN_OUTBOX`) | thin over `han.client`; `approve` shows the plan and checks its digest first (P-08) |

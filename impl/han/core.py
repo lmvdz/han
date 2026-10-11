@@ -12,7 +12,9 @@ import wire                         # noqa: E402
 P, W = policy, wire
 
 LIMITS = {"maxFrameBytes": 1310720, "maxHeaderBytes": 16384, "maxContentBytes": 65536, "maxBlobBytes": 4294967296,
-          "maxBlobPartBytes": 786432, "maxBlobRangeBytes": 786432, "maxStreamItemBytes": 65536, "maxFollows": 256}   # han.ts Limits
+          "maxBlobPartBytes": 786432, "maxBlobRangeBytes": 786432, "maxStreamItemBytes": 65536, "maxFollows": 256,
+          "maxClockSkewSeconds": W.MAX_CLOCK_SKEW}   # han.ts Limits, all nine (D9)
+
 
 class WireError(Exception):
     """A han.ts WireError as an exception (server replies and client raises)."""

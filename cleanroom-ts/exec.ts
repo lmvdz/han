@@ -33,6 +33,7 @@ export interface ExecOptions {
   spaces: string[];
   crashAt?: "after-claiming-journal" | "after-receipt" | "after-launching-journal" | "after-launch" | "after-reporting-journal";
   backoffBaseMs?: number; backoffCapMs?: number;   // X-11: exponential back-off before claiming the same effect again after failed/not started (default 1 s, cap 60 s)
+  retryMs?: number;              // D5: first back-off when a followed space is not_found/moved (default 1 s, doubling to 30 s)
   stallBeforeCheckMs?: number;   // test hook: simulate a stalled platform between the receipt and the deadline check
   onEvent?: (e: string) => void;
 }
@@ -115,13 +116,23 @@ export class Executor {
       this.loadJournal();
       this.client = await HanClient.connect(this.o.url, this.o.server, this.o.actor, this.key);
       await this.recover();                           // X-06, before anything new
-      for (const sp of this.o.spaces) {
-        const s = this.client.stream("read", { space: sp, after: 0, follow: true }, (item) => this.enqueue(item));
-        this.streamsToCancel.push(s.cancel);
-        s.done.catch(() => { /* connection lost: the executor is down; restart recovers */ });
-      }
+      for (const sp of this.o.spaces) void this.followSpace(sp);
       await this.idle();
     } catch (e) { this.releaseLock(); throw e; }
+  }
+  /** D5: a follow of a space that does not exist yet (or has moved) is answered at once; retry with back-off (1 s, doubling to 30 s), never treat it as final. */
+  private async followSpace(sp: string) {
+    let delay = this.o.retryMs ?? 1000;
+    while (!this.dead && !this.client.closed) {
+      const s = this.client.stream("read", { space: sp, after: 0, follow: true }, (item) => this.enqueue(item));
+      this.streamsToCancel.push(s.cancel);
+      try { await s.done; return; }
+      catch (e) {
+        if (!(e instanceof WireFault) || (e.code !== "not_found" && e.code !== "moved" && e.code !== "unavailable") || e.message.includes("connection closed")) return;   // denied, or the connection is lost: restart recovers
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 30000);
+      }
+    }
   }
   async idle() { let q; do { q = this.queue; await q; } while (q !== this.queue); }
   async stop() { this.dead = true; for (const tm of this.timers) clearTimeout(tm); this.timers.clear(); this.client?.close(); this.releaseLock(); try { fs.closeSync(this.journalFd); } catch { /* */ } }
