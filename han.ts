@@ -88,7 +88,7 @@ export interface Bodies {
   "redact": { target: EntryId };
   "session.open": { steerMode: SteerMode; task?: EntryId };   // a live session by its author (P-15); the stream itself travels on the transport (T-07)
   "session.close": { session: EntryId };
-  "session.input": { session: EntryId };                       // steering: input into someone's live session, accountable and sequenced
+  "session.input": { session: EntryId; release?: true };      // steering, accountable and sequenced; release: the guard ends a hold (P-15)
   "space.move": { to: ServerName; accept: { keyId: KeyId; sig: Sig } };   // sig = Ed25519(to's key, "han-accept-move-v1\n" ‖ space ‖ "\n" ‖ receiptHash(head))
 }
 
@@ -117,8 +117,8 @@ export interface Contents {
 }
 export type KindName = keyof Bodies;
 /** How a session's host treats input from someone other than the session's own actor (P-15, R-24):
- *  auto: like its own input · guarded: the harness's stricter mode for that turn, and the agent is tainted (P-15) ·
- *  suggest: shown to the agent's human, acted on only once they re-issue it (also taints). */
+ *  auto: like its own input · guarded: the harness's stricter mode for that turn, and the agent is held (P-15) ·
+ *  suggest: shown to the agent's human, acted on only once they re-issue it (also holds). */
 export type SteerMode = "auto" | "guarded" | "suggest";
 /** Extension kinds: `<prefix>.<name>`, prefix [a-z][a-z0-9-]{0,31} not a core prefix, name [a-z0-9][a-z0-9._-]{0,63}.
  *  Bodies and contents are opaque objects to the core; `content.blobs` (BlobRef[]) is the generic blob position (G-01). */
@@ -171,15 +171,14 @@ export interface SpaceState {
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number;
-                     parent?: EntryId; budget?: Budget; left?: Budget;
-                     guards?: ActorId[] };                  // taint carried by the task (P-15)
+                     parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
       expiresAt?: Time;                             // E5: no claim at or after this time
-      guards?: ActorId[];                           // humans who must each approve (P-15 taint), besides any approval rule
+      guards?: ActorId[];                           // the holding human, if its proposer was held (P-15); besides any approval rule
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId; dropped?: true }[];
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
@@ -194,8 +193,8 @@ export interface SpaceState {
   budgetLeft: { unit: string; amount: SignedInt } | null;   // budget − committed; negative only after a cut (P-06)
   entries: { [id: EntryId]: { author: ActorId; kind: KindName } };   // R-05 resolution, P-04 redact
   sessions: { [id: EntryId]: { actor: ActorId; open: boolean; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId;
-                                guard?: ActorId } };            // an agent session's confirmed operator at open
-  taint: { [agent: ActorId]: ActorId[] };                       // P-15: humans who must approve what this agent does next
+                                human: boolean; guard?: ActorId } };   // the guard is an agent's confirmed operator at open
+  held: { [agent: ActorId]: ActorId };                          // P-15: agent → the human it waits for
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
@@ -260,7 +259,7 @@ export type VerifierStatus =
   | { state: "moved"; through: Seq; to: ServerName };
 /** T-07: one item of a live session's stream. Published only by the session's actor; never authority (a steer is a
  *  session.input). `n` counts from 1 per session, so gaps are visible; `status` mirrors OSC 7501 program status. */
-export type StreamItem = { session: EntryId; n: number; time: Time } & (
+export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Time } & (
   | { type: "output"; text: string }                                         // what the session shows: watch
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
   | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only
@@ -270,7 +269,7 @@ export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order
   subscribe(space: SpaceId, as: ActorId): AsyncIterable<ReadItem>;  // records and signals (T-05) for this actor
   stream(item: StreamItem): Promise<void>;                          // T-07: by the session's actor's host
-  watch(session: EntryId, as: ActorId): AsyncIterable<StreamItem>;  // T-07: only what sessionAccess grants `as`, re-checked per item
+  watch(space: SpaceId, session: EntryId, as: ActorId): AsyncIterable<StreamItem>;   // T-07: only what sessionAccess grants `as`
 }
 /** The client an actor is built with: the sequencer calls plus the transport, authenticated as that actor. */
 export interface Client {
@@ -280,7 +279,7 @@ export interface Client {
   blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
   blobGet(ref: BlobRef): Promise<Uint8Array>;                           // via the transport; the caller verifies the hash
   stream(item: StreamItem): Promise<void>;                              // T-07, for the client's own sessions
-  watch(session: EntryId): AsyncIterable<StreamItem>;                   // T-07: data, never instruction (R-24)
+  watch(space: SpaceId, session: EntryId): AsyncIterable<StreamItem>;  // T-07: data, never instruction (R-24)
 }
 /** M5 and M6 (and human apps) are actors: fed every record and signal of the spaces they follow (and the notices on their
  *  own profile), they answer only through their Client. */

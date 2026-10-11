@@ -165,7 +165,7 @@ SCHEMA = {
     "redact": {"target": (_id, True)},
     "session.open": {"task": (_id, False), "steerMode": (lambda v: v in ("auto", "guarded", "suggest"), True)},
     "session.close": {"session": (_id, True)},
-    "session.input": {"session": (_id, True)},
+    "session.input": {"session": (_id, True), "release": (lambda v: v is True, False)},
     "space.move": {"to": (lambda v: isinstance(v, str) and bool(SERVER.match(v)), True),
                    "accept": (lambda v: isinstance(v, dict) and set(v) == {"keyId", "sig"} and _keyid(v["keyId"]) and isinstance(v["sig"], str), True)},
 }
@@ -323,6 +323,8 @@ def decide(state, entry, ctx) -> dict:
     if state["space"].startswith("profile:"): return _decide_profile(state, entry, ctx)
 
     role = role_of(state, author)
+    if author in state["held"] and not held_may(state, entry):
+        return deny("held: an outside steer is waiting for this agent's human")       # P-15
     if is_extension(kind):
         need = state["policy"]["extensionsMinRole"]
         return ALLOW if role in READ_ROLES[:READ_ROLES.index(need) + 1] else deny(f"extensions need role {need} or higher")
@@ -596,12 +598,22 @@ def _redact(state, entry, ctx, role):
 def is_human(ctx, actor):
     return ctx["profiles"].get(actor, {}).get("actorKind") == "human"
 
-def guards_for(state, author, task_id=None):
-    """P-15 taint: the humans who must approve what `author` does next: its taint, plus the task's (never itself)."""
-    g = set(state["taint"].get(author, []))
-    if task_id and task_id in state["tasks"]: g |= set(state["tasks"][task_id].get("guards", []))
-    g.discard(author)
-    return sorted(g)
+HELD_KINDS = {"message", "effect.propose", "effect.claim", "effect.outcome", "effect.resolve", "effect.cancel",
+              "task.update", "session.open", "session.close"}
+
+def held_may(state, entry):
+    """P-15: a held agent may talk, report and propose (its proposals wait for its guard), and work its own sessions; it
+    may not instruct anyone else (session.input into others' sessions, task), approve, or govern."""
+    if entry["kind"] == "session.input":
+        sess = state["sessions"].get(entry["body"]["session"])
+        return bool(sess) and sess["actor"] == entry["author"]
+    return entry["kind"] in HELD_KINDS
+
+def effective_mode(state, sess):
+    """A session's mode, unless the space no longer allows it: then the most cautious mode the space allows."""
+    allowed = state["policy"]["sessions"]["modes"]
+    if sess["steerMode"] in allowed: return sess["steerMode"]
+    return next(m for m in ("guarded", "suggest", "auto") if m in allowed)
 
 def guard_approval(state, eff, g, ctx):
     """E3 for a guard: an unconsumed, undropped, unexpired approval by `g`, who still holds a role, signed with a valid
@@ -616,15 +628,16 @@ def guard_approval(state, eff, g, ctx):
     return "none", None
 
 def live(state, sess):
-    """A session is live while open and its actor still holds a role."""
-    return bool(sess) and sess["open"] and role_of(state, sess["actor"]) in READ_ROLES
+    """A session is live while open, its actor holds a role, and its actor is human, has a guard, or is effectively auto."""
+    return (bool(sess) and sess["open"] and role_of(state, sess["actor"]) in READ_ROLES
+            and (sess["human"] or "guard" in sess or effective_mode(state, sess) == "auto"))
 
 def session_access(state, actor, session_id) -> dict:
     """P-15: what `actor` may do with a live session: watch its output, read its full context, steer it.
     The session's own actor always has all three. A level of "nobody" grants nothing to anyone else."""
     s = state["sessions"].get(session_id)
     if not live(state, s): return {"watch": False, "read": False, "steer": False}
-    if actor == s["actor"]: return {"watch": True, "read": True, "steer": True}
+    if actor == s["actor"] or actor == s.get("guard"): return {"watch": True, "read": True, "steer": True}
     role = state["roles"].get(actor)
     out = {}
     for right in ("watch", "read", "steer"):
@@ -661,6 +674,9 @@ def _session_close(state, entry, ctx, role):
 def _session_input(state, entry, ctx, role):
     sess = state["sessions"].get(entry["body"]["session"])
     if not sess: return invalid("no such session")
+    if entry["body"].get("release"):
+        if state["held"].get(sess["actor"]) != entry["author"]: return deny("only the guard holding this agent releases it")
+        return ALLOW if role in READ_ROLES else deny("guard holds no role")
     if not live(state, sess): return deny("session not live")
     if not _accountable(state, ctx, entry["author"]): return deny("agent's operator confirmation withdrawn")
     if not session_access(state, entry["author"], entry["body"]["session"])["steer"]: return deny("no steer right on this session")
@@ -709,8 +725,6 @@ def fold(state, record, ctx) -> dict:
         parent = s["tasks"].get(b.get("parent")) if b.get("parent") else None
         t = {"author": author, "to": b["to"], "open": True, "state": "pending", "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0}
         if parent: t["parent"] = b["parent"]
-        tg = sorted(set(s["taint"].get(author, [])) | set(parent.get("guards", []) if parent else []))
-        if tg: t["guards"] = tg
         if "budget" in b:
             _debit(s, task_source(s, b.get("parent")), b["budget"]["amount"])
             t["budget"] = dict(b["budget"]); t["left"] = dict(b["budget"])
@@ -734,8 +748,7 @@ def fold(state, record, ctx) -> dict:
         if "cost" in b: eff["cost"] = dict(b["cost"])
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
-        g = guards_for(s, author, b.get("task"))
-        if g: eff["guards"] = g; eff["phase"] = "awaiting-approval"
+        if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
@@ -752,6 +765,7 @@ def fold(state, record, ctx) -> dict:
             chosen.append(a); c["approval"] = a["id"]
         for g in eff.get("guards", []):
             a = next((x for x in chosen if x["author"] == g), None) or guard_approval(s, eff, g, ctx)[1]
+            if a is None: continue                           # unreachable when decide allowed the claim
             if a not in chosen: chosen.append(a)
             c.setdefault("guardApprovals", []).append(a["id"])
         for a in chosen: a["consumedBy"] = eid
@@ -799,7 +813,8 @@ def fold(state, record, ctx) -> dict:
     elif kind == "space.move":
         s["home"] = b["to"]
     elif kind == "session.open":
-        s["sessions"][eid] = {"actor": author, "open": True, "opened": rc["time"], "steers": 0, "steerMode": b["steerMode"]}
+        s["sessions"][eid] = {"actor": author, "open": True, "opened": rc["time"], "steers": 0, "steerMode": b["steerMode"],
+                              "human": is_human(ctx, author)}
         if not is_human(ctx, author):
             p = ctx["profiles"][author]
             if p.get("operatorConfirmed") and p.get("operator"): s["sessions"][eid]["guard"] = p["operator"]
@@ -810,12 +825,9 @@ def fold(state, record, ctx) -> dict:
         sess = s["sessions"][b["session"]]
         sess["steers"] += 1
         x = sess["actor"]
-        if author == x: pass                                     # own input: no change
-        elif author == sess.get("guard"): s["taint"].pop(x, None)  # its human takes the wheel back: taint cleared
-        elif "guard" in sess:                                    # only agent sessions carry taint
-            add = set(s["taint"].get(author, []))                # relays carry their taint (humans have none)
-            if sess["steerMode"] != "auto": add.add(sess["guard"])
-            if add: s["taint"][x] = sorted(set(s["taint"].get(x, [])) | add)
+        if b.get("release"): s["held"].pop(x, None)                    # its human releases it, explicitly
+        elif author not in (x, sess.get("guard")) and "guard" in sess and effective_mode(s, sess) != "auto":
+            s["held"][x] = sess["guard"]                               # an outside steer: held for its human
     return s
 
 def _debit(s, src, amount):
@@ -841,7 +853,7 @@ def _credit(s, task_id, amount):
 def _fold_create(e, rc, ctx, eid):
     b, author, space = e["body"], e["author"], e["space"]
     base = {"space": space, "head": rc["seq"], "home": server_of(space), "policy": b["policy"], "roles": {}, "roleHistory": {},
-            "tasks": {}, "effects": {}, "sessions": {}, "taint": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
+            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
             "entries": {eid: {"author": author, "kind": "space.create"}}}
     if space.startswith("profile:"):
         actor = space[len("profile:"):]
