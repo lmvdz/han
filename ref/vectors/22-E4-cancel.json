@@ -203,7 +203,8 @@
     "body": {
      "proposal": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
@@ -248,7 +249,8 @@
     "body": {
      "proposal": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
@@ -364,7 +366,8 @@
     "body": {
      "proposal": "8d8ed36a8489cf8526e6ae183163d585bbc1d93a84200e00fb1c534fed658c90",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],

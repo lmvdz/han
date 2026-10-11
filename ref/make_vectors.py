@@ -74,8 +74,8 @@ def prop(id, author=P, action="git.push", cost=None, repeatable=False, task=None
     if task: b["task"] = task
     return E(id, "effect.propose", author, b)
 
-def claim(id, pr, attempt=1, author=X, instance="k1", key="k1"):
-    return E(id, "effect.claim", author, {"proposal": pr, "attempt": attempt, "instance": instance}, key=key)
+def claim(id, pr, attempt=1, author=X, instance="k1", key="k1", window=30):
+    return E(id, "effect.claim", author, {"proposal": pr, "attempt": attempt, "instance": instance, "window": window}, key=key)
 
 def outc(id, cl, result, started, author=X, cost=None, key="k1"):
     b = {"claim": cl, "result": result, "started": started}
@@ -223,7 +223,7 @@ v.step(E("t5", "task", X, {"to": [M], "parent": "t4"}), "denied", note="depth 2 
 v.step(E("u1", "task.update", M, {"task": "t2", "state": "progress"}), "denied", note="not an assignee")
 v.step(E("c1", "task.cancel", X, {"task": "t2"}), "denied", note="not asker or owner")
 v.step(E("c2", "task.cancel", M, {"task": "t2"}), "allow", check={"tasks.t2.cancelRequested": True, "tasks.t2.open": True})
-v.step(E("u2", "task.update", P, {"task": "t2", "state": "cancelled"}), "allow", check={"tasks.t2.open": False})
+v.step(E("u2", "task.update", P, {"task": "t2", "state": "cancelled"}), "allow", check={"tasks.t2.open": False, "tasks.t2.state": "cancelled"})
 v.step(E("u3", "task.update", P, {"task": "t2", "state": "progress"}), "denied", note="closed")
 add(v.done())
 
@@ -398,7 +398,7 @@ v.step(prop("pr"), "allow")
 F = "f1:b.example"
 v.step(E("FC", "space.create", P, {"policy": policy(), "forkOf": {"space": S, "through": 5}}, space=F), "allow",
        check={"roles": {P: "owner"}, "effects": {}}, note="new space; check applies to it")
-v.step(E("fx", "effect.claim", X, {"proposal": "pr", "attempt": 1, "instance": "k1"}, space=F), "invalid", note="parent proposal not in fork")
+v.step(E("fx", "effect.claim", X, {"proposal": "pr", "attempt": 1, "instance": "k1", "window": 30}, space=F), "invalid", note="parent proposal not in fork")
 add(v.done())
 
 
@@ -602,7 +602,8 @@ add(v.done())
 
 v = V("launch-window-is-policy", ["P-09", "X-04"], "the abandon threshold follows policy.launchWindow")
 team(v, policy(launchWindow=120))
-v.step(prop("p"), "allow").step(claim("c", "p"), "allow", at=100)
+v.step(prop("p"), "allow").step(claim("cw", "p", window=30), "denied", at=99, note="the claim must state the space's window")
+v.step(claim("c", "p", window=120), "allow", at=100)
 v.step(outc("a0", "c", "unknown", "unknown", author=O), "denied", at=224, note="abandon_after(120) = ⌈120·1.01/0.99⌉ + 2 = 125 s")
 v.step(outc("a1", "c", "unknown", "unknown", author=O), "allow", at=225)
 add(v.done())
@@ -618,7 +619,7 @@ add(v.done())
 # ── round-5 vectors: findings of review round 4 ──
 v = V("window-pinned-in-claim", ["P-09", "X-04"], "shortening launchWindow after a claim doesn't shorten that claim's abandon wait")
 team(v, policy(launchWindow=3600))
-v.step(prop("p"), "allow").step(claim("c", "p"), "allow", at=100, check={"effects.p.claims.0.window": 3600})
+v.step(prop("p"), "allow").step(claim("c", "p", window=3600), "allow", at=100, check={"effects.p.claims.0.window": 3600})
 v.step(E("ps", "policy.set", O, {"policy": policy(launchWindow=15)}), "allow", at=101)
 v.step(outc("a0", "c", "unknown", "unknown", author=O), "denied", at=117, note="the claim was made under a 3600 s window")
 v.step(outc("a0b", "c", "unknown", "unknown", author=O), "denied", at=100 + 3674, note="abandon_after(3600) = 3675 s")
@@ -685,6 +686,71 @@ v.step(ms("g", O, G, "guest"), "allow")
 v.step(E("x1", "doc.version", G, {}), "denied", note="default minimum role is member")
 v.step(E("ps", "policy.set", O, {"policy": policy(extensionsMinRole="guest")}), "allow")
 v.step(E("x2", "doc.version", G, {}), "allow")
+add(v.done())
+
+# ── round-7 vectors: findings of review round 6 ──
+AG = {"actorKind": "agent", "operator": OP, "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
+XS = dict(human(), actorKind="service", operatorConfirmed=True)
+
+v = V("operator-withdrawn-before-claim", ["P-07 E2", "P-03"], "if an agent's operator withdraws between its proposal and the claim, the claim is denied")
+v.prof(BOT, AG).prof(X, XS)
+team(v, policy(allowAgents="with-operator"))
+v.step(ms("b", O, BOT, "member"), "allow").step(prop("p", author=BOT), "allow")
+v.step(claim("c", "p"), "denied", profiles={BOT: dict(AG, operatorConfirmed=False)})
+add(v.done())
+
+v = V("owners-are-human", ["P-03"], "an agent or service can't be made an owner")
+v.prof(BOT, AG)
+team(v)
+v.step(ms("b", O, BOT, "member"), "allow").step(ms("b2", O, BOT, "owner"), "denied")
+add(v.done())
+
+v = V("no-closing-over-running-effects", ["P-05"], "an assignee can't close a task while an effect charged to it is claimed or unknown; an owner can force-close")
+team(v)
+v.step(E("t", "task", O, {"to": [P]}), "allow").step(prop("p", task="t"), "allow").step(claim("c", "p"), "allow")
+v.step(E("d0", "task.update", P, {"task": "t", "state": "done"}), "denied")
+v.step(outc("o", "c", "succeeded", "yes"), "allow").step(E("d1", "task.update", P, {"task": "t", "state": "done"}), "allow")
+add(v.done())
+
+v = V("agents-off-stops-agents", ["P-03"], "switching allowAgents to none stops agents already in the space from proposing")
+v.prof(BOT, AG)
+team(v)
+v.step(ms("b", O, BOT, "member"), "allow").step(prop("p1", author=BOT), "allow")
+v.step(E("ps", "policy.set", O, {"policy": policy(allowAgents="none")}), "allow").step(prop("p2", author=BOT), "denied")
+add(v.done())
+
+v = V("cant-deny-own-home", ["P-11"], "a policy.set can't deny the home's own server or every owner's server")
+team(v)
+v.step(E("ps0", "policy.set", O, {"policy": policy(servers={"deny": ["a.example"]})}), "denied")
+v.step(E("ps1", "policy.set", O, {"policy": policy(servers={"deny": ["d.example"]})}), "allow")
+v.step(E("mv", "space.move", O, {"to": "host.example", "accept": ACCEPT}), "allow")
+v.step(E("ps2", "policy.set", O, {"policy": policy(servers={"deny": ["host.example"]})}), "denied", note="the home is host.example, which no owner is on")
+add(v.done())
+
+v = V("abandon-never-rereadies", ["P-09"], "an owner's abandon leaves even a repeatable effect unknown; only the executor's own unknown re-readies it")
+team(v)
+v.step(prop("p", repeatable=True), "allow").step(claim("c", "p"), "allow", at=100)
+v.step(outc("ab", "c", "unknown", "unknown", author=O), "allow", at=133, check={"effects.p.phase": "unknown"})
+add(v.done())
+
+v = V("open-approvals-capped", ["P-08", "P-01"], "at most 16 unconsumed approvals per proposal")
+team(v, policy(approvals=[{"action": "*", "approvers": ["owner", "member"]}]))
+v.step(prop("p"), "allow")
+for i in range(16):
+    v.step(appr(f"a{i}", "p", author=O if i % 2 else M), "allow")
+v.step(appr("a16", "p"), "denied")
+add(v.done())
+
+v = V("missing-references-invalid", ["R-05", "P-05"], "a body reference to an entry that isn't in the space is invalid, not denied")
+team(v)
+v.step(E("t", "task", M, {"to": [P], "parent": hashlib.sha256(b"nope-task").hexdigest()}), "invalid")
+v.step(prop("p", task=hashlib.sha256(b"nope-task2").hexdigest()), "invalid")
+add(v.done())
+
+v = V("repeatable-cancelled-started", ["P-09"], "a repeatable effect stopped partway (cancelled, started:yes) with no cancel requested goes back to ready")
+team(v)
+v.step(prop("p", repeatable=True), "allow").step(claim("c", "p"), "allow")
+v.step(outc("o", "c", "cancelled", "yes"), "allow", check={"effects.p.phase": "ready"})
 add(v.done())
 
 # ── R-01 id derivation ──

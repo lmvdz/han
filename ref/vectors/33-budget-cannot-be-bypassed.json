@@ -240,7 +240,8 @@
     "body": {
      "proposal": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],

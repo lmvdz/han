@@ -57,7 +57,9 @@ def random_entry(r, state, n):
         "effect.approve": lambda: dict({"proposal": pick(effects, H("nope")), "planDigest": H("plan")},
                                        **({"expiresAt": r.choice([(BASE + timedelta(seconds=r.randint(0, 3000))).strftime("%Y-%m-%dT%H:%M:%SZ"),
                                                                   "2026-13-45T99:99:99Z", "2026-02-30T00:00:00Z"])} if r.random() < .3 else {})),
-        "effect.claim": lambda: {"proposal": pick(effects, H("nope")), "attempt": r.randint(1, 3), "instance": "k1"},
+        "effect.claim": lambda: (lambda pid: {"proposal": pid, "instance": "k1",
+                                 "attempt": (len(state["effects"][pid]["claims"]) + 1 if pid in state["effects"] and r.random() < .85 else r.randint(1, 3)),
+                                 "window": state["policy"]["launchWindow"] if r.random() < .9 else r.choice([15, 30, 60])})(pick(effects, H("nope"))),
         "effect.cancel": lambda: {"proposal": pick(effects, H("nope"))},
         "effect.outcome": lambda: dict({"claim": pick(claims, H("nope")), "result": r.choice(["succeeded", "failed", "cancelled", "unknown"]),
                                         "started": r.choice(["yes", "no", "unknown"])}, **({"cost": cost} if r.random() < .4 else {})),
@@ -92,6 +94,8 @@ def check_state(s, prev):
         if old and old["phase"] in P.FINAL and e["phase"] != old["phase"]: errs.append(f"final phase changed {old['phase']}→{e['phase']}")
     return errs
 
+CLAIMS = [0]
+
 def run(seed, steps):
     r = random.Random(seed)
     t = 0
@@ -100,6 +104,12 @@ def run(seed, steps):
               "contentHash": "", "refs": [], "seen": 0, "nonce": "c", "time": "2026-10-10T12:00:00Z"}
     ctx = {"time": BASE.strftime("%Y-%m-%dT%H:%M:%SZ"), "profiles": {a: profile(a) for a in ACTORS}}
     state = P.fold(None, {"entry": create, "content": None, "receipt": {"seq": 1, "time": ctx["time"]}}, ctx)
+    for i, a in enumerate([M, PR, X, BOT, G]):            # a populated room, so the effect lifecycle is reachable
+        ms = {"id": H(f"setup{i}"), "v": 1, "space": S, "kind": "member.set", "author": O, "keyId": "k1",
+              "body": {"actor": a, "role": "guest" if a == G else "member"}, "contentHash": "", "refs": [], "seen": 0,
+              "nonce": f"s{i}", "time": "2026-10-10T12:00:00Z"}
+        if P.decide(state, ms, ctx)["allow"]:
+            state = P.fold(state, {"entry": ms, "content": None, "receipt": {"seq": state["head"] + 1, "time": ctx["time"]}}, ctx)
     allowed = 0
     for n in range(steps):
         t += r.choice([0, 1, 5, 20, 45])
@@ -122,6 +132,7 @@ def run(seed, steps):
         errs = check_state(new, state)
         if errs: return f"seed {seed} step {n}: after {e['kind']} {e['body']}: {errs}", allowed
         state = new; allowed += 1
+        if e["kind"] == "effect.claim": CLAIMS[0] += 1
     return None, allowed
 
 def main():
@@ -133,7 +144,7 @@ def main():
         total += allowed
         if err:
             print("FAIL", err); return 1
-    print(f"{seeds} seeds × {steps} steps: {total} allowed entries folded; decide/fold total, pure, budgets within bounds, final phases stable")
+    print(f"{seeds} seeds × {steps} steps: {total} allowed entries folded ({CLAIMS[0]} claims); decide/fold total, pure, budgets within bounds, final phases stable")
     return 0
 
 if __name__ == "__main__":

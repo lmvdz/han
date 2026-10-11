@@ -12,6 +12,8 @@ This repository starts at its first public commit. The work before it was not un
 
 ## v1 rounds (2026-10-10 → 2026-10-11)
 
+HAN was first published as v1 round 6 (tag `v1-draft-r6`). In round 7 its scope narrowed to the part that is new: making agent actions safe. Federated chat is left to networks like Matrix that already do it well.
+
 Each round was graded by a fresh, independent reviewing agent against the same fixed rubric ([grading-rubric.md](grading-rubric.md)), with no stake in the score.
 
 | Round | Independent score | What changed |
@@ -22,5 +24,6 @@ Each round was graded by a fresh, independent reviewing agent against the same f
 | 4 | 71.6 | Simpler budgets; deadlines measured on the executor's own clock; fold-totality fuzzer, which found a budget-accounting defect |
 | 5 | 74.1 | Forced takeover after home death removed from the core (forks instead); window pinned in each claim; per-space blob supply; content validation |
 | 6 | 76.6 | Abandon margin proven for two-sided clock drift (model with clock rates); signed move acceptance; signed redaction proofs; private gossip; signal relay |
+| 7 | (pending) | **Repositioned as the agent-safety layer over existing chat transports (Matrix first).** Chat, presence, files and invites move to the transport, and the core shrinks to the sequencer (3 calls), Policy, Identity, verification and the executor. Fixes: claims state their window, owners are human, operator withdrawal is checked at claim, abandon needs elapsed sequencer time, assignees can't close tasks with running effects. |
 
 The full defect lists from each review drove the next round. Defects the executable checks found on their own are listed in [architecture.md §10](architecture.md).

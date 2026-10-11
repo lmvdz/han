@@ -52,7 +52,8 @@ def validate_header(entry: dict) -> str | None:
 MIME = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$")
 def _str(n): return lambda v: isinstance(v, str) and len(v.encode("utf-8")) <= n
 def _blobref(v):
-    return (isinstance(v, dict) and set(v) == {"hash", "size", "type"} and P._hex(v["hash"]) and P._int(v["size"])
+    return (isinstance(v, dict) and {"hash", "size", "type"} <= set(v) <= {"hash", "size", "type", "uri"}
+            and ("uri" not in v or (isinstance(v["uri"], str) and len(v["uri"].encode("utf-8")) <= 1024)) and P._hex(v["hash"]) and P._int(v["size"])
             and v["size"] <= 4 * 2**30 and isinstance(v["type"], str) and bool(MIME.match(v["type"])))
 def _blobs(v): return isinstance(v, list) and len(v) <= 64 and all(_blobref(b) for b in v)
 def _links(v): return isinstance(v, list) and len(v) <= 64 and all(

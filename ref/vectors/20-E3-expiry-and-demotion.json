@@ -220,7 +220,8 @@
     "body": {
      "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
@@ -306,7 +307,8 @@
     "body": {
      "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
@@ -351,7 +353,8 @@
     "body": {
      "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
      "attempt": 1,
-     "instance": "k1"
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],

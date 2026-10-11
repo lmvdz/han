@@ -3,7 +3,7 @@
 Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1: **kept** (same guarantee, different mechanism), **moved** (now private to a module or an extension), or **dropped** (with the reason).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
-## Invariants (12/12 kept)
+## Invariants (12/12 accounted for: 10 kept, 2 kept with a stated qualification)
 
 | v0.4 | Meaning | v1 mechanism | Checked by |
 |---|---|---|---|
@@ -37,7 +37,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | events.unsubscribe | close the stream | kept |
 | events.snapshot | `read(…, {state:true})` | **weakened:** a state too large for one frame is refused with `limit`, and the reader replays records instead |
 | view.get / subscribe / resync / unsubscribe | `views` extension over `signal`; truth via `read` | moved |
-| document.open / sync.exchange | `doc` extension | moved |
+| document.open / sync.exchange | **dropped from the v1 core:** shared documents are the transport's (e.g. Matrix rooms and files) or a future extension | dropped |
 | presence.update / subscribe / unsubscribe | `signal` + following the space | kept |
 | artifact.begin / write / commit | `blobPut(ref, offset, bytes)`; complete when the hash matches | kept |
 | artifact.read | `blobGet` | kept |
@@ -50,13 +50,13 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | context.create | `space.create` | kept |
 | conversation.create | `space.create` + `member.set` (agent) + `task` | kept |
 | grant.set / grant.revoke | `member.set`, `policy.set` | **narrowed:** v0.4 per-resource grants with delegation narrowing become four fixed roles plus per-action approvals. To narrow access, use a smaller space. Reason: one permission unit per space keeps Policy a small pure function (R-11). |
-| agent.submit | `task` (or `message` with `to`) | kept |
+| agent.submit | `task` (or `message` with `to`) | kept. v0.4's "final result requires known outcomes" is kept by P-05: an assignee can't close a task while an effect charged to it is claimed or unknown. |
 | operation.execute | `effect.propose` → `effect.approve` → `effect.claim` → `effect.outcome` | kept |
 | approval.decide | `effect.approve`; a refusal is `effect.cancel` | kept |
 | submission.withdraw / run.cancel | `task.cancel` | kept |
 | operation.cancel | `effect.cancel` | kept |
 | workspace.ensure / suspend / resume / destroy | effects with `action: workspace.*` on the owning executor | moved |
-| checkpoint.create | snapshot effects per executor, then `checkpoint` | kept |
+| checkpoint.create | snapshot effects per executor, then `checkpoint` | **weakened:** a `checkpoint` is a member's list of blobs; v0.4's "complete verified dependency manifest" is not checked by the protocol |
 | checkpoint.restore | effect `action: restore` naming the checkpoint blobs | kept |
 | context.fork | `space.create` with `forkOf` (P-13) | kept |
 | context.publish | effect `action: publish`. The stale-target compare-and-swap moves into the plan: `plan.args` carries the expected target version, and the executor reports `failed` (`started: "no"`) on mismatch. **Weakened:** this is an executor obligation, not a protocol-enforced check. | weakened |

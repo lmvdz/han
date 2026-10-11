@@ -27,6 +27,7 @@ def abandon_after(window: int, drift_ppm: int = None) -> int:
 READ_ROLES = ("owner", "member", "guest")
 FINAL = ("succeeded", "failed", "cancelled")
 TASK_FINAL = ("done", "failed", "declined", "cancelled")
+MAX_OPEN_APPROVALS = 16       # unconsumed approvals per proposal (bounds receipt.profiles, P-01)
 
 # ───────────────────────── encoding ─────────────────────────
 def _jcs_str(s: str) -> str:
@@ -144,7 +145,8 @@ SCHEMA = {
                        "planDigest": (_hex, True), "cost": (_budget, False), "repeatable": (lambda v: isinstance(v, bool), True), "task": (_id, False),
                        "expiresAt": (_time, False)},
     "effect.approve": {"proposal": (_id, True), "planDigest": (_hex, True), "expiresAt": (_time, False)},
-    "effect.claim": {"proposal": (_id, True), "attempt": (lambda v: _int(v) and v >= 1, True), "instance": (_keyid, True)},
+    "effect.claim": {"proposal": (_id, True), "attempt": (lambda v: _int(v) and v >= 1, True), "instance": (_keyid, True),
+                     "window": (lambda v: _int(v) and 15 <= v <= 3600, True)},
     "effect.cancel": {"proposal": (_id, True)},
     "effect.outcome": {"claim": (_id, True), "result": (lambda v: v in ("succeeded", "failed", "cancelled", "unknown"), True),
                        "started": (lambda v: v in ("yes", "no", "unknown"), True), "cost": (_budget, False)},
@@ -231,7 +233,7 @@ def approval_candidates(state, eff, time):
         out.append(a)
     return out
 
-def relevant_actors(state, entry) -> list[str]:
+def relevant_actors(state, entry, time=None) -> list[str]:
     """P-01: actors whose profiles the receipt must pin: the author; the target of member.set; for a claim, the proposer
     and the author of every approval candidate (E3 order, without the time filter)."""
     out = [entry["author"]]
@@ -242,7 +244,7 @@ def relevant_actors(state, entry) -> list[str]:
         eff = state["effects"].get(b["proposal"])
         if eff:
             out.append(eff["proposer"])
-            out.extend(a["author"] for a in approval_candidates(state, eff, None))
+            out.extend(a["author"] for a in approval_candidates(state, eff, time))
     return list(dict.fromkeys(out))
 
 
@@ -291,7 +293,8 @@ def decide(state, entry, ctx) -> dict:
     err = validate(entry)
     if err: return invalid(err)
     kind, author = entry["kind"], entry["author"]
-    for actor in relevant_actors(state, entry):
+    ra = relevant_actors(state, entry, ctx["time"])
+    for actor in (ra[:2] if kind == "effect.claim" else ra):
         if actor not in ctx["profiles"]: return invalid(f"no pinned profile for {actor}")
     if key_status(ctx, author, entry["keyId"]) != "valid": return deny("author key not valid")
 
@@ -356,6 +359,7 @@ def _member_set(state, entry, ctx, role):
     owners = [a for a, r in state["roles"].items() if r == "owner"]
     if cur == "owner" and new != "owner" and len(owners) == 1: return deny("would leave zero owners")
     if new in READ_ROLES and server_of(tgt) in pol["servers"]["deny"]: return deny("target server denied")
+    if new == "owner" and ctx["profiles"][tgt]["actorKind"] != "human": return deny("owners must be human")
     if new in READ_ROLES and cur not in READ_ROLES:
         prof = ctx["profiles"][tgt]
         if prof["actorKind"] != "human":
@@ -369,6 +373,9 @@ def _member_set(state, entry, ctx, role):
 
 def _policy_set(state, entry, ctx, role):
     if role != "owner": return deny("owners only")
+    deny_list = entry["body"]["policy"]["servers"]["deny"]
+    if state["home"] in deny_list: return deny("can't deny the home's own server")
+    if all(server_of(a) in deny_list for a, r in state["roles"].items() if r == "owner"): return deny("can't deny every owner's server")
     if not budget_change_ok(state, entry["body"]["policy"]["budget"]): return deny("budget unit can't change while reservations exist")
     return ALLOW
 
@@ -382,7 +389,8 @@ def _task(state, entry, ctx, role):
         if role_of(state, a) not in READ_ROLES: return deny("assignee holds no role")
     parent = state["tasks"].get(b["parent"]) if "parent" in b else None
     if "parent" in b:
-        if not parent or not parent["open"]: return deny("parent not an open task here")
+        if not parent: return invalid("no such parent task")
+        if not parent["open"]: return deny("parent task closed")
         if author not in parent["to"]: return deny("only an assignee may delegate")
         if parent["depth"] + 1 > state["policy"]["maxDelegationDepth"]: return deny("delegation too deep")
         if parent.get("left") and "budget" not in b: return deny("child of a budgeted task needs a budget")
@@ -404,8 +412,12 @@ def _task_update(state, entry, ctx, role):
     if not t: return invalid("no such task")
     if not t["open"]: return deny("task closed")
     if role not in READ_ROLES: return deny("author holds no role")
-    if entry["author"] in t["to"]: return ALLOW
-    if role == "owner" and entry["body"]["state"] in TASK_FINAL: return ALLOW                # owner force-close (P-05)
+    final = entry["body"]["state"] in TASK_FINAL
+    if role == "owner" and final and entry["author"] not in t["to"]: return ALLOW         # owner force-close (P-05)
+    if entry["author"] in t["to"]:
+        if final and any(e.get("task") == entry["body"]["task"] and e["phase"] in ("claimed", "unknown") for e in state["effects"].values()):
+            return deny("task has effects still running or of unknown outcome")
+        return ALLOW
     return deny("only assignees update")
 
 def _task_cancel(state, entry, ctx, role):
@@ -421,7 +433,8 @@ def _propose(state, entry, ctx, role):
     if role not in ("owner", "member"): return deny("not allowed to propose")
     if "task" in b:
         t = state["tasks"].get(b["task"])
-        if not t or not t["open"]: return deny("task not open")
+        if not t: return invalid("no such task")
+        if not t["open"]: return deny("task not open")
         if author not in t["to"] and role != "owner": return deny("only an assignee or owner charges a task")
     unit = space_unit(state)
     if unit and ("cost" not in b or b["cost"]["unit"] != unit): return deny("budgeted space: cost in the space's unit required")
@@ -437,7 +450,9 @@ def _budgeted_tasks_of(state, actor):
 def _accountable(state, ctx, actor):
     """P-03: under allowAgents "with-operator", a non-human actor needs a confirmed operator at every propose/claim/budget draw."""
     p = ctx["profiles"][actor]
-    return p["actorKind"] == "human" or state["policy"]["allowAgents"] != "with-operator" or bool(p.get("operatorConfirmed"))
+    if p["actorKind"] == "human": return True
+    if state["policy"]["allowAgents"] == "none": return False
+    return state["policy"]["allowAgents"] != "with-operator" or bool(p.get("operatorConfirmed"))
 
 def _approve(state, entry, ctx, role):
     b, author = entry["body"], entry["author"]
@@ -448,6 +463,8 @@ def _approve(state, entry, ctx, role):
     rule = approval_rule(state["policy"], eff["action"])
     if not rule or not may_approve(state, rule, author): return deny("not an approver for this action")
     if state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")
+    if sum(1 for a in eff["approvals"] if not a.get("consumedBy") and not a.get("dropped")) >= MAX_OPEN_APPROVALS:
+        return deny("too many open approvals")
     return ALLOW
 
 def pick_approval(state, eff, ctx):
@@ -468,6 +485,8 @@ def _claim(state, entry, ctx, role):
     if eff.get("expiresAt") and ts(eff["expiresAt"]) <= ts(ctx["time"]): return deny("E5 proposal expired")
     if role_of(state, eff["proposer"]) not in ("owner", "member") or key_status(ctx, eff["proposer"], eff["proposerKey"]) != "valid":
         return deny("E2 proposer no longer authorized")
+    if not _accountable(state, ctx, eff["proposer"]): return deny("E2 proposer's operator confirmation withdrawn")
+    if b["window"] != state["policy"]["launchWindow"]: return deny("E5 claim's window is not the space's launchWindow")
     if approval_rule(state["policy"], eff["action"]):
         res, _ = pick_approval(state, eff, ctx)
         if res == "unpinned": return invalid("approver profile not pinned")
@@ -583,7 +602,7 @@ def fold(state, record, ctx) -> dict:
                 eff["phase"] = "ready"
     elif kind == "task":
         parent = s["tasks"].get(b.get("parent")) if b.get("parent") else None
-        t = {"author": author, "to": b["to"], "open": True, "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0}
+        t = {"author": author, "to": b["to"], "open": True, "state": "pending", "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0}
         if parent: t["parent"] = b["parent"]
         if "budget" in b:
             _debit(s, task_source(s, b.get("parent")), b["budget"]["amount"])
@@ -591,6 +610,7 @@ def fold(state, record, ctx) -> dict:
         s["tasks"][eid] = t
     elif kind == "task.update":
         t = s["tasks"][b["task"]]
+        t["state"] = b["state"]
         if b["state"] in TASK_FINAL:
             t["open"] = False
             if t.get("left"):
@@ -616,7 +636,7 @@ def fold(state, record, ctx) -> dict:
         if eff["phase"] == "awaiting-approval": eff["phase"] = "ready"
     elif kind == "effect.claim":
         eff = s["effects"][b["proposal"]]
-        c = {"id": eid, "attempt": b["attempt"], "instance": b["instance"], "time": rc["time"], "window": s["policy"]["launchWindow"]}
+        c = {"id": eid, "attempt": b["attempt"], "instance": b["instance"], "time": rc["time"], "window": b["window"]}
         if approval_rule(s["policy"], eff["action"]):
             _, a = pick_approval(s, eff, ctx)
             a["consumedBy"] = eid; c["approval"] = a["id"]
@@ -640,7 +660,7 @@ def fold(state, record, ctx) -> dict:
                     if a["id"] == c["approval"]: a.pop("consumedBy", None)
             eff["phase"] = "cancelled" if eff["cancelRequested"] else "ready"
         elif b["result"] == "unknown":
-            if eff["repeatable"] and not eff["cancelRequested"]:
+            if eff["repeatable"] and not eff["cancelRequested"] and author == eff["executor"]:
                 _settle(s, c, None)                    # charged in full, then retry
                 eff["phase"] = "ready"
             else:
