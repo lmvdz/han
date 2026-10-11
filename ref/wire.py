@@ -25,6 +25,10 @@ def secs(t: str) -> int:
     """Seconds since the epoch of a HAN Time string."""
     return int(datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp())
 
+def fmt(sec: int) -> str:
+    """A HAN Time string for seconds since the epoch."""
+    return datetime.datetime.fromtimestamp(sec, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 def b64(b: bytes) -> str: return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 def unb64(s: str) -> bytes: return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
@@ -243,13 +247,12 @@ class Home:
             head = S["records"][-1]["receipt"]
             if not verify_accept(self.server_keys, entry["body"]["to"], entry["body"]["accept"], sp, head, now):
                 return "invalid", "no valid acceptance from the target server"
-        need = P.relevant_actors(state, dict(entry, id=eid))                # 4 profiles (all of P-01)
-        if any(a not in profiles for a in need): return "unavailable", "profile"
-        pinned = {a: profiles[a] for a in need}
+        pinned = self.pin(state, dict(entry, id=eid), profiles, now)        # 4 profiles (P-01: candidates up to the first valid key)
+        if pinned is None: return "unavailable", "profile"
         if not verify_entry(entry, profiles[entry["author"]]): return "invalid", "signature"          # 5
         if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"
         ctx = {"time": now, "profiles": pinned}
-        wait = self.abandon_wait(state, entry, now)                         # R-16: an early owner abandon is `unavailable`, not `denied`
+        wait = self.abandon_wait(state, entry, eid, pinned, now)                       # R-16: an early owner abandon is `unavailable`, not `denied`
         if wait > 0 and not skip_policy: return "unavailable", {"reason": "abandon before the launch window closed (R-16)", "retryAfterMs": int(wait * 1000)}
         if not skip_policy:                                                 # 6
             d = P.decide(state, dict(entry, id=eid), ctx)
@@ -281,24 +284,41 @@ class Home:
         if self.steady: self.run_start = self.steady()
         self.claim_steady = {}
 
-    def abandon_wait(self, state, entry, now):
-        """R-16, P-09: seconds an owner's abandon must still wait (0 if it isn't an early abandon). The abandon is early if either
-        this home's steady clock shows less than A since it ordered the claim (or since this run began), or the receipt time it
-        would get is less than claim.time + A."""
+    def pin(self, state, entry, profiles, now):
+        """P-01: pin the author, the target, the proposer and the guards, and the approval candidates in E3 order up to and
+        including the first whose signing key is valid. Later candidates are not required. None if a required view is missing."""
+        need = P.relevant_actors(state, entry, now)
+        required, cand = {entry["author"]}, {}
+        if entry["kind"] == "member.set": required.add(entry["body"]["actor"])
+        eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
+        if eff:
+            required |= {eff["proposer"], *P.guards_of(state, eff)}
+            cand = {a["author"]: a["keyId"] for a in P.approval_candidates(state, eff, now)}
+        pinned, found_valid = {}, False
+        for a in need:
+            if found_valid and a not in required: continue
+            if a not in profiles: return None
+            pinned[a] = profiles[a]
+            if a in cand and P.key_status({"profiles": profiles}, a, cand[a]) == "valid": found_valid = True
+        return pinned
+
+    def abandon_wait(self, state, entry, eid, pinned, now):
+        """R-16, P-09: seconds an owner's abandon must still wait. Non-zero only if Policy would allow the entry at claim.time + A
+        (latest claim, phase `claimed`, right key and author): then it is early, by this home's steady clock (A since it ordered the
+        claim, or since this run began) or by the receipt time it would get. Anything else gets Policy's own verdict now."""
         b = entry["body"]
-        if not state or entry["kind"] != "effect.outcome" or b.get("result") != "unknown" or b.get("started") != "unknown": return 0
-        if state["roles"].get(entry["author"]) != "owner": return 0                  # not an owner: Policy's `denied`
-        for eff in state["effects"].values():
-            for c in eff["claims"]:
-                if c["id"] != b.get("claim"): continue
-                if entry["author"] == eff["executor"] and entry["keyId"] == c["instance"]: return 0       # the executor's own report
-                A = (c["window"] * 101 + 98) // 99 + 2                                                    # ceil(window*101/99) + 2
-                steady_wait = 0
-                if self.steady is not None:
-                    started = self.claim_steady.get(c["id"], self.run_start)
-                    steady_wait = A - (self.steady() - started)
-                return max(steady_wait, secs(c["time"]) + A - secs(now), 0)
-        return 0
+        if not state or entry["kind"] != "effect.outcome": return 0
+        _pid, eff, c = P.find_claim(state, b.get("claim"))
+        if not c: return 0
+        if entry["author"] == eff["executor"] and entry["keyId"] == c["instance"]: return 0       # the executor's own report
+        A = P.abandon_after(c["window"])
+        due = secs(c["time"]) + A
+        if not P.decide(state, dict(entry, id=eid), {"time": fmt(due), "profiles": pinned})["allow"]: return 0
+        steady_wait = 0
+        if self.steady is not None:
+            started = self.claim_steady.get(c["id"], self.run_start)
+            steady_wait = A - (self.steady() - started)
+        return max(steady_wait, due - secs(now), 0)
 
     def adopt(self, space, records, state):
         """Become home again after a move back (§7.3): take the verified chain and its state (from a mirror's replay),

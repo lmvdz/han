@@ -523,6 +523,66 @@ def _():
     m = mirror(); out = [m.ingest(r) for r in h.spaces[S]["records"]]
     return (a, b, forged) == ("invalid", "invalid", "ok") and not out[-1][0] and "forbidden" in out[-1][1], f"{a} {b} {forged} mirror={out[-1][1]}"
 
+# ── round 20: R-16 verdict class, P-01 pinning, P-02 on state at a past seq ──
+@scenario("an abandon that could never be allowed gets Policy's verdict now", "R-16, P-16", "`unavailable` only if Policy would allow the abandon at claim.time + A; a settled claim, an unknown claim and a non-owner get `denied`/`invalid` at once")
+def _():
+    wall, steady = [0], [0.0]
+    h, claim = claimed_home(wall, steady)
+    e, c = entry("effect.outcome", X, {"claim": claim, "result": "succeeded", "started": "yes"}); settled = h.append(e, c, profiles())[0]
+    steady[0], wall[0] = 5.0, 5
+    early_settled = abandon(h, claim)[0]                          # phase is `succeeded`: no later time makes it allowed
+    unknown = abandon(h, "0" * 64)[0]
+    h2, claim2 = claimed_home([0], [0.0])
+    open_early = abandon(h2, claim2)[0]                           # control: the same abandon on an open claim is merely early
+    return ((settled, early_settled, unknown, open_early) == ("ok", "denied", "invalid", "unavailable"),
+            f"settled={settled} abandon-of-settled={early_settled} unknown-claim={unknown} open={open_early}")
+
+def approved_home(approvers=("owner", "member")):
+    """A home with a proposal of X approved first by O, then by Z (a member on another server); returns (home, proposal id)."""
+    h = base_home()
+    for kind, author, body in [("policy.set", O, {"policy": dict(POLICY, approvals=[{"action": "git.push", "approvers": list(approvers)}])}),
+                               ("member.set", O, {"actor": Z, "role": "member"})]:
+        e, c = entry(kind, author, body); assert h.append(e, c, profiles())[0] == "ok"
+    plan = {"action": "git.push", "target": "repo"}
+    body = {"executor": X, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}
+    e, c = entry("effect.propose", M, body, {"plan": plan}); assert h.append(e, c, profiles())[0] == "ok"
+    pid = W.entry_id(e)
+    for who in (O, Z):
+        e, c = entry("effect.approve", who, {"proposal": pid, "planDigest": body["planDigest"]}); code, r = h.append(e, c, profiles()); assert code == "ok", (code, r)
+    return h, pid
+
+@scenario("approvers are pinned up to the first valid key", "P-01, E3", "an unreachable later approver does not block a claim while an earlier candidate's key is valid; it does once every earlier candidate's key is revoked")
+def _():
+    out = {}
+    for name, revoked, with_z in [("first-valid", False, False), ("first-revoked-z-there", True, True), ("first-revoked-z-missing", True, False)]:
+        h, pid = approved_home()
+        if revoked: REVOKED.add((O, 2))
+        try:
+            p = profiles()
+            if revoked: p[O] = view(O, 2)
+            if not with_z: del p[Z]
+            e, c = entry("effect.claim", X, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30})
+            code, r = h.append(e, c, p)
+            out[name] = (code, sorted(r["profiles"]) if code == "ok" else r)
+            if name == "first-valid":
+                m = mirror(); out["mirror"] = all(m.ingest(rec)[0] for rec in h.spaces[S]["records"])
+        finally:
+            REVOKED.discard((O, 2))
+    want = {"first-valid": ("ok", sorted([X, M, O])), "first-revoked-z-there": ("ok", sorted([X, M, O, Z])),
+            "first-revoked-z-missing": ("unavailable", "profile"), "mirror": True}
+    return out == want, str(out)
+
+@scenario("a role held now reads the state at an earlier seq", "P-02, §3 read", "a member who joined at seq 3 reads the state after seq 2 (rights are judged on the current state); a stranger does not")
+def _():
+    h = base_home()                                               # 1 create, 2 member M, 3 member X
+    e, c = entry("message", M, {}, {"text": "later"}); h.append(e, c, profiles())
+    code, items = h.read(S, 0, X, state=True, at=2)
+    early = [i["record"]["receipt"]["seq"] for i in items if i["type"] == "record"]
+    state2 = items[0]["state"]
+    stranger = h.read(S, 0, Z, state=True, at=2)[0]
+    return (code == "ok" and state2["head"] == 2 and X not in state2["roles"] and early == [1, 2, 3, 4] and stranger == "denied",
+            f"{code} head={state2['head']} X-in-roles={X in state2['roles']} records={early} stranger={stranger}")
+
 def main():
     bad = 0
     for ok, name, rule, desc, detail in RESULTS:
