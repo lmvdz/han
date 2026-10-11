@@ -14,7 +14,7 @@ from han.core import P, W, LIMITS, WireError
 from han.seq import server as seqserver
 
 HAN_TS_LIMITS = {"maxFrameBytes", "maxHeaderBytes", "maxContentBytes", "maxBlobBytes", "maxBlobPartBytes", "maxBlobRangeBytes",
-                 "maxStreamItemBytes", "maxFollows", "maxClockSkewSeconds"}
+                 "maxStreamItemBytes", "maxFollows", "maxClockSkewSeconds", "maxStateItems"}
 
 class Raw:
     """A raw WebSocket to a han-seq: frames as the test writes them."""

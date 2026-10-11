@@ -80,6 +80,10 @@ async def test_session_steer_hold_and_release(env):
     await han(env, "ana", "session", "release", S, sid[:8])
     st = await han(env, "ana", "status", S)
     assert "held agents: none" in st and f"guarded agents: {bot} (guard {ana})" in st    # released, still guarded (sticky)
+    code, _, err = await han(env, "carol", "session", "release", S, sid, "--unguard", ok=False)       # E1: only the guard loosens
+    assert code == 1 and "denied" in err
+    await han(env, "ana", "session", "release", S, sid[:8], "--unguard")
+    assert "guarded agents: none" in await han(env, "ana", "status", S)                  # the operator loosened it
     bc = await env.client("bot")
     watcher = asyncio.create_task(han(env, "carol", "watch", S, sid[:8], "--count", "1", "--timeout", "30"))
     n = 0

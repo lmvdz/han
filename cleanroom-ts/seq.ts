@@ -23,7 +23,7 @@ const err = (code: ErrorCode, m: string, extra?: { retryAfterMs?: number; movedT
 
 export const LIMITS: Limits = {
   maxFrameBytes: 1310720, maxHeaderBytes: 16384, maxContentBytes: 65536, maxBlobBytes: 4294967296, maxBlobPartBytes: 786432,
-  maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60,
+  maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60, maxStateItems: 1000,
 };
 const CALLS = ["hello", "append", "read", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
 const READABLE = ["owner", "member", "guest"];
@@ -45,6 +45,7 @@ export interface SeqOptions {
   testClock?: { ms: number; base: number };
   peerUrls?: Record<string, string>;                // served in /.well-known/han-peers; default https://<server>/.well-known/han
   /** G-06: does this server take over hosting this space (a move handover)? Default yes. */
+  maxStateItems?: number;                           // test hook: `effects` and `tasks` per state page (default 1000)
   acceptHosting?: (space: string, from: string) => boolean;
 }
 
@@ -234,10 +235,7 @@ export class Sequencer {
     const state = sp?.state;
     // `seen ≤ head` and R-05 reference resolution are decided by Policy.decide (P-16 steps 5 and 1), in its order: after the author's key
     if (entry.kind === "space.move") this.checkAccept(sp, entry);
-    this.rateLimit(conn);
-    // R-08: never state a durability level we have not achieved; refuse what we can never provide
-    if (state && state.policy.minDurability === "replicated" && entry.kind !== "policy.set" && entry.kind !== "space.move") throw err("unavailable", "cannot reach the space's minDurability");
-    // 4. profiles
+    // 4. the author's profile and the signature, then the other relevant actors (the order of verdicts, E5)
     const time = this.now();
     const pins: Record<string, number> = {};
     const profiles: A = {};
@@ -248,7 +246,11 @@ export class Sequencer {
       pins[actor] = v.seq;
       if (!own) profiles[actor] = v;
     };
-    if (!state && isProfileSpace(entry.space)) { pin(entry.author); }
+    pin(entry.author);
+    const authorKeys0 = state?.profile !== undefined && entry.author === profileActorOf(state.space) ? state.profile.keys : profiles[entry.author]?.keys;
+    const k0 = authorKeys0?.[entry.keyId];
+    if (k0 && !verifyBytes(k0.publicKey, sigMessage(id), entry.sig)) throw err("invalid", "bad signature");
+    if (!state && isProfileSpace(entry.space)) { /* only the author */ }
     else {
       const plan = claimPinPlan(state, entry, time);
       if (plan) {
@@ -259,26 +261,28 @@ export class Sequencer {
     }
     // own-profile-space author: its view is the space's own state; record its seq as the head before this entry
     if (state?.profile !== undefined && entry.author === profileActorOf(state.space)) pins[entry.author] = state.head;
-    // 5. signature
-    const authorKeys = state?.profile !== undefined && entry.author === profileActorOf(state.space) ? state.profile.keys : profiles[entry.author]?.keys;
-    const k = authorKeys?.[entry.keyId];
-    if (k && !verifyBytes(k.publicKey, sigMessage(id), entry.sig)) throw err("invalid", "bad signature");
     // 6. policy, with the steady clock rounded down (R-03a)
     const ctx: PolicyCtx = { time, profiles };
     const d = decide(state, entry, ctx);
+    let earlyWait = 0;
     if (!d.allow) {
-      const wait = d.code === "denied" && entry.kind === "effect.outcome" && state ? this.earlyAbandonWait(state, entry, ctx) : 0;
-      if (wait > 0) throw err("unavailable", "an owner's abandon that is only early (R-16)", { retryAfterMs: wait });
-      throw err(d.code, d.reason);
+      earlyWait = d.code === "denied" && entry.kind === "effect.outcome" && state ? this.earlyAbandonWait(state, entry, ctx) : 0;
+      if (earlyWait <= 0) throw err(d.code, d.reason);
     }
-    if (entry.kind === "space.create" || entry.kind === "policy.set") {
-      if (entry.body.policy.minDurability === "replicated") throw err("unavailable", "this sequencer cannot provide minDurability replicated (R-08)");
-    }
+    // 6. rate limits, after Policy
+    this.rateLimit(conn);
+    // 7. the moment-dependent `unavailable`, in this order
+    if (earlyWait > 0) throw err("unavailable", "an owner's abandon that is only early (R-16)", { retryAfterMs: earlyWait });
+    // R-16: an owner's abandon needs A seconds of this process's steady clock since it ordered the claim
+    if (entry.kind === "effect.outcome" && state) this.checkAbandonElapsed(state, entry);
     // R-03a: receipt time never decreases
     const lastTime = sp?.lastTime ?? "";
     if (lastTime && time < lastTime) throw err("unavailable", "clock is behind the last receipt time; retry", { retryAfterMs: 1000 });
-    // R-16: an owner's abandon needs A seconds of this process's steady clock since it ordered the claim
-    if (entry.kind === "effect.outcome" && state) this.checkAbandonElapsed(state, entry);
+    // R-08: never state a durability level we have not achieved; refuse what we can never provide
+    if (state && state.policy.minDurability === "replicated" && entry.kind !== "policy.set" && entry.kind !== "space.move") throw err("unavailable", "cannot reach the space's minDurability");
+    if (entry.kind === "space.create" || entry.kind === "policy.set") {
+      if (entry.body.policy.minDurability === "replicated") throw err("unavailable", "this sequencer cannot provide minDurability replicated (R-08)");
+    }
     // 7. seq, prev, time, durability, profiles; sign
     const seq = (state?.head ?? 0) + 1;
     const prev = state ? receiptHash(sp!.records[state.head - 1].receipt as A) : "";
@@ -461,7 +465,8 @@ export class Sequencer {
 
   private onFrame(conn: Conn, text: string) {
     let f: A;
-    try { f = parseStrict(text); } catch (e) {
+    const big = { found: false };
+    try { f = parseStrict(text, big); } catch (e) {
       // D2: a frame that is not I-JSON: error with id 0, and the connection is closed
       conn.send({ id: 0, error: { code: "invalid", message: "frame does not parse as I-JSON" } });
       conn.ws.close(1007, "not I-JSON");
@@ -471,6 +476,13 @@ export class Sequencer {
     if (typeof f !== "object" || f === null || Array.isArray(f)) {
       conn.send({ id: 0, error: { code: "invalid", message: "frame is not an object" } });
       conn.ws.close(1007, "not an object");
+      return;
+    }
+    // an integer of 2^53 or more anywhere: `invalid` on the request's own id if that is usable (the connection stays open), else id 0 and a close
+    if (big.found) {
+      if (isInt(f.id) && f.id >= 1) return conn.send({ id: f.id, error: { code: "invalid", message: "integer of 2^53 or more" } });
+      conn.send({ id: 0, error: { code: "invalid", message: "integer of 2^53 or more" } });
+      conn.ws.close(1007, "integer out of range");
       return;
     }
     // D2: exactly {id, call, args}; id a positive integer, args an object. Otherwise an error on the request's own id (0 if unusable)
@@ -523,7 +535,7 @@ export class Sequencer {
     if (!verifyBytes(k.publicKey, helloMessage(conn.challenge, this.server), a.proof)) throw err("denied", "bad proof");
     const heads = this.headsFor(a.who, a.knownHeads);
     conn.who = a.who;
-    return { limits: LIMITS, durability: "local", time: this.now(), knownHeads: heads };
+    return { limits: this.opts.maxStateItems === undefined ? LIMITS : { ...LIMITS, maxStateItems: this.opts.maxStateItems }, durability: "local", time: this.now(), knownHeads: heads };
   }
 
   /** D1: a server with no record of a space answers `moved` (to the server in the space id) for every call naming it, unless it is that server (`not_found`). */
@@ -543,7 +555,7 @@ export class Sequencer {
   private doRead(conn: Conn, id: number, a: A) {
     try {
       const keys = Object.keys(a);
-      if (!("space" in a) || !("after" in a) || !keys.every((k) => ["space", "after", "follow", "state", "at", "limit", "knownHeads"].includes(k))) throw err("invalid", "read args");
+      if (!("space" in a) || !("after" in a) || !keys.every((k) => ["space", "after", "follow", "state", "at", "limit", "knownHeads", "cursor", "effect"].includes(k))) throw err("invalid", "read args");
       if (!isInt(a.after)) throw err("invalid", "after");
       if (a.follow !== undefined && typeof a.follow !== "boolean") throw err("invalid", "follow");
       if (a.state !== undefined && typeof a.state !== "boolean") throw err("invalid", "state");
@@ -556,13 +568,38 @@ export class Sequencer {
       let any = false;
       for (let s = 1; s <= st.head && !any; s++) if (canRead(st, who, s)) any = true;
       if (!any) throw err("not_found", "no such space");
+      if ((a.cursor !== undefined || a.effect !== undefined) && a.state !== true) throw err("invalid", "`cursor` and `effect` need state:true");
+      if (a.cursor !== undefined && (a.at !== undefined || a.effect !== undefined)) throw err("invalid", "`cursor` excludes `at` and `effect`");
+      if (a.effect !== undefined && (!isHex(a.effect) || a.at !== undefined)) throw err("invalid", "`effect` must be an effect id and excludes `at`");
+      if (a.cursor !== undefined && typeof a.cursor !== "string") throw err("invalid", "cursor");
       if (a.at !== undefined && (!a.state || !isInt(a.at) || a.at < 1 || a.at > st.head)) throw err("invalid", "`at` needs state:true and a seq in 1…head");
       const items: A[] = [];
+      if (a.state && (a.cursor !== undefined || a.effect !== undefined)) {
+        // one state item as the only item: a later page of effects and tasks, or one effect with the members a host needs
+        let page = 0, head = st.head;
+        if (a.cursor !== undefined) {
+          let c: A;
+          try { c = JSON.parse(Buffer.from(a.cursor, "base64url").toString("utf8")); } catch { throw err("invalid", "malformed cursor"); }
+          if (typeof c !== "object" || c === null || !isInt(c.h) || !isInt(c.p) || c.h < 1 || c.h > st.head || c.p < 1 || Buffer.from(JSON.stringify({ h: c.h, p: c.p })).toString("base64url") !== a.cursor) throw err("invalid", "malformed cursor");
+          head = c.h; page = c.p;
+        }
+        if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + (a.cursor === undefined ? "the head" : "the cursor's head"));
+        const full = (head === st.head ? st : this.stateAt(sp, head)) as A;
+        if (a.effect !== undefined) {
+          if (!(a.effect in full.effects)) throw err("not_found", "no such effect");
+          const v: A = {};
+          for (const k of ["space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents"]) v[k] = full[k];
+          v.effects = { [a.effect]: full.effects[a.effect] };
+          conn.send({ id, item: { type: "state", state: withSettled(v) } });
+        } else conn.send({ id, item: this.statePage(full, page) });
+        conn.send({ id, end: true });
+        return;
+      }
       if (a.state) {
         const at = a.at ?? st.head;       // with `at`: the StateView after record `at`, readable by whoever may read seq `at` (P-02)
         if (!canRead(st, who, at)) throw err("denied", "state needs read rights at " + (a.at === undefined ? "the head" : "`at`"));
         const { entries, ...view } = (at === st.head ? st : this.stateAt(sp, at)) as A;
-        items.push({ type: "state", state: withSettled(view) });
+        items.push(this.statePage(view, 0));
       }
       const heads = this.headsFor(who, a.knownHeads);
       if (a.knownHeads !== undefined) items.push({ type: "heads", heads });
@@ -570,7 +607,7 @@ export class Sequencer {
       const recs = probe.slice(0, limit), more = probe.length > limit;
       for (const it of items) {
         const text = JSON.stringify({ id, item: it });
-        if (text.length > LIMITS.maxFrameBytes) throw err("limit", "state too large for one frame; replay records instead");
+        if (text.length > LIMITS.maxFrameBytes && it.type !== "state") throw err("limit", "item too large for one frame");
         conn.send({ id, item: it });
       }
       for (const r of recs) conn.send({ id, item: { type: "record", record: r } });
@@ -579,6 +616,21 @@ export class Sequencer {
       void more;
       this.addSub(conn, id, sp.id, who, false);       // G-09: `read` with `follow` never carries signals
     } catch (e) { conn.send({ id, error: this.toWire(e) }); }
+  }
+  /** One page of a StateView: `effects` and `tasks` hold at most maxStateItems each (seq order); `next` is a cursor while more remain. */
+  private statePage(view: A, page: number): A {
+    const n = this.opts.maxStateItems ?? LIMITS.maxStateItems;
+    const v = withSettled(view);
+    delete v.entries;
+    let more = false;
+    for (const k of ["effects", "tasks"]) {
+      const ents = Object.entries(v[k] ?? {});
+      if (ents.length > (page + 1) * n) more = true;
+      v[k] = Object.fromEntries(ents.slice(page * n, (page + 1) * n));
+    }
+    const item: A = { type: "state", state: v };
+    if (more) item.next = Buffer.from(JSON.stringify({ h: v.head, p: page + 1 })).toString("base64url");
+    return item;
   }
   /** the SpaceState after record `at`, by replay */
   private stateAt(sp: Space, at: number): SpaceState {
@@ -746,7 +798,7 @@ export class Sequencer {
         if (ref && ref.size === a.ref.size && sess && sessionAccess(sp.state, who, sid).read && this.blobs.hasSupply(sess.actor, a.ref.hash, sp.id)) { allowed = true; break; }
       }
     }
-    if (!allowed && sp.state && canRead(sp.state, who, sp.state.head) && this.blobs.ownRecent(who, a.ref.hash)) allowed = true;   // D3: uploaders read their own blobs for 24 h, via a space they can read
+    if (!allowed && sp.state && canRead(sp.state, who, sp.state.head) && this.blobs.ownRecent(who, a.ref.hash, a.ref.size)) allowed = true;   // D3: uploaders read their own blobs for 24 h, via a space they can read
     if (!allowed) throw err("not_found", "no such blob for this reader and space");
     return this.blobs.get(a.ref.hash, a.offset ?? 0, a.length);
   }
@@ -831,6 +883,7 @@ export class Sequencer {
 import { newNonce as randomNonce } from "./keys.js";
 
 // ───────────── blob store (G-01) ─────────────
+const UPLOAD_INCOMPLETE_MAX = 2 * 1024 ** 3, UPLOAD_RECENT_MAX = 16 * 1024 ** 3;   // per uploader (G-01)
 class Blobs {
   private uploads = new Map<string, { size: number; type: string; chunks: Buffer[]; have: number }>();
   private complete = new Map<string, { size: number; type: string; at: number }>();   // uploader\nhash
@@ -851,6 +904,11 @@ class Blobs {
     const ref = a.ref, key = who + "\n" + ref.hash;
     const done = this.complete.get(key);
     if (done) { if (done.size !== ref.size) throw err("invalid", "size differs from the earlier upload"); return { have: done.size, complete: true }; }
+    // G-01: bound, per uploader, the bytes held in incomplete uploads and the completed bytes of the last 24 h; over the bound `limit`
+    let incomplete = 0, recent = 0;
+    for (const [k, v] of this.uploads) if (k.startsWith(who + "\n")) incomplete += v.have;
+    for (const [k, v] of this.complete) if (k.startsWith(who + "\n") && Date.now() - v.at < 24 * 3600 * 1000) recent += v.size;
+    if (incomplete + bytes.length > UPLOAD_INCOMPLETE_MAX || (!this.uploads.has(key) && recent + ref.size > UPLOAD_RECENT_MAX)) throw err("limit", "too many upload bytes held for this uploader", { retryAfterMs: 1000 });
     let u = this.uploads.get(key);
     if (!u) { u = { size: ref.size, type: ref.type, chunks: [], have: 0 }; this.uploads.set(key, u); }
     if (u.size !== ref.size || u.type !== ref.type) throw err("invalid", "ref differs from the first part's ref");
@@ -876,7 +934,7 @@ class Blobs {
     return { have: u.have, complete: false };
   }
   hasSupply(uploader: string, hash: string, _space: string): boolean { return this.complete.has(uploader + "\n" + hash); }
-  ownRecent(who: string, hash: string): boolean { const c = this.complete.get(who + "\n" + hash); return !!c && Date.now() - c.at < 24 * 3600 * 1000; }
+  ownRecent(who: string, hash: string, size: number): boolean { const c = this.complete.get(who + "\n" + hash); return !!c && c.size === size && Date.now() - c.at < 24 * 3600 * 1000; }
   get(hash: string, offset: number, length: number | undefined) {
     const f = path.join(this.dir, "blobs", hash);
     const size = fs.statSync(f).size;

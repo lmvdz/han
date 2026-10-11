@@ -53,32 +53,26 @@ class Host:
         if self.crash: self.crash(point, key)
 
     async def _refresh(self):
-        gen = self.client.read(self.space, self.client.heads.get(self.space, 0), state=True, limit=1)
-        try:
-            async for it in gen:
-                if it["type"] == "state": self.state = it["state"]; return
-        finally: await gen.aclose()
+        self.state = await self.client.read_state(self.space)
 
     async def _state_at(self, seq: int) -> dict | None:
         """The state after record `seq` (R-24: the mode is read from the state at the input's receipt, not the head)."""
-        gen = self.client.read(self.space, seq, state=True, at=seq, limit=1)
-        try:
-            async for it in gen:
-                if it["type"] == "state": return it["state"]
+        try: return await self.client.read_state(self.space, at=seq)
         except WireError: return None
-        finally: await gen.aclose()
 
     def _my_sessions(self) -> list[str]:
         return [i for i, s in self.state["sessions"].items() if s["actor"] == self.me]
 
-    def _mode_for(self, author: str, sess_id: str | None, from_sessions: bool, st: dict | None = None) -> str:
+    def _mode_for(self, author: str, sess_id: str | None, from_sessions: bool, at: dict | None = None) -> str:
         """R-24: `strict` while held (every turn); while guarded for any instruction by someone other than the guard; in a session whose
-        effective mode is `guarded` for outside input; and when the turn carries another session's stream or context as data."""
-        st, me = st or self.state, self.me
-        g = P.guarded_now(st, me)
-        if me in st["held"]: return "strict"
-        sess = st["sessions"].get(sess_id) if sess_id else None
-        if sess and author not in (me, sess.get("guard")) and P.effective_mode(st, sess) == "guarded": return "strict"
+        effective mode is `guarded` for outside input; and when the turn carries another session's stream or context as data. The
+        session's effective mode comes from the state at the input's seq (`at`); `held` and `guardedNow` come from the head."""
+        head, me = self.state, self.me
+        g = P.guarded_now(head, me)
+        if me in head["held"]: return "strict"
+        at = at or head
+        sess = at["sessions"].get(sess_id) if sess_id else None
+        if sess and author not in (me, sess.get("guard")) and P.effective_mode(at, sess) == "guarded": return "strict"
         if g and author not in (me, g): return "strict"
         if from_sessions: return "strict"              # SHOULD for any agent, MUST when guarded (R-24)
         return "auto"
@@ -183,6 +177,7 @@ class Host:
         def refuse(key, why):
             self.refused.append(why); out.append((key + "r", "say", {"text": "refused: " + why}))
         def entry(kind, body, content):
+            assert not {"release", "unguard"} & set(body)        # E1: only the guard releases or unguards; the host never does, for itself least of all
             return self.client.make_entry(kind, self.space, body, content, refs=refs, seen=inp.seq)
         for i, a in enumerate(actions):
             key = f"{inp.trigger}:{i}"

@@ -663,11 +663,85 @@ async function round21b() {
   });
 }
 
+async function round22() {
+  const w = await newWorld({ seq: { maxStateItems: 3, appendsPerSecond: 1000 } });
+  try {
+    const ada = addPerson(w, "ada"), ann = addPerson(w, "ann"), bob = addPerson(w, "bob");
+    const bot = addPerson(w, "bot", "agent", ann);
+    for (const p of [ada, ann, bob, bot]) await login(w, p);
+    await send(ann, `profile:${bot.id}`, "member.set", { actor: ann.id, role: "owner" });
+    const SP = "p15:" + SERVER;
+    await createSpace(ada, SP, POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"] } }));
+    for (const p of [ann, bob, bot]) await send(ada, SP, "member.set", { actor: p.id, role: "member" });
+    const st = async () => (await ada.client.read(SP, 0, { state: true }))[0].state;
+    let sess = "";
+    await scenario("P-15: only the guard unguards (release + unguard); closing never does; re-close is denied", async () => {
+      sess = (await send(bot, SP, "session.open", { steerMode: "guarded" })).id;
+      ok((await st()).guarded[bot.id] === ann.id, "guarded[bot] = operator");
+      await send(bot, SP, "session.close", { session: sess });
+      ok((await st()).guarded[bot.id] === ann.id, "closing does not unguard");
+      ok(await code(send(bot, SP, "session.close", { session: sess })) === "denied", "re-close is denied");
+      ok(await code(send(bot, SP, "session.input", { session: sess, release: true, unguard: true }, { text: "x" })) === "denied", "the agent cannot unguard itself");
+      ok(await code(send(ada, SP, "session.input", { session: sess, release: true, unguard: true }, { text: "x" })) === "denied", "an owner is not the guard");
+      ok(await code(send(ann, SP, "session.input", { session: sess, unguard: true }, { text: "x" })) === "invalid", "unguard needs release");
+      const r = await send(ann, SP, "session.input", { session: sess, release: true, unguard: true }, { text: "unguard" });
+      ok(r.seq > 0 && (await st()).guarded[bot.id] === undefined, "the guard unguards, even a closed session");
+    });
+    await scenario("P-15: forceGuarded guards every agent with a confirmed operator, session or not", async () => {
+      ok(await guarded(false), "off by default");
+      const pol = { ...POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"], forceGuarded: true } }) };
+      await send(ada, SP, "policy.set", { policy: pol });
+      ok(Object.keys((await st()).agents).includes(bot.id) && (await st()).agents[bot.id] === ann.id, "agents[bot] = operator");
+      const s2 = (await send(bot, SP, "session.open", { steerMode: "auto" })).id;
+      await send(bob, SP, "session.input", { session: s2 }, { text: "hello" });
+      ok((await st()).held[bot.id] === ann.id, "an outside steer holds the forced agent");
+      await send(ann, SP, "session.input", { session: s2, release: true }, { text: "r" }, (await st()).head);
+      ok((await st()).held[bot.id] === undefined, "released");
+      async function guarded(_x: boolean) { return (await st()).guarded[bot.id] === undefined; }
+    });
+    await scenario("E8: state pages (maxStateItems), cursor, effect", async () => {
+      for (let i = 0; i < 7; i++) await send(ada, SP, "task", { to: [bob.id] }, { ask: "t" + i });
+      const first = (await ada.client.read(SP, 0, { state: true }))[0];
+      ok(Object.keys(first.state.tasks).length === 3 && typeof first.next === "string", "first page: 3 tasks and next");
+      const all: A = { ...first.state.tasks }; let next = first.next, pages = 1;
+      while (next) { const it = await ada.client.read(SP, 0, { state: true, cursor: next }); ok(it.length === 1, "one item"); Object.assign(all, it[0].state.tasks); next = it[0].next; pages++; }
+      ok(Object.keys(all).length === 7 && pages === 3, "7 tasks in 3 pages");
+      ok(await code(ada.client.read(SP, 0, { state: true, cursor: "bogus" })) === "invalid", "a malformed cursor is invalid");
+      ok(await code(ada.client.read(SP, 0, { cursor: first.next })) === "invalid", "cursor needs state");
+      const ef = (await send(bob, SP, "effect.propose", { action: "file.write", planDigest: digestOf(planOf("file.write", "a.txt")), executor: bob.id } as A, { plan: planOf("file.write", "a.txt") }).catch((e) => e)) as A;
+      if (ef.id) {
+        const one = await ada.client.read(SP, 0, { state: true, effect: ef.id });
+        ok(one.length === 1 && Object.keys(one[0].state.effects).length === 1 && one[0].state.tasks === undefined && "agents" in one[0].state, "one effect + members");
+        ok(await code(ada.client.read(SP, 0, { state: true, effect: "0".repeat(64) })) === "not_found", "unknown effect");
+      }
+    });
+    await scenario("integers >= 2^53: invalid on the request id, else id 0 + close", async () => {
+      const r = await raw(w.url); const ch = await r.next();
+      r.send({ id: 1, call: "hello", args: { who: ada.id, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, SERVER)), version: 1 } }); await r.next();
+      r.send('{"id":5,"call":"read","args":{"space":"' + SP + '","after":9007199254740993}}'); let m = await r.next();
+      ok(m.id === 5 && m.error.code === "invalid" && !r.closed, "invalid on id 5, connection open");
+      r.send('{"id":9007199254740993,"call":"read","args":{}}'); m = await r.next();
+      ok(m.id === 0 && m.error.code === "invalid", "id 0");
+      await sleep(100); ok(r.closed, "closed");
+    });
+    await scenario("E5: a denied entry is denied even from an author over the rate limit", async () => {
+      const w2 = await newWorld({ seq: { appendsPerSecond: 1 } });
+      try {
+        const x = addPerson(w2, "x"); await login(w2, x);
+        const S = "rl:" + SERVER; await createSpace(x, S);
+        const bad = await code(send(x, S, "member.set", { actor: "@nobody:" + SERVER, role: "owner" }).then(() => send(x, S, "policy.set", { policy: { bogus: 1 } })));
+        ok(bad === "invalid" || bad === "denied", "invalid/denied beats limit: " + bad);
+      } finally { await stop(w2); }
+    });
+  } finally { await stop(w); }
+}
+
 const t0 = Date.now();
 await scenario("A. end to end: create, members, propose, approve, claim, execute, report, verify", e2e);
 await protocol();
 await round21();
 await round21b();
+await round22();
 await durability();
 await executorScenarios();
 await abandon();

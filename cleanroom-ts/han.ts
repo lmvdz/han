@@ -88,7 +88,7 @@ export interface Bodies {
   "redact": { target: EntryId };
   "session.open": { steerMode: SteerMode; task?: EntryId };   // a live session by its author (P-15); the stream itself travels on the transport (T-07)
   "session.close": { session: EntryId };
-  "session.input": { session: EntryId; release?: true };      // steering, accountable and sequenced; release: the guard ends a hold (P-15)
+  "session.input": { session: EntryId; release?: true; unguard?: true };      // steering, accountable and sequenced; release: the guard ends a hold; unguard (needs release, guard only) also ends the agent's own guarded choice (P-15)
   "space.move": { to: ServerName; accept: { keyId: KeyId; sig: Sig } };   // sig = Ed25519(to's key, "han-accept-move-v1\n" ‖ space ‖ "\n" ‖ receiptHash(head))
 }
 
@@ -142,7 +142,7 @@ export interface PolicyDoc {
   minDurability: Durability;                             // R-08
   launchWindow: number;                                  // seconds, 15–3600: abandon threshold (P-09) and executor deadline (X-04)
   extensionsMinRole: "guest" | "member" | "owner";       // lowest role that may append extension kinds (§5)
-  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[] };   // P-15: minimum roles (read, steer no wider than watch); allowed modes
+  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[]; forceGuarded?: boolean };   // P-15: minimum roles (read, steer no wider than watch); allowed modes; forceGuarded (default false): every agent with a confirmed operator is guarded, session or not
   servers: { deny: ServerName[] };
 }
 
@@ -202,8 +202,9 @@ export interface SpaceState {
   held: { [agent: ActorId]: ActorId };                          // P-15: agent → the human it waits for
   cleared: { [agent: ActorId]: Seq };                           // P-15: `seen` of the guard's last release (instructions up to it are reviewed)
   outside: { [agent: ActorId]: Seq };                           // P-15: seq of the latest outside instruction while guarded (stale releases)
-  guarded: { [agent: ActorId]: ActorId };                       // P-15: agent → its guard; the agent's own sticky choice
+  guarded: { [agent: ActorId]: ActorId };                       // P-15: agent → its guard; the agent's own sticky choice, ended only by its guard's unguard
                                                                 // (guardedNow also counts owner-forced guarding, derived)
+  agents: { [agent: ActorId]: ActorId };                        // P-15: agent member → its confirmed operator, from the profile pinned at member.set; cleared with the role (forceGuarded)
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
@@ -223,12 +224,16 @@ export interface Limits {
   maxStreamItemBytes: 65536;   // T-07: one StreamItem; larger context goes in a blob
   maxFollows: 256;
   maxClockSkewSeconds: 60;     // R-03a: the one future-time tolerance; a receipt dated further ahead of a verifier's clock is a `future-time` fault
+  maxStateItems: 1000;         // §3 read: `effects` and `tasks` per page of a state read; the rest follows by `cursor`
 }
 export interface Challenge { challenge: string /* 43 chars: 32 random bytes, base64url; a client accepts 22–128 of [A-Za-z0-9_-] (G-08) */; server: ServerName; versions: number[]; time: Time }
 /** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never host:port). */
-export type StateView = Omit<SpaceState, "entries">;   // the wire state; too big for one frame → `limit`, replay records instead
+export type StateView = Omit<SpaceState, "entries">;   // the wire state, one page: `effects` and `tasks` hold at most Limits.maxStateItems each; never `limit` (§3 read)
+/** `read {state: true, effect: id}`: that one effect, plus the members a host or executor needs to judge it (§3). */
+export type EffectStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "roles" | "effects" | "sessions" | "held" | "guarded" | "agents">;
 export type ReadItem =
-  | { type: "state"; state: StateView }                  // first item when `state: true` and the reader may read at head (or at `at`, then StateView.head = at)
+  | { type: "state"; state: StateView; next?: string }   // first item when `state: true` and the reader may read at head (or at `at`, then StateView.head = at); `next`: more effects or tasks, fetch with `read {state: true, cursor: next}`
+  | { type: "state"; state: EffectStateView }            // the answer to `read {state: true, effect}`
   | { type: "heads"; heads: Receipt[] }                  // the server's latest receipts, when the reader sent knownHeads (R-15)
   | { type: "record"; record: LogRecord }
   | { type: "signal"; from: ActorId; body: Json };       // T-05, G-09: only on `subscribe` (never on `read`); ephemeral, unordered with records, never authority
@@ -239,7 +244,9 @@ export interface Calls {
   append: { args: { entry: Entry; content?: Json }; ok: Receipt };
   read: { args: { space: SpaceId; after: Seq; follow?: boolean; state?: boolean;
                   at?: Seq /* with state: the StateView after record `at`; needs read rights at `at` (P-02); 1…head */;
-                  limit?: number /* 1–1000, default 1000; with follow a longer backlog leaves a seq gap the client MUST re-read */; knownHeads?: Receipt[] /* ≤ 256 */ }; item: ReadItem };
+                  limit?: number /* 1–1000, default 1000; bounds the record backlog only, never the state; with follow a longer backlog leaves a seq gap the client MUST re-read */; knownHeads?: Receipt[] /* ≤ 256 */;
+                  cursor?: string /* with state: the `next` of a state page; answers that page alone; excludes `at` and `effect` */;
+                  effect?: EntryId /* with state: only that effect and the members of EffectStateView; answers the state item alone */ }; item: ReadItem };
 }   // the three sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
@@ -249,10 +256,11 @@ export type ReplyFrame =
 
 // ───────────────────────── the generic binding's frames (§8.3) ─────────────────────────
 // One WebSocket, text frames of I-JSON. The server speaks first with a bare `Challenge` (no id). The client's first call
-// is `hello`; any other call before it is `denied`. Request ids are integers in [0, 2^53), chosen by the client; a streaming
+// is `hello`; any other call before it is `denied`. Request ids are integers in [1, 2^53), chosen by the client; a streaming
 // call whose id is still open is `invalid`. A request frame is exactly {id, call, args} (id in [1, 2^53), args an object, closed per call);
-// text that is not an I-JSON object is answered `{ id: 0, error: invalid }` and the server closes; an object that is not a request frame is
-// answered `invalid` with its own id when that is usable, else 0 (G-07). Binary frames close the connection. Streaming calls (`read`, `subscribe`, `watch`) answer with
+// text that is not an I-JSON object is answered `{ id: 0, error: invalid }` and the server closes; an integer of 2^53 or more anywhere in the text
+// is answered `invalid` on the request's own id when that is usable (the connection stays open), else `{ id: 0 }` and a close; an object that is not a
+// request frame is answered `invalid` with its own id when that is usable, else 0 (G-07). Binary frames close the connection. Streaming calls (`read`, `subscribe`, `watch`) answer with
 // `item` frames: `read` without `follow` then ends with `{ id, end: true }`; the others, and `read` with `follow`, run until
 // `cancel`, the connection closing, or `{ id, error: unavailable }` (the subscriber fell too far behind: read again).
 // `data` is base64url without padding. Every call below is a RequestFrame with the same envelope.
@@ -279,14 +287,14 @@ export type AnyRequestFrame = RequestFrame | BindingRequestFrame;
 // ───────────────────────── modules ─────────────────────────
 export interface Log {                                   // M1
   append(entry: Entry, content: Json | undefined): Promise<Receipt>;          // throws WireError
-  read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; at?: Seq; limit?: number; knownHeads?: Receipt[] }, as: ActorId): AsyncIterable<ReadItem>;
+  read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; at?: Seq; limit?: number; knownHeads?: Receipt[]; cursor?: string; effect?: EntryId }, as: ActorId): AsyncIterable<ReadItem>;
 }
 export interface Policy {                                // M2 — five pure functions (R-11)
   decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision;   // after the Log's checks only (R-25); order and codes: P-16
   fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState;   // the entry's id is record.receipt.id (R-25)
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
-  // P-15 hosts also need guardedNow(state, agent) → guard | null; it is derived from `guarded` and the sessions (§6.6).
+  // P-15 hosts also need guardedNow(state, agent) → guard | null; it is derived from `guarded`, `forceGuarded` with `agents`, and the sessions (§6.6).
   relevantActors(state: SpaceState | undefined, entry: Entry, time: Time): ActorId[];   // P-01: author, member.set target, claim: proposer, every approval candidate in order, guards; each once
 }
 export interface Identity {                              // M3
@@ -332,9 +340,12 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
 /** `GET https://<server>/_han/v1/challenge` answers a `Challenge`. `GET .../read` carries `Authorization: HAN <actor> <keyId> <proof>`
  *  and `HAN-Challenge: <challenge>` (the challenge that was signed; single-use, 120 s), with proof = Ed25519(key,
  *  "han-hello-v1\n" ‖ challenge ‖ "\n" ‖ <server>). It answers `HttpReadResponse`, with HTTP status 400 invalid, 401 denied,
- *  404 not_found, 421 moved, 429 limit, 503 unavailable. No `follow`, no `knownHeads`. */
-export interface HttpReadRequest { space: SpaceId; after: Seq; state?: boolean; at?: Seq; limit?: number }   // the query string
+ *  404 not_found, 421 moved, 429 limit, 503 unavailable; 429 and 503 carry `Retry-After` (whole seconds, rounded up) beside `retryAfterMs`.
+ *  No `follow`, no `knownHeads`. `POST .../entry` (same authentication) uploads a whole entry before it is announced to the room (§8.2). */
+export interface HttpReadRequest { space: SpaceId; after: Seq; state?: boolean; at?: Seq; limit?: number; cursor?: string; effect?: EntryId }   // the query string
 export type HttpReadResponse = { items: ReadItem[] } | { error: WireError };
+export interface HttpEntryRequest { entry: Entry; content?: Json }                // the POST body, at most Limits.maxFrameBytes; the authenticated actor must be entry.author
+export type HttpEntryResponse = { id: EntryId } | { error: WireError };          // 200: held 10 minutes under the id; the room event names only the id
 /** §4.3, D13: `GET /.well-known/han` and `GET /.well-known/han-peers`, both `200 application/json`; an absent optional member is omitted, never null. */
 export interface ServerKey { keyId: KeyId; publicKey: string; from: Time; until?: Time; compromised?: true }
 export interface WellKnownHan { server: ServerName; sequencer: string /* the complete WebSocket URL, path included, e.g. wss://a.example/han */; keys: ServerKey[] }
@@ -343,10 +354,10 @@ export interface WellKnownPeers { peers: { server: ServerName; url: string /* th
  *  from the room's sequencer user (§8.2, trust anchor). */
 export interface MatrixEvents {
   "org.han.space": { spaceId: SpaceId; sequencer: string /* the Matrix user @han-seq:<server of the space id> */ };   // state event, state key ""; a room keeps its first binding
-  "org.han.entry": { entry: Entry; content?: Json }                        // sent by a member (append)
-                 | { id: EntryId; kind: string; author: ActorId };         // the sequencer's header-only copy: nothing P-02 might hide
-  "org.han.receipt": { receipt: Receipt };                                   // m.relates_to (m.reference) the entry's event
-  "org.han.reject": { id: EntryId; code: "denied" | "invalid" | "not_found" | "moved"; reason: string };   // m.relates_to the entry's event; `unavailable` and `limit` get none
+  "org.han.entry": { id: EntryId }                                           // sent by a member: names an entry it uploaded with POST /_han/v1/entry (never the entry itself)
+                 | { id: EntryId; kind: string; author: ActorId; seq: Seq };  // the sequencer's copy once ordered: ids and the kind only, nothing P-02 might hide
+  "org.han.receipt": { receipt: Receipt };                                   // m.relates_to (m.reference) the entry's event; reveals only ids, hashes and seqs
+  "org.han.reject": { id: EntryId; code: "denied" | "invalid" | "not_found" | "moved" | "unavailable"; reason: string; retryAfterMs?: number; movedTo?: ServerName };   // m.relates_to the entry's event; final, except `unavailable` (carries retryAfterMs; resend the same entry then); `limit` gets none
   "org.han.signal": { body: Json };                                          // room-wide, T-05
   "org.han.session": { session: EntryId; watch: string; read: string };      // state event in the space room, state key = the session id; room ids of the two stream rooms
   "org.han.stream": StreamItem & { file?: { url: string; key: Json; iv: string; hashes: { [alg: string]: string }; v: string } };   // in a stream room; `file` = Matrix EncryptedFile info of a context item's blob
@@ -364,7 +375,7 @@ export interface TransportBinding {
 /** The client an actor is built with: the sequencer calls plus the transport, authenticated as that actor. */
 export interface Client {
   append(entry: Entry, content?: Json): Promise<Receipt>;              // outbox + R-06 retry are the client's job (R-07)
-  read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean; at?: Seq; limit?: number; knownHeads?: Receipt[] }): AsyncIterable<ReadItem>;
+  read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean; at?: Seq; limit?: number; knownHeads?: Receipt[]; cursor?: string; effect?: EntryId }): AsyncIterable<ReadItem>;
   signal(space: SpaceId, body: Json): Promise<void>;                    // via the transport (T-05)
   blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
   blobGet(ref: BlobRef, space: SpaceId): Promise<Uint8Array>;          // via the transport (G-01: a referencing record, or a context blob of a live session you may read); verify the hash

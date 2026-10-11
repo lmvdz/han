@@ -39,9 +39,9 @@ class V:
         if note: st["note"] = note
         if expect == "allow": self.heads[entry["space"]] = self.heads.get(entry["space"], 0) + 1
         self.v["steps"].append(st); return self
-    def rel(self, id, author, session, seen=None, space=S):
-        """A guard's release, signed having seen the space up to its current head (or `seen`)."""
-        e = E(id, "session.input", author, {"session": session, "release": True}, space=space)
+    def rel(self, id, author, session, seen=None, space=S, unguard=False):
+        """A guard's release, signed having seen the space up to its current head (or `seen`); `unguard` also ends its agent's guarded choice."""
+        e = E(id, "session.input", author, dict({"session": session, "release": True}, **({"unguard": True} if unguard else {})), space=space)
         e["seen"] = self.heads.get(space, 0) if seen is None else seen
         return e
     def read(self, actor, seq, expect, space=S):
@@ -760,7 +760,7 @@ add(v.done())
 ALL = {"watch": True, "read": True, "steer": True}
 NONE = {"watch": False, "read": False, "steer": False}
 MODES = ["auto", "guarded"]
-def sess(w, r, st, modes=MODES): return {"watch": w, "read": r, "steer": st, "modes": list(modes)}
+def sess(w, r, st, modes=MODES, force=None): return dict({"watch": w, "read": r, "steer": st, "modes": list(modes)}, **({} if force is None else {"forceGuarded": force}))
 BOT2 = "@bot2:b.example"
 
 v = V("session-rights", ["P-15"], "watch/read/steer follow policy.sessions; the actor has all three; a session whose actor lost its role is dead")
@@ -1010,15 +1010,93 @@ v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "membe
 v.step(E("in", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}}, note="A3: still guarded")
 add(v.done())
 
-v = V("only-the-agent-unguards-itself", ["P-15"], "an agent that isn't held stops being guarded by closing its last guarded session; a held one can't")
+v = V("agents-cannot-unguard-themselves", ["P-15"], "closing sessions never unguards an agent, held or not; it can't unguard itself with a release either")
 agents(v, policy(sessions=sess("member", "member", "member")))
 v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("c1", "session.close", BOT, {"session": "s1"}), "allow", check={"guarded": {BOT: OP}}, note="E1: not held, closing its last guarded session still doesn't unguard")
 v.step(E("in", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}})
-v.step(E("c1", "session.close", BOT, {"session": "s1"}), "allow", check={"guarded": {BOT: OP}}, note="held: closing doesn't unguard")
-v.step(v.rel("r", OP, "s1"), "allow")
-v.step(E("s2", "session.open", BOT, {"steerMode": "guarded"}), "allow")
-v.step(E("c2", "session.close", BOT, {"session": "s2"}), "allow", check={"guarded": {}}, note="its own choice, not held")
-v.step(E("in2", "session.input", P, {"session": "s3"}), "allow", check={"held": {}})
+v.step(E("c3", "session.close", BOT, {"session": "s3"}), "allow", check={"guarded": {BOT: OP}}, note="held: nor does it")
+v.step(E("s2", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("c2", "session.close", BOT, {"session": "s2"}), "allow", check={"guarded": {BOT: OP}})
+v.step(v.rel("u0", BOT, "s1", unguard=True), "denied", note="an agent can't release or unguard itself")
+v.step(v.rel("u1", O, "s1", unguard=True), "denied", note="nor can an owner")
+v.step(E("c4", "session.close", O, {"session": "s1"}), "denied", note="already closed: the re-close rule is gone")
+v.step(E("c5", "session.close", BOT, {"session": "s1"}), "denied", note="even for its actor")
+add(v.done())
+
+v = V("guard-unguards", ["P-15"], "only the guard ends an agent's guarded choice: release with unguard; unguard alone is invalid; a plain release leaves it guarded")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("c1", "session.close", BOT, {"session": "s1"}), "allow", note="a live guarded session would still guard it")
+v.step(E("in", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}})
+v.step(E("bad", "session.input", OP, {"session": "s3", "unguard": True}), "invalid", note="unguard needs release")
+v.step(v.rel("r", OP, "s3"), "allow", check={"held": {}, "guarded": {BOT: OP}}, note="a plain release leaves it guarded")
+v.step(E("in2", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}})
+v.step(v.rel("u", OP, "s3", unguard=True), "allow", check={"held": {}, "guarded": {}}, note="E1: on any of its sessions")
+v.step(E("in3", "session.input", P, {"session": "s3"}), "allow", check={"held": {}}, note="no longer guarded: an outside steer doesn't hold")
+add(v.done())
+
+v = V("guard-unguards-without-a-hold", ["P-15"], "a guard may unguard an agent that isn't held, on a closed session; nobody else may")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("c", "session.close", BOT, {"session": "s1"}), "allow")
+v.step(v.rel("u0", M, "s1", unguard=True), "denied", note="not the guard")
+v.step(v.rel("u1", OP2, "s1", unguard=True), "denied", note="another operator")
+v.step(v.rel("u2", OP, "s1", unguard=True), "allow", check={"guarded": {}, "held": {}})
+add(v.done())
+
+v = V("stale-unguards-are-refused", ["P-15"], "an unguard is a release: signed before a newer outside instruction arrived, it is refused and the agent stays guarded and held")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("c", "session.close", BOT, {"session": "s"}), "allow")
+v.step(E("t0", "task", P, {"to": [BOT]}), "allow", check={"held": {BOT: OP}})
+seen_at = v.heads[S]
+v.step(E("t1", "task", P, {"to": [BOT]}), "allow")
+v.step(v.rel("u0", OP, "s", seen=seen_at, unguard=True), "denied", note="signed before t1 arrived")
+v.step(v.rel("u1", OP, "s", unguard=True), "allow", check={"held": {}, "guarded": {}})
+add(v.done())
+
+v = V("unguard-does-not-loosen-forcing", ["P-15"], "an unguard clears only the agent's own choice: owner forcing (forceGuarded) still guards it")
+agents(v, policy(sessions=sess("member", "member", "member", MODES, True)))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow", check={"guarded": {BOT: OP}}).step(E("c", "session.close", BOT, {"session": "s"}), "allow")
+v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {BOT: OP}})
+v.step(v.rel("u", OP, "s", unguard=True), "allow", check={"held": {}, "guarded": {}})
+v.step(E("t2", "task", P, {"to": [BOT]}), "allow", check={"held": {BOT: OP}}, note="still forced")
+add(v.done())
+
+# ── round 22 (E2): owner forcing per agent ──
+v = V("force-guarded-holds-session-less-agents", ["P-15"], "with forceGuarded, an agent with a confirmed operator is guarded without any session: a task or an executor slot holds it")
+agents(v, policy(sessions=sess("member", "member", "member", MODES, True)))
+v.step(E("t0", "task", OP, {"to": [BOT]}), "allow", check={"agents": {BOT: OP, BOT2: OP}, "held": {}}, note="its own guard's task")
+v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {BOT: OP}}, note="no session needed")
+v.step(prop("d", author=M, executor=BOT2), "allow", check={"held": {BOT: OP, BOT2: OP}, "effects.d.guards": [OP]}, note="so does naming it executor")
+v.step(claim("c0", "d", author=BOT2), "denied", note="its guard must approve")
+v.step(E("so", "session.open", BOT, {"steerMode": "auto"}), "allow", note="a held agent may open a session for its guard to release against")
+v.step(v.rel("r", OP, "so"), "allow", check={"held": {BOT2: OP}})
+v.step(E("msg", "message", M, {}), "allow", check={"held": {BOT2: OP}})
+add(v.done())
+
+v = V("force-guarded-is-off-by-default", ["P-15"], "without forceGuarded (the default), a session-less agent is not guarded; switching it on holds at once for open instructions")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {}, "agents": {BOT: OP, BOT2: OP}})
+v.step(E("pf", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", MODES, "yes"))}), "invalid", note="forceGuarded is a boolean")
+v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", MODES, True))}), "allow", check={"held": {BOT: OP}})
+add(v.done())
+
+v = V("force-guarded-spares-humans-and-services", ["P-15"], "forcing guards agents only: humans and services (even with a confirmed operator) are never forced")
+agents(v, policy(sessions=sess("member", "member", "member", MODES, True)))
+v.prof(X, dict(XS, operator=OP))
+v.step(E("t", "task", P, {"to": [M, X]}), "allow", check={"held": {}, "agents": {BOT: OP, BOT2: OP}}, note="agents[] holds agents only")
+v.step(prop("d", author=P, executor=X), "allow", check={"held": {}, "effects.d.phase": "ready"})
+v.step(E("t2", "task", P, {"to": [BOT2]}), "allow", check={"held": {BOT2: OP}})
+add(v.done())
+
+v = V("agents-entry-follows-the-role", ["P-15", "P-03"], "agents[X] is folded from the profile pinned at member.set and cleared when X's role goes or its operator isn't confirmed")
+v.prof(BOT, AG)
+team(v, policy(sessions=sess("member", "member", "member", MODES, True)))
+v.step(ms("op", O, OP, "member"), "allow")
+v.step(ms("b", O, BOT, "member"), "allow", check={"agents": {BOT: OP}})
+v.step(ms("rm", O, BOT, "none"), "allow", check={"agents": {}})
+v.step(ms("b2", O, BOT, "member"), "allow", profiles={BOT: dict(AG, operatorConfirmed=False)}, check={"agents": {}}, note="operator not confirmed in the pinned profile")
+v.step(ms("b3", O, BOT, "guest"), "allow", profiles={BOT: AG}, check={"agents": {BOT: OP}}, note="a role change refreshes it from the pinned profile")
+v.step(ms("b4", O, BOT, "banned"), "allow", check={"agents": {}})
 add(v.done())
 
 v = V("naming-a-guarded-executor-holds-it", ["P-15"], "a proposal naming a guarded agent as executor is an instruction: from anyone but its guard it holds the agent")
@@ -1052,14 +1130,6 @@ v.step(prop("p", author=BOT), "allow", check={"effects.p.phase": "ready"})
 v.step(E("in", "session.input", P, {"session": "s"}), "allow")
 v.step(claim("c0", "p"), "denied", note="CE2: its proposer is held now")
 v.step(appr("a", "p", author=OP), "allow").step(claim("c1", "p"), "allow")
-add(v.done())
-
-v = V("agents-can-always-unguard", ["P-15"], "an agent that isn't held can unguard by closing its guarded session, even one an owner already closed")
-agents(v, policy(sessions=sess("member", "member", "member")))
-v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
-v.step(E("c0", "session.close", O, {"session": "s"}), "allow").step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["auto"]))}), "allow")
-v.step(E("c1", "session.close", M, {"session": "s"}), "denied", note="already closed, and not its session")
-v.step(E("c2", "session.close", BOT, {"session": "s"}), "allow", check={"guarded": {}}, note="CE5: its own choice to undo")
 add(v.done())
 
 v = V("guarding-holds-for-open-outside-instructions", ["P-15"], "becoming guarded with an outside task or executor slot still open holds the agent at once")

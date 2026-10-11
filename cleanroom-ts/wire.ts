@@ -96,7 +96,8 @@ export const contentHashOf = (content: unknown): string => sha256(jcs(content));
 
 // ───────────── I-JSON strict parse ─────────────
 export class JsonError extends Error {}
-export function parseStrict(text: string): unknown {
+/** `big`: when given, an integer of 2^53 or more does not fail the parse; it becomes a bigint and `big.found` is set (the caller answers it, §3 frames). */
+export function parseStrict(text: string, big?: { found: boolean }): unknown {
   let i = 0;
   const ws = () => { while (i < text.length && " \t\n\r".includes(text[i])) i++; };
   const fail = (m: string): never => { throw new JsonError(m + " at " + i); };
@@ -157,7 +158,8 @@ export function parseStrict(text: string): unknown {
     if (!m) return fail("value expected");
     // integers only: no fraction, no exponent, no leading zeros, no negatives (incl. -0)
     if (!/^(0|[1-9][0-9]*)$/.test(m[0])) fail("non-integer number form");
-    const n = Number(m[0]); if (!Number.isSafeInteger(n)) fail("number out of range");
+    const n = Number(m[0]);
+    if (!Number.isSafeInteger(n)) { if (!big) fail("number out of range"); big!.found = true; i += m[0].length; return BigInt(m[0]); }
     i += m[0].length; return n;
   };
   const v = val(); ws(); if (i !== text.length) fail("trailing data");

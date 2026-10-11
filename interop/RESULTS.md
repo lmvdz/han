@@ -448,3 +448,43 @@ W-01 and W-02: hello proofs interoperate in all four pairs with the transport on
 - `golden/`: one JSON per operation (`hello`, `space.create`, `member.set`, `message`, `read`, `read.state`, `follow`, `subscribe`, `signal`, `propose`, `approve`, `blobPut`, `blobGet`, `blobPut.multipart`, `blobGet.multipart`, `session.open`, `session.input`, `stream_watch`, `session.close`, `task`, `redact`) plus `probes.json` (error-path vectors both servers agree on) and `index.json`. Frames are what crossed the tap, keys and clocks fixed, request ids renumbered per connection, hello challenge/proof masked, long blob data summarised by length and hash. Every operation except `hello` is answered byte for byte the same by both servers for both clients (`pythonServerAndTsServerAgree: true`); `hello` differs only in `limits.maxClockSkewSeconds` (root cause 9).
 - Limits of this measurement: one Python implementation and one TS implementation; the Python server and Python client share `ref/wire.py` and `ref/policy.py`, so "Python agrees with itself" says nothing about the spec; both sides had been tuned against the same vectors; probes encode my reading of the text (the `expect` column), and where a probe says "unspecified" no failure is counted.
 
+
+## 6. Closure of round 21
+
+Appended by hand after round 21 (`report.py` regenerates sections 1 to 5 only; append this section again if it is re-run). It answers section 4: **the decisions of round 21 resolved all 22 failures** counted there, each with the decision that settles it (`DECISIONS-r21.md`), the place in architecture.md that now says it, and what shows it. The one extra difference, W-51 (the StateView `settled` member of a claim without a reservation), is settled by D14 (`settled` is on every claim, `false` until settled; §6.1, han.ts, `ref/policy.py`).
+
+| id | failure | on | decision | in the spec | shown by | status |
+|---|---|---|---|---|---|---|
+| C01 | P18 `space.create` naming another server answered `invalid` | Python server | D1 | §4.1 step 2 | wire vector D1a; wire scenario "verdict order 2/3" | resolved |
+| C02 | P56 `read` of a space homed elsewhere answered `not_found` | Python server | D1 | §4.1 step 2 | wire vectors D1b, D1c | resolved |
+| C03 | P56 the same | TS server | D1 | §4.1 step 2 | wire vectors D1b, D1c | resolved |
+| C04 | P58 `host` from a non-server connection answered `invalid` | Python server | D1 | G-06 | wire vector D6a | resolved |
+| C05 | P58 the same | TS server | D1 | G-06 | wire vector D6a | resolved |
+| C06 | P09 a frame that is JSON but not I-JSON answered with id 0 (the probe expected the request's id) | Python server | D2 | G-07 (1): id 0 and close | wire vector D2a; the probe's reading was wrong, the TS server changed | resolved by decision |
+| C07 | P10 a frame with an extra member was served | Python server | D2 | G-07 (2) | wire vector D2b | resolved |
+| C08 | P11 a frame without `args` was served | Python server | D2 | G-07 (2) | wire vector D2c | resolved |
+| C09 | P22 `read` with an unknown argument was served | Python server | D2 | G-09 (closed args) | wire vectors D2d, D2e | resolved |
+| C10 | P37 an uploader's own blob refused within 24 h | Python server | D3 | G-01 | wire vector D3b | resolved |
+| C11 | P38 `offset` past the end refused as `denied` | Python server | D3 | G-01 `blobGet` | wire vector D3a | resolved |
+| C12 | P39 oversized `length` refused as `denied` | Python server | D3 | G-01 `blobGet` | wire vectors D3a, D3b | resolved |
+| C13 | P34 padded base64url accepted | Python server | D4 | §2 base64url | wire vector D4a | resolved |
+| C14 | P28b non-canonical signature accepted | Python server | D4 | §2 base64url | wire vector D4b | resolved |
+| C15 | P32 `blobPut` with a gap answered `ok` | Python server | D8 | G-01 `blobPut` | wire vector D8a | resolved |
+| C16 | P33 `blobPut` with a hash mismatch answered `ok` | Python server | D8 | G-01 `blobPut` | wire vector D8b | resolved |
+| C17 | P50 `hello` limits without `maxClockSkewSeconds` | Python server | D9 | §3, G-08 | wire vector D9a | resolved |
+| C18 | P27 `signal` with a relayed `from` answered `invalid` | TS server | D10 | G-04, han.ts `BindingCalls.signal` | wire vector D10a | resolved |
+| C19 | P51 WebSocket upgrade refused on `/` (the Python docs and well-known published a path-less URL) | TS server | D7 | G-07 endpoint, §4.3 | wire vector D13a (the `sequencer` URL has the path); no vector for the upgrade itself | resolved |
+| C20 | py->ts `hello` passed only with a workaround (the same path) | matrix cell | D7 | G-07 endpoint | cell not re-run | resolved (cell not re-run) |
+| C21 | verifier on `profile:@alice` failed: the TS verifier hard-coded key id `srv1` | matrix cell, ts->py | D6 | §4.3 "Which key signs what" | cell not re-run; the clean room's round-21 notes in `cleanroom-ts/SPEC-GAPS-WIRE.md` | resolved (cell not re-run) |
+| C22 | executor started before the space exists never retried | matrix cell, ts->py | D5 | §3 `read`, X-12 | cell not re-run; the clean room's round-21 notes (N-09 for `moved`) | resolved (cell not re-run) |
+
+C01 to C19 are shown by wire vectors that both reference servers answered at the end of round 21 (first row below). C20 to C22 are matrix cells: the interop matrix was **not re-run** after round 21, so they are resolved by the decisions and the implementations' own tests, not by a new matrix run.
+
+Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` and `--launch ts`). The first row is the end of round 21; the second was measured during round 22, while the implementations were being changed for it. The Python server fails six vectors in the second row only because `hello` now carries ten limits (`maxStateItems`) and the StateView has `agents`, which `ref/wire-vectors` predates (`01-hello`, `06-read.state`, `11-approve`, `21-redact`, `P03`, `D9a`); the TypeScript build predates both changes.
+
+| recorded run | Python server | TS server |
+|---|---|---|
+| wire vectors, end of round 21 | 82/82 vectors, 203/203 expectations | 82/82 vectors, 203/203 expectations |
+| wire vectors, round 22 | 76/82 vectors, 136/203 expectations | 82/82 vectors, 203/203 expectations |
+
+Still unexercised by any wire vector (test mode is one server with a frozen clock): moves, federation notices, server-to-server blob transfer, key rotation, executor crash recovery and R-16 clock behaviour.

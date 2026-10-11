@@ -30,7 +30,7 @@ def main(argv=None):
                   backoff_base=a.backoff_base, backoff_cap=a.backoff_cap)
     async def go():
         await ex.start()
-        print(f"han-exec {a.actor} instance {ex.instance} ready", flush=True)
+        print(f"han-exec {a.actor} instance {ex.instance} ready; elapsed-time clock (X-02): {ex.clock_name}", flush=True)
         try: await asyncio.Event().wait()
         finally: await ex.stop()
     try: asyncio.run(go())
