@@ -99,7 +99,7 @@ export function badBody(kind: string, b: A): string | null {
       return !("to" in b) || (Array.isArray(b.to) && b.to.length <= 64 && b.to.every(isActorId)) ? null : "to";
     case "task":
       if ((e = c(["to"], ["budget", "parent", "deadline"]))) return e;
-      if (!Array.isArray(b.to) || b.to.length > 64 || !b.to.every(isActorId)) return "to";
+      if (!Array.isArray(b.to) || b.to.length === 0 || b.to.length > 64 || !b.to.every(isActorId)) return "to";
       if ("budget" in b && (e = badBudget(b.budget))) return e;
       if ("parent" in b && !isHex(b.parent)) return "parent";
       if ("deadline" in b && !isTime(b.deadline)) return "deadline";
@@ -126,14 +126,13 @@ export function badBody(kind: string, b: A): string | null {
     case "effect.outcome": {
       if ((e = c(["claim", "result", "started"], ["cost"]))) return e;
       if (!isHex(b.claim) || !RESULTS.includes(b.result) || !STARTED.includes(b.started)) return "outcome fields";
-      if (!validPair(b.result, b.started)) return "invalid (result, started) pair";
-      if ("cost" in b) { if ((e = badBudget(b.cost))) return e; if (b.started !== "yes") return "cost only with started yes"; }
-      return null;
+      if ("cost" in b && (e = badBudget(b.cost))) return e;
+      return null; // pair and cost/started rules are in the kind list (P-16)
     }
     case "effect.resolve":
       if ((e = c(["proposal", "result"], ["cost"]))) return e;
       if (!isHex(b.proposal) || !["succeeded", "failed"].includes(b.result)) return "resolve fields";
-      if ("cost" in b) { if ((e = badBudget(b.cost))) return e; if (b.result !== "succeeded") return "cost only with succeeded"; }
+      if ("cost" in b && (e = badBudget(b.cost))) return e;
       return null;
     case "checkpoint": return (e = c(["through"])) ? e : isInt(b.through) ? null : "through";
     case "redact": return (e = c(["target"])) ? e : isHex(b.target) ? null : "target";
@@ -178,21 +177,16 @@ function bodyIds(kind: string, b: A): string[] {
     default: return [];
   }
 }
-const HEADER = ["v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig"];
+/** R-25: decide checks only the header fields it reads: v, space, kind, author, keyId, refs, seen. Everything else is the Log's. */
 function badHeader(e: A): string | null {
-  const x = closed(e, HEADER.filter((k) => k !== "sig" && k !== "nonce"), ["sig", "nonce"]); if (x) return "header: " + x;
   if (e.v !== 1) return "v";
   if (!isSpaceId(e.space)) return "space";
   if (!isKind(e.kind)) return "kind";
   if (!isActorId(e.author)) return "author";
   if (!isKeyId(e.keyId)) return "keyId";
-  if (!(e.contentHash === "" || isHex(e.contentHash))) return "contentHash";
   if (!idList(e.refs)) return "refs";
   if (!isInt(e.seen)) return "seen";
-  // nonce and sig grammar belong to the Log (step 3); vectors carry placeholders
-  if (!isTime(e.time)) return "time";
-  if ("sig" in e && !isSig(e.sig)) return "sig";
-  try { if (utf8len(jcs(e)) > 16384) return "header too large"; } catch { return "header not json"; }
+  if (!isObj(e.body)) return "body";
   return null;
 }
 
@@ -271,12 +265,12 @@ function guardsOf(s: SpaceState, e: A): string[] {
 const openApproval = (a: A, time: string) => !a.consumedBy && !a.dropped && unexpired(a.expiresAt, time);
 
 // ───────────────────────── P-02 read ─────────────────────────
-export function canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean {
+export function canRead(state: SpaceState, reader: string, seq: Seq): boolean {
   const s = state;
   if (s.policy.visibility === "public") return true;
   const readableAt = (a: string): boolean => {
     if (READABLE.includes((s.roles as A)[a] ?? "none")) return true;
-    return ((s.roleHistory as A)[a] ?? []).some((iv: A) => iv.from <= seq && (iv.to === undefined || seq <= iv.to));
+    return ((s.roleHistory as A)[a] ?? []).some((iv: A) => iv.from <= seq && (iv.to === undefined || seq < iv.to));
   };
   if (!isServerActor(reader)) return readableAt(reader);
   const S = serverOf(reader);
@@ -288,7 +282,7 @@ export function canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean {
 }
 
 // ───────────────────────── P-15 session access ─────────────────────────
-export function sessionAccess(state: SpaceState, actor: ActorId, session: EntryId) {
+export function sessionAccess(state: SpaceState, actor: string, session: EntryId) {
   const none = { watch: false, read: false, steer: false };
   const sess = (state.sessions as A)[session];
   if (!sess || !live(state, sess)) return none;
@@ -326,64 +320,84 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, time
 const HELD_OK = ["message", "session.open", "session.close", "session.input", "task.update", "effect.outcome", "effect.resolve", "effect.claim",
   "effect.cancel", "task.cancel", "effect.propose"];
 
+function pinsFor(state: SpaceState | undefined, e: A, time: string): string[] {
+  if (e.kind === "effect.claim" && state) {
+    const ef = (state.effects as A)[e.body?.proposal];
+    return ef ? [e.author, ef.proposer].filter((x, i, l) => l.indexOf(x) === i) : [e.author];
+  }
+  return relevantActors(state, e, time);
+}
+
 export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision {
   const e = entry as A;
+  // P-16 common step 1: shape of the header fields Policy reads, and of the body
   if (!isObj(e)) return inv("entry not an object");
   const h = badHeader(e); if (h) return inv(h);
   const bb = badBody(e.kind, e.body); if (bb) return inv(bb);
-  if (e.kind === "space.create") return decideCreate(state, e, ctx);
-  if (!state) return deny("no such space");
+  const b = e.body as A, a = e.author as string, time = ctx.time;
+  // step 2: pins
+  for (const x of pinsFor(state, e, time)) {
+    if (state?.profile !== undefined && x === profileActorOf(state.space) && x === a) continue; // own view is the space's state (§4.3)
+    if (!(ctx.profiles as A)?.[x]) return inv("no pinned profile for " + x);
+  }
+  // step 3: the author's key (R-12)
+  if (!authorKeyValid(state, ctx, e)) return deny("author key not valid");
+  // step 4: no state yet
+  if (!state) {
+    if (e.kind !== "space.create") return inv("first entry must be space.create");
+    return decideCreate(e, ctx);
+  }
   const s = state;
+  // step 5: the space exists
+  if (e.kind === "space.create") return inv("space.create on an existing space");
   if (e.space !== s.space) return inv("entry names another space");
   if (e.seen > s.head) return inv("seen beyond head");
   for (const r of e.refs) if (!(r in s.entries)) return inv("ref does not resolve");
-  for (const i of bodyIds(e.kind, e.body)) if (!(i in s.entries)) return inv("body id does not resolve");
-  const b = e.body as A, a = e.author as string, time = ctx.time;
-
-  // R-12 key validity
-  if (!authorKeyValid(s, ctx, e)) return deny("author key not valid");
-  // P-04: denied servers may append only fact reports
+  // step 6: denied server
   const factReport = e.kind === "effect.outcome" || e.kind === "effect.resolve";
   if (!factReport && s.policy.servers.deny.includes(serverOf(a))) return deny("author on a denied server");
-  // P-15 hold
+  // step 7: profile spaces
+  if (s.profile !== undefined) {
+    if (e.kind === "key.add" || e.kind === "key.revoke") return decideKey(s, e);
+    if (e.kind === "member.set") return decideProfileMember(s, e, ctx);
+    return deny("kind not allowed in a profile space");
+  }
+  // step 8: held
   if ((s.held as A)[a] !== undefined) {
     if (!HELD_OK.includes(e.kind)) return deny("agent is on hold");
     if (e.kind === "session.input") {
       const ts = (s.sessions as A)[b.session];
-      if (!ts || ts.actor !== a) return deny("held agent may only steer its own sessions");
+      if (ts && ts.actor !== a) return deny("held agent may only steer its own sessions");
     }
   }
-
+  // step 9: extension kinds
+  if (isExtensionKind(e.kind)) {
+    const r = roleOf(s, a);
+    return READABLE.includes(r) && RANK[r] >= RANK[s.policy.extensionsMinRole] ? ok : deny("role below extensionsMinRole");
+  }
+  // step 10: the kind's own list
   switch (e.kind) {
     case "member.set": return decideMember(s, e, ctx);
     case "policy.set": return decidePolicySet(s, e);
-    case "key.add": case "key.revoke": {
-      if (s.profile === undefined) return deny("key entries are for profile spaces only");
-      if (a !== profileActorOf(s.space) && a !== "@:" + spaceServer(s.space)) return deny("only the actor or its server");
-      if (e.kind === "key.add") return b.keyId in s.profile.keys ? inv("keyId is single-use") : ok; // vector: invalid
-      const k = s.profile.keys[b.keyId];
-      if (!k) return deny("unknown key");
-      return k.status === "revoked" ? inv("already revoked") : ok; // vector: invalid
-    }
-    case "message": {
-      return holds(s, a) ? ok : deny("no role");
-    }
+    case "key.add": case "key.revoke": return deny("key entries are for profile spaces only");
+    case "message": return holds(s, a) ? ok : deny("no role");
     case "task": return decideTask(s, e, ctx);
     case "task.update": {
       const t = (s.tasks as A)[b.task];
-      if (!t) return deny("not a task");
+      if (!t) return inv("not a task");
       if (!t.open) return deny("task closed");
+      if (!holds(s, a)) return deny("no role");
       const final = FINAL_TASK.includes(b.state);
-      if (isOwner(s, a) && final) return ok;
-      if (!t.to.includes(a) || !holds(s, a)) return deny("not an assignee");
-      if (final) {
+      const assignee = t.to.includes(a);
+      if (isOwner(s, a) && !assignee && final) return ok;
+      if (assignee && final) {
         for (const ef of Object.values(s.effects) as A[]) if (ef.task === b.task && (ef.phase === "claimed" || ef.phase === "unknown")) return deny("effect running on the task");
       }
-      return ok;
+      return assignee ? ok : deny("not an assignee");
     }
     case "task.cancel": {
       const t = (s.tasks as A)[b.task];
-      if (!t) return deny("not a task");
+      if (!t) return inv("not a task");
       if (!t.open) return deny("task closed");
       if (!holds(s, a)) return deny("no role");
       return t.author === a || isOwner(s, a) ? ok : deny("not the task's author or an owner");
@@ -392,7 +406,7 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     case "effect.approve": return decideApprove(s, e, ctx);
     case "effect.cancel": {
       const ef = (s.effects as A)[b.proposal];
-      if (!ef) return deny("not a proposal");
+      if (!ef) return inv("not a proposal");
       if (!holds(s, a)) return deny("no role");
       const guards = guardsOf(s, ef);
       const may = ef.proposer === a || ef.approvals.some((x: A) => x.author === a) || guards.includes(a) || isOwner(s, a);
@@ -406,16 +420,16 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     case "effect.resolve": return decideResolve(s, e, ctx);
     case "checkpoint":
       if (!isMemberOrOwner(s, a)) return deny("not owner/member");
-      return b.through <= s.head ? ok : inv("through beyond head"); // vector: invalid
+      return b.through <= s.head ? ok : inv("through beyond head");
     case "redact": {
       const target = (s.entries as A)[b.target];
+      if (!target) return inv("target not in the space");
       if (target.kind === "redact") return deny("cannot redact a redact");
-      if (target.author !== a && !isOwner(s, a)) return deny("not the target's author or an owner");
       if (target.kind === "effect.propose") {
         const ef = (s.effects as A)[b.target];
         if (ef && !isFinalPhase(ef.phase)) return deny("plan of an unfinished effect");
       }
-      return ok;
+      return target.author === a || isOwner(s, a) ? ok : deny("not the target's author or an owner");
     }
     case "space.move": {
       if (!isOwner(s, a)) return deny("not an owner");
@@ -425,71 +439,62 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     case "session.open": return decideSessionOpen(s, e, ctx);
     case "session.close": {
       const sess = (s.sessions as A)[b.session];
-      if (!sess) return deny("not a session");
+      if (!sess) return inv("not a session");
       return sess.actor === a || isOwner(s, a) ? ok : deny("not the session's actor or an owner");
     }
     case "session.input": return decideInput(s, e, ctx);
-    default: {
-      // extension kind
-      const min = s.policy.extensionsMinRole;
-      const r = roleOf(s, a);
-      return READABLE.includes(r) && RANK[r] >= RANK[min] ? ok : deny("role below extensionsMinRole");
-    }
+    default: return inv("unknown kind");
   }
 }
 
-function decideCreate(state: SpaceState | undefined, e: A, ctx: PolicyCtx): Decision {
-  if (state) return inv("space.create only at seq 1"); // vector: invalid (P-04 table suggests denied)
+function decideKey(s: SpaceState, e: A): Decision {
+  const b = e.body as A, a = e.author as string;
+  if (a !== profileActorOf(s.space) && a !== "@:" + spaceServer(s.space)) return deny("only the actor or its server");
+  if (e.kind === "key.add") return b.keyId in s.profile!.keys ? inv("keyId is single-use") : ok;
+  return s.profile!.keys[b.keyId]?.status === "valid" ? ok : inv("key is not currently valid");
+}
+
+function decideProfileMember(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
+  const b = e.body as A, a = e.author as string, op = s.profile!.operator;
+  if (!op || b.actor !== op) return deny("only the operator may be set in a profile space");
+  if (b.role === "owner") {
+    if (a !== op) return deny("only the operator confirms");
+    return kindOf(ctx, op) === "human" ? ok : deny("operator must be human");
+  }
+  if (b.role === "none") return a === op || a === "@:" + spaceServer(s.space) ? ok : deny("not allowed to withdraw");
+  return deny("only owner or none in a profile space");
+}
+
+function decideCreate(e: A, ctx: PolicyCtx): Decision {
+  const b = e.body as A, a = e.author as string;
+  const home = spaceServer(e.space);
   if (e.seen !== 0) return inv("seen beyond head");
   if (e.refs.length) return inv("ref does not resolve");
-  const b = e.body as A;
-  const a = e.author as string;
-  const home = spaceServer(e.space);
-  const profileSpace = isProfileSpace(e.space);
-  if (profileSpace) {
-    if (!b.profile) return inv("profile space needs body.profile");
+  if (isProfileSpace(e.space)) {
     if (a !== "@:" + home) return deny("profile space is created by the server actor");
+    if (!b.profile) return inv("profile space needs body.profile");
     if (b.profile.operator !== undefined && b.profile.operator === profileActorOf(e.space)) return inv("actor names itself as operator");
-    if (!keyValid(ctx, a, e.keyId)) return deny("author key not valid");
-  } else {
-    if (b.profile) return inv("body.profile only in profile spaces");
-    if (kindOf(ctx, a) !== "human") return deny("owners are human");
-    if (!keyValid(ctx, a, e.keyId)) return deny("author key not valid");
-  }
-  if (b.policy.servers.deny.includes(home) || b.policy.servers.deny.includes(serverOf(a))) return deny("policy denies the home or the creator's server");
+  } else if (b.profile) return inv("body.profile only in profile spaces");
+  if (b.policy.servers.deny.includes(home)) return inv("policy denies its own home");
+  if (!isProfileSpace(e.space) && kindOf(ctx, a) !== "human") return deny("owners are human");
   return ok;
 }
 
 function decideMember(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string, t = b.actor as string, role = b.role as string;
-  if (s.profile !== undefined) {
-    // §4.3: operator confirmation / withdrawal
-    const op = s.profile.operator;
-    if (!op || t !== op) return deny("only the operator may be set in a profile space");
-    if (role === "owner") {
-      if (a !== op) return deny("only the operator confirms");
-      if (kindOf(ctx, op) !== "human") return deny("operator must be human");
-      return ok;
-    }
-    if (role === "none") return a === op || a === profileActorOf(s.space) || a === "@:" + spaceServer(s.space) ? ok : deny("not allowed to withdraw");
-    return deny("only owner or none in a profile space");
-  }
   const cur = roleOf(s, t);
   const granting = READABLE.includes(role);
   const aRole = roleOf(s, a);
+  const owners = Object.keys(s.roles).filter((k) => (s.roles as A)[k] === "owner");
+  if (cur === "owner" && role !== "owner" && owners.length === 1) return deny("would leave zero owners");
   if (granting && s.policy.servers.deny.includes(serverOf(t))) return deny("target on a denied server");
-  if (granting && kindOf(ctx, t) !== "human") {
+  if (role === "owner" && kindOf(ctx, t) !== "human") return deny("owners are human");
+  if (granting && (cur === "none" || cur === "banned") && kindOf(ctx, t) !== "human") {
     if (s.policy.allowAgents === "none") return deny("agents not allowed");
     if (s.policy.allowAgents === "with-operator" && !(ctx.profiles as A)?.[t]?.operatorConfirmed) return deny("operator not confirmed");
   }
-  const owners = Object.keys(s.roles).filter((k) => (s.roles as A)[k] === "owner");
-  const lastOwner = (x: string) => cur === "owner" && x === t && owners.length === 1 && owners[0] === t;
-  if (aRole === "owner") {
-    if (role === "owner" && kindOf(ctx, t) !== "human") return deny("owners are human");
-    if (cur === "owner" && role !== "owner" && owners.length === 1) return deny("would leave zero owners");
-    return ok;
-  }
-  if (a === t && role === "none" && aRole !== "banned") return lastOwner(a) ? deny("last owner") : ok;
+  if (aRole === "owner") return ok;
+  if (a === t && role === "none" && READABLE.includes(aRole)) return ok;
   if (s.policy.join === "open" && a === t && cur === "none" && role === "member") return ok;
   if (s.policy.membersMayInvite && aRole === "member" && cur === "none" && (role === "guest" || role === "member")) return ok;
   return deny("not allowed to set this role");
@@ -501,7 +506,8 @@ function decidePolicySet(s: SpaceState, e: A): Decision {
   const np: PolicyDoc = b.policy;
   const deny_ = np.servers.deny;
   if (deny_.includes(s.home)) return deny("cannot deny the current home");
-  for (const [k, r] of Object.entries(s.roles)) if (r === "owner" && deny_.includes(serverOf(k))) return deny("cannot deny an owner's server");
+  const owners = Object.keys(s.roles).filter((k) => (s.roles as A)[k] === "owner");
+  if (owners.length > 0 && owners.every((k) => deny_.includes(serverOf(k)))) return deny("cannot deny every owner's server");
   const ob = s.policy.budget, nb = np.budget;
   const same = ob && nb && ob.unit === nb.unit;
   if (!same && (ob || nb) && reservedAnything(s)) return deny("budget unit/presence change while reserved");
@@ -515,43 +521,42 @@ function reservedAnything(s: SpaceState): boolean {
 
 function decideTask(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
-  if (b.to.length === 0) return deny("to is empty");
+  if (!holds(s, a)) return deny("no role");
   for (const x of b.to) if (!holds(s, x)) return deny("assignee holds no role");
   let parent: A;
   if (b.parent !== undefined) {
     parent = (s.tasks as A)[b.parent];
-    if (!parent) return deny("parent is not a task");
+    if (!parent) return inv("parent is not a task");
     if (!parent.open) return deny("parent closed");
     if (!parent.to.includes(a)) return deny("author not an assignee of parent");
-    if (!holds(s, a)) return deny("no role");
     if (parent.depth + 1 > s.policy.maxDelegationDepth) return deny("delegation too deep");
-  } else if (!isMemberOrOwner(s, a)) return deny("not owner/member");
+    if (parent.budget && b.budget === undefined) return deny("child of a budgeted parent must carry a budget");
+  } else if (roleOf(s, a) === "guest") return deny("guests cannot create top-level tasks");
   if (b.budget !== undefined) {
-    if (!s.policy.budget || s.policy.budget.unit !== b.budget.unit) return deny("budget unit differs or space unbudgeted");
     if (!accountable(s, ctx, a)) return deny("not accountable");
     if (kindOf(ctx, a) !== "human" && !(parent && parent.budget)) return deny("agents' budgeted tasks need a budgeted parent");
-    const avail = parent && parent.left ? parent.left.amount : (s.budgetLeft as A)?.amount;
-    if (avail === undefined || b.budget.amount > avail) return deny("budget does not fit");
-  } else if (parent && parent.budget) return deny("child of a budgeted parent must carry a budget");
+    if (!s.policy.budget) return deny("the space has no budget");
+    if (s.policy.budget.unit !== b.budget.unit) return deny("budget unit differs");
+    const avail = parent && parent.left ? parent.left.amount : (s.budgetLeft as A).amount;
+    if (b.budget.amount > avail) return deny("budget does not fit");
+  }
   return ok;
 }
 
 function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   if (!isMemberOrOwner(s, a)) return deny("not owner/member");
-  if (!accountable(s, ctx, a)) return deny("not accountable");
   let task: A;
   if (b.task !== undefined) {
     task = (s.tasks as A)[b.task];
-    if (!task) return deny("not a task");
+    if (!task) return inv("not a task");
     if (!task.open) return deny("task closed");
-    if (task.budget && !task.to.includes(a)) return deny("cannot charge a budgeted task one is not assigned to"); // vector 35#8
+    if (!task.to.includes(a) && !isOwner(s, a)) return deny("neither an assignee nor an owner");
   }
-  if (s.policy.budget) {
-    if (!b.cost || b.cost.unit !== s.policy.budget.unit) return deny("budgeted space needs a cost in its unit");
-    if (kindOf(ctx, a) !== "human") {
-      if (!task || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
-    }
+  if (s.policy.budget && (!b.cost || b.cost.unit !== s.policy.budget.unit)) return deny("budgeted space needs a cost in its unit");
+  if (!accountable(s, ctx, a)) return deny("not accountable");
+  if (s.policy.budget && kindOf(ctx, a) !== "human") {
+    if (!task || !task.open || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
   }
   return ok;
 }
@@ -559,16 +564,15 @@ function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
 function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   const ef = (s.effects as A)[b.proposal];
-  if (!ef) return deny("not a proposal");
+  if (!ef) return inv("not a proposal");
   if (b.planDigest !== ef.planDigest) return inv("planDigest does not match");
   if (!["awaiting-approval", "ready", "claimed"].includes(ef.phase)) return deny("phase does not take approvals");
   if (b.expiresAt !== undefined && !(b.expiresAt > ctx.time)) return deny("approval already expired");
-  if (!holds(s, a)) return deny("no role");
   const guards = guardsOf(s, ef);
   const rule = ruleFor(s.policy, ef.action);
-  const asGuard = guards.includes(a);
+  const asGuard = guards.includes(a) && holds(s, a);
   if (!asGuard && !(rule && satisfiesRule(s, rule, a))) return deny("not an approver");
-  if (s.policy.separateApprover && a === ef.proposer) return deny("proposer cannot approve");
+  if (!asGuard && s.policy.separateApprover && a === ef.proposer) return deny("proposer cannot approve");
   if (!asGuard) {
     const open = ef.approvals.filter((x: A) => openApproval(x, ctx.time) && x.author !== a && !guards.includes(x.author)).length;
     if (open >= 16) return deny("too many open approvals");
@@ -576,18 +580,23 @@ function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   return ok;
 }
 
-function e3(s: SpaceState, ef: A, ctx: PolicyCtx): { ok: true; approval?: string; guardApprovals: string[] } | { ok: false; why: string } {
+type E3 = { ok: true; approval?: string; guardApprovals: string[] } | { ok: false; code: "invalid" | "denied"; why: string };
+function e3(s: SpaceState, ef: A, ctx: PolicyCtx): E3 {
   const rule = ruleFor(s.policy, ef.action);
   let approval: A;
   if (rule) {
-    for (const x of candidates(s, ef, ctx.time)) if (keyValid(ctx, x.author, x.keyId)) { approval = x; break; }
-    if (!approval) return { ok: false, why: "no valid approval" };
+    for (const x of candidates(s, ef, ctx.time)) {
+      if (!(ctx.profiles as A)?.[x.author]) return { ok: false, code: "invalid", why: "candidate has no pinned profile" };
+      if (keyValid(ctx, x.author, x.keyId)) { approval = x; break; }
+    }
+    if (!approval) return { ok: false, code: "denied", why: "no valid approval" };
   }
   const guardApprovals: string[] = [];
   for (const g of guardsOf(s, ef)) {
-    if (!holds(s, g)) return { ok: false, why: "guard holds no role" };
+    if (!(ctx.profiles as A)?.[g]) return { ok: false, code: "invalid", why: "guard has no pinned profile" };
+    if (!holds(s, g)) return { ok: false, code: "denied", why: "guard holds no role" };
     const x = ef.approvals.find((y: A) => y.author === g && openApproval(y, ctx.time));
-    if (!x || !keyValid(ctx, g, x.keyId)) return { ok: false, why: "guard has not approved" };
+    if (!x || !keyValid(ctx, g, x.keyId)) return { ok: false, code: "denied", why: "guard has not approved" };
     guardApprovals.push(x.id);
   }
   return { ok: true, approval: approval?.id, guardApprovals };
@@ -596,33 +605,32 @@ function e3(s: SpaceState, ef: A, ctx: PolicyCtx): { ok: true; approval?: string
 function decideClaim(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   const ef = (s.effects as A)[b.proposal];
-  if (!ef) return deny("not a proposal");
+  if (!ef) return inv("not a proposal");
   // E1
-  if (a !== ef.executor) return deny("E1: not the executor");
+  if (a !== ef.executor || b.instance !== e.keyId) return deny("E1: not the executor, or instance is not the signing key");
   if (!isMemberOrOwner(s, a)) return deny("E1: executor holds no role");
   if (!accountable(s, ctx, a)) return deny("E1: executor not accountable");
-  if (b.instance !== e.keyId || !keyValid(ctx, a, b.instance)) return deny("E1: instance is not the valid signing key");
+  if (ef.expiresAt !== undefined && !(ef.expiresAt > ctx.time)) return deny("E5: proposal expired");
   // E2
-  if (!isMemberOrOwner(s, ef.proposer)) return deny("E2: proposer holds no role");
+  if (!isMemberOrOwner(s, ef.proposer) || !keyValid(ctx, ef.proposer, ef.proposerKey)) return deny("E2: proposer holds no role or its key is revoked");
   if (!accountable(s, ctx, ef.proposer)) return deny("E2: proposer not accountable");
-  if (!keyValid(ctx, ef.proposer, ef.proposerKey)) return deny("E2: proposer key revoked");
+  if (b.window !== s.policy.launchWindow) return deny("E5: window differs from launchWindow");
+  // E3
+  const r = e3(s, ef, ctx); if (!r.ok) return { allow: false, code: r.code, reason: "E3: " + r.why };
   // E4
   if (ef.cancelRequested) return deny("E4: cancel requested");
   // E5
   if (ef.phase !== "ready") return deny("E5: not ready");
-  if (b.attempt !== 1 + ef.claims.length) return deny("E5: wrong attempt");
-  if (b.window !== s.policy.launchWindow) return deny("E5: window differs from launchWindow");
-  if (ef.expiresAt !== undefined && !(ef.expiresAt > ctx.time)) return deny("E5: proposal expired");
   if (ef.task !== undefined && !(s.tasks as A)[ef.task]?.open) return deny("E5: task closed");
-  // E3
-  const r = e3(s, ef, ctx); if (!r.ok) return deny("E3: " + r.why);
+  if (b.attempt !== 1 + ef.claims.length) return deny("E5: wrong attempt");
   // E6
   if (s.policy.budget) {
     if (!ef.cost || ef.cost.unit !== s.policy.budget.unit) return deny("E6: no cost in the space's unit");
     const task = ef.task !== undefined ? (s.tasks as A)[ef.task] : undefined;
-    if (kindOf(ctx, ef.proposer) !== "human" && !(task && task.open && task.budget && task.to.includes(ef.proposer))) return deny("E6: agent proposer needs an open budgeted task");
-    const left = task && task.budget ? task.left.amount : (s.budgetLeft as A).amount;
+    const charged = task && task.budget ? task : undefined;
+    const left = charged ? charged.left.amount : (s.budgetLeft as A).amount;
     if (ef.cost.amount > left) return deny("E6: cost does not fit");
+    if (!charged && kindOf(ctx, ef.proposer) !== "human") return deny("E6: agent proposer cannot draw on the space budget");
   }
   return ok;
 }
@@ -641,28 +649,23 @@ function decideOutcome(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const f = findClaim(s, b.claim);
   if (!f) return inv("claim does not resolve");
   const { ef, claim } = f;
-  if (ef.phase !== "claimed") return deny("effect not claimed");
-  if (ef.claims[ef.claims.length - 1] !== claim) return deny("not the latest claim");
-  if (claim.outcome !== undefined) return deny("claim already has an outcome");
-  const own = a === ef.executor && e.keyId === claim.instance;
-  if (!own) {
-    // abandon
-    if (!isOwner(s, a)) return deny("abandon needs an owner");
-    if (b.result !== "unknown" || b.started !== "unknown") return deny("abandon must be unknown/unknown");
-    if (!(secs(ctx.time) >= secs(claim.time) + abandonAfter(claim.window))) return deny("abandon too early");
-    return ok;
-  }
-  if (!costWithin(s, claim, b.cost)) return inv("cost exceeds the reservation"); // vector: invalid
-  return ok;
+  if (ef.phase !== "claimed" || ef.claims[ef.claims.length - 1] !== claim || claim.outcome !== undefined) return deny("not the latest open claim");
+  if (!validPair(b.result, b.started)) return inv("(result, started) pair outside the table");
+  if (b.cost !== undefined && b.started !== "yes") return inv("cost only with started yes");
+  if (!costWithin(s, claim, b.cost)) return inv("cost exceeds the reservation");
+  if (a === ef.executor && e.keyId === claim.instance) return ok;
+  if (isOwner(s, a) && b.result === "unknown" && b.started === "unknown" && secs(ctx.time) >= secs(claim.time) + abandonAfter(claim.window)) return ok;
+  return deny("not the claim's instance, and not a timely abandon by an owner");
 }
 function decideResolve(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   const ef = (s.effects as A)[b.proposal];
-  if (!ef) return deny("not a proposal");
+  if (!ef) return inv("not a proposal");
   if (ef.phase !== "unknown") return deny("effect not unknown");
   if (a !== ef.executor && !isOwner(s, a)) return deny("not the executor or an owner");
+  if (b.cost !== undefined && b.result === "failed") return inv("cost with failed");
   const claim = ef.claims[ef.claims.length - 1];
-  if (!costWithin(s, claim, b.cost)) return inv("cost exceeds the reservation"); // vector: invalid
+  if (!costWithin(s, claim, b.cost)) return inv("cost exceeds the reservation");
   return ok;
 }
 
@@ -679,7 +682,7 @@ function decideSessionOpen(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   }
   if (b.task !== undefined) {
     const t = (s.tasks as A)[b.task];
-    if (!t) return deny("not a task");
+    if (!t) return inv("not a task");
     if (!t.to.includes(a) && !isOwner(s, a)) return deny("not assigned to the task");
   }
   return ok;
@@ -688,7 +691,7 @@ function decideSessionOpen(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
 function decideInput(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   const sess = (s.sessions as A)[b.session];
-  if (!sess) return deny("not a session");
+  if (!sess) return inv("not a session");
   if (b.release === true) {
     const x = sess.actor;
     if ((s.held as A)[x] !== a) return deny("not the guard of a held agent");
@@ -723,6 +726,15 @@ function refundClaim(s: SpaceState, claim: A, amount: number) {
 function freshPhase(s: SpaceState, ef: A): string {
   return ruleFor(s.policy, ef.action) || (s.held as A)[ef.proposer] ? "awaiting-approval" : "ready";
 }
+/** §6.4 re-arm: cancelled if a cancel was requested, else ready if the approvals are in hand (no expiry or key checks), else awaiting-approval. */
+function rearm(s: SpaceState, ef: A): string {
+  if (ef.cancelRequested) return "cancelled";
+  const live = (x: A) => !x.consumedBy && !x.dropped;
+  const rule = ruleFor(s.policy, ef.action);
+  if (rule && !ef.approvals.some((x: A) => live(x) && satisfiesRule(s, rule, x.author) && !(s.policy.separateApprover && x.author === ef.proposer))) return "awaiting-approval";
+  for (const g of guardsOf(s, ef)) if (!ef.approvals.some((x: A) => live(x) && x.author === g)) return "awaiting-approval";
+  return "ready";
+}
 function satisfied(s: SpaceState, ef: A, time: string): boolean {
   const rule = ruleFor(s.policy, ef.action);
   if (rule && candidates(s, ef, time).length === 0) return false;
@@ -752,6 +764,8 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     if (isProfileSpace(e.space)) {
       s.profile = { actorKind: b.profile.actorKind, operatorConfirmed: false, keys: { [b.profile.key.keyId]: { publicKey: b.profile.key.publicKey, status: "valid" } } };
       if (b.profile.operator !== undefined) s.profile.operator = b.profile.operator;
+      (s.roles as A)[profileActorOf(e.space)] = "owner";
+      (s.roles as A)["@:" + spaceServer(e.space)] = "owner";
     } else {
       (s.roles as A)[a] = "owner";
       (s.roleHistory as A)[a] = [{ from: seq }];
@@ -785,7 +799,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       }
       s.policy = structuredClone(b.policy);
       for (const ef of Object.values(s.effects) as A[]) {
-        if (ef.phase === "awaiting-approval" && !ruleFor(s.policy, ef.action) && satisfied(s, ef, time)) ef.phase = "ready";
+        if (ef.phase === "awaiting-approval" && rearm(s, ef) === "ready") ef.phase = "ready";
       }
       break;
     }
@@ -884,14 +898,14 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (b.started === "no") {
         giveBack();
         if (claim.reserved) { refundClaim(s, claim, claim.reserved.amount); claim.settled = true; }
-        ef.phase = ef.cancelRequested ? "cancelled" : "ready";
+        ef.phase = rearm(s, ef);
       } else if (b.started === "yes" && b.result !== "unknown") {
         settle(b.cost);
         if (b.result === "succeeded") ef.phase = "succeeded";
-        else ef.phase = ef.repeatable && !ef.cancelRequested ? "ready" : "failed";
+        else ef.phase = ef.repeatable && !ef.cancelRequested ? rearm(s, ef) : "failed";
       } else {
         // the executor's own unknown
-        if (ef.repeatable && !ef.cancelRequested) { claim.settled = true; ef.phase = "ready"; }
+        if (ef.repeatable && !ef.cancelRequested) { claim.settled = true; ef.phase = rearm(s, ef); }
         else ef.phase = "unknown";
       }
       break;
@@ -907,7 +921,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         if (claim.reserved) refundClaim(s, claim, claim.reserved.amount);
         claim.settled = true;
         for (const x of ef.approvals) x.dropped = true;
-        ef.phase = ef.cancelRequested ? "cancelled" : freshPhase(s, ef);
+        ef.phase = rearm(s, ef);
       }
       break;
     }
@@ -968,4 +982,23 @@ function settle(s: SpaceState, createdId: string, time: string) {
     }
     if (pending) (s.held as A)[x] = g;
   }
+}
+
+/** P-01 pinning plan for an `effect.claim`: the sequencer pins `base`, then `candidates` in order up to and including the first whose
+ *  signing key is valid, and always `guards`. Returns null for any other entry or when the proposal is unknown. */
+export function claimPinPlan(state: SpaceState | undefined, entry: Entry, time: Time): { base: string[]; candidates: { author: string; keyId: string }[]; guards: string[] } | null {
+  const e = entry as A;
+  if (e.kind !== "effect.claim" || !state) return null;
+  const ef = (state.effects as A)[e.body?.proposal];
+  if (!ef) return null;
+  const base = [e.author as string, ef.proposer as string].filter((x, i, l) => l.indexOf(x) === i);
+  return { base, candidates: candidates(state, ef, time).map((a: A) => ({ author: a.author, keyId: a.keyId })), guards: guardsOf(state, ef) };
+}
+
+/** ProfileView of a profile space's state (§4.3). */
+export function profileViewOf(actor: string, seq: number, s: SpaceState): import("./han.js").ProfileView {
+  const p = s.profile!;
+  const v: any = { actor, seq, actorKind: p.actorKind, operatorConfirmed: p.operatorConfirmed, keys: JSON.parse(JSON.stringify(p.keys)) };
+  if (p.operator) v.operator = p.operator;
+  return v;
 }

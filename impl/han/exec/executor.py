@@ -5,7 +5,7 @@ Per claim the journal holds, in order: `claiming` (X-02: signed claim + elapsed-
 `launching` (X-04) → [`expired`] → `ran` (the action's own result) → `reporting` (the signed outcome entry) → `reported`.
 Other terminal events: `void` (the claim was refused), `refused` (the outcome was refused) then `resolved`/`unresolved` (X-10)."""
 from __future__ import annotations
-import asyncio, hashlib, json, logging, os
+import asyncio, hashlib, json, logging, os, time
 from .. import keys
 from ..client import Client
 from ..core import P, WireError
@@ -21,13 +21,18 @@ class Crash(BaseException):
 class Executor:
     def __init__(self, url: str, actor: str, key_path: str, journal: str, spaces, sandbox: str, actions=("file.write", "http.post"),
                  allow_urls=(), instance: str | None = None, server: str | None = None, clock=None, hook=None,
-                 retry_delay: float = 0.2, max_retry_delay: float = 2.0):
-        """`clock` is the elapsed-time clock (X-02); `hook(point, **info)` may be sync or async and may raise Crash (tests)."""
+                 retry_delay: float = 0.2, max_retry_delay: float = 2.0, backoff_base: float = 1.0, backoff_cap: float = 60.0):
+        """`clock` is the elapsed-time clock (X-02); `hook(point, **info)` may be sync or async and may raise Crash (tests).
+        After a `failed`/`not started` outcome the effect is re-claimed no sooner than `backoff_base` * 2^(failures - 1)
+        seconds later, at most `backoff_cap` (X-11)."""
         self.url, self.actor, self.key_path, self.journal_path = url, actor, key_path, journal
         self.spaces, self.instance, self.server = list(spaces), instance, server
         self.actions = Actions(sandbox, allow_urls, actions)
         self.clock, self.hook = clock or elapsed_clock(), hook
         self.retry = (retry_delay, max_retry_delay)
+        self.backoff = (backoff_base, backoff_cap)
+        self._fails: dict[str, int] = {}               # proposal id → consecutive failed/not-started outcomes
+        self._not_before: dict[str, float] = {}        # proposal id → time.monotonic() before which we don't claim it again
         self.client = self.journal = None
         self.launched: list[str] = []                  # claim ids this process launched
         self.crashed = asyncio.Event()
@@ -125,10 +130,29 @@ class Executor:
         items = await self.client.read_all(space, 2 ** 31, state=True)
         st = items[0]["state"]
         for pid, eff in st["effects"].items():
-            if (eff["executor"] != self.actor or eff["phase"] != "ready" or eff["action"] not in self.actions.enabled
-                    or pid in self._jobs or pid in self._skip or self._denied.get(pid, -1) >= st["head"]): continue
+            if (eff["executor"] != self.actor or eff["phase"] != "ready" or pid in self._jobs or pid in self._skip
+                    or self._denied.get(pid, -1) >= st["head"]): continue
+            if eff["action"] not in self.actions.enabled:                       # never claimed; the proposer is told once
+                self._skip.add(pid)
+                self._jobs[pid] = asyncio.create_task(self._guard(self._decline, space, pid, eff, f"action {eff['action']} is not enabled here"))
+                continue
+            wait = self._not_before.get(pid, 0) - time.monotonic()
+            if wait > 0:                                                         # X-11: back off, then look again
+                asyncio.get_running_loop().call_later(wait + 0.01, self._wake[space].set)
+                continue
             self._jobs[pid] = asyncio.create_task(self._guard(self._job, space, pid, eff, st))
         return st["head"]
+
+    async def _decline(self, space, pid, eff, why):
+        """X-11: an effect this executor won't run is never claimed; one `message` citing the proposal tells its proposer."""
+        try:
+            if self.journal.declined(pid): return
+            self.journal.decline(pid, why)
+            text = f"declined proposal {pid}: {why}"
+            await self.client.append(*self.client.make_entry("message", space, {"to": [eff["proposer"]]}, {"text": text}, refs=[pid]))
+        except WireError as ex: log.warning("could not tell %s about %s: %s", eff["proposer"], pid, ex)
+        finally:
+            self._jobs.pop(pid, None)
 
     # ── X-09: the plan ──
     async def _load_plan(self, space, pid, eff) -> dict | None:
@@ -151,7 +175,8 @@ class Executor:
                 if plan is None: raise Refused("plan missing or does not hash to planDigest (X-09)")
                 self.actions.check(plan)
             except Refused as ex:
-                log.warning("not running %s: %s", pid, ex); self._skip.add(pid); return
+                log.warning("not running %s: %s", pid, ex); self._skip.add(pid)
+                self._jobs.pop(pid, None); await self._decline(space, pid, eff, str(ex)); return
             window = st["policy"]["launchWindow"]
             unit = (st["policy"].get("budget") or {}).get("unit") if eff.get("cost") else None
             entry, content = self.client.make_entry("effect.claim", space, {"proposal": pid, "attempt": len(eff["claims"]) + 1,
@@ -186,6 +211,11 @@ class Executor:
         info = dict(self.journal.events(cid))["claiming"]
         body = {"claim": cid, "result": result, "started": started}
         if started == "yes" and info.get("cost_unit"): body["cost"] = {"unit": info["cost_unit"], "amount": 0}
+        pid = info["proposal"]
+        if result == "failed" and started == "no":                    # X-11: the effect is ready again; don't hammer it
+            self._fails[pid] = n = self._fails.get(pid, 0) + 1
+            self._not_before[pid] = time.monotonic() + min(self.backoff[1], self.backoff[0] * 2 ** (n - 1))
+        else: self._fails.pop(pid, None); self._not_before.pop(pid, None)
         entry, content = self.client.make_entry("effect.outcome", info["space"], body)
         self.journal.add(cid, "reporting", {"entry": entry, "content": content})
         await self._at("before-report", claim=cid)

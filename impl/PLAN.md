@@ -20,7 +20,7 @@ The rubric stays fixed; a revision (e.g. the weight of v0.4 coverage after the s
 
 **Why.** Independent graders put the ceiling for design-only work at about 80/100: *goal fit* and *verifiability* are capped while nothing runs, and §10 lists rules whose only check is "a procedure, needs an implementation" (R-03, R-17/R-18, X-07, R-24, T-07/G-05, §8.4). This plan builds the smallest system that runs end to end, so those rules get executable checks and v1 test 1 ("used daily") becomes possible.
 
-**Not in scope (v1 minimal):** the Matrix binding (stays specified, untested), federation between sequencers, moves and forks over the wire, a GUI. Everything speaks the **generic binding** (§8.3) over one WebSocket.
+**Not in scope (v1 minimal):** the Matrix binding (stays specified, untested), moves and forks over the wire, a GUI. Everything speaks the **generic binding** (§8.3) over one WebSocket.
 
 ## Shape: five deep modules, one library
 
@@ -35,6 +35,8 @@ The rubric stays fixed; a revision (e.g. the weight of v0.4 coverage after the s
 | `han.cli` | `han` | `han space create`, `invite`, `steer`, `approve`, `release`, `watch`, `task`, `propose` | argument parsing only |
 
 Rule of depth: `han.seq` exposes the 3 calls + 6 transport ops and hides storage, clock, pinning and fan-out. `han.host` and `han.exec` expose nothing but behaviour.
+
+Federation between two sequencers was added afterwards (`han/seq/federation.py`, README "Federation", NOTES 28-37).
 
 ## Data and process layout
 

@@ -84,9 +84,15 @@ class Journal:
     def claims(self) -> dict[str, list[tuple[str, dict]]]:
         """claim id → its events in order."""
         out: dict[str, list] = {}
-        for claim, event, data in self.db.execute("SELECT claim, event, data FROM events ORDER BY n"):
+        for claim, event, data in self.db.execute("SELECT claim, event, data FROM events WHERE claim NOT LIKE 'decline:%' ORDER BY n"):
             out.setdefault(claim, []).append((event, json.loads(data)))
         return out
+
+    def declined(self, pid: str) -> bool:
+        """Has this executor already told the proposer it won't run `pid`? (kept apart from claims: it never claimed)"""
+        return self.db.execute("SELECT 1 FROM events WHERE claim=? AND event='declined'", ("decline:" + pid,)).fetchone() is not None
+
+    def decline(self, pid: str, why: str): self.add("decline:" + pid, "declined", {"why": why})
 
     def events(self, claim: str) -> list[tuple[str, dict]]:
         return [(e, json.loads(d)) for e, d in self.db.execute("SELECT event, data FROM events WHERE claim=? ORDER BY n", (claim,))]

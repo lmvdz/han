@@ -1,10 +1,12 @@
 """han-seq:  python -m han.seq --server a.localhost --port 8701 --db PATH --key PATH [--host 127.0.0.1] [--register ACTOR=KEYFILE[,kind[,operator]]]...
+                [--peers han-peers.json] [--peer NAME=URL]... [--advertise ws://host:port]
             python -m han.seq register --server S --db PATH --key PATH --actor @x:S --pub KEYFILE|PUBKEY [--kind human] [--operator @o:S]   (server stopped)"""
 import argparse, asyncio, logging, sys
 from .. import keys
 from ..core import P
 from .sequencer import Sequencer
 from .server import SeqServer
+from .federation import Federation, load_peers
 
 def _common(ap):
     ap.add_argument("--server", required=True, help="this server's name, e.g. a.localhost")
@@ -28,6 +30,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="han-seq"); _common(ap)
     ap.add_argument("--port", type=int, default=8701); ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--register", action="append", default=[], metavar="ACTOR=KEYFILE[,kind[,operator]]")
+    ap.add_argument("--peers", help="han-peers config: JSON {server name: http(s) base URL of its /.well-known/han}")
+    ap.add_argument("--peer", action="append", default=[], metavar="NAME=URL", help="one peer, as in --peers")
+    ap.add_argument("--advertise", help="the sequencer endpoint published in /.well-known/han (default ws://HOST:PORT)")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     seq = Sequencer(a.server, keys.load_or_generate(a.key, "h1"), a.db)
@@ -35,10 +40,14 @@ def main(argv=None):
         actor, rest = spec.split("=", 1)
         pub, *more = rest.split(",")
         _register(seq, actor, pub, *more)
+    peers = load_peers(a.peers) if a.peers else {}
+    peers.update(p.split("=", 1) for p in a.peer)
     async def run():
-        srv = await SeqServer(seq, a.host, a.port).start()
+        srv = await SeqServer(seq, a.host, a.port, advertise=a.advertise).start()
+        fed = Federation(seq, peers)
         print(f"han-seq {a.server} listening on {srv.url}", flush=True)
-        await asyncio.Event().wait()
+        try: await asyncio.Event().wait()
+        finally: await fed.close()
     try: asyncio.run(run())
     except KeyboardInterrupt: pass
     finally: seq.close()

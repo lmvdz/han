@@ -32,8 +32,8 @@ async def world(env, steer="member"):
     await member(cl["alice"], BOT, "member"); await member(cl["alice"], EXEC, "member")
     return cl, bot
 
-def start_host(env, client, mode, agent=None, crash=None, state=None, executor=EXEC):
-    host = Host(client, S, agent or ScriptedAgent(), state or os.path.join(env.tmp, "bot.state.db"), mode, executor, crash)
+def start_host(env, client, mode, agent=None, crash=None, state=None, executor=EXEC, cost=None):
+    host = Host(client, S, agent or ScriptedAgent(), state or os.path.join(env.tmp, "bot.state.db"), mode, executor, crash, cost)
     return host, asyncio.create_task(host.run())
 
 async def records(c, kind=None, author=None):

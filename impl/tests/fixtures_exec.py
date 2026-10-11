@@ -7,6 +7,8 @@ from han.client import default_policy
 from han.core import P
 from han.exec import Executor, Crash
 
+ALICE = "@alice:a.localhost"
+EXEC_ID = "@exec:a.localhost"
 IMPL = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 APPROVE_ALL = [{"action": "*", "approvers": ["owner"]}]
 
@@ -23,6 +25,7 @@ def key_path(env, name): return os.path.join(env.tmp, f"{name}.key.json")
 def sandbox(env): return os.path.join(env.tmp, "sandbox")
 
 def make_exec(env, execs, name="exec", spaces=(S,), journal=None, start=False, **kw) -> Executor:
+    kw.setdefault("backoff_base", 0.05); kw.setdefault("backoff_cap", 0.2)
     ex = Executor(env.srv.url, f"@{name}:{env.server}", key_path(env, name), journal or os.path.join(env.tmp, f"{name}.journal.db"),
                   list(spaces), sandbox(env), server=env.server, retry_delay=0.05, max_retry_delay=0.2, **kw)
     execs.append(ex)
@@ -70,6 +73,10 @@ def phase_is(c, pid, phase):
 async def kinds(c, space=S):
     """[(kind, body)] of the whole chain."""
     return [(r["entry"]["kind"], r["entry"]["body"]) for r in await chain(c, space)]
+
+async def records_of(c, kind, author=None, space=S):
+    """Records of one kind (optionally by one author) in a space."""
+    return [r for r in await chain(c, space) if r["entry"]["kind"] == kind and (author is None or r["entry"]["author"] == author)]
 
 def crash_at(point):
     """A hook that simulates the process dying (once) at the named journal point."""

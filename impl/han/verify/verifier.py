@@ -225,7 +225,7 @@ class Verifier:
         """R-15 in the room: signal our head; the other readers of the space compare it with theirs."""
         recs = self.c.records(space)
         if recs and space not in self.faults:
-            try: await self.client.signal(space, {"type": "heads", "heads": [recs[-1]["receipt"]]})
+            try: await self.client.signal(space, {"type": "heads", "receipts": [recs[-1]["receipt"]]})
             except (WireError,) + _NET: pass
 
     async def _announce(self, space):
@@ -237,8 +237,8 @@ class Verifier:
 
     def _on_signal(self, space, body):
         if not isinstance(body, dict): return
-        if body.get("type") == "heads" and isinstance(body.get("heads"), list):
-            for r in body["heads"][:16]:
+        if body.get("type") == "heads" and isinstance(body.get("receipts"), list):
+            for r in body["receipts"][:16]:
                 if isinstance(r, dict) and r.get("space") == space and self.observe(r): break
         elif body.get("type") == "fault": self._adopt(space, body.get("proof"))
 
