@@ -482,8 +482,10 @@ def _approve(state, entry, ctx, role):
     if is_guard and role not in READ_ROLES: return deny("guard holds no role")
     if not is_guard and (not rule or not may_approve(state, rule, author)): return deny("not an approver for this action")
     if not is_guard and state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")
-    if sum(1 for a in eff["approvals"] if not a.get("consumedBy") and not a.get("dropped")) >= MAX_OPEN_APPROVALS:
-        return deny("too many open approvals")
+    open_ = [a for a in eff["approvals"] if not a.get("consumedBy") and not a.get("dropped")]
+    if any(a["author"] == author and not (a.get("expiresAt") and ts(a["expiresAt"]) <= ts(ctx["time"])) for a in open_):
+        return deny("already has an open, unexpired approval")
+    if not is_guard and len(open_) >= MAX_OPEN_APPROVALS: return deny("too many open approvals")
     return ALLOW
 
 def approvals_complete(state, eff):
@@ -599,7 +601,7 @@ def is_human(ctx, actor):
     return ctx["profiles"].get(actor, {}).get("actorKind") == "human"
 
 HELD_KINDS = {"message", "effect.propose", "effect.claim", "effect.outcome", "effect.resolve", "effect.cancel",
-              "task.update", "session.open", "session.close"}
+              "task.update", "task.cancel", "session.open", "session.close"}
 
 def held_may(state, entry):
     """P-15: a held agent may talk, report and propose (its proposals wait for its guard), and work its own sessions; it
@@ -609,11 +611,13 @@ def held_may(state, entry):
         return bool(sess) and sess["actor"] == entry["author"]
     return entry["kind"] in HELD_KINDS
 
+CAUTION = ("auto", "guarded", "suggest")       # least to most cautious
+
 def effective_mode(state, sess):
-    """A session's mode, unless the space no longer allows it: then the most cautious mode the space allows."""
+    """A session's mode, or, if the space no longer allows it, the least cautious allowed mode that is at least as
+    cautious; None if there is none (the session is dead). Owners can make sessions stricter, never looser."""
     allowed = state["policy"]["sessions"]["modes"]
-    if sess["steerMode"] in allowed: return sess["steerMode"]
-    return next(m for m in ("guarded", "suggest", "auto") if m in allowed)
+    return next((m for m in CAUTION[CAUTION.index(sess["steerMode"]):] if m in allowed), None)
 
 def guard_approval(state, eff, g, ctx):
     """E3 for a guard: an unconsumed, undropped, unexpired approval by `g`, who still holds a role, signed with a valid
@@ -628,8 +632,10 @@ def guard_approval(state, eff, g, ctx):
     return "none", None
 
 def live(state, sess):
-    """A session is live while open, its actor holds a role, and its actor is human, has a guard, or is effectively auto."""
+    """Live: open, its actor holds a role, an allowed effective mode exists, and its actor is human, has a guard, or is
+    effectively auto."""
     return (bool(sess) and sess["open"] and role_of(state, sess["actor"]) in READ_ROLES
+            and effective_mode(state, sess) is not None
             and (sess["human"] or "guard" in sess or effective_mode(state, sess) == "auto"))
 
 def session_access(state, actor, session_id) -> dict:
@@ -637,7 +643,8 @@ def session_access(state, actor, session_id) -> dict:
     The session's own actor always has all three. A level of "nobody" grants nothing to anyone else."""
     s = state["sessions"].get(session_id)
     if not live(state, s): return {"watch": False, "read": False, "steer": False}
-    if actor == s["actor"] or actor == s.get("guard"): return {"watch": True, "read": True, "steer": True}
+    if actor == s["actor"] or (actor == s.get("guard") and role_of(state, actor) in READ_ROLES):
+        return {"watch": True, "read": True, "steer": True}
     role = state["roles"].get(actor)
     out = {}
     for right in ("watch", "read", "steer"):
@@ -675,8 +682,11 @@ def _session_input(state, entry, ctx, role):
     sess = state["sessions"].get(entry["body"]["session"])
     if not sess: return invalid("no such session")
     if entry["body"].get("release"):
-        if state["held"].get(sess["actor"]) != entry["author"]: return deny("only the guard holding this agent releases it")
-        return ALLOW if role in READ_ROLES else deny("guard holds no role")
+        g = state["held"].get(sess["actor"])
+        if g is None: return deny("agent not held")
+        if entry["author"] == g: return ALLOW if role in READ_ROLES else deny("guard holds no role")
+        if role == "owner" and role_of(state, g) not in READ_ROLES: return ALLOW     # the guard is gone: owners recover
+        return deny("only the guard holding this agent releases it")
     if not live(state, sess): return deny("session not live")
     if not _accountable(state, ctx, entry["author"]): return deny("agent's operator confirmation withdrawn")
     if not session_access(state, entry["author"], entry["body"]["session"])["steer"]: return deny("no steer right on this session")
@@ -826,7 +836,7 @@ def fold(state, record, ctx) -> dict:
         sess["steers"] += 1
         x = sess["actor"]
         if b.get("release"): s["held"].pop(x, None)                    # its human releases it, explicitly
-        elif author not in (x, sess.get("guard")) and "guard" in sess and effective_mode(s, sess) != "auto":
+        elif author not in (x, sess.get("guard")) and "guard" in sess and effective_mode(s, sess) == "guarded":
             s["held"][x] = sess["guard"]                               # an outside steer: held for its human
     return s
 

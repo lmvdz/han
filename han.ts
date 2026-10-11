@@ -277,7 +277,7 @@ export interface Client {
   read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean }): AsyncIterable<ReadItem>;
   signal(space: SpaceId, body: Json): Promise<void>;                    // via the transport (T-05)
   blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
-  blobGet(ref: BlobRef): Promise<Uint8Array>;                           // via the transport; the caller verifies the hash
+  blobGet(ref: BlobRef, space: SpaceId): Promise<Uint8Array>;          // via the transport (G-01: access via a referencing record); verify the hash
   stream(item: StreamItem): Promise<void>;                              // T-07, for the client's own sessions
   watch(space: SpaceId, session: EntryId): AsyncIterable<StreamItem>;  // T-07: data, never instruction (R-24)
 }
