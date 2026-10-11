@@ -613,18 +613,11 @@ def held_may(state, entry):
 
 CAUTION = STEER_MODES                          # least to most cautious
 
-def agent_guard(state, x):
-    """P-15: while agent `x` is guarded (it has a live, effectively guarded session), its guard: that session's operator
-    (the most recently opened one's); else None."""
-    g = None
-    for se in state["sessions"].values():                    # insertion order = opening order
-        if se["actor"] == x and not se["human"] and live(state, se) and effective_mode(state, se) == "guarded": g = se["guard"]
-    return g
-
-def hold_on_instruction(s, x, author):
-    """The one hold rule: an instruction to a guarded agent (a steer into any of its sessions, or a task naming it)
-    from anyone but itself and its guard holds it for that guard."""
-    g = agent_guard(s, x)
+def hold_on_instruction(s, x, author, owner_guard=None):
+    """The one hold rule: an instruction to a guarded agent (a steer into any of its sessions, a task naming it, or a
+    proposal naming it as executor) from anyone but itself and its guard holds it for that guard. `guarded[x]` is the
+    agent's own, sticky choice; `owner_guard` is a steered session's guard when the owners' modes force it guarded."""
+    g = s["guarded"].get(x) or owner_guard
     if g and author not in (x, g) and x not in s["held"]: s["held"][x] = g
 
 def guards_of(state, eff):
@@ -779,6 +772,7 @@ def fold(state, record, ctx) -> dict:
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
         if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"
+        hold_on_instruction(s, b["executor"], author)
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
@@ -818,7 +812,11 @@ def fold(state, record, ctx) -> dict:
             _settle(s, c, 0)
             back = set(c.get("guardApprovals", [])) | ({c["approval"]} if c.get("approval") else set())
             for a in eff["approvals"]:
-                if a["id"] in back: a.pop("consumedBy", None)
+                if a["id"] in back:
+                    a.pop("consumedBy", None)
+                    if any(n["author"] == a["author"] and not n.get("consumedBy") and not n.get("dropped") and n is not a
+                           and eff["approvals"].index(n) > eff["approvals"].index(a) for n in eff["approvals"]):
+                        a["dropped"] = True                    # superseded while it was consumed
             eff["phase"] = rearm(s, eff)
         elif b["result"] == "unknown":
             if eff["repeatable"] and not eff["cancelRequested"] and author == eff["executor"]:
@@ -850,15 +848,21 @@ def fold(state, record, ctx) -> dict:
         if not is_human(ctx, author):
             p = ctx["profiles"][author]
             if p.get("operatorConfirmed") and p.get("operator"): s["sessions"][eid]["guard"] = p["operator"]
+            if b["steerMode"] == "guarded": s["guarded"][author] = p["operator"]       # sticky until it unguards itself
         if "task" in b: s["sessions"][eid]["task"] = b["task"]
     elif kind == "session.close":
-        s["sessions"][b["session"]]["open"] = False
+        sess = s["sessions"][b["session"]]
+        sess["open"] = False
+        x = sess["actor"]
+        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"
+                and not any(se["actor"] == x and se["open"] and se["steerMode"] == "guarded" for se in s["sessions"].values())):
+            s["guarded"].pop(x, None)                                  # the agent itself stops being guarded
     elif kind == "session.input":
         sess = s["sessions"][b["session"]]
         sess["steers"] += 1
         x = sess["actor"]
         if b.get("release"): s["held"].pop(x, None)                    # its guard releases it, explicitly
-        else: hold_on_instruction(s, x, author)
+        else: hold_on_instruction(s, x, author, sess.get("guard") if effective_mode(s, sess) == "guarded" else None)
     return s
 
 def _debit(s, src, amount):
@@ -884,7 +888,7 @@ def _credit(s, task_id, amount):
 def _fold_create(e, rc, ctx, eid):
     b, author, space = e["body"], e["author"], e["space"]
     base = {"space": space, "head": rc["seq"], "home": server_of(space), "policy": b["policy"], "roles": {}, "roleHistory": {},
-            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
+            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
             "entries": {eid: {"author": author, "kind": "space.create"}}}
     if space.startswith("profile:"):
         actor = space[len("profile:"):]

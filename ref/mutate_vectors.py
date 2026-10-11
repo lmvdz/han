@@ -17,8 +17,7 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement)
     ("P-07 E6", "ignore budget", 'if remaining(state, effect_source(state, eff)) < eff["cost"]["amount"]: return deny("E6 budget")', "pass"),
     ("P-08", "self-approval allowed", 'if not is_guard and state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")', "pass"),
     ("P-08", "expired approvals count", 'if time is not None and a.get("expiresAt") and ts(a["expiresAt"]) <= ts(time): continue', "pass"),
-    ("P-09", "not-started keeps approval consumed", 'if a["id"] in back: a.pop("consumedBy", None)', "pass"),
-    ("P-09", "inconsistent result/started accepted", 'if (b["result"], b["started"]) not in VALID_PAIRS: return invalid("inconsistent result/started")', "pass"),
+    ("P-09", "not-started keeps approval consumed", '                    a.pop("consumedBy", None)\n                    if any(', '                    pass\n                    if any('),
     ("P-10", "anyone resolves", 'if author != eff["executor"] and role != "owner": return deny("executor or owner only")', "pass"),
     ("P-06", "uncosted effects in budgeted space", 'if unit and ("cost" not in b or b["cost"]["unit"] != unit): return deny("budgeted space: cost in the space\'s unit required")', "pass"),
     ("P-06", "agents may charge the space budget", 'if b.get("task") not in mine: return deny("agents spend only from a budgeted task assigned to them")', "pass"),
@@ -102,8 +101,6 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement)
     ('P-08', 'expired approvals accepted', '    if b.get("expiresAt") and ts(b["expiresAt"]) <= ts(ctx["time"]): return deny("approval already expired")', '    pass'),
     ('P-15', 'humans need a guard', '            and (sess["human"] or effective_mode', '            and (effective_mode'),
     ('P-15', 'guards cannot refuse', 'or a in guards_of(state, eff) or any(', 'or any('),
-    ('P-15', 'auto holds', '        if se["actor"] == x and not se["human"] and live(state, se) and effective_mode(state, se) == "guarded": g = se["guard"]', '        if se["actor"] == x and not se["human"] and live(state, se) and "guard" in se: g = se["guard"]'),
-    ('P-15', 'guard may self-hold', '    if g and author not in (x, g) and x not in s["held"]: s["held"][x] = g', '    if g and author != x and x not in s["held"]: s["held"][x] = g'),
     ('P-15', 'tasks never hold', '        for x in b["to"]: hold_on_instruction(s, x, author)\n', ''),
     ('P-15', 'held executors unguarded', '    h = state["held"].get(eff["executor"])\n    if h and h not in g: g.append(h)', '    pass'),
     ('P-15', 'guard approve without role', '    is_guard = author in guards and role in READ_ROLES', '    is_guard = author in guards'),
@@ -115,6 +112,14 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement)
     ('P-08', 'guard capped out', '    if not is_guard and len(others) >= MAX_OPEN_APPROVALS:', '    if len(others) >= MAX_OPEN_APPROVALS:'),
     ('P-08', 'expired approvals count toward cap', '\n              and a["author"] != author and not (a.get("expiresAt") and ts(a["expiresAt"]) <= ts(ctx["time"]))]', '\n              and a["author"] != author]'),
     ('P-01', 'guards not pinned', '            out.extend(guards_of(state, eff))', '            pass'),
+    ('P-15', 'guarded not sticky', '            if b["steerMode"] == "guarded": s["guarded"][author] = p["operator"]       # sticky until it unguards itself', '            pass'),
+    ('P-15', 'anyone closing unguards', '        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"', '        if (x not in s["held"] and sess["steerMode"] == "guarded"'),
+    ('P-15', 'held agent unguards itself', '        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"', '        if (author == x and sess["steerMode"] == "guarded"'),
+    ('P-15', 'never unguards', '            s["guarded"].pop(x, None)                                  # the agent itself stops being guarded', '            pass'),
+    ('P-15', 'executor naming no instruction', '        hold_on_instruction(s, b["executor"], author)\n', ''),
+    ('P-15', 'guard may self-hold', '    if g and author not in (x, g) and x not in s["held"]: s["held"][x] = g', '    if g and author != x and x not in s["held"]: s["held"][x] = g'),
+    ('P-15', 'owner-forced modes ignored', '        else: hold_on_instruction(s, x, author, sess.get("guard") if effective_mode(s, sess) == "guarded" else None)', '        else: hold_on_instruction(s, x, author)'),
+    ('P-08', 'returned approvals unsuperseded', '                        a["dropped"] = True                    # superseded while it was consumed', '                        pass'),
 ]
 
 def load_mutant(old, new):
