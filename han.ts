@@ -196,6 +196,7 @@ export interface SpaceState {
                                 human: boolean; guard?: ActorId } };   // the guard is an agent's confirmed operator at open
   held: { [agent: ActorId]: ActorId };                          // P-15: agent → the human it waits for
   guarded: { [agent: ActorId]: ActorId };                       // P-15: agent → its guard; the agent's own sticky choice
+                                                                // (guardedNow also counts owner-forced guarding, derived)
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
@@ -245,6 +246,7 @@ export interface Policy {                                // M2 — five pure fun
   fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState;
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
+  // P-15 hosts also need guardedNow(state, agent) → guard | null; it is derived from `guarded` and the sessions (§6.6).
   relevantActors(state: SpaceState | undefined, entry: Entry, time: Time): ActorId[];   // P-01
 }
 export interface Identity {                              // M3

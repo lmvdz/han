@@ -1029,6 +1029,46 @@ v.step(appr("a2", "p", author=O), "allow")
 v.step(outc("o", "c", "failed", "no"), "allow", check={"effects.p.approvals.0.dropped": True}, note="A5: one open approval per author")
 add(v.done())
 
+v = V("owner-forced-guarding-covers-every-instruction", ["P-15"], "when owners' modes force an agent's session guarded, tasks and executor slots hold it too, not only steers")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["guarded"]))}), "allow")
+v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {BOT: OP}}, note="CE1: a task holds it")
+v.step(E("r", "session.input", OP, {"session": "s", "release": True}), "allow")
+v.step(prop("d", author=P, executor=BOT), "allow", check={"held": {BOT: OP}}, note="so does naming it as executor")
+add(v.done())
+
+v = V("held-proposers-need-their-guard-for-older-proposals", ["P-15", "P-07 E3"], "a proposal made before the hold still needs the guard while its proposer is held")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(prop("p", author=BOT), "allow", check={"effects.p.phase": "ready"})
+v.step(E("in", "session.input", P, {"session": "s"}), "allow")
+v.step(claim("c0", "p"), "denied", note="CE2: its proposer is held now")
+v.step(appr("a", "p", author=OP), "allow").step(claim("c1", "p"), "allow")
+add(v.done())
+
+v = V("agents-can-always-unguard", ["P-15"], "an agent that isn't held can unguard by closing its guarded session, even one an owner already closed")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(E("c0", "session.close", O, {"session": "s"}), "allow").step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["auto"]))}), "allow")
+v.step(E("c1", "session.close", M, {"session": "s"}), "denied", note="already closed, and not its session")
+v.step(E("c2", "session.close", BOT, {"session": "s"}), "allow", check={"guarded": {}}, note="CE5: its own choice to undo")
+add(v.done())
+
+v = V("guarding-holds-for-open-outside-instructions", ["P-15"], "becoming guarded with an outside task or executor slot still open holds the agent at once")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("t", "task", P, {"to": [BOT2, BOT]}), "allow")
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow", check={"held": {BOT: OP}}, note="CE6")
+v.step(E("t2", "task", M, {"to": [BOT2, BOT]}), "allow")
+v.step(E("s2", "session.open", BOT2, {"steerMode": "guarded"}), "allow", check={"held": {BOT: OP, BOT2: OP}}, note="every assignee")
+add(v.done())
+
+v = V("tasks-hold-every-guarded-assignee", ["P-15"], "a task naming several guarded agents holds each of them")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s2", "session.open", BOT2, {"steerMode": "guarded"}), "allow")
+v.step(E("t", "task", P, {"to": [BOT2, BOT]}), "allow", check={"held": {BOT: OP, BOT2: OP}})
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",
