@@ -46,8 +46,8 @@ def ticking(start=0):
     t = iter(range(start, 100000))
     return lambda: "2026-10-10T12:%02d:%02dZ" % divmod(next(t), 60)
 
-def base_home(network=None, clock=None, server="a.example", key=HOME_A, space=S):
-    h = W.Home(server, key, clock=clock or ticking(), network=network, server_keys=SERVER_KEYS)
+def base_home(network=None, clock=None, server="a.example", key=HOME_A, space=S, steady=None):
+    h = W.Home(server, key, clock=clock or ticking(), network=network, server_keys=SERVER_KEYS, steady=steady)
     for kind, author, body, content in [("space.create", O, {"policy": POLICY}, {"name": "room"}),
                                         ("member.set", O, {"actor": M, "role": "member"}, None),
                                         ("member.set", O, {"actor": X, "role": "member"}, None)]:
@@ -383,6 +383,145 @@ def _():
     h.clock = lambda: "2026-10-10T12:00:00Z"
     e, c = entry("message", M, {}, {"text": "x"}); a = h.append(e, c, profiles())[0]
     return a == "unavailable", a
+
+# ── round 19: R-16 code, state at a seq, follow + limit, gossip signals, future time, context blobs, Policy-owned seen/refs ──
+import datetime as _dt
+def _fmt(sec): return (_dt.datetime(2026, 10, 10, 12, 0, 0) + _dt.timedelta(seconds=int(sec))).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def claimed_home(wall, steady):
+    """A home with a proposal claimed by X at time 0 (window 30, so A = 33)."""
+    h = base_home(clock=lambda: _fmt(wall[0]), steady=lambda: steady[0])
+    plan = {"action": "git.push", "target": "repo"}
+    body = {"executor": X, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}
+    e, c = entry("effect.propose", M, body, {"plan": plan}); assert h.append(e, c, profiles())[0] == "ok"
+    pid = W.entry_id(e)
+    e, c = entry("effect.claim", X, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30}); code, rc = h.append(e, c, profiles())
+    assert code == "ok", (code, rc)
+    return h, rc["id"]
+
+def abandon(h, claim, author=O):
+    e, c = entry("effect.outcome", author, {"claim": claim, "result": "unknown", "started": "unknown"})
+    return h.append(e, c, profiles())
+
+@scenario("an early abandon is unavailable, with retryAfterMs", "R-16, P-09", "an owner's abandon before A steady seconds is `unavailable` (not `denied`) even if the wall clock jumped; a non-owner's is denied; it succeeds at A; the executor's own report is never delayed")
+def _():
+    wall, steady = [0], [0.0]
+    h, claim = claimed_home(wall, steady)
+    steady[0], wall[0] = 10.0, 10
+    a, da = abandon(h, claim)                                    # 10 s in: 23 s to wait
+    steady[0], wall[0] = 11.0, 111                               # a wall-clock step forward: receipt time says A has passed
+    b, db = abandon(h, claim)
+    nonowner, _ = abandon(h, claim, author=M)
+    steady[0] = 33.0
+    c, _ = abandon(h, claim)
+    h2, claim2 = claimed_home([0], [0.0])
+    e2, c2 = entry("effect.outcome", X, {"claim": claim2, "result": "unknown", "started": "unknown"})
+    own = h2.append(e2, c2, profiles())[0]
+    return ((a, da["retryAfterMs"], b, db["retryAfterMs"], nonowner, c, own) == ("unavailable", 23000, "unavailable", 22000, "denied", "ok", "ok"),
+            f"{a}/{da} {b}/{db} nonowner={nonowner} at-A={c} executor={own}")
+
+@scenario("an abandon after a restart waits a full A again", "R-16", "after a restart or failover the sequencer counts every earlier claim from its new start")
+def _():
+    wall, steady = [0], [0.0]
+    h, claim = claimed_home(wall, steady)
+    steady[0], wall[0] = 40.0, 40
+    h.restart()                                                  # claim is now older than A by receipt time, but this run knows nothing of it
+    steady[0], wall[0] = 45.0, 45
+    a, da = abandon(h, claim)
+    steady[0], wall[0] = 73.0, 73
+    b, _ = abandon(h, claim)
+    return (a, da["retryAfterMs"], b) == ("unavailable", 28000, "ok"), f"{a}/{da} {b}"
+
+@scenario("state at a past seq", "§3 read, P-02", "`at` returns the state after that record, needs read rights at `at` (not at the head), and equals a verifier's replay")
+def _():
+    h = base_home()
+    e, c = entry("message", M, {}, {"text": "while a member"}); h.append(e, c, profiles())
+    e, c = entry("member.set", O, {"actor": M, "role": "none"}); h.append(e, c, profiles())
+    code, items = h.read(S, 0, M, state=True, at=4)
+    m = mirror(); [m.ingest(r) for r in h.spaces[S]["records"][:4]]
+    want = {k: v for k, v in m.spaces[S]["state"].items() if k != "entries"}
+    at_head = h.read(S, 0, M, state=True)[0]
+    at5 = h.read(S, 0, M, state=True, at=5)[0]                    # the removal itself is not readable by the removed member
+    bad = (h.read(S, 0, O, state=True, at=0)[0], h.read(S, 0, O, state=True, at=99)[0], h.read(S, 0, O, at=2)[0])
+    owner = h.read(S, 0, O, state=True, at=1)[1][0]["state"]
+    return (code == "ok" and items[0]["state"] == want and items[0]["state"]["head"] == 4 and at_head == "denied" and at5 == "denied"
+            and bad == ("invalid", "invalid", "invalid") and owner["head"] == 1 and M not in owner["roles"] and O in owner["roles"]), f"{code} head={items[0]['state']['head']} {at_head} {at5} {bad}"
+
+@scenario("follow with a short limit leaves a visible gap", "§3 read", "a backlog longer than `limit` is cut at `limit`; live records follow from the head at registration; re-reading the gap closes it")
+def _():
+    h = base_home()
+    for i in range(5):
+        e, c = entry("message", M, {}, {"text": str(i)}); h.append(e, c, profiles())          # seqs 4..8
+    code, items, q = h.read_follow(S, 0, O, limit=3)
+    e, c = entry("message", M, {}, {"text": "live"}); h.append(e, c, profiles())            # seq 9
+    seqs = [i["record"]["receipt"]["seq"] for i in items]
+    live = [i["record"]["receipt"]["seq"] for i in q if i["type"] == "record"]
+    refill = [i["record"]["receipt"]["seq"] for i in h.read(S, seqs[-1], O)[1]]
+    return (seqs, live, refill) == ([1, 2, 3], [9], [4, 5, 6, 7, 8, 9]), f"{seqs} {live} {refill}"
+
+def _world():
+    """Two forked homes (equivocation at seq 4)."""
+    h1 = base_home(); h2 = base_home()
+    e1, c1 = entry("message", M, {}, {"text": "left"}); e2, c2 = entry("message", M, {}, {"text": "right"})
+    _, r1 = h1.append(e1, c1, profiles()); _, r2 = h2.append(e2, c2, profiles())
+    return h1, h2, r1, r2
+
+@scenario("gossip signals: heads compare, faults are adopted only if they check", "R-15, T-05", "a heads signal surfaces an equivocation; a fault signal is adopted only when its proof checks against the receiver's own keys; signals change no state")
+def _():
+    h1, h2, r1, r2 = _world()
+    mine = {S: h1.spaces[S]["records"]}
+    heads = W.receive_gossip(W.heads_signal([r2]), mine, SERVER_KEYS)
+    nohead = W.receive_gossip(W.heads_signal([r1]), mine, SERVER_KEYS)
+    proof = {"v": 1, "kind": "equivocation", "space": S, "through": 3, "reason": "", "receipts": [r1, r2], "serverKeys": SERVER_KEYS}
+    real = W.receive_gossip(W.fault_signal(proof), mine, SERVER_KEYS)
+    forged = [W.sign_receipt(dict(r, time="2026-10-10T13:00:00Z"), EVIL) for r in (r1, r2)]          # EVIL signs as if it were a.example
+    fake = W.receive_gossip(W.fault_signal(dict(proof, receipts=forged, serverKeys={"a.example": {"h1": {"publicKey": EVIL.pub, "from": T0}}})), mine, SERVER_KEYS)
+    junk = W.receive_gossip({"type": "fault", "proof": "trust me"}, mine, SERVER_KEYS)
+    before = h1.spaces[S]["state"]["head"]
+    sent = h1.signal(S, M, W.fault_signal(proof))[0]; stranger = h1.signal(S, Z, W.heads_signal([r1]))[0]
+    return (heads == ("proofs", ["equivocation"]) and nohead == ("proofs", []) and real == ("adopted", "equivocation")
+            and fake[0] == "ignored" and junk[0] == "ignored" and sent == "ok" and stranger == "denied" and h1.spaces[S]["state"]["head"] == before,
+            f"{heads} {nohead} {real} {fake} {junk} {sent} {stranger}")
+
+@scenario("future-dated receipts: one 60 s tolerance", "R-03a", "a verifier tolerates a receipt dated up to 60 s after its own clock and faults one second more")
+def _():
+    h = base_home()                                              # first receipt at 12:00:00
+    first = h.spaces[S]["records"][0]
+    ok = mirror().ingest(first, now="2026-10-10T11:59:00Z")       # exactly 60 s ahead
+    m = mirror(); bad = m.ingest(first, now="2026-10-10T11:58:59Z")
+    proof = {"v": 1, "kind": "future-time", "space": S, "through": 0, "reason": "", "receipts": [first["receipt"]], "serverKeys": SERVER_KEYS, "observedAt": "2026-10-10T11:58:59Z"}
+    adopted = W.receive_gossip(W.fault_signal(proof), {}, SERVER_KEYS)
+    return ok[0] and not bad[0] and bad[1] == "future-time" and adopted == ("adopted", "future-time"), f"{ok} {bad} {adopted}"
+
+@scenario("context blobs follow the session's read right", "G-01, G-05", "a context item's blob is readable by exactly the actors with `read` on the live session, supplied only by the session's actor, and not after it closes")
+def _():
+    h = base_home()
+    e, c = entry("policy.set", O, {"policy": dict(POLICY, sessions={"watch": "member", "read": "owner", "steer": "owner", "modes": ["auto", "guarded"]})}); h.append(e, c, profiles())
+    e, c = entry("session.open", X, {"steerMode": "auto"}); code, r = h.append(e, c, profiles()); assert code == "ok", (code, r)
+    sid = r["id"]
+    data, other = b"transcript bytes", b"someone else's bytes"
+    ref = {"hash": hashlib.sha256(data).hexdigest(), "size": len(data), "type": "text/plain"}
+    ref2 = {"hash": hashlib.sha256(other).hexdigest(), "size": len(other), "type": "text/plain"}
+    h.blob_put(data, X); h.blob_put(other, O)                    # ref2 is uploaded by an owner, not by the session's actor
+    item = lambda n, ref_: {"space": S, "session": sid, "n": n, "time": "2026-10-10T12:00:00Z", "type": "context", "blob": ref_, "what": "transcript"}
+    s1 = h.stream(item(1, ref), X)[0]; s2 = h.stream(item(2, ref2), X)[0]; not_actor = h.stream(item(3, ref), O)[0]
+    owner = h.blob_get(ref, S, O)[0]; watcher = h.blob_get(ref, S, M)[0]; stranger = h.blob_get(ref, S, Z)[0]
+    unsupplied = h.blob_get(ref2, S, O)[0]
+    e, c = entry("session.close", X, {"session": sid}); h.append(e, c, profiles())
+    closed = h.blob_get(ref, S, O)[0]
+    return ((s1, s2, not_actor, owner, watcher, stranger, unsupplied, closed) == ("ok", "ok", "denied", "ok", "denied", "denied", "unavailable", "denied"),
+            f"{s1} {s2} {not_actor} owner={owner} watcher={watcher} stranger={stranger} unsupplied={unsupplied} closed={closed}")
+
+@scenario("seen and refs are Policy's verdict alone", "R-25, P-16, R-05", "`seen` beyond the head and a missing ref are invalid at the home (from Policy), and a home that skipped Policy is caught by the mirror's replay with the same verdict")
+def _():
+    h = base_home()
+    e, _c = entry("message", M, {}, {"text": "x"}, seen=999)
+    a = h.append(e, {"text": "x"}, profiles())[0]
+    e2 = dict(entry("message", M, {}, {"text": "y"})[0]); e2.pop("sig"); e2["refs"] = ["0" * 63 + "1"]; e2 = W.sign_entry(e2, KEYS[M])
+    b = h.append(e2, {"text": "y"}, profiles())[0]
+    forged = h.append(e, {"text": "x"}, profiles(), skip_policy=True)[0]       # a careless home orders it anyway
+    m = mirror(); out = [m.ingest(r) for r in h.spaces[S]["records"]]
+    return (a, b, forged) == ("invalid", "invalid", "ok") and not out[-1][0] and "forbidden" in out[-1][1], f"{a} {b} {forged} mirror={out[-1][1]}"
 
 def main():
     bad = 0

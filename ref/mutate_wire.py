@@ -37,6 +37,18 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement)
     ("G-01", "completion by claim, not bytes", 'done = len(buf) == ref["size"] and hashlib.sha256(bytes(buf)).hexdigest() == ref["hash"]', "done = True"),
     ("R-03a", "slow new home stamps earlier time", 'if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"', "pass"),
     ("R-08", "policy may demand impossible durability", 'return "unavailable", "this home can\'t meet the requested minDurability"', "pass"),
+    ("R-16", "early abandon answered denied", 'return "unavailable", {"reason": "abandon before the launch window closed (R-16)"', 'return "denied", {"reason": "abandon before the launch window closed (R-16)"'),
+    ("R-16", "no elapsed-time check on the steady clock", 'steady_wait = A - (self.steady() - started)', 'steady_wait = 0'),
+    ("R-16", "a restart forgets nothing", 'started = self.claim_steady.get(c["id"], self.run_start)', 'started = self.claim_steady.get(c["id"], -10**9)'),
+    ("§3", "state at ignores `at`", 'view = st if at is None else self.state_at(space, at)', 'view = st'),
+    ("§3", "state at needs rights at the head", 'where = st["head"] if at is None else at', 'where = st["head"]'),
+    ("§3", "follow ignores limit", 'if P.can_read(st, as_, r["receipt"]["seq"])][:limit]', 'if P.can_read(st, as_, r["receipt"]["seq"])]'),
+    ("R-15", "fault adopted without checking its proof", 'if pr.get("kind") == "equivocation" and len(rs) == 2 and equivocation_proof(rs[0], rs[1], server_keys): return "adopted", "equivocation"',
+              'if pr.get("kind") == "equivocation" and len(rs) == 2: return "adopted", "equivocation"'),
+    ("R-03a", "future-dated receipts not flagged", 'if now is not None and secs(r["time"]) > secs(now) + MAX_CLOCK_SKEW: return fault("future-time")', "pass"),
+    ("R-03a", "future tolerance is 600 s", "MAX_CLOCK_SKEW = 60 ", "MAX_CLOCK_SKEW = 600 "),
+    ("G-01", "context blobs readable by watchers", 'P.session_access(S["state"], as_, sid)["read"]', 'P.session_access(S["state"], as_, sid)["watch"]'),
+    ("G-01", "context blobs supplied by anyone's upload", 'if as_ in self.uploads.get(h, ()): self.supplied.add((item["space"], h))', 'self.supplied.add((item["space"], h))'),
 ]
 
 def main():

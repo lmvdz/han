@@ -13,11 +13,17 @@ Preimages (architecture.md §2, all UTF-8):
   helloProof  = Ed25519(actor key,   "han-hello-v1\\n" + challenge + "\\n" + dialed server name)
 """
 from __future__ import annotations
-import base64, hashlib, re
+import base64, datetime, hashlib, re
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 import policy as P
+
+MAX_CLOCK_SKEW = 60        # han.ts Limits.maxClockSkewSeconds: the one future-time tolerance (R-03a)
+
+def secs(t: str) -> int:
+    """Seconds since the epoch of a HAN Time string."""
+    return int(datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp())
 
 def b64(b: bytes) -> str: return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 def unb64(s: str) -> bytes: return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
@@ -190,8 +196,12 @@ def blob_refs(kind: str, content) -> list[dict]:
 # ── a reference home ──
 class Home:
     """The §4.1 append pipeline plus the server behaviours G-01, R-15, G-03, G-02, G-04."""
-    def __init__(self, server: str, key: Key, key_id="h1", durability="local", clock=None, network=None, server_keys=None):
+    def __init__(self, server: str, key: Key, key_id="h1", durability="local", clock=None, network=None, server_keys=None, steady=None):
         self.server, self.key, self.key_id, self.durability = server, key, key_id, durability
+        self.steady = steady      # R-16: a callable returning steady-clock seconds; None switches the elapsed-time check off
+        self.run_start = steady() if steady else 0       # claims ordered before this run count from here (restart, failover)
+        self.claim_steady = {}    # claim id -> steady reading when this run ordered it
+        self.context_blobs = {}   # (space, hash) -> session id: blobs of `context` StreamItems (G-01, G-05)
         self.server_keys = server_keys or {}
         self.parts = {}           # (hash, uploader) -> bytearray of that uploader's own bytes (G-01)
         self.spaces = {}          # space -> {"records": [...], "state": SpaceState}
@@ -239,6 +249,8 @@ class Home:
         if not verify_entry(entry, profiles[entry["author"]]): return "invalid", "signature"          # 5
         if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"
         ctx = {"time": now, "profiles": pinned}
+        wait = self.abandon_wait(state, entry, now)                         # R-16: an early owner abandon is `unavailable`, not `denied`
+        if wait > 0 and not skip_policy: return "unavailable", {"reason": "abandon before the launch window closed (R-16)", "retryAfterMs": int(wait * 1000)}
         if not skip_policy:                                                 # 6
             d = P.decide(state, dict(entry, id=eid), ctx)
             if not d["allow"]: return d["code"], d["reason"]
@@ -249,8 +261,10 @@ class Home:
         r = sign_receipt(r, self.key)
         rec = {"entry": entry, "content": content, "redacted": False, "receipt": r}
         new_state = P.fold(state, {"entry": dict(entry, id=eid), "content": None, "receipt": r}, ctx)   # 8
-        if not S: S = self.spaces[sp] = {"records": [], "state": None}
+        if not S: S = self.spaces[sp] = {"records": [], "state": None, "pins": []}
+        S.setdefault("pins", [None] * len(S["records"])).append(pinned)
         S["records"].append(rec); S["state"] = new_state
+        if entry["kind"] == "effect.claim" and self.steady: self.claim_steady[eid] = self.steady()
         if entry["kind"] == "space.move": self.moved[sp] = entry["body"]["to"]
         for ref in blob_refs(entry["kind"], content):                       # G-01: the author supplied these bytes
             if entry["author"] in self.uploads.get(ref["hash"], ()): self.supplied.add((sp, ref["hash"]))
@@ -262,10 +276,34 @@ class Home:
         self._notify(entry, sp, r["seq"], new_state)
         return "ok", r
 
+    def restart(self):
+        """R-16: a steady clock can't measure across a restart or a failover, so every earlier claim counts from now."""
+        if self.steady: self.run_start = self.steady()
+        self.claim_steady = {}
+
+    def abandon_wait(self, state, entry, now):
+        """R-16, P-09: seconds an owner's abandon must still wait (0 if it isn't an early abandon). The abandon is early if either
+        this home's steady clock shows less than A since it ordered the claim (or since this run began), or the receipt time it
+        would get is less than claim.time + A."""
+        b = entry["body"]
+        if not state or entry["kind"] != "effect.outcome" or b.get("result") != "unknown" or b.get("started") != "unknown": return 0
+        if state["roles"].get(entry["author"]) != "owner": return 0                  # not an owner: Policy's `denied`
+        for eff in state["effects"].values():
+            for c in eff["claims"]:
+                if c["id"] != b.get("claim"): continue
+                if entry["author"] == eff["executor"] and entry["keyId"] == c["instance"]: return 0       # the executor's own report
+                A = (c["window"] * 101 + 98) // 99 + 2                                                    # ceil(window*101/99) + 2
+                steady_wait = 0
+                if self.steady is not None:
+                    started = self.claim_steady.get(c["id"], self.run_start)
+                    steady_wait = A - (self.steady() - started)
+                return max(steady_wait, secs(c["time"]) + A - secs(now), 0)
+        return 0
+
     def adopt(self, space, records, state):
         """Become home again after a move back (§7.3): take the verified chain and its state (from a mirror's replay),
         and stop answering `moved` once the last move names this server."""
-        self.spaces[space] = {"records": list(records), "state": state}
+        self.spaces[space] = {"records": list(records), "state": state, "pins": [None] * len(records)}
         if home_at(records, records[-1]["receipt"]["seq"] + 1) == self.server: self.moved.pop(space, None)
 
     def _notify(self, entry, space, seq, state):
@@ -277,16 +315,41 @@ class Home:
             target = self.network.get(P.server_of(a))
             if target: target.signal("profile:" + a, "@:" + self.server, {"type": "notice", "space": space, "seq": seq})
 
-    def read(self, space, after, as_, state=False):
+    def state_at(self, space, at):
+        """The SpaceState after record `at`: a fold of the stored records with the profiles each receipt pinned."""
+        S = self.spaces[space]
+        pins = S.get("pins", [])
+        if len(pins) != len(S["records"]) or any(p is None for p in pins[:at]): return None
+        st = None
+        for rec, pin in zip(S["records"][:at], pins):
+            e = dict(rec["entry"], id=rec["receipt"]["id"])
+            st = P.fold(st, {"entry": e, "content": None, "receipt": rec["receipt"]}, {"time": rec["receipt"]["time"], "profiles": pin})
+        return st
+
+    def read(self, space, after, as_, state=False, at=None, limit=1000):
+        """§3 read. `at` (with `state`) gives the state after record `at`, and needs read rights at `at` (P-02), not at the head."""
         S = self.spaces.get(space)
         if not S: return "not_found", None
         st = S["state"]
+        if not (isinstance(limit, int) and 1 <= limit <= 1000): return "invalid", "limit"
+        if at is not None and (not state or not isinstance(at, int) or not 1 <= at <= st["head"]): return "invalid", "at needs state and 1 <= at <= head"
         items = []
         if state:
-            if not P.can_read(st, as_, st["head"]): return "denied", "state needs read rights at head"
-            items.append({"type": "state", "state": {k: v for k, v in st.items() if k != "entries"}})
-        items += [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])]
+            where = st["head"] if at is None else at
+            if not P.can_read(st, as_, where): return "denied", "state needs read rights at " + ("head" if at is None else "at")
+            view = st if at is None else self.state_at(space, at)
+            if view is None: return "unavailable", "no stored profile pins for this seq"
+            items.append({"type": "state", "state": {k: v for k, v in view.items() if k != "entries"}})
+        items += [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])][:limit]
         return "ok", items
+
+    def read_follow(self, space, after, as_, limit=1000):
+        """§3 read with follow: `limit` backlog records, then the live records from the head at registration. If the backlog was
+        longer, the client sees a seq gap between the last backlog record and the first live one and MUST re-read it."""
+        code, items = self.read(space, after, as_, limit=limit)
+        if code != "ok": return code, items, None
+        q = self.followers.setdefault(space, {})[as_] = []
+        return "ok", items, q
 
     def follow(self, space, as_):
         if space.startswith("profile:"):
@@ -346,10 +409,28 @@ class Home:
         self.blobs[h] = data; self.uploads.setdefault(h, set()).add(as_)
         return h
 
+    def stream(self, item, as_):
+        """G-05: only the session's actor, on a live session, with `n` one more than its last item. A `context` item names a
+        blob that G-01 then serves to every actor with `read` on the live session; supply is the session's actor's own upload."""
+        S = self.spaces.get(item["space"])
+        sess = S["state"]["sessions"].get(item["session"]) if S else None
+        if not sess or sess["actor"] != as_ or not P.session_access(S["state"], as_, item["session"])["watch"]: return "denied", None
+        key = (item["space"], item["session"])
+        last = self.__dict__.setdefault("_stream_n", {}).get(key, 0)
+        if item["n"] != last + 1: return "invalid", "n"
+        self._stream_n[key] = item["n"]
+        if item["type"] == "context":
+            h = item["blob"]["hash"]
+            self.context_blobs[(item["space"], h)] = item["session"]
+            if as_ in self.uploads.get(h, ()): self.supplied.add((item["space"], h))
+        return "ok", None
+
     def blob_get(self, ref, space, as_):
         S = self.spaces.get(space)
         if not S: return "not_found", None
-        if not blob_readable(S["records"], S["state"], ref, as_): return "denied", None
+        sid = self.context_blobs.get((space, ref["hash"]))
+        by_context = sid is not None and P.session_access(S["state"], as_, sid)["read"]
+        if not by_context and not blob_readable(S["records"], S["state"], ref, as_): return "denied", None
         if (space, ref["hash"]) not in self.supplied or ref["hash"] not in self.blobs: return "unavailable", None
         return "ok", self.blobs[ref["hash"]]
 
@@ -385,7 +466,8 @@ class Mirror:
         self.server_keys, self.profile_source = server_keys, profile_source
         self.spaces = {}
 
-    def ingest(self, rec: dict) -> tuple[bool, str]:
+    def ingest(self, rec: dict, now: str | None = None) -> tuple[bool, str]:
+        """`now` is the verifier's own clock; a receipt dated more than MAX_CLOCK_SKEW after it is a fault (R-03a, future-time)."""
         e, r = rec["entry"], rec["receipt"]
         sp = e["space"]
         S = self.spaces.setdefault(sp, {"records": [], "state": None, "lastProfiles": {}})
@@ -400,6 +482,7 @@ class Mirror:
         expected = home_at(S["records"], r["seq"]) or P.server_of(sp)
         if r["home"] != expected: return fault("receipt from a server that is not the home")              # R-14
         if not verify_receipt(r, self.server_keys): return fault("receipt signature or key window")
+        if now is not None and secs(r["time"]) > secs(now) + MAX_CLOCK_SKEW: return fault("future-time")           # R-03a
         prev = S["records"][-1]["receipt"] if S["records"] else None
         if r["seq"] != (prev["seq"] + 1 if prev else 1): return fault("seq gap")
         if r["prev"] != (receipt_hash(prev) if prev else ""): return fault("prev mismatch")
@@ -432,3 +515,33 @@ class Mirror:
         S["records"].append(rec)
         S["lastProfiles"].update(r["profiles"])
         return True, "ok"
+
+
+# ── gossip signals (R-15, T-05): heads and faults travel as in-space signals and carry no authority ──
+def heads_signal(receipts: list[dict]) -> dict: return {"type": "heads", "receipts": receipts}
+def fault_signal(proof: dict) -> dict: return {"type": "fault", "proof": proof}
+
+def receive_gossip(body: dict, records_by_space: dict, server_keys: dict) -> tuple[str, object]:
+    """What a verifier does with a gossip signal. `records_by_space`: the verified records it holds. `server_keys`: its OWN keys.
+    heads -> ("proofs", [fault kinds found]); fault -> ("adopted", kind) only if the proof checks against our keys, else ("ignored", why).
+    Only the proof kinds that need no profile chains are checked here (equivocation, wrong-home, future-time)."""
+    if not isinstance(body, dict): return "ignored", "not an object"
+    if body.get("type") == "heads":
+        rs = body.get("receipts")
+        if not isinstance(rs, list) or len(rs) > 256: return "ignored", "bad heads"
+        found = []
+        for r in rs:
+            mine = records_by_space.get(r.get("space"), [])
+            if 1 <= r.get("seq", 0) <= len(mine) and equivocation_proof(mine[r["seq"] - 1]["receipt"], r, server_keys): found.append("equivocation")
+            elif mine and wrong_home_proof(mine[:r.get("seq", 1) - 1], r, server_keys): found.append("wrong-home")
+        return "proofs", found
+    if body.get("type") == "fault":
+        pr = body.get("proof")
+        if not isinstance(pr, dict): return "ignored", "no proof"
+        rs = pr.get("receipts", [])
+        if pr.get("kind") == "equivocation" and len(rs) == 2 and equivocation_proof(rs[0], rs[1], server_keys): return "adopted", "equivocation"
+        if pr.get("kind") == "wrong-home" and len(rs) == 1 and wrong_home_proof(pr.get("chain", []), rs[0], server_keys): return "adopted", "wrong-home"
+        if (pr.get("kind") == "future-time" and len(rs) == 1 and pr.get("observedAt") and verify_receipt(rs[0], server_keys)
+                and secs(rs[0]["time"]) > secs(pr["observedAt"]) + MAX_CLOCK_SKEW): return "adopted", "future-time"
+        return "ignored", "the proof does not check against our keys"
+    return "ignored", "not a gossip signal"

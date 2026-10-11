@@ -1,7 +1,7 @@
 # HAN v1 — coverage of v0.4
 
-Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–18): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
-v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09, X-10, T-01…T-07, G-01…G-05 (the generic binding, §8.3).
+Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–19): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
+v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-11, T-01…T-07, G-01…G-05 (the generic binding, §8.3).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
 ## Invariants (12/12 accounted for: 10 kept, 2 weakened with a stated qualification)
@@ -16,7 +16,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | INV-06 | unknown stays unknown; no silent rerun | P-09/P-10 phase `unknown`; X-06 | model UnknownNeverSilentlyRetried |
 | INV-07 | stale authority admits nothing new; running effects need a separate stop | E2–E4 at the claim's seq; launch at once or never (X-04, X-06); `effect.cancel` for running work; an owner's abandon waits on elapsed time (P-09, R-16) | model RevokedBeforeClaimNeverLaunches; vectors E2, E4 |
 | INV-08 | model input is an immutable manifest | R-04 immutable headers + R-17 `seen`/`refs` + optional input blob. **Weakened:** the header (what was seen, which entries) is permanent, but redaction (P-12) can erase content and release blobs, so *what* the agent read may later be gone by design. | by construction |
-| INV-09 | hash ≠ permission, authorship or truth | G-01: access needs a reference and per-space supply, and supply needs the uploader's own bytes (T-03: readers verify the hash) | wire "blob theft by hash is refused", "uploads complete only on the uploader's own bytes" |
+| INV-09 | hash ≠ permission, authorship or truth | G-01: access needs a reference (a record, or a context item of a live session the caller may read) and per-space supply, and supply needs the uploader's own bytes (T-03: readers verify the hash) | wire "blob theft by hash is refused", "uploads complete only on the uploader's own bytes" |
 | INV-10 | a fork gets fresh identity and authority, with no inherited leases or credentials | P-13; credentials are executor-private and never in entries | vector `fork-fresh-authority` |
 | INV-11 | no global order; ordering only per stream | §7.2: total order per space only | by construction |
 | INV-12 | missing capability → explicit failure | R-08 (version, durability). **Weakened:** v0.4's per-provider capability negotiation (`ProviderCapabilities`, `STALE_CAPABILITY`) is gone from the protocol, because providers are executor-private. An executor that lacks a capability a plan needs reports `{result: "failed", started: "no"}` with evidence, which is an explicit failure | wire "no silent downgrade" |
@@ -26,7 +26,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | v0.4 method | v1 | Status |
 |---|---|---|
 | directory.resolve | `read(profile:@x:server)` (M3 Identity) | kept |
-| context.describe | `read(space, 0, {state:true})` | kept |
+| context.describe | `read(space, 0, {state:true})`; the state as it was after record n: `{state:true, at:n}` | kept |
 | command.submit | `append(entry)` | kept |
 | command.get | resend the same entry (R-01 returns its receipt) or `read` | kept |
 | run.get | `read`: the `task` and its `task.update`s | kept |
@@ -36,7 +36,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | events.read / events.subscribe | `read(space, after[, follow])` | kept |
 | events.ack | **dropped:** the client keeps its own cursor; resume = `read(after)`. Nothing on the server depends on acks. | dropped |
 | events.unsubscribe | close the stream | kept |
-| events.snapshot | `read(…, {state:true})` | **weakened:** a state too large for one frame is refused with `limit`, and the reader replays records instead |
+| events.snapshot | `read(…, {state:true[, at]})` | **weakened:** a state too large for one frame is refused with `limit`, and the reader replays records instead |
 | view.get / subscribe / resync / unsubscribe | live sessions: the session stream rides the transport (T-07, G-05) and what it may show is `sessionAccess` (P-15); truth stays in `read`. No view-reset protocol: a stream carries no state to resync. | moved to transport |
 | document.open / sync.exchange | **dropped from the v1 core:** shared documents are the transport's (T-03 files, e.g. Matrix rooms) or a future extension | dropped |
 | presence.update / subscribe / unsubscribe | transport `signal` + `follow` (T-05, G-04) | moved to transport |

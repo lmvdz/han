@@ -212,7 +212,7 @@ export interface SpaceState {
 
 // ───────────────────────── the wire: three calls ─────────────────────────
 export type ErrorCode = "denied" | "invalid" | "not_found" | "limit" | "unavailable" | "moved";
-export interface WireError { code: ErrorCode; message: string; retryAfterMs?: number; movedTo?: ServerName }
+export interface WireError { code: ErrorCode; message: string; retryAfterMs?: number /* `limit`, and `unavailable` when waiting helps (R-03a, R-16) */; movedTo?: ServerName }
 
 export interface Limits {
   maxFrameBytes: 1310720;      // 1.25 MiB of JSON text
@@ -222,11 +222,12 @@ export interface Limits {
   maxBlobRangeBytes: 786432;   // generic binding only: blobGet answers at most this many bytes per call
   maxStreamItemBytes: 65536;   // T-07: one StreamItem; larger context goes in a blob
   maxFollows: 256;
+  maxClockSkewSeconds: 60;     // R-03a: the one future-time tolerance; a receipt dated further ahead of a verifier's clock is a `future-time` fault
 }
 export interface Challenge { challenge: string; server: ServerName; versions: number[]; time: Time }
 export type StateView = Omit<SpaceState, "entries">;   // the wire state; too big for one frame → `limit`, replay records instead
 export type ReadItem =
-  | { type: "state"; state: StateView }                  // first item when `state: true` and the reader may read at head
+  | { type: "state"; state: StateView }                  // first item when `state: true` and the reader may read at head (or at `at`, then StateView.head = at)
   | { type: "heads"; heads: Receipt[] }                  // the server's latest receipts, when the reader sent knownHeads (R-15)
   | { type: "record"; record: LogRecord }
   | { type: "signal"; from: ActorId; body: Json };       // from the transport (T-05): ephemeral, unordered with records, never authority
@@ -235,7 +236,9 @@ export interface Calls {
   hello: { args: { who: ActorId; keyId: KeyId; proof: Sig; version: 1; knownHeads?: Receipt[] };
            ok: { limits: Limits; durability: Durability; time: Time; knownHeads: Receipt[] } };
   append: { args: { entry: Entry; content?: Json }; ok: Receipt };
-  read: { args: { space: SpaceId; after: Seq; follow?: boolean; state?: boolean; limit?: number /* 1–1000, default 1000 */; knownHeads?: Receipt[] /* ≤ 256 */ }; item: ReadItem };
+  read: { args: { space: SpaceId; after: Seq; follow?: boolean; state?: boolean;
+                  at?: Seq /* with state: the StateView after record `at`; needs read rights at `at` (P-02); 1…head */;
+                  limit?: number /* 1–1000, default 1000; with follow a longer backlog leaves a seq gap the client MUST re-read */; knownHeads?: Receipt[] /* ≤ 256 */ }; item: ReadItem };
 }   // the three sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
@@ -270,7 +273,7 @@ export type AnyRequestFrame = RequestFrame | BindingRequestFrame;
 // ───────────────────────── modules ─────────────────────────
 export interface Log {                                   // M1
   append(entry: Entry, content: Json | undefined): Promise<Receipt>;          // throws WireError
-  read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; limit?: number; knownHeads?: Receipt[] }, as: ActorId): AsyncIterable<ReadItem>;
+  read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; at?: Seq; limit?: number; knownHeads?: Receipt[] }, as: ActorId): AsyncIterable<ReadItem>;
 }
 export interface Policy {                                // M2 — five pure functions (R-11)
   decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision;   // after the Log's checks only (R-25); order and codes: P-16
@@ -295,7 +298,7 @@ export type VerifierStatus =
 export type FaultKind = "equivocation" | "wrong-home" | "forbidden-accept" | "bad-signature" | "chain" | "bad-redaction" | "bad-move" | "future-time";
 /** A portable misbehaviour proof (R-02, R-14): checkable offline against server keys the checker trusts.
  *  equivocation: `receipts` = the two conflicting receipts. future-time: `receipts` = [the receipt] and `observedAt` (the checker
- *  trusts the prover's clock; the receipt is a fault when dated more than R-03a's tolerance after it). wrong-home found by gossip:
+ *  trusts the prover's clock; the receipt is a fault when dated more than Limits.maxClockSkewSeconds after it). wrong-home found by gossip:
  *  `receipts` = [the receipt] and `chain`. Every other kind: `chain` (the verified records before the fault), `profiles` (the
  *  profile-space chains they pin, by space) and `record` (the offending record); the checker replays them from nothing and must
  *  hit the same kind of fault at `record`. `serverKeys` are what the prover used; a checker that doesn't trust them passes its own.
@@ -309,12 +312,15 @@ export interface FaultProof {
   serverKeys: { [server: ServerName]: { [keyId: KeyId]: { publicKey: string; from: Time; until?: Time; compromised?: boolean } } };
   observedAt?: Time;
 }
+/** R-15, T-05: verifier gossip as in-space signals (ReadItem `signal` bodies). Heads are compared with the receiver's own records;
+ *  a fault is adopted only if its proof checks against the receiver's own server keys. Signals carry no authority. */
+export type GossipSignal = { type: "heads"; receipts: Receipt[] } | { type: "fault"; proof: FaultProof };
 /** T-07: one item of a live session's stream. Published only by the session's actor; never authority (a steer is a
  *  session.input). `n` counts from 1 per session, so gaps are visible; `status` mirrors OSC 7501 program status. */
 export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Time } & (
   | { type: "output"; text: string }                                         // what the session shows: watch
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
-  | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only
+  | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01)
 );
 /** M7: what HAN needs from a transport (T-01…T-07). The Matrix binding implements it with org.han.* room events. */
 export interface TransportBinding {
@@ -322,17 +328,17 @@ export interface TransportBinding {
   subscribe(space: SpaceId, as: ActorId): AsyncIterable<ReadItem>;  // records and signals (T-05) for this actor
   signal(space: SpaceId, from: ActorId, body: Json): Promise<void>;  // T-05: ephemeral, never authority
   blobPut(bytes: Uint8Array, as: ActorId): Promise<BlobRef>;        // T-03
-  blobGet(ref: BlobRef, space: SpaceId, as: ActorId): Promise<Uint8Array>;   // T-03, G-01: access via a referencing record
+  blobGet(ref: BlobRef, space: SpaceId, as: ActorId): Promise<Uint8Array>;   // T-03, G-01: access via a referencing record, or a context blob of a live session the caller may read
   stream(item: StreamItem): Promise<void>;                          // T-07: by the session's actor's host
   watch(space: SpaceId, session: EntryId, as: ActorId): AsyncIterable<StreamItem>;   // T-07: only what sessionAccess grants `as`
 }
 /** The client an actor is built with: the sequencer calls plus the transport, authenticated as that actor. */
 export interface Client {
   append(entry: Entry, content?: Json): Promise<Receipt>;              // outbox + R-06 retry are the client's job (R-07)
-  read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean; limit?: number; knownHeads?: Receipt[] }): AsyncIterable<ReadItem>;
+  read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean; at?: Seq; limit?: number; knownHeads?: Receipt[] }): AsyncIterable<ReadItem>;
   signal(space: SpaceId, body: Json): Promise<void>;                    // via the transport (T-05)
   blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
-  blobGet(ref: BlobRef, space: SpaceId): Promise<Uint8Array>;          // via the transport (G-01: access via a referencing record); verify the hash
+  blobGet(ref: BlobRef, space: SpaceId): Promise<Uint8Array>;          // via the transport (G-01: a referencing record, or a context blob of a live session you may read); verify the hash
   stream(item: StreamItem): Promise<void>;                              // T-07, for the client's own sessions
   watch(space: SpaceId, session: EntryId): AsyncIterable<StreamItem>;  // T-07: data, never instruction (R-24)
 }
@@ -342,7 +348,7 @@ export interface Actor {
   deliver(item: ReadItem): Promise<void>;
 }
 export type ActorFactory = (client: Client, self: ActorId) => Actor;
-export type Executor = Actor;                            // M5: hides X-01…X-10, sandboxes, workspaces, the journal
+export type Executor = Actor;                            // M5: hides X-01…X-11, sandboxes, workspaces, the journal
 export type AgentHost = Actor;                           // M6: hides models, prompts, memory, the agent framework
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
