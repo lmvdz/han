@@ -19,6 +19,15 @@ CALL_ARGS = {"hello": {"who", "keyId", "proof", "version", "knownHeads"}, "cance
              "stream": {"item"}, "read": {"space", "after", "follow", "state", "limit", "knownHeads", "at", "cursor", "effect"},
              "subscribe": {"space", "after"}, "watch": {"space", "session"}, "host": {"space", "records", "head"}}
 
+
+def _has_big_int(v) -> bool:
+    """G-07 (1a): does the frame hold an integer whose magnitude is 2^53 or more anywhere?"""
+    if isinstance(v, bool): return False
+    if isinstance(v, int): return abs(v) >= 2 ** 53
+    if isinstance(v, dict): return any(_has_big_int(x) for x in v.values())
+    if isinstance(v, list): return any(_has_big_int(x) for x in v)
+    return False
+
 class DropConnection(Exception):
     """Raised by the `after_append` test hook: close the socket without replying (the receipt is lost in transit)."""
 
@@ -85,6 +94,12 @@ class SeqServer:
                 if not isinstance(req, dict):                                                       # not an I-JSON object (G-07 case 1)
                     await send({"id": 0, "error": WireError("invalid", "a frame is one JSON object").to_wire()})
                     await ws.close(1007, "not an object"); return
+                if _has_big_int(req):                                                               # G-07 (1a): integers ≥ 2^53
+                    rid = req.get("id")
+                    if P._int(rid) and rid >= 1:
+                        await send({"id": rid, "error": WireError("invalid", "integer beyond 2^53").to_wire()}); continue
+                    await send({"id": 0, "error": WireError("invalid", "integer beyond 2^53 and no usable id").to_wire()})
+                    await ws.close(1007, "integer beyond 2^53"); return
                 bad = self._frame_error(req)
                 if bad:
                     rid = req.get("id")

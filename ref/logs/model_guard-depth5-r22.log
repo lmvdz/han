@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "H:\HAN\v1\ref\model_guard.py", line 350, in <module>
+    main()
+  File "H:\HAN\v1\ref\model_guard.py", line 343, in main
+    n, v, path, g, gd = explore(POL, a.depth)
+                        ^^^^^^^^^^^^^^^^^^^^^
+  File "H:\HAN\v1\ref\model_guard.py", line 276, in explore
+    seen.add(k); nxt.append((m2, path + (name,)))
+    ^^^^^^^^^^^
+MemoryError

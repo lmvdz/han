@@ -68,7 +68,8 @@
   "maxBlobRangeBytes": 786432,
   "maxStreamItemBytes": 65536,
   "maxFollows": 256,
-  "maxClockSkewSeconds": 60
+  "maxClockSkewSeconds": 60,
+  "maxStateItems": 1000
  },
  "defaults": {
   "expectTimeoutMs": 5000,

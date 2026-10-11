@@ -237,6 +237,114 @@
    ]
   },
   {
+   "id": "P10",
+   "title": "frame with an extra member (W-04)",
+   "expect": "invalid",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": "<limits: see hello.json>",
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "cancel",
+      "args": {
+       "target": 1
+      },
+      "extra": true
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P11",
+   "title": "frame without args (W-04)",
+   "expect": "invalid (args must be an object)",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": "<limits: see hello.json>",
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "cancel"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
    "id": "P12",
    "title": "unknown call",
    "expect": "invalid",
@@ -608,6 +716,84 @@
    ]
   },
   {
+   "id": "P18",
+   "title": "space.create for a space homed on another server (W-13d)",
+   "expect": "moved",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "q1:other.localhost",
+        "kind": "space.create",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "policy": {
+          "visibility": "members",
+          "join": "invite",
+          "membersMayInvite": false,
+          "allowAgents": "any",
+          "approvals": [
+           {
+            "action": "file.write",
+            "approvers": [
+             "owner"
+            ]
+           }
+          ],
+          "separateApprover": true,
+          "budget": null,
+          "maxDelegationDepth": 2,
+          "minDurability": "local",
+          "launchWindow": 15,
+          "extensionsMinRole": "member",
+          "sessions": {
+           "watch": "member",
+           "read": "member",
+           "steer": "owner",
+           "modes": [
+            "auto",
+            "guarded"
+           ]
+          },
+          "servers": {
+           "deny": []
+          }
+         }
+        },
+        "contentHash": "48985d46c773eeb0a7c00ee7ff6c06667065af1b923cc5458418905944592727",
+        "refs": [],
+        "seen": 0,
+        "nonce": "so6e6pbaygdlgdapm7ch4ibkp5",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "6I_o6DMh85YFV9cnP1-nL4ybDTQx4gcxVanrw3dqhCst4AAwcqdCLaESHentDk4c42XjAdaRDSuOr4F8UbDKCw"
+       },
+       "content": {
+        "name": "q"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    }
+   ]
+  },
+  {
    "id": "P19",
    "title": "read of an unknown local space (W-13)",
    "expect": "not_found",
@@ -715,6 +901,36 @@
      "frame": {
       "id": 1,
       "end": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "P22",
+   "title": "read with an unknown argument member (W-21a)",
+   "expect": "invalid",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 0,
+       "bogus": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
      }
     }
    ]
@@ -1033,6 +1249,238 @@
    ]
   },
   {
+   "id": "P31",
+   "title": "two appends pipelined without waiting (W-05)",
+   "expect": "two receipts, seq consecutive, in send order",
+   "frames": [
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@bob:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": "<limits: see hello.json>",
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@bob:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "8aea0449674e0950c57eec3b0333b91aed6d8deadc096e8d329779f4305e35bd",
+        "refs": [],
+        "seen": 0,
+        "nonce": "6nrqelnmwdqdq5qsscsoztwx7z",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "LE7N-ZA49JcM-e3k_Mu7CYzQBbSG2VRPI56KX6cgTLHnDg_X1Y47A7qmGX0a8PoFwBNCbursBEZlwvVQJO7uDA"
+       },
+       "content": {
+        "text": "p1"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 3,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@bob:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "3fe682a96dee72bf6d7023c3714379704ddd3a36089a96943c99eb7ed8e139be",
+        "refs": [],
+        "seen": 0,
+        "nonce": "rvgilftcxqceoeo5ug6tla4u23",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "h74PK1GEi8KwqLXXvzSaVGDdbk8O7grtyMiMuXZlcuDAEdtz55VKq0XkQ6fhthko2ptvW1riYBgFwHY3QTo0DQ"
+       },
+       "content": {
+        "text": "p2"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 19,
+       "id": "47509667ad99f920b508a72b2d124f4425d752e1ef4e8c0d0eb5c358c1f5baf1",
+       "prev": "163e124b9cd7341f921778df70349e85752e74c705bb63b955d9c274cbd38eb0",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "nUVxnIOlLT9x9mfiof3xiYHyKsxlwIIWWeLTowUmPqOglIw8Wn0gPFZDHlP0Zok2f64IqGZgIx5O8yYHYfiDDA"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 3,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 20,
+       "id": "f0fa5ee18ee73abcf0645454d5b254ebbd928519724991db36f93afddce36cf7",
+       "prev": "65eea8b8f85f58c31d307dca346be6d9a2b31e8293b529778ed51df2ee3e2785",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@bob:a.localhost": 1
+       },
+       "homeSig": "6unD3AtrOOd0zBmTsXnoBRx-Ei_VRjD2bgn63MDJj2dguk5FW0E4fGKx09t9hyoUPCv4SSicxdszL-S6ZkBiDg"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P32",
+   "title": "blobPut with a gap (offset 5 before any part) (W-27)",
+   "expect": "invalid",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "offset": 5,
+       "data": "IGJsb2IgYnl0ZXM"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P33",
+   "title": "blobPut whose bytes do not match ref.hash (W-27)",
+   "expect": "invalid",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "17f165d5a5ba695f27c023a83aa2b3463e23810e360b7517127e90161eebabda",
+        "size": 3,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "YWJj"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P34",
+   "title": "blobPut with padded base64 (data must be base64url without padding)",
+   "expect": "invalid",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "cHJvYmUgYmxvYiBieXRlcw==="
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
    "id": "P35",
    "title": "blobPut complete, then repeat (idempotent) (W-27)",
    "expect": "ok complete both times",
@@ -1090,6 +1538,257 @@
       "ok": {
        "have": 16,
        "complete": true
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P36",
+   "title": "blobGet of a blob nothing references, by a non-uploader (W-29a)",
+   "expect": "denied or not_found",
+   "frames": [
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@bob:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": "<limits: see hello.json>",
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P37",
+   "title": "blobGet by the uploader within 24 h (own-blob rule)",
+   "expect": "ok",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "data": "cHJvYmUgYmxvYiBieXRlcw",
+       "size": 16,
+       "offset": 0
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P38",
+   "title": "blobGet with offset past the end (W-29c)",
+   "expect": "invalid",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost",
+       "offset": 9999
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P39",
+   "title": "blobGet with length 0 / huge length (W-29c)",
+   "expect": "ok (clamped) for huge length",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost",
+       "offset": 0,
+       "length": 99999999
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "data": "cHJvYmUgYmxvYiBieXRlcw",
+       "size": 16,
+       "offset": 0
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P40",
+   "title": "stream item for a closed session (G-05)",
+   "expect": "denied",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "s1:a.localhost",
+        "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+        "n": 99,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "late"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "denied"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.open",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "steerMode": "auto"
+        },
+        "contentHash": "0a4f33c321d0531e587f20f46b8db1f4e8b033836fe70ec79f50700de08d0459",
+        "refs": [],
+        "seen": 0,
+        "nonce": "tmyjc7hb5xtcnmvgrghca6tqn5",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "7Hw2woFdYweOyu9zBD2r0BAe7Y4S75Enq1gMZw3W15QUzT20rhMy8mkabhIhZzhmwJIBtFtwMNVA9ldeZmF3BQ"
+       },
+       "content": {
+        "title": "probe"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 21,
+       "id": "92bba9f2c93d43707c66832e8b3d5d560b08718187b2031660f4de6d0cf1073c",
+       "prev": "84456cd987af621e915ab94409087e62e2058635f7c1bb6a8e31e7478b5c16f2",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1
+       },
+       "homeSig": "cB9niA4JzxcOW68yyVJYiJ8C2yCl0u1pcD9-8Ah_PotOlp4ic3sA8c6jDo6Wc3P44VR7003VUl73ozoRS-L-DQ"
       }
      }
     }
@@ -1447,6 +2146,40 @@
    "frames": []
   },
   {
+   "id": "P50",
+   "title": "hello ok shape (Limits keys)",
+   "expect": "limits has every han.ts Limits key, incl. maxClockSkewSeconds",
+   "frames": [
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@bob:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": "<limits: see hello.json>",
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ]
+  },
+  {
    "id": "P52",
    "title": "message whose content is over maxContentBytes (65536) (W-15/R-09)",
    "expect": "invalid",
@@ -1670,127 +2403,474 @@
      }
     }
    ]
+  },
+  {
+   "id": "P55",
+   "title": "read with knownHeads naming s1 (R-15, W-21c): item order",
+   "expect": "heads item first, then records (unspecified order)",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 17,
+       "knownHeads": [
+        {
+         "space": "s1:a.localhost",
+         "seq": 1,
+         "id": "6e43de031efd439457d778d9fa45849415c8e0f990138bcd92571cc93556fd7a",
+         "prev": "",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@alice:a.localhost": 1
+         },
+         "homeSig": "2HU35R4FgkNDXZa_q8JE99K4aXucwT4IgeUk-o4kCO0E-IAzbaZkAfH6f5P_H7sHM58ePrWpk2MSK8gzVoPxDw"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "heads",
+       "heads": [
+        {
+         "space": "s1:a.localhost",
+         "seq": 21,
+         "id": "92bba9f2c93d43707c66832e8b3d5d560b08718187b2031660f4de6d0cf1073c",
+         "prev": "84456cd987af621e915ab94409087e62e2058635f7c1bb6a8e31e7478b5c16f2",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@alice:a.localhost": 1
+         },
+         "homeSig": "cB9niA4JzxcOW68yyVJYiJ8C2yCl0u1pcD9-8Ah_PotOlp4ic3sA8c6jDo6Wc3P44VR7003VUl73ozoRS-L-DQ"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "record",
+       "record": {
+        "entry": {
+         "v": 1,
+         "space": "s1:a.localhost",
+         "kind": "redact",
+         "author": "@alice:a.localhost",
+         "keyId": "k1",
+         "body": {
+          "target": "268c300429de3907c1d7a43a32253c3c1a903b979255e28880241555c2400590"
+         },
+         "contentHash": "5f8bd8acf215d74d6a20bd57e61bf00bd311471b1c9e576fd45517cab963cd13",
+         "refs": [],
+         "seen": 17,
+         "nonce": "iyprwo5tupkna3ndoqxd5pm4ke",
+         "time": "2026-01-01T00:00:00Z",
+         "sig": "NZz9I9o6HJG79h7tCn4jY3b67BHBlCtArzHGmfDwlFtLK3BItihyYihXnO9B6X-BK42BsTifH_gd9EDH1CYzAw"
+        },
+        "content": {
+         "reason": "interop redaction"
+        },
+        "redacted": false,
+        "receipt": {
+         "space": "s1:a.localhost",
+         "seq": 18,
+         "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
+         "prev": "c313f25d991c1beb7e09ef70a12f07be242a513ce66fe76950725367b5b5daa4",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@alice:a.localhost": 1
+         },
+         "homeSig": "H5lcaOnVETlKDwjvfDfW7AbmNJ_np_7jbWUKHNIa-Rxhw2y7vPMdxZKQE_iBuc8VoSm09ZaWIctGWzDuLTKFDw"
+        }
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "record",
+       "record": {
+        "entry": {
+         "v": 1,
+         "space": "s1:a.localhost",
+         "kind": "message",
+         "author": "@bob:a.localhost",
+         "keyId": "k1",
+         "body": {},
+         "contentHash": "8aea0449674e0950c57eec3b0333b91aed6d8deadc096e8d329779f4305e35bd",
+         "refs": [],
+         "seen": 0,
+         "nonce": "6nrqelnmwdqdq5qsscsoztwx7z",
+         "time": "2026-01-01T00:00:00Z",
+         "sig": "LE7N-ZA49JcM-e3k_Mu7CYzQBbSG2VRPI56KX6cgTLHnDg_X1Y47A7qmGX0a8PoFwBNCbursBEZlwvVQJO7uDA"
+        },
+        "content": {
+         "text": "p1"
+        },
+        "redacted": false,
+        "receipt": {
+         "space": "s1:a.localhost",
+         "seq": 19,
+         "id": "47509667ad99f920b508a72b2d124f4425d752e1ef4e8c0d0eb5c358c1f5baf1",
+         "prev": "163e124b9cd7341f921778df70349e85752e74c705bb63b955d9c274cbd38eb0",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@bob:a.localhost": 1
+         },
+         "homeSig": "nUVxnIOlLT9x9mfiof3xiYHyKsxlwIIWWeLTowUmPqOglIw8Wn0gPFZDHlP0Zok2f64IqGZgIx5O8yYHYfiDDA"
+        }
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "record",
+       "record": {
+        "entry": {
+         "v": 1,
+         "space": "s1:a.localhost",
+         "kind": "message",
+         "author": "@bob:a.localhost",
+         "keyId": "k1",
+         "body": {},
+         "contentHash": "3fe682a96dee72bf6d7023c3714379704ddd3a36089a96943c99eb7ed8e139be",
+         "refs": [],
+         "seen": 0,
+         "nonce": "rvgilftcxqceoeo5ug6tla4u23",
+         "time": "2026-01-01T00:00:00Z",
+         "sig": "h74PK1GEi8KwqLXXvzSaVGDdbk8O7grtyMiMuXZlcuDAEdtz55VKq0XkQ6fhthko2ptvW1riYBgFwHY3QTo0DQ"
+        },
+        "content": {
+         "text": "p2"
+        },
+        "redacted": false,
+        "receipt": {
+         "space": "s1:a.localhost",
+         "seq": 20,
+         "id": "f0fa5ee18ee73abcf0645454d5b254ebbd928519724991db36f93afddce36cf7",
+         "prev": "65eea8b8f85f58c31d307dca346be6d9a2b31e8293b529778ed51df2ee3e2785",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@bob:a.localhost": 1
+         },
+         "homeSig": "6unD3AtrOOd0zBmTsXnoBRx-Ei_VRjD2bgn63MDJj2dguk5FW0E4fGKx09t9hyoUPCv4SSicxdszL-S6ZkBiDg"
+        }
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "record",
+       "record": {
+        "entry": {
+         "v": 1,
+         "space": "s1:a.localhost",
+         "kind": "session.open",
+         "author": "@alice:a.localhost",
+         "keyId": "k1",
+         "body": {
+          "steerMode": "auto"
+         },
+         "contentHash": "0a4f33c321d0531e587f20f46b8db1f4e8b033836fe70ec79f50700de08d0459",
+         "refs": [],
+         "seen": 0,
+         "nonce": "tmyjc7hb5xtcnmvgrghca6tqn5",
+         "time": "2026-01-01T00:00:00Z",
+         "sig": "7Hw2woFdYweOyu9zBD2r0BAe7Y4S75Enq1gMZw3W15QUzT20rhMy8mkabhIhZzhmwJIBtFtwMNVA9ldeZmF3BQ"
+        },
+        "content": {
+         "title": "probe"
+        },
+        "redacted": false,
+        "receipt": {
+         "space": "s1:a.localhost",
+         "seq": 21,
+         "id": "92bba9f2c93d43707c66832e8b3d5d560b08718187b2031660f4de6d0cf1073c",
+         "prev": "84456cd987af621e915ab94409087e62e2058635f7c1bb6a8e31e7478b5c16f2",
+         "home": "a.localhost",
+         "homeKey": "h1",
+         "time": "2026-01-01T00:00:00Z",
+         "durability": "local",
+         "profiles": {
+          "@alice:a.localhost": 1
+         },
+         "homeSig": "cB9niA4JzxcOW68yyVJYiJ8C2yCl0u1pcD9-8Ah_PotOlp4ic3sA8c6jDo6Wc3P44VR7003VUl73ozoRS-L-DQ"
+        }
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "end": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "P56",
+   "title": "read of a space homed on another server (W-13a)",
+   "expect": "moved",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "read",
+      "args": {
+       "space": "q1:other.localhost",
+       "after": 0
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P57",
+   "title": "watch ends when its session is closed (W-32)",
+   "expect": "unspecified: error or end, or stays open",
+   "frames": [
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@bob:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": "<limits: see hello.json>",
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "watch",
+      "args": {
+       "space": "s1:a.localhost",
+       "session": "92bba9f2c93d43707c66832e8b3d5d560b08718187b2031660f4de6d0cf1073c"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "session.close",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "session": "92bba9f2c93d43707c66832e8b3d5d560b08718187b2031660f4de6d0cf1073c"
+        },
+        "contentHash": "",
+        "refs": [],
+        "seen": 0,
+        "nonce": "3japq7urfws3apodla6fyl7fac",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "3B1hwozwiYcF2QkpfvTTtyqaKl63XawWBncpbtsGmb03i7PKQiLiyfZly3ljfoIZ2-Vx8K191-PP1WvAIIxTDg"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 22,
+       "id": "11bbb9d13b98fb3a962707934c04cce20423e00b17054cce1973dc859caf76a3",
+       "prev": "bc7863b19462a1ac6d12dfdbc286a4378a6289d0e148114e01c71886297b1664",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1
+       },
+       "homeSig": "Y92Yd9PUF0S_ytdUKAx4h7Zd8VHdGj-lG3_j69FRACHXar1632tBWabDAMwlsDazZxiunWj82r7DhEca_N9GBQ"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P58",
+   "title": "`host` (G-06) from a non-server connection",
+   "expect": "denied (host needs a server actor @:A)",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "host",
+      "args": {
+       "space": "s1:a.localhost",
+       "records": []
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "P28b",
+   "title": "append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17)",
+   "expect": "invalid (Sig is canonical base64url)",
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "209589b4ccecf602cdd040e056fe6a937f5fdc48bce6227e7aeee10f647bba13",
+        "refs": [],
+        "seen": 0,
+        "nonce": "d2vydo2fvcdnapnvwm6qd4redl",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "waIDLYblJ9XlafwYn6wiUqTcnXY-ubKAKFA154O3aWCTO3yHPACG5-OsKAidmgTC3u6tc6xPTazntcWSCQNqDR"
+       },
+       "content": {
+        "text": "noncanonical sig"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
   }
  ],
  "skipped": [
   {
    "id": "P05",
    "title": "hello for an actor with no profile (W-03)",
-   "reason": "servers differ",
-   "python": "denied",
-   "ts": "invalid"
+   "reason": "does not match the spec reading on at least one server",
+   "python": "not_found",
+   "ts": "not_found"
   },
   {
    "id": "P09",
    "title": "valid JSON with id 7 but a fraction (not I-JSON) (W-04)",
-   "reason": "servers differ",
+   "reason": "does not match the spec reading on at least one server",
    "python": "[[0,\"invalid\"]]",
-   "ts": "[[7,\"invalid\"]]"
-  },
-  {
-   "id": "P10",
-   "title": "frame with an extra member (W-04)",
-   "reason": "servers differ",
-   "python": "[[5,\"ok\"]]",
    "ts": "[[0,\"invalid\"]]"
-  },
-  {
-   "id": "P11",
-   "title": "frame without args (W-04)",
-   "reason": "servers differ",
-   "python": "[[5,\"ok\"]]",
-   "ts": "[[0,\"invalid\"]]"
-  },
-  {
-   "id": "P18",
-   "title": "space.create for a space homed on another server (W-13d)",
-   "reason": "servers differ",
-   "python": "invalid",
-   "ts": "moved movedTo=other.localhost"
-  },
-  {
-   "id": "P22",
-   "title": "read with an unknown argument member (W-21a)",
-   "reason": "servers differ",
-   "python": "end",
-   "ts": "invalid"
   },
   {
    "id": "P27",
    "title": "signal carrying a relayed `from` by a non-server connection (W-23)",
-   "reason": "servers differ",
-   "python": "denied",
-   "ts": "invalid"
-  },
-  {
-   "id": "P31",
-   "title": "two appends pipelined without waiting (W-05)",
-   "reason": "same answer; frames differ only in values that depend on earlier appends (seq, prev, receipt)",
-   "python": "ids 61,62; consecutive seqs",
-   "ts": "ids 61,62; consecutive seqs"
-  },
-  {
-   "id": "P32",
-   "title": "blobPut with a gap (offset 5 before any part) (W-27)",
-   "reason": "servers differ",
-   "python": "ok",
-   "ts": "invalid"
-  },
-  {
-   "id": "P33",
-   "title": "blobPut whose bytes do not match ref.hash (W-27)",
-   "reason": "servers differ",
-   "python": "ok",
-   "ts": "invalid"
-  },
-  {
-   "id": "P34",
-   "title": "blobPut with padded base64 (data must be base64url without padding)",
-   "reason": "servers differ",
-   "python": "ok",
-   "ts": "invalid"
-  },
-  {
-   "id": "P36",
-   "title": "blobGet of a blob nothing references, by a non-uploader (W-29a)",
-   "reason": "servers differ",
-   "python": "denied",
-   "ts": "not_found"
-  },
-  {
-   "id": "P37",
-   "title": "blobGet by the uploader within 24 h (own-blob rule)",
-   "reason": "servers differ",
-   "python": "denied",
-   "ts": "ok"
-  },
-  {
-   "id": "P38",
-   "title": "blobGet with offset past the end (W-29c)",
-   "reason": "servers differ",
-   "python": "denied",
-   "ts": "invalid"
-  },
-  {
-   "id": "P39",
-   "title": "blobGet with length 0 / huge length (W-29c)",
-   "reason": "servers differ",
-   "python": "denied",
-   "ts": "ok"
-  },
-  {
-   "id": "P40",
-   "title": "stream item for a closed session (G-05)",
-   "reason": "same answer; frames differ only in values that depend on earlier appends (seq, prev, receipt)",
-   "python": "denied",
-   "ts": "denied"
-  },
-  {
-   "id": "P50",
-   "title": "hello ok shape (Limits keys)",
    "reason": "does not match the spec reading on at least one server",
-   "python": "limits keys missing: [maxClockSkewSeconds]; hello ok keys: durability,knownHeads,limits,time",
-   "ts": "limits keys missing: []; hello ok keys: durability,knownHeads,limits,time"
+   "python": "invalid",
+   "ts": "invalid"
   },
   {
    "id": "P51",
@@ -1798,41 +2878,6 @@
    "reason": "does not match the spec reading on at least one server",
    "python": "upgrade accepted",
    "ts": "upgrade refused: HTTP 400"
-  },
-  {
-   "id": "P55",
-   "title": "read with knownHeads naming s1 (R-15, W-21c): item order",
-   "reason": "same answer; frames differ only in values that depend on earlier appends (seq, prev, receipt)",
-   "python": "heads,record,end",
-   "ts": "heads,record,end"
-  },
-  {
-   "id": "P56",
-   "title": "read of a space homed on another server (W-13a)",
-   "reason": "does not match the spec reading on at least one server",
-   "python": "not_found",
-   "ts": "not_found"
-  },
-  {
-   "id": "P57",
-   "title": "watch ends when its session is closed (W-32)",
-   "reason": "same answer; frames differ only in values that depend on earlier appends (seq, prev, receipt)",
-   "python": "stays open, no frame",
-   "ts": "stays open, no frame"
-  },
-  {
-   "id": "P58",
-   "title": "`host` (G-06) from a non-server connection",
-   "reason": "does not match the spec reading on at least one server",
-   "python": "invalid",
-   "ts": "invalid"
-  },
-  {
-   "id": "P28b",
-   "title": "append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17)",
-   "reason": "servers differ",
-   "python": "ok",
-   "ts": "invalid"
   }
  ]
 }

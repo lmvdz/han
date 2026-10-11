@@ -20,11 +20,12 @@ Vectors never depend on the server's key beyond the config: `check` verifies tha
 
 | File | What |
 |---|---|
-| `config.json` | the test-mode contract: server name, clock, server key, actors with seeds and public keys, blob generator and hashes, the nine `Limits`, runner defaults |
+| `config.json` | the test-mode contract: server name, clock, server key, actors with seeds and public keys, blob generator and hashes, the ten `Limits` (`maxStateItems` included), runner defaults |
 | `index.json` | the order to run the files in |
 | `01-hello.json` … `21-redact.json` | one operation each: hello, space.create, member.set, message, read, read.state, follow, subscribe, signal, propose, approve, blobPut, blobGet, blobPut.multipart, blobGet.multipart, session.open, session.input, stream+watch, session.close, task, redact |
 | `probes.json` | error paths and edges both reference servers answered alike, and the text confirms (`kind: agreed`) |
 | `probes-decided.json` | paths where the two servers differed or the text was silent, now fixed by DECISIONS-r21.md and G-07…G-11 (`kind: decided`). An implementation that has not converged fails these |
+| `probes-r22.json` | the coverage DECISIONS-r22.md E10 asked for (`kind: r22`), 17 vectors, run last: paged state (`E8-setup`, `E8a`, `E8b`: 1,001 tasks, a cursor), `read {state, effect}` (`E8c`), integers of 2^53 or more (`E7a`, `E7b`, `E7c`), the §4.1 order of verdicts (`E5-setup`, `E5a`…`E5d`), `read {state, at}` (`E9a`), `follow` with a `limit` gap (`E9b`), non-empty `knownHeads` in `read` and `hello` (`E10a`), the profile-space bootstrap record (`E3a`) and G-03 notices (`E3b`). Each expected value is computed by `ref/wire.py`'s `Home` (the executable reading of the spec that `ref/run_wire.py` tests) from the same entries, the config server key and the frozen clock, after `make_wire_vectors.py` has checked that this model reproduces the 18 golden receipts and the golden `read` byte for byte; no server's answer is copied. Paging uses "enough items" (1,001 tasks, one more than `maxStateItems`) instead of a lowered limit, so a server needs no test option and `hello.limits` stays as in `config.json` |
 
 `ref/make_wire_vectors.py` regenerates the directory from `interop/golden/` (provenance only).
 
@@ -61,6 +62,8 @@ Matchers (a string value in `expect` that stands for a class of values):
 | `<challenge-shape>` | 22–128 characters of `[A-Za-z0-9_-]` |
 | `<receipt>`, `<receipt seq=N>` | a Receipt (exactly its ten members) whose `home` and `homeKey` are the server and key of the config, whose `homeSig` verifies under that key, whose `id` is the id of the entry sent in the request with that frame id, and whose `seq` is `N` if given |
 | `<url-of-the-binding>` | a `ws://` or `wss://` URL ending in `/han` (the `sequencer` of `/.well-known/han`) |
+| `<cursor>` | the `next` of a state page: any non-empty printable ASCII string of at most 1,024 characters (a cursor is opaque, §3: the two reference servers' differ). The runner keeps the last one for `<cursor>` in a later `send` of the same vector |
+| `<profile-bootstrap @actor kind>` | the record (`{entry, content, redacted, receipt}`) that is seq 1 of `profile:@actor` (§4.3): a `space.create` authored by the server actor `@:S`, `keyId` and `homeKey` of the server key, `seen` 0, `refs` `[]`, signed by the server key, body `{policy, profile: {actorKind: kind, key: {keyId, publicKey}}}` with the actor's key from `config.json` (`policy` is any object: the PolicyDoc and the `nonce` are the server's own and differ between the two reference servers), content `{name: <actor>}`, and a receipt for seq 1 with `prev` `""`, `profiles` `{"@:S": 0}` and a valid `homeSig` |
 
 **Placeholders in client frames.**
 
@@ -70,6 +73,7 @@ Matchers (a string value in `expect` that stands for a class of values):
 | `<proof challenge=X>`, `<proof dialed=Y>` | the same over another challenge string, or another dialed name (the server must answer `denied`) |
 | `"data": "<b64u len=N sha256=H>"` in a `blobPut` | the base64url of the next `N*3/4` bytes of the blob generator starting at `args.offset` (byte *i* of a blob is `(i*7+3) mod 251`; `config.json` lists the two blobs by hash). The runner checks that the expansion hashes to `H` |
 | `"<repeat c n>"` (a whole string) | the character `c` repeated `n` times |
+| `"<cursor>"` (a whole string, in `args.cursor`) | the last `next` the server sent in this vector (a vector error if there was none) |
 
 After a `send` of `subscribe`, `watch` or `read` with `follow`, the runner waits `settleMs` (250 ms) so the registration has happened before another connection acts. A server that registers a follow asynchronously and slower than that is not conforming to G-09 ("atomically with registration").
 
@@ -88,4 +92,17 @@ The Ed25519 signature of those bytes, base64url without padding, is `MlgcxEfCrmI
 
 ## Counts at the time of writing
 
-21 operation files (109 expectations), 39 agreed probe vectors (50 expectations), 22 decided probe vectors (44 expectations): 82 vectors, 203 expectations, 335 steps. The results against the two reference servers are in architecture.md §10 and `ref/RESULTS.md`.
+21 operation files (109 expectations), 39 agreed probe vectors (50 expectations), 22 decided probe vectors (44 expectations), 17 round-22 vectors (1,141 expectations): 99 vectors, 1,344 expectations, 2,578 steps. The results against the two reference servers are in `interop/RESULTS.md` (section 6) and architecture.md §10.
+
+## Not yet vectorised
+
+What E10 listed, and what the single-server test mode (one server, a frozen clock, no second server) cannot show deterministically. A server that implements these is still tested for them by `ref/run_wire.py` (the reference model) and the implementations' own suites, but no wire vector pins the frames:
+
+- **`limit`** (rate limits, §4.1 step 6): the servers' rate limits are their own configuration (a `limiter` in the Python sequencer, `appendsPerSecond` in the TypeScript one, counted in different units), and test mode does not fix one. So the verdict pairs *Policy before the rate limit* (5/6) and *the rate limit before the moment-dependent `unavailable`* (6/7) have no vector.
+- **`unavailable`** and `retryAfterMs`: R-16 (early abandon, needs the steady clock to advance), R-03a (a clock behind the chain) and R-08 (a `minDurability` the server cannot reach) all need a clock or a durability the test mode freezes. The pair *Policy before the moment-dependent `unavailable`* (5/7) goes with them. The `unavailable` of step 4 (an author's profile on another server that cannot be fetched) needs a second server.
+- **Dedupe before routing** (pair 1/2): needs a space that has moved away (`space.move`), i.e. two servers. Dedupe before Policy (1/5) and before shape (1/3: P15) are vectorised (`E5a`, `P15`).
+- **Federation**: notices to another server, relayed signals with `from` (only the refusal D10a is vectorised), blob transfer, remote profile reads, `/.well-known/han-peers` with peers.
+- **Moves**: `space.move`, `host` beyond the `denied` of D6a, the §7.3 handshake.
+- **Key rotation**: `key.add` and `key.revoke` are deterministic on one server, but they change the keys (and so the `profiles` pins) of the five test actors for every later vector, and every vector authenticates with `k1`. They need a run of their own with an actor reserved for it.
+
+Where the two reference servers answer differently and the text is silent, no vector pins an answer (a vector there would just choose): `read {state, effect}` together with `at` (Python `not_found`, TS `invalid`) or with `follow` (Python `invalid`, TS the state item then `end`); `read {state, cursor}` together with `follow` (Python `invalid`, TS the state page); a notice for an actor with no open session (Python keeps it and delivers it to the actor's next subscription to its profile, TS drops it; G-09 says signals are never replayed). A negative integer in `args` is `invalid` by §2 ("an integer in [0, 2^53)"), but G-07 (1a) speaks only of 2^53 or more: at -(2^53+1) the TS server closes the connection with id 0 and the Python server serves the call, so no vector pins it (`E7b` combines its negative `id` with a positive 2^53+1).

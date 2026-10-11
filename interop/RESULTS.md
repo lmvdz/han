@@ -8,7 +8,7 @@ Required directions: **ts->py** (TS client on the Python server) and **py->ts** 
 
 | operation | ts->py | py->ts | ts->ts | py->py |
 |---|---|---|---|---|
-| hello | PASS | PASS* | PASS | PASS |
+| hello | PASS | PASS | PASS | PASS |
 | space.create | PASS | PASS | PASS | PASS |
 | member.set | PASS | PASS | PASS | PASS |
 | message | PASS | PASS | PASS | PASS |
@@ -31,17 +31,17 @@ Required directions: **ts->py** (TS client on the Python server) and **py->ts** 
 | task | PASS | PASS | PASS | PASS |
 | redact | PASS | PASS | PASS | PASS |
 | verifier follows s1 and verifies its receipts (R-14) | PASS | PASS | PASS | PASS |
-| verifier follows `profile:@alice` (entries authored by the server actor @:S) | FAIL | PASS | FAIL | PASS |
+| verifier follows `profile:@alice` (entries authored by the server actor @:S) | PASS | PASS | PASS | PASS |
 | executor claims, launches, reports (late: executor starts after the space exists) | PASS | PASS | PASS | PASS |
-| executor claims, launches, reports (early: executor starts before the space exists) | FAIL | PASS | FAIL | PASS |
+| executor claims, launches, reports (early: executor starts before the space exists) | PASS | PASS | PASS | PASS |
 
 Column = client implementation -> server implementation. The verifier row uses the client's own implementation as verifier (ts->py: TS verifier, Python server). The executor rows use the column's client implementation as the executor against the column's server; the proposal and approval are made by the server's native client, so the executor is the only cross-implementation piece. Totals count the late-order executor row only.
 
 | direction | passed (incl. workaround) | passed without workaround | total |
 |---|---|---|---|
-| ts->py | 24 | 24 | 25 |
-| py->ts | 25 | 24 | 25 |
-| ts->ts | 24 | 24 | 25 |
+| ts->py | 25 | 25 | 25 |
+| py->ts | 25 | 25 | 25 |
+| ts->ts | 25 | 25 | 25 |
 | py->py | 25 | 25 | 25 |
 
 Supplementary cells with the TS sequencer's own server key id `srv1` (the TS verifier hard-codes it, root cause 8):
@@ -57,7 +57,7 @@ Supplementary cells with the TS sequencer's own server key id `srv1` (the TS ver
 - final `read {state:true}` of s1, ts->ts vs ts->py: identical
 - final `read {state:true}` of s1, py->ts vs ts->py: identical
 - final `read {state:true}` of s1, py->py vs ts->py: identical
-- claim fields in the StateView after an executor run: Python server ['approval', 'attempt', 'id', 'instance', 'outcome', 'started', 'time', 'window'] / ['approval', 'attempt', 'id', 'instance', 'outcome', 'started', 'time', 'window']; TS server ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window'] / ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window']
+- claim fields in the StateView after an executor run: Python server ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window'] / ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window']; TS server ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window'] / ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window']
 
 ## 2. Wire probes (raw frames at each server)
 
@@ -69,41 +69,41 @@ Supplementary cells with the TS sequencer's own server key id `srv1` (the TS ver
 | P02 | read before hello | denied | ok | ok | yes |
 | P03 | second hello on an authenticated connection | invalid | ok | ok | yes |
 | P04 | hello version 2 | invalid | ok | ok | yes |
-| P05 | hello for an actor with no profile (W-03) | invalid or denied (unspecified) | ok | ok | **NO** |
+| P05 | hello for an actor with no profile (W-03) | invalid or denied (unspecified) | **not_found** | **not_found** | yes |
 | P06 | hello with an unknown keyId (W-03) | denied | ok | ok | yes |
 | P07 | hello naming another server in the proof (dialed != server) | denied | ok | ok | yes |
 | P08 | a frame that is not JSON | {id:0, error:invalid} | ok | ok | yes |
-| P09 | valid JSON with id 7 but a fraction (not I-JSON) (W-04) | error invalid on id 7 (the id the client can wait on) | **[[0,"invalid"]]** | ok | **NO** |
-| P10 | frame with an extra member (W-04) | invalid | **[[5,"ok"]]** | ok | **NO** |
-| P11 | frame without args (W-04) | invalid (args must be an object) | **[[5,"ok"]]** | ok | **NO** |
+| P09 | valid JSON with id 7 but a fraction (not I-JSON) (W-04) | error invalid on id 7 (the id the client can wait on) | **[[0,"invalid"]]** | **[[0,"invalid"]]** | yes |
+| P10 | frame with an extra member (W-04) | invalid | ok | ok | yes |
+| P11 | frame without args (W-04) | invalid (args must be an object) | ok | ok | yes |
 | P12 | unknown call | invalid | ok | ok | yes |
 | P13 | binary frame | connection closes | ok | ok | yes |
 | P14 | re-append of a stored entry (R-01) returns the same receipt | same receipt | ok | ok | yes |
 | P15 | re-append of a stored entry without its content (W-16d) | same receipt | ok | ok | yes |
 | P16 | append by a non-member | denied | ok | ok | yes |
 | P17 | non-create first entry in an unknown local space (W-13b) | invalid | ok | ok | yes |
-| P18 | space.create for a space homed on another server (W-13d) | moved | **invalid** | ok | **NO** |
+| P18 | space.create for a space homed on another server (W-13d) | moved | ok | ok | yes |
 | P19 | read of an unknown local space (W-13) | not_found | ok | ok | yes |
 | P20 | read of a members-only space by a non-member | denied or not_found | ok | ok | yes |
 | P21 | read with after >= head | no records, then end | ok | ok | yes |
-| P22 | read with an unknown argument member (W-21a) | invalid | **end** | ok | **NO** |
+| P22 | read with an unknown argument member (W-21a) | invalid | ok | ok | yes |
 | P23 | cancel of an unknown target (W-06) | ok null | ok | ok | yes |
 | P24 | streaming call reusing an open request id | invalid | ok | ok | yes |
 | P25 | subscribe by a non-reader | denied | ok | ok | yes |
 | P26 | signal into an unknown space (W-24) | not_found | ok | ok | yes |
-| P27 | signal carrying a relayed `from` by a non-server connection (W-23) | denied | ok | **invalid** | **NO** |
+| P27 | signal carrying a relayed `from` by a non-server connection (W-23) | denied | **invalid** | **invalid** | yes |
 | P28 | append with a flipped bit in the middle of the signature | invalid | ok | ok | yes |
 | P29 | append with content but contentHash "" (W-16b) | invalid | ok | ok | yes |
 | P30 | member.set with content (W-16c) | invalid | ok | ok | yes |
 | P31 | two appends pipelined without waiting (W-05) | two receipts, seq consecutive, in send order | ok | ok | yes |
-| P32 | blobPut with a gap (offset 5 before any part) (W-27) | invalid | **ok** | ok | **NO** |
-| P33 | blobPut whose bytes do not match ref.hash (W-27) | invalid | **ok** | ok | **NO** |
-| P34 | blobPut with padded base64 (data must be base64url without padding) | invalid | **ok** | ok | **NO** |
+| P32 | blobPut with a gap (offset 5 before any part) (W-27) | invalid | ok | ok | yes |
+| P33 | blobPut whose bytes do not match ref.hash (W-27) | invalid | ok | ok | yes |
+| P34 | blobPut with padded base64 (data must be base64url without padding) | invalid | ok | ok | yes |
 | P35 | blobPut complete, then repeat (idempotent) (W-27) | ok complete both times | ok | ok | yes |
-| P36 | blobGet of a blob nothing references, by a non-uploader (W-29a) | denied or not_found | ok | ok | **NO** |
-| P37 | blobGet by the uploader within 24 h (own-blob rule) | ok | **denied** | ok | **NO** |
-| P38 | blobGet with offset past the end (W-29c) | invalid | **denied** | ok | **NO** |
-| P39 | blobGet with length 0 / huge length (W-29c) | ok (clamped) for huge length | **denied** | ok | **NO** |
+| P36 | blobGet of a blob nothing references, by a non-uploader (W-29a) | denied or not_found | ok | ok | yes |
+| P37 | blobGet by the uploader within 24 h (own-blob rule) | ok | ok | ok | yes |
+| P38 | blobGet with offset past the end (W-29c) | invalid | ok | ok | yes |
+| P39 | blobGet with length 0 / huge length (W-29c) | ok (clamped) for huge length | ok | ok | yes |
 | P40 | stream item for a closed session (G-05) | denied | ok | ok | yes |
 | P41 | stream n=1 by the session actor | ok | ok | ok | yes |
 | P42 | stream n=1 repeated (identical) | ok | ok | ok | yes |
@@ -113,19 +113,19 @@ Supplementary cells with the TS sequencer's own server key id `srv1` (the TS ver
 | P46 | stream for an unknown session (W-31) | not_found or denied | ok | ok | yes |
 | P47 | watch of an unknown session (W-32) | not_found or denied | ok | ok | yes |
 | P48 | watch by a non-reader | denied | ok | ok | yes |
-| P49 | challenge frame shape (W-01) | {challenge, server, versions:[1], time} | ok | ok | **NO** |
-| P50 | hello ok shape (Limits keys) | limits has every han.ts Limits key, incl. maxClockSkewSeconds | **limits keys missing: [maxClockSkewSeconds]; hello ok keys: durability,** | ok | **NO** |
+| P49 | challenge frame shape (W-01) | {challenge, server, versions:[1], time} | ok | ok | yes |
+| P50 | hello ok shape (Limits keys) | limits has every han.ts Limits key, incl. maxClockSkewSeconds | ok | ok | yes |
 | P51 | WebSocket upgrade on path / (W-07) | unspecified; README shows ws://host:port | ok | **upgrade refused: HTTP 400** | **NO** |
 | P52 | message whose content is over maxContentBytes (65536) (W-15/R-09) | invalid | ok | ok | yes |
 | P53 | read with limit 2 from the start (no follow) | 2 records then end | ok | ok | yes |
 | P54 | read with limit 0 (outside 1-1000) | invalid | ok | ok | yes |
 | P55 | read with knownHeads naming s1 (R-15, W-21c): item order | heads item first, then records (unspecified order) | ok | ok | yes |
-| P56 | read of a space homed on another server (W-13a) | moved | **not_found** | **not_found** | yes |
+| P56 | read of a space homed on another server (W-13a) | moved | ok | ok | yes |
 | P57 | watch ends when its session is closed (W-32) | unspecified: error or end, or stays open | ok | ok | yes |
-| P58 | `host` (G-06) from a non-server connection | denied (host needs a server actor @:A) | **invalid** | **invalid** | yes |
-| P28b | append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17) | invalid (Sig is canonical base64url) | **ok** | ok | **NO** |
+| P58 | `host` (G-06) from a non-server connection | denied (host needs a server actor @:A) | ok | ok | yes |
+| P28b | append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17) | invalid (Sig is canonical base64url) | ok | ok | yes |
 
-Probes matching the spec reading: Python server 44/59, TS server 55/59. Probes where the two servers answer differently: 18 (P05, P09, P10, P11, P18, P22, P27, P32, P33, P34, P36, P37, P38, P39, P49, P50, P51, P28b).
+Probes matching the spec reading: Python server 56/59, TS server 55/59. Probes where the two servers answer differently: 1 (P51).
 
 ## 3. Failing steps with their frames
 
@@ -134,195 +134,27 @@ Probes matching the spec reading: Python server 44/59, TS server 55/59. Probes w
 The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server only upgrades `/han`. Tap log of the first connection attempt (the harness retries with `/han`, which works, so `hello` is `PASS*`):
 
 ```json
-{"ev": "open", "conn": 0, "path": "/", "upstreamPath": "/"}
-{"ev": "upgrade-fail", "conn": 0, "status": 400, "path": "/"}
-{"ev": "open", "conn": 1, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 1, "dir": "s2c", "data": "{\"challenge\":\"wuUyA738Xr-vQ5QRbRHSwj6M_gPF7malI8wWgh9onz8\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-11T19:07:15Z\"}"}
-{"ev": "frame", "conn": 1, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"Duc7PH5LdL2U9G7kuGpOeoIC-NpC3bU5GJJ2DvwozmI-eYjarJgQBU19o8AtFWTFOrYV_0JgBk30M0oLGXFwDw\", \"version\": 1}}"}
-{"ev": "frame", "conn": 1, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60},\"durability\":\"local\",\"time\":\"2026-10-11T19:07:15Z\",\"knownHeads\":[]}}"}
+{"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"CHyfTbFJyt8z6dwQ_kTZuEt78Ozbdd3z73mIppKqILs\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-11T20:54:52Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"AVISeiGyiwgVnVj8j2FZYFKPA7SongBXmogLD7yBFdZcYiPu9ZPalg1ZxBKcpAYFPH5yrt2LwE0ayRmBnBpjCw\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-11T20:54:52Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
 
-**P05** (hello for an actor with no profile (W-03)), Python server:
-```
-< @nobody {"id": 100, "error": {"code": "denied", "message": "authentication failed"}}
-```
-**P05** (hello for an actor with no profile (W-03)), TS server:
-```
-< @nobody {"id": 100, "error": {"code": "invalid", "message": "unknown actor @nobody:a.localhost"}}
-```
-**P09** (valid JSON with id 7 but a fraction (not I-JSON) (W-04)), Python server:
-```
-> @alice {"id": 7, "call": "read", "args": {"space": "s1:a.localhost", "after": 0.5}}
-< @alice {"id": 0, "error": {"code": "invalid", "message": "bad frame"}}
-```
-**P09** (valid JSON with id 7 but a fraction (not I-JSON) (W-04)), TS server:
-```
-> @alice {"id": 7, "call": "read", "args": {"space": "s1:a.localhost", "after": 0.5}}
-< @alice {"id": 7, "error": {"code": "invalid", "message": "frame does not parse as I-JSON"}}
-```
-**P10** (frame with an extra member (W-04)), Python server:
-```
-> @alice {"id": 5, "call": "cancel", "args": {"target": 1}, "extra": true}
-< @alice {"id": 5, "ok": null}
-```
-**P10** (frame with an extra member (W-04)), TS server:
-```
-> @alice {"id": 5, "call": "cancel", "args": {"target": 1}, "extra": true}
-< @alice {"id": 0, "error": {"code": "invalid", "message": "frame needs exactly id, call, args"}}
-```
-**P11** (frame without args (W-04)), Python server:
-```
-> @alice {"id": 5, "call": "cancel"}
-< @alice {"id": 5, "ok": null}
-```
-**P11** (frame without args (W-04)), TS server:
-```
-> @alice {"id": 5, "call": "cancel"}
-< @alice {"id": 0, "error": {"code": "invalid", "message": "frame needs exactly id, call, args"}}
-```
-**P18** (space.create for a space homed on another server (W-13d)), Python server:
-```
-> @alice {"id": 103, "call": "append", "args": {"entry": {"v": 1, "space": "q1:other.localhost", "kind": "space.create", "author": "@alice:a.localhost", "keyId": "k1", "body": {"policy": {"visibility": "members", "join": "invite", "membersMayInvite": false, "allowAgents": "any", "approvals": [{"action": "file.write", "approvers": ["owner"]}], "separateApprover": true, "budget": null, "maxDelegationDepth": 2, "minDurability": "local", "launchWindow": 15, "extensionsMinRole": "member", "sessions": {"watch": "member", "read": 
-< @alice {"id": 103, "error": {"code": "invalid", "message": "space id names another home"}}
-```
-**P18** (space.create for a space homed on another server (W-13d)), TS server:
-```
-> @alice {"id": 103, "call": "append", "args": {"entry": {"v": 1, "space": "q1:other.localhost", "kind": "space.create", "author": "@alice:a.localhost", "keyId": "k1", "body": {"policy": {"visibility": "members", "join": "invite", "membersMayInvite": false, "allowAgents": "any", "approvals": [{"action": "file.write", "approvers": ["owner"]}], "separateApprover": true, "budget": null, "maxDelegationDepth": 2, "minDurability": "local", "launchWindow": 15, "extensionsMinRole": "member", "sessions": {"watch": "member", "read": 
-< @alice {"id": 103, "error": {"code": "moved", "message": "this server does not host the space", "movedTo": "other.localhost"}}
-```
-**P22** (read with an unknown argument member (W-21a)), Python server:
-```
-> @alice {"id": 106, "call": "read", "args": {"space": "s1:a.localhost", "after": 0, "bogus": 1}}
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "space.create", "author": "@alice:a.localhost", "keyId": "k1", "body": {"policy": {"visibility": "members", "join": "invite", "membersMayInvite": false, "allowAgents": "any", "approvals": [{"action": "file.write", "approvers": ["owner"]}], "separateApprover": true, "budget": null, "maxDelegationDepth": 2, "minDurability": "local", "launchWindow": 15, "extensionsMinRole": "member", "sessions": {"watch": "member", "
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "member.set", "author": "@alice:a.localhost", "keyId": "k1", "body": {"actor": "@bob:a.localhost", "role": "member"}, "contentHash": "", "refs": [], "seen": 1, "nonce": "dkteupp67ud4sq54t3n5ovckml", "time": "2026-01-01T00:00:00Z", "sig": "cUBC1x4XkbWCF-D-Hu2qFezRDkYlW3WlGBgl4DykzHGLeLqmqf8M53HycW_S7IkNF0vdGMLGdmvJ4RuXNjDXDw"}, "content": null, "redacted": false, "receipt": {"space": "s1:a.localhost", "seq": 2, "id
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "member.set", "author": "@alice:a.localhost", "keyId": "k1", "body": {"actor": "@vera:a.localhost", "role": "member"}, "contentHash": "", "refs": [], "seen": 2, "nonce": "zoaux3owdpbqkhvugzsbsprrdu", "time": "2026-01-01T00:00:00Z", "sig": "IuhPu9g3FZIO3EdpdCuaAnmsWpg78LZGJPDo_0LVxEy-xUK7GUgOHrj3Io91O7iPTaOe269XqH_SQ0t_De3gBQ"}, "content": null, "redacted": false, "receipt": {"space": "s1:a.localhost", "seq": 3, "i
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "member.set", "author": "@alice:a.localhost", "keyId": "k1", "body": {"actor": "@x:a.localhost", "role": "member"}, "contentHash": "", "refs": [], "seen": 3, "nonce": "snff7yhmzhwxocwmnmdnxvgahd", "time": "2026-01-01T00:00:00Z", "sig": "BryWbHyfvfT5xmHOoklakgeUQpsM-_prIxaIaD9l1X_D2_ZlsoPkeNpcnTgu6ziMOkbM1OV-NmlIx7AVrqeCBQ"}, "content": null, "redacted": false, "receipt": {"space": "s1:a.localhost", "seq": 4, "id":
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "message", "author": "@bob:a.localhost", "keyId": "k1", "body": {"to": ["@alice:a.localhost"]}, "contentHash": "c7ed77193149b875a87c0b02e7a40ecba23e92af26a538092e050105958758ca", "refs": [], "seen": 4, "nonce": "ekvz7uh3rajjw4cts4mdqwzwjz", "time": "2026-01-01T00:00:00Z", "sig": "JlCgvVDbvU2IUBsmk0M8OosSMvKxq6VqNmzQIPSCxNJqEyBIqjmvJPKWTpWjiQxp_tDjRbA_omuNxfMHURdbBg"}, "content": {"text": "hello alice"}, "redacted"
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "message", "author": "@bob:a.localhost", "keyId": "k1", "body": {}, "contentHash": "398a2d7e67e573772cf379ec9f4eac819c8642bd9018527d08eb176cd4d72be1", "refs": [], "seen": 5, "nonce": "kcoh3g7dyv77qwoolvlwrmz7d4", "time": "2026-01-01T00:00:00Z", "sig": "H1EWs5Zfsp0uJcoZpkhih7heOTHqSWdFSIam07K0DTGXbEJ_vm4MciBseklx7kI5NqAZpK4JXlxr59hck_38DQ"}, "content": {"text": "café ✓ 😀 \"q\" \\ \n\t      <&>"}, "redacted": false
-< @alice {"id": 106, "item": {"type": "record", "record": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "message", "author": "@bob:a.localhost", "keyId": "k1", "body": {}, "contentHash": "12a0e1fca0457f22173b6c2fa74ab2db4573cc56c66165585185de2f5e09819f", "refs": [], "seen": 6, "nonce": "iezethugr4a55zkgp4qhh46ls4", "time": "2026-01-01T00:00:00Z", "sig": "09khj7vdr10gNE0srq-D-ICy1eI7Gcx1_iYoqT6J4lP3h1M-8D8xoWf24qGV1VxrdA0P7unTYPcIXwHtWIIRDw"}, "content": null, "redacted": true, "receipt": {"space": "s1:a.localhost", 
-```
-**P22** (read with an unknown argument member (W-21a)), TS server:
-```
-> @alice {"id": 106, "call": "read", "args": {"space": "s1:a.localhost", "after": 0, "bogus": 1}}
-< @alice {"id": 106, "error": {"code": "invalid", "message": "read args"}}
-```
-**P27** (signal carrying a relayed `from` by a non-server connection (W-23)), Python server:
-```
-> @alice {"id": 109, "call": "signal", "args": {"space": "s1:a.localhost", "body": {"a": 1}, "from": "@bob:a.localhost"}}
-< @alice {"id": 109, "error": {"code": "denied", "message": "a server may relay signals only from its own actors"}}
-```
-**P27** (signal carrying a relayed `from` by a non-server connection (W-23)), TS server:
-```
-> @alice {"id": 109, "call": "signal", "args": {"space": "s1:a.localhost", "body": {"a": 1}, "from": "@bob:a.localhost"}}
-< @alice {"id": 109, "error": {"code": "invalid", "message": "signal args"}}
-```
-**P32** (blobPut with a gap (offset 5 before any part) (W-27)), Python server:
-```
-> @alice {"id": 114, "call": "blobPut", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "offset": 5, "data": "IGJsb2IgYnl0ZXM"}}
-< @alice {"id": 114, "ok": {"have": 0, "complete": false}}
-```
-**P32** (blobPut with a gap (offset 5 before any part) (W-27)), TS server:
-```
-> @alice {"id": 114, "call": "blobPut", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "offset": 5, "data": "IGJsb2IgYnl0ZXM"}}
-< @alice {"id": 114, "error": {"code": "invalid", "message": "gap: part starts after the bytes held (0)"}}
-```
-**P33** (blobPut whose bytes do not match ref.hash (W-27)), Python server:
-```
-> @alice {"id": 115, "call": "blobPut", "args": {"ref": {"hash": "17f165d5a5ba695f27c023a83aa2b3463e23810e360b7517127e90161eebabda", "size": 3, "type": "text/plain"}, "offset": 0, "data": "YWJj"}}
-< @alice {"id": 115, "ok": {"have": 3, "complete": false}}
-```
-**P33** (blobPut whose bytes do not match ref.hash (W-27)), TS server:
-```
-> @alice {"id": 115, "call": "blobPut", "args": {"ref": {"hash": "17f165d5a5ba695f27c023a83aa2b3463e23810e360b7517127e90161eebabda", "size": 3, "type": "text/plain"}, "offset": 0, "data": "YWJj"}}
-< @alice {"id": 115, "error": {"code": "invalid", "message": "bytes do not hash to ref.hash"}}
-```
-**P34** (blobPut with padded base64 (data must be base64url without padding)), Python server:
-```
-> @alice {"id": 116, "call": "blobPut", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "offset": 0, "data": "cHJvYmUgYmxvYiBieXRlcw==="}}
-< @alice {"id": 116, "ok": {"have": 16, "complete": true}}
-```
-**P34** (blobPut with padded base64 (data must be base64url without padding)), TS server:
-```
-> @alice {"id": 116, "call": "blobPut", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "offset": 0, "data": "cHJvYmUgYmxvYiBieXRlcw==="}}
-< @alice {"id": 116, "error": {"code": "invalid", "message": "data must be base64url without padding"}}
-```
-**P36** (blobGet of a blob nothing references, by a non-uploader (W-29a)), Python server:
-```
-> @bob {"id": 101, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost"}}
-< @bob {"id": 101, "error": {"code": "denied", "message": "blob not available"}}
-```
-**P36** (blobGet of a blob nothing references, by a non-uploader (W-29a)), TS server:
-```
-> @bob {"id": 101, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost"}}
-< @bob {"id": 101, "error": {"code": "not_found", "message": "no such blob for this reader and space"}}
-```
-**P37** (blobGet by the uploader within 24 h (own-blob rule)), Python server:
-```
-> @alice {"id": 119, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost"}}
-< @alice {"id": 119, "error": {"code": "denied", "message": "blob not available"}}
-```
-**P37** (blobGet by the uploader within 24 h (own-blob rule)), TS server:
-```
-> @alice {"id": 119, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost"}}
-< @alice {"id": 119, "ok": {"data": "cHJvYmUgYmxvYiBieXRlcw", "size": 16, "offset": 0}}
-```
-**P38** (blobGet with offset past the end (W-29c)), Python server:
-```
-> @alice {"id": 120, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost", "offset": 9999}}
-< @alice {"id": 120, "error": {"code": "denied", "message": "blob not available"}}
-```
-**P38** (blobGet with offset past the end (W-29c)), TS server:
-```
-> @alice {"id": 120, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost", "offset": 9999}}
-< @alice {"id": 120, "error": {"code": "invalid", "message": "offset past the end"}}
-```
-**P39** (blobGet with length 0 / huge length (W-29c)), Python server:
-```
-> @alice {"id": 121, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost", "offset": 0, "length": 99999999}}
-< @alice {"id": 121, "error": {"code": "denied", "message": "blob not available"}}
-```
-**P39** (blobGet with length 0 / huge length (W-29c)), TS server:
-```
-> @alice {"id": 121, "call": "blobGet", "args": {"ref": {"hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5", "size": 16, "type": "text/plain"}, "space": "s1:a.localhost", "offset": 0, "length": 99999999}}
-< @alice {"id": 121, "ok": {"data": "cHJvYmUgYmxvYiBieXRlcw", "size": 16, "offset": 0}}
-```
-**P49** (challenge frame shape (W-01)), Python server:
-```
-```
-**P49** (challenge frame shape (W-01)), TS server:
-```
-```
-**P50** (hello ok shape (Limits keys)), Python server:
-```
-```
-**P50** (hello ok shape (Limits keys)), TS server:
-```
-```
 **P51** (WebSocket upgrade on path / (W-07)), Python server:
 ```
 ```
 **P51** (WebSocket upgrade on path / (W-07)), TS server:
 ```
 ```
-**P28b** (append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17)), Python server:
-```
-> @alice {"id": 111, "call": "append", "args": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "message", "author": "@alice:a.localhost", "keyId": "k1", "body": {}, "contentHash": "209589b4ccecf602cdd040e056fe6a937f5fdc48bce6227e7aeee10f647bba13", "refs": [], "seen": 0, "nonce": "d2vydo2fvcdnapnvwm6qd4redl", "time": "2026-01-01T00:00:00Z", "sig": "waIDLYblJ9XlafwYn6wiUqTcnXY-ubKAKFA154O3aWCTO3yHPACG5-OsKAidmgTC3u6tc6xPTazntcWSCQNqDR"}, "content": {"text": "noncanonical sig"}}}
-< @alice {"id": 111, "ok": {"space": "s1:a.localhost", "seq": 19, "id": "b3d72887259bc46b7146bbdd40c1242a8aff533c608e130ed8ff8169367f3b72", "prev": "c6908bc135653b44898a4202867a23e09f14b1bf0573452e2cc3ece4349061d1", "home": "a.localhost", "homeKey": "h1", "time": "2026-10-11T19:07:12Z", "durability": "local", "profiles": {"@alice:a.localhost": 1}, "homeSig": "Lsq7S8PghKUH0SDhoP7-6eTNoIZXz4C-wtxKGcQSnjboEhCgnH7rEqZOJJLtWD7B6WeflxC0uRPLce8Zt0NiBQ"}}
-```
-**P28b** (append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17)), TS server:
-```
-> @alice {"id": 111, "call": "append", "args": {"entry": {"v": 1, "space": "s1:a.localhost", "kind": "message", "author": "@alice:a.localhost", "keyId": "k1", "body": {}, "contentHash": "209589b4ccecf602cdd040e056fe6a937f5fdc48bce6227e7aeee10f647bba13", "refs": [], "seen": 0, "nonce": "d2vydo2fvcdnapnvwm6qd4redl", "time": "2026-01-01T00:00:00Z", "sig": "waIDLYblJ9XlafwYn6wiUqTcnXY-ubKAKFA154O3aWCTO3yHPACG5-OsKAidmgTC3u6tc6xPTazntcWSCQNqDR"}, "content": {"text": "noncanonical sig"}}}
-< @alice {"id": 111, "error": {"code": "invalid", "message": "bad signature"}}
-```
 
 ### 3.3 Executor cells
 
 - exec-py on py server, early: phase `succeeded`, claims 1, file written True; 
 - exec-py on ts server, early: phase `succeeded`, claims 1, file written True; 
-- exec-ts on py server, early: phase `ready`, claims 0, file written False; see `runs/exec-ts-py-early/exec.log`
-- exec-ts on ts server, early: phase `ready`, claims 0, file written False; see `runs/exec-ts-ts-early/exec.log`
+- exec-ts on py server, early: phase `succeeded`, claims 1, file written True; 
+- exec-ts on ts server, early: phase `succeeded`, claims 1, file written True; 
 - exec-py on py server, late: phase `succeeded`, claims 1, file written True; 
 - exec-py on ts server, late: phase `succeeded`, claims 1, file written True; 
 - exec-ts on py server, late: phase `succeeded`, claims 1, file written True; 
@@ -333,17 +165,18 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-11T19:08:13Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-11T20:55:49Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
+> {"id": 3, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 ```
 
 TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the TS verifier then looks for the entry signer `@:a.localhost` under key id `srv1` only (`verify.ts` viewOf) and reports `seq 1: entry signature does not verify against the pinned key`:
 
 ```
-< {"id": 2, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "pdyDpCMRYDV2qf_kLYSSouGf6SOwTULO-la1R2e1AlPCP-NB-HtTjl7arY48tITUl6Bj98m0IiaNgt2R2r4QBg"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "pdyDpCMRYDV2qf_kLYSSouGf6SOwTULO-la1R2e1AlPCP-NB-HtTjl7arY48tITUl6Bj98m0IiaNgt2R2r4QBg"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 2, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "4F6DBTq5hG0h8od3aHDZ51sXYI-d83JiK6-BwCYI8hQVfTn-lX0PKIUPNJ6lKygslT9rejgDi5XypCDNxvZIBw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "4F6DBTq5hG0h8od3aHDZ51sXYI-d83JiK6-BwCYI8hQVfTn-lX0PKIUPNJ6lKygslT9rejgDi5XypCDNxvZIBw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked
@@ -451,7 +284,7 @@ W-01 and W-02: hello proofs interoperate in all four pairs with the transport on
 
 ## 6. Closure of round 21
 
-Appended by hand after round 21 (`report.py` regenerates sections 1 to 5 only; append this section again if it is re-run). It answers section 4: **the decisions of round 21 resolved all 22 failures** counted there, each with the decision that settles it (`DECISIONS-r21.md`), the place in architecture.md that now says it, and what shows it. The one extra difference, W-51 (the StateView `settled` member of a claim without a reservation), is settled by D14 (`settled` is on every claim, `false` until settled; §6.1, han.ts, `ref/policy.py`).
+Appended by hand after round 21 and extended in round 22 (`report.py` regenerates sections 1 to 5 only; copy this section back after a re-run: it is the only part of the file that is not generated). It answers section 4: **the decisions of round 21 resolved all 22 failures** counted there, each with the decision that settles it (`DECISIONS-r21.md`), the place in architecture.md that now says it, and what shows it. The one extra difference, W-51 (the StateView `settled` member of a claim without a reservation), is settled by D14 (`settled` is on every claim, `false` until settled; §6.1, han.ts, `ref/policy.py`).
 
 | id | failure | on | decision | in the spec | shown by | status |
 |---|---|---|---|---|---|---|
@@ -474,17 +307,33 @@ Appended by hand after round 21 (`report.py` regenerates sections 1 to 5 only; a
 | C17 | P50 `hello` limits without `maxClockSkewSeconds` | Python server | D9 | §3, G-08 | wire vector D9a | resolved |
 | C18 | P27 `signal` with a relayed `from` answered `invalid` | TS server | D10 | G-04, han.ts `BindingCalls.signal` | wire vector D10a | resolved |
 | C19 | P51 WebSocket upgrade refused on `/` (the Python docs and well-known published a path-less URL) | TS server | D7 | G-07 endpoint, §4.3 | wire vector D13a (the `sequencer` URL has the path); no vector for the upgrade itself | resolved |
-| C20 | py->ts `hello` passed only with a workaround (the same path) | matrix cell | D7 | G-07 endpoint | cell not re-run | resolved (cell not re-run) |
-| C21 | verifier on `profile:@alice` failed: the TS verifier hard-coded key id `srv1` | matrix cell, ts->py | D6 | §4.3 "Which key signs what" | cell not re-run; the clean room's round-21 notes in `cleanroom-ts/SPEC-GAPS-WIRE.md` | resolved (cell not re-run) |
-| C22 | executor started before the space exists never retried | matrix cell, ts->py | D5 | §3 `read`, X-12 | cell not re-run; the clean room's round-21 notes (N-09 for `moved`) | resolved (cell not re-run) |
+| C20 | py->ts `hello` passed only with a workaround (the same path) | matrix cell | D7 | G-07 endpoint | matrix re-run in round 22: `hello` is a plain PASS for py->ts (section 1: 25 of 25 without a workaround) | resolved (cell re-run in round 22: PASS) |
+| C21 | verifier on `profile:@alice` failed: the TS verifier hard-coded key id `srv1` | matrix cell, ts->py | D6 | §4.3 "Which key signs what" | matrix re-run in round 22: the verifier row for `profile:@alice` is PASS in all four directions, with the server key id `h1` (section 1) | resolved (cell re-run in round 22: PASS) |
+| C22 | executor started before the space exists never retried | matrix cell, ts->py | D5 | §3 `read`, X-12 | matrix re-run in round 22: the executor (early) row is PASS in all four directions, phase `succeeded`, the file written (section 3.3) | resolved (cell re-run in round 22: PASS) |
 
-C01 to C19 are shown by wire vectors that both reference servers answered at the end of round 21 (first row below). C20 to C22 are matrix cells: the interop matrix was **not re-run** after round 21, so they are resolved by the decisions and the implementations' own tests, not by a new matrix run.
+C01 to C19 are shown by wire vectors that both reference servers answered at the end of round 21 (first row below). C20 to C22 are matrix cells, **re-run in round 22** (every cell of `run.py`: four client/server pairs in live and in frozen time, three `srv1` cells, eight executor cells; sections 1 to 3 above are from that run) and passing.
 
-Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` and `--launch ts`). The first row is the end of round 21; the second was measured during round 22, while the implementations were being changed for it. The Python server fails six vectors in the second row only because `hello` now carries ten limits (`maxStateItems`) and the StateView has `agents`, which `ref/wire-vectors` predates (`01-hello`, `06-read.state`, `11-approve`, `21-redact`, `P03`, `D9a`); the TypeScript build predates both changes.
+Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` and `--launch ts`). The first row is the end of round 21 (82 vectors). The second is the end of round 22, after `ref/wire-vectors` was regenerated from the round-22 transcripts and extended with the 17 vectors of `probes-r22.json` (99 vectors); it replaces the mid-round row, in which the Python server failed six vectors because `hello` then carried ten limits (`maxStateItems`) and the StateView had `agents`, which the vectors predated.
 
 | recorded run | Python server | TS server |
 |---|---|---|
 | wire vectors, end of round 21 | 82/82 vectors, 203/203 expectations | 82/82 vectors, 203/203 expectations |
-| wire vectors, round 22 | 76/82 vectors, 136/203 expectations | 82/82 vectors, 203/203 expectations |
+| wire vectors, round 22 | 97/99 vectors, 1330/1344 expectations | 99/99 vectors, 1344/1344 expectations |
+| wire vectors, round 22 after the G-07 (1a) fix in impl/han/seq/server.py | 99/99 vectors, 1344/1344 expectations | 99/99 vectors, 1344/1344 expectations |
 
-Still unexercised by any wire vector (test mode is one server with a frozen clock): moves, federation notices, server-to-server blob transfer, key rotation, executor crash recovery and R-16 clock behaviour.
+### 6.1 What the round-22 refresh changed and found
+
+**Matrix** (`run.py` then `report.py`, 2026-10-11): ts->py 25/25, py->ts 25/25 without a workaround, ts->ts 25/25, py->py 25/25 (section 1). Both verifier rows, both executor rows and the three `srv1` cells pass. The StateView after the scenario is identical on all four (including `agents` and the claim member `settled`). The probe totals of section 2 are against the probe *readings* of round 21 (`probe.mjs` was not changed): four probes still differ from those readings and each is settled by a decision, not a failure: P05 (an unknown actor is `not_found`, D11), P09 (a non-I-JSON frame is id 0 and closes, D2), P27 (`from` on a non-server connection is `invalid`, D10) and P51 (the TS server refuses an upgrade on `/`: the generic binding must upgrade `/han` and may upgrade other paths, G-07, D7). Python server 56/59 and TS server 55/59 on those readings; P51 is the only probe on which the two servers differ.
+
+**Golden transcripts** (`golden/`, regenerated by `report.py`): all 21 operations are answered byte for byte alike by both servers for both clients (`hello` now agrees too, since both carry ten limits). Against the round-21 files exactly four operations changed, each by one member: `hello` (`limits.maxStateItems: 1000`) and `read.state`, `approve`, `redact` (the StateView's `agents: {}`). Nothing else moved, so the other 17 operation vectors are unchanged.
+
+**Wire vectors**: `make_wire_vectors.py` regenerated the 21 operation files and the probes from these transcripts. Six of the 82 vectors changed, by exactly those two members: `01-hello`, `06-read.state`, `11-approve`, `21-redact`, `P03` and `D9a` (and `config.json` lists the tenth limit). Both servers pass all 82 again. The 17 new vectors (`probes-r22.json`) cover the E10 items one server can show deterministically: paged state with a cursor (E8-setup, E8a, E8b), `read {state, effect}` (E8c), integers of 2^53 or more with and without a usable id (E7a, E7b), the order of the frame checks (E7c), the adjacent pairs of the §4.1 order of verdicts that are observable (E5-setup, E5a to E5d), `read {at}` (E9a), `follow` with a `limit` gap (E9b), non-empty `knownHeads` (E10a), the profile-space bootstrap (E3a) and G-03 notices (E3b). What is not vectorised, and why, is listed in `ref/wire-vectors/README.md`.
+
+**Python server: two vectors fail, and the vectors are right** (`probes-r22.json`; G-07 (1a) and "the order is (1), (1a), (2), authentication, args"):
+
+- `E7b`: a frame holding an integer of 2^53 or more with no usable `id` must be answered `{id: 0, error: invalid}` **and the connection closed**. The Python server answers `{"id":0,"error":{"code":"invalid",...}}` and keeps the connection open, for all five frames: `{"id":9007199254740992,"call":"cancel","args":{"target":1}}` (authenticated) and, unauthenticated, `{"call":"cancel","args":{"target":9007199254740993}}`, `{"id":0,"call":"cancel","args":{"target":9007199254740993}}`, `{"id":"5","call":"cancel","args":{"target":9007199254740993}}` and `{"id":-5,"call":"cancel","args":{"target":9007199254740993}}`. A later `{"id":99,"call":"cancel","args":{"target":1}}` is still answered (`ok: null` when authenticated, `denied` when not). The TS server closes (WebSocket close 1007) after the error.
+- `E7c`: on a connection that has not said `hello`, `{"id":2,"call":"read","args":{"space":"s1:a.localhost","after":9007199254740992}}` must be `{"id":2,"error":{"code":"invalid"}}` (check (1a) comes before authentication). The Python server answers `{"id":2,"error":{"code":"denied","message":"hello first"}}`. The other three steps of that vector (a malformed frame is `invalid` before authentication, a call with bad args is `denied`) pass.
+
+No other vector fails on either server. Differences found while writing the vectors where the text is silent, so no vector pins them (details in `ref/wire-vectors/README.md`): `read {state, effect}` with `at` or with `follow`, `read {state, cursor}` with `follow`, a negative integer below -(2^53), and whether a notice for an actor with no open session is kept for its next subscription (the Python server keeps and replays it, the TS server drops it; G-09 says signals are never replayed).
+
+Still unexercised by any wire vector (test mode is one server with a frozen clock): moves, federation notices, server-to-server blob transfer, key rotation, executor crash recovery, R-16 clock behaviour, `limit`, and the `unavailable` verdicts.
