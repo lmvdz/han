@@ -13,24 +13,13 @@ from websockets.exceptions import WebSocketException
 from ..client import Client
 from ..core import P, W, WireError
 from ..entries import fmt_time
-from ..verify.chains import Chains
+from .sequencer import _Chains
 
 log = logging.getLogger("han.seq.federation")
 FRESH = 300          # R-10: seconds a fetched profile may be used
 KEYS_TTL = 30        # seconds before a peer's key document is fetched again (when a profile or hello needs it)
 CALL_TIMEOUT = 15
 _NET = (OSError, asyncio.TimeoutError, WebSocketException, WireError, ValueError)
-
-class _Chains(Chains):
-    """Verified copies of other servers' profile chains. A record there may be authored or pinned by one of OUR actors (an operator's
-    confirmation in an agent's profile space on a peer), so views of local actors come from the sequencer itself."""
-    def __init__(self, seq):
-        self.seq = seq
-        super().__init__(seq.server_keys)
-    def profile(self, actor, seq):
-        if actor == "@:" + self.seq.server or (not actor.startswith("@:") and P.server_of(actor) == self.seq.server):
-            return self.seq.profile(actor, seq) or {"actor": actor, "seq": seq, "actorKind": "human", "operatorConfirmed": False, "keys": {}}
-        return super().profile(actor, seq)
 
 class PeerKeyFault(Exception):
     """A peer's key document changed an already-seen window (§4.3): the peer is not trusted any more."""
@@ -50,7 +39,7 @@ class Federation:
     def __init__(self, seq, peers: dict | None = None):
         self.seq, self.peers = seq, {} if peers is None else peers          # live: a caller may add peers later
         self.docs: dict[str, dict] = seq.store.get_meta("peer_keys", {})        # server → {keys: [raw key docs], sequencer, cut: {keyId: time}}
-        self.chains = _Chains(seq)                                   # verified profile chains of other servers' actors
+        self.chains = seq.chains = _Chains(seq)                      # verified profile chains of other servers' actors (and spaces handed over, G-06)
         self.fetched: dict[str, float] = {}                                      # actor → steady time its profile was last read
         self.fetched_keys: dict[str, float] = {}
         self.bad: dict[str, str] = {}                                            # server → why it is not trusted
@@ -253,6 +242,18 @@ class Federation:
                 for a in need: await have(a)
                 if len(got) == before: break
         except (KeyError, TypeError, ValueError, AttributeError): return
+
+    async def prepare_host(self, who, records):
+        """G-06: the caller's keys and the profiles its records pin (other servers' actors), so the verification can run from memory."""
+        if not (isinstance(who, str) and who.startswith("@:") and isinstance(records, list)): return
+        try:
+            await self.ensure_keys(who[2:])
+            actors = {a for r in records for a in r["receipt"]["profiles"]}
+        except (WireError, KeyError, TypeError, AttributeError): return
+        for a in sorted(actors):
+            if a.startswith("@:") or not P._actor(a) or P.server_of(a) == self.seq.server: continue
+            try: await self.ensure_profile(a)
+            except WireError as ex: log.info("profile of %s unavailable: %s", a, ex.message)
 
     async def prepare_read(self, space):
         if isinstance(space, str) and space.startswith("profile:") and P._space(space) and P.server_of(space) != self.seq.server \

@@ -1,0 +1,78 @@
+{
+ "format": "han-wire-config/1",
+ "server": "a.localhost",
+ "clock": "2026-01-01T00:00:00Z",
+ "note": "Test mode (architecture.md G-11): a frozen clock, this server key, these actors, an empty data directory. Private key of a key = sha256(UTF-8 seed), 32 raw bytes.",
+ "serverKey": {
+  "keyId": "h1",
+  "seed": "han-interop-key-server",
+  "publicKey": "dQWTdAnET1np2Xh93ckRTT8OE0xZHe8PLXhmqofsvbE",
+  "from": "1970-01-01T00:00:00Z"
+ },
+ "actors": [
+  {
+   "actor": "@alice:a.localhost",
+   "kind": "human",
+   "keyId": "k1",
+   "seed": "han-interop-key-alice",
+   "publicKey": "fYJZW3WyWkfZwykOuq9onUWCeQy68DY__Isv9MujOT4"
+  },
+  {
+   "actor": "@bob:a.localhost",
+   "kind": "human",
+   "keyId": "k1",
+   "seed": "han-interop-key-bob",
+   "publicKey": "EoeduLl9RDBQ37sWgal-hRVHFfnnSFUoA5eMzSOUCzo"
+  },
+  {
+   "actor": "@carol:a.localhost",
+   "kind": "human",
+   "keyId": "k1",
+   "seed": "han-interop-key-carol",
+   "publicKey": "C1_BlnrIAuV39Qdp1rMPGeQDv-7EUG-gmKr163dS57A"
+  },
+  {
+   "actor": "@vera:a.localhost",
+   "kind": "human",
+   "keyId": "k1",
+   "seed": "han-interop-key-vera",
+   "publicKey": "QY63o4WWyxhX3qyJcp-VUBcM7ZtcVsobcMf-ONmzFWI"
+  },
+  {
+   "actor": "@x:a.localhost",
+   "kind": "service",
+   "keyId": "k1",
+   "seed": "han-interop-key-x",
+   "publicKey": "tKMyq_8MvN9nfQuf1y8VxTOmgv9KUCJjXMUh-WWayhs"
+  }
+ ],
+ "blobs": {
+  "b1": {
+   "hash": "55384c31cb0f7eb9abb8e18719553b259f83c506083a7156e123ad613d43fbef",
+   "size": 2000,
+   "type": "application/octet-stream"
+  },
+  "b2": {
+   "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+   "size": 1700000,
+   "type": "application/octet-stream"
+  },
+  "generator": "byte i of a blob is (i*7+3) mod 251"
+ },
+ "limits": {
+  "maxFrameBytes": 1310720,
+  "maxHeaderBytes": 16384,
+  "maxContentBytes": 65536,
+  "maxBlobBytes": 4294967296,
+  "maxBlobPartBytes": 786432,
+  "maxBlobRangeBytes": 786432,
+  "maxStreamItemBytes": 65536,
+  "maxFollows": 256,
+  "maxClockSkewSeconds": 60
+ },
+ "defaults": {
+  "expectTimeoutMs": 5000,
+  "settleMs": 250,
+  "silenceMs": 400
+ }
+}

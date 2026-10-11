@@ -1,5 +1,5 @@
 """han-verify:
-  python -m han.verify follow --url ws://… --actor @a:S --key KEYFILE --space SP [--state PATH] --server-key S=KEYFILE|PUBKEY[,keyId]
+  python -m han.verify follow --url ws://…/han --actor @a:S --key KEYFILE --space SP [--state PATH] --server-key S=KEYFILE|PUBKEY[,keyId]
                               [--once | --until SEQ] [--json] [--proof-out PATH] [--gossip-interval SECONDS]
   python -m han.verify proof FILE [--server-key S=KEY…]        (also: `verify proof FILE`)
 Exit codes: 0 ok (or a proof accepted), 2 faulty, 3 stopped, 4 moved, 1 usage or a proof rejected."""

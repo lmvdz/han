@@ -1,0 +1,178 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "stream+watch",
+ "description": "bob watches the session; alice streams three items and repeats the last; watch delivers three",
+ "rules": [
+  "G-05",
+  "W-31",
+  "W-32"
+ ],
+ "steps": [
+  {
+   "conn": "@bob:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "watch",
+    "args": {
+     "space": "s1:a.localhost",
+     "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "stream",
+    "args": {
+     "item": {
+      "space": "s1:a.localhost",
+      "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+      "time": "2026-01-01T00:00:00Z",
+      "n": 1,
+      "type": "output",
+      "text": "line 1"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": null
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "space": "s1:a.localhost",
+     "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+     "time": "2026-01-01T00:00:00Z",
+     "n": 1,
+     "type": "output",
+     "text": "line 1"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 2,
+    "call": "stream",
+    "args": {
+     "item": {
+      "space": "s1:a.localhost",
+      "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+      "time": "2026-01-01T00:00:00Z",
+      "n": 2,
+      "type": "status",
+      "state": "working"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 2,
+    "ok": null
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "space": "s1:a.localhost",
+     "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+     "time": "2026-01-01T00:00:00Z",
+     "n": 2,
+     "type": "status",
+     "state": "working"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 3,
+    "call": "stream",
+    "args": {
+     "item": {
+      "space": "s1:a.localhost",
+      "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+      "time": "2026-01-01T00:00:00Z",
+      "n": 3,
+      "type": "output",
+      "text": "line 3 é"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 3,
+    "ok": null
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 1,
+    "item": {
+     "space": "s1:a.localhost",
+     "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+     "time": "2026-01-01T00:00:00Z",
+     "n": 3,
+     "type": "output",
+     "text": "line 3 é"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 4,
+    "call": "stream",
+    "args": {
+     "item": {
+      "space": "s1:a.localhost",
+      "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+      "time": "2026-01-01T00:00:00Z",
+      "n": 3,
+      "type": "output",
+      "text": "line 3 é"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 4,
+    "ok": null
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "send": {
+    "id": 2,
+    "call": "cancel",
+    "args": {
+     "target": 1
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 2,
+    "ok": null
+   }
+  }
+ ]
+}

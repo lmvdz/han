@@ -2,6 +2,7 @@
 outbox (R-06, R-07). One WebSocket at a time; requests are multiplexed by frame id."""
 from __future__ import annotations
 import asyncio, hashlib, json, os
+from urllib.parse import urlsplit
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 from .. import keys
@@ -10,12 +11,13 @@ from ..entries import make_entry
 from .outbox import Outbox
 
 _CLOSED = object()
+PATH = "/han"                 # D7: the generic binding's WebSocket path
 _NET = (ConnectionError, OSError, ConnectionClosed, WebSocketException, asyncio.TimeoutError)
 
 class Client:
     def __init__(self, url: str, actor: str, key_path: str, outbox_db: str, server: str | None = None,
                  retry_delay: float = 0.2, max_retry_delay: float = 5.0, key=None):
-        self.url, self.actor = url, actor
+        self.url, self.actor = (url.rstrip("/") + PATH if urlsplit(url).path in ("", "/") else url), actor      # D7: never a bare host
         self.server = server or P.server_of(actor)               # the name we dial: bound into the hello proof
         self.key = key or keys.load(key_path)                     # `key`: an already loaded key (a server's own, for @:server connections)
         self.outbox = Outbox(outbox_db)
@@ -55,6 +57,9 @@ class Client:
         try:
             async for raw in ws:
                 msg = json.loads(raw)
+                if msg.get("id") == 0 and "error" in msg:                  # D2: a frame the server could not attribute; every open request failed
+                    for q in list(self._pending.values()): q.put_nowait(_CLOSED)
+                    continue
                 q = self._pending.get(msg.get("id"))
                 if q: q.put_nowait(msg)
         except _NET + (ValueError,): pass

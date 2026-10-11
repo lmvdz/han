@@ -2,13 +2,15 @@
 fan-out, blobs, notices and session streams. han.seq.server is only the WebSocket framing around this.
 Everything here is synchronous (one event loop, so each call is atomic, like the per-space serial transaction of §4.1)."""
 from __future__ import annotations
-import asyncio, logging, math, time
+import asyncio, hashlib, logging, math, time
 from ..core import P, W, LIMITS, WireError
 from ..entries import fmt_time, make_entry, default_policy
+from ..verify.chains import Chains
 from .store import Store, BlobStore
 
 log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
+OWN_BLOB_SECONDS = 86400      # G-01 / D3: an uploader may read its own unreferenced blob this long
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)
 
 class Clock:
@@ -18,8 +20,9 @@ class Clock:
 
 class Sub:
     """One live subscription (a read-follow, subscribe or watch); han.seq.server drains `q` onto the socket."""
-    def __init__(self, actor, space=None, cutoff=0):
+    def __init__(self, actor, space=None, cutoff=0, signals=False):
         self.actor, self.space, self.cutoff, self.q, self.dead = actor, space, cutoff, asyncio.Queue(), False
+        self.signals = signals                  # G-09: signals ride `subscribe`, never `read` with follow
     def push(self, item):
         if self.dead: return
         if self.q.qsize() > 10000: self.dead = True; self.q.put_nowait(None)      # a consumer that doesn't keep up is cut off (it can re-read)
@@ -47,6 +50,23 @@ def key_list(keys: dict) -> list[dict]:
 
 def _invalid(why): return WireError("invalid", why)
 
+class _Chains(Chains):
+    """Verified copies of chains this server does not (yet) order: other servers' profile spaces and spaces handed over by `host`
+    (G-06). A record there may be authored or pinned by one of OUR actors (an operator's confirmation in an agent's profile space
+    on a peer), so views of local actors come from the sequencer itself."""
+    def __init__(self, seq):
+        self.seq = seq
+        super().__init__(seq.server_keys)
+    def profile(self, actor, seq):
+        if actor == "@:" + self.seq.server or (not actor.startswith("@:") and P.server_of(actor) == self.seq.server):
+            return self.seq.profile(actor, seq) or {"actor": actor, "seq": seq, "actorKind": "human", "operatorConfirmed": False, "keys": {}}
+        return super().profile(actor, seq)
+
+def wire_state(state: dict) -> dict:
+    """The StateView as served (D14): `settled` is present on every claim (a copy; the sequencer's own state is untouched)."""
+    return dict(state, effects={pid: dict(e, claims=[dict(c, settled=bool(c.get("settled"))) for c in e["claims"]])
+                                for pid, e in state["effects"].items()})
+
 class Sequencer:
     def __init__(self, server: str, key, db_path: str, clock=None):
         self.server, self.key, self.key_id = server, key, key.key_id
@@ -58,6 +78,9 @@ class Sequencer:
         self.home = W.Home(server, key, key.key_id, "local", clock=self.now_str, server_keys=self.server_keys)
         self.home.blobs, self.home.inbox = BlobStore(self.store), Inbox(self)
         self.home.uploads, self.home.supplied = self.store.uploads(), self.store.supplied()
+        self.part_refs: dict[tuple, tuple] = {}                                         # (hash, uploader) → (size, type) of the first part (D8)
+        self.upload_times = self.store.upload_times()                                   # (hash, actor) → when it completed (D3)
+        self.chains = _Chains(self)                                                    # profile chains of peers and spaces being handed over (G-06)
         self._supplied_saved = set(self.home.supplied)
         self.subs: dict[str, set] = {}              # space → live read/subscribe subscriptions
         self.notice_subs: dict[str, set] = {}       # actor → subscriptions to its own profile (notices)
@@ -114,23 +137,34 @@ class Sequencer:
         """The document served at /.well-known/han (§4.3)."""
         return {"server": self.server, "sequencer": endpoint, "keys": key_list(self.server_keys[self.server])}
 
+    def peers_doc(self) -> dict:
+        """The document at /.well-known/han-peers (D13): the other servers whose keys this one verifies with, and the
+        /.well-known/han document of each (where the peers map puts it, else https://<server>)."""
+        peers = self.fed.peers if self.fed else {}
+        return {"peers": [{"server": s, "url": peers.get(s, f"https://{s}").rstrip("/") + "/.well-known/han"}
+                          for s in sorted(self.server_keys) if s != self.server]}
+
     # ── startup: reload the chain, check it, rebuild state ──
     def _load(self):
-        for sp in self.store.spaces():
-            recs, state, prev = [], None, None
-            for rec, pinned in self.store.records(sp):
-                e, r = rec["entry"], rec["receipt"]
-                eid = P.entry_id(e)
-                if not (r["seq"] == len(recs) + 1 and r["id"] == eid and r["prev"] == (W.receipt_hash(prev) if prev else "")
-                        and W.verify_receipt(r, self.server_keys)):
-                    raise RuntimeError(f"stored chain of {sp} is corrupt at seq {r['seq']}; refusing to start")
-                state = P.fold(state, {"entry": dict(e, id=eid), "content": None, "receipt": r}, {"time": r["time"], "profiles": pinned})
-                recs.append(rec); prev = r
-                self.ids.setdefault(sp, {})[eid] = r["seq"]
-                if e["kind"] == "space.move": self.home.moved[sp] = e["body"]["to"]
-            self.home.spaces[sp] = {"records": recs, "state": state}
+        for sp in self.store.spaces(): self._load_space(sp)
         for actor, items in self.store.notices().items():
             n = Notices(self, actor); list.extend(n, items); self.home.inbox[actor] = n
+
+    def _load_space(self, sp):
+        recs, state, prev = [], None, None
+        for rec, pinned in self.store.records(sp):
+            e, r = rec["entry"], rec["receipt"]
+            eid = P.entry_id(e)
+            if not (r["seq"] == len(recs) + 1 and r["id"] == eid and r["prev"] == (W.receipt_hash(prev) if prev else "")
+                    and W.verify_receipt(r, self.server_keys)):
+                raise RuntimeError(f"stored chain of {sp} is corrupt at seq {r['seq']}; refusing to start")
+            state = P.fold(state, {"entry": dict(e, id=eid), "content": None, "receipt": r}, {"time": r["time"], "profiles": pinned})
+            recs.append(rec); prev = r
+            self.ids.setdefault(sp, {})[eid] = r["seq"]
+            if e["kind"] == "space.move":
+                if e["body"]["to"] == self.server: self.home.moved.pop(sp, None)        # handed to us (G-06): we are the home again
+                else: self.home.moved[sp] = e["body"]["to"]
+        self.home.spaces[sp] = {"records": recs, "state": state}
 
     def close(self): self.store.close()
 
@@ -170,10 +204,13 @@ class Sequencer:
 
     # ── hello (§3) ──
     def hello(self, who, key_id, proof, version, challenge, known_heads=None):
+        """D11: an actor this server has no profile for is `not_found`; an unknown or revoked key or a bad proof is `denied`."""
         if version != 1: raise _invalid("unsupported version")                                        # R-08
-        view = self.profile(who) if isinstance(who, str) and P._actor(who) else None
-        k = view["keys"].get(key_id) if view and isinstance(key_id, str) else None
-        if not k or k["status"] != "valid" or not isinstance(proof, str) or not W.verify_hello(k["publicKey"], proof, challenge, self.server):
+        if not (isinstance(who, str) and P._actor(who) and isinstance(key_id, str) and isinstance(proof, str)): raise _invalid("hello args")
+        view = self.profile(who)
+        if view is None: raise WireError("not_found", "no such actor")
+        k = view["keys"].get(key_id)
+        if not k or k["status"] != "valid" or not W.verify_hello(k["publicKey"], proof, challenge, self.server):
             raise WireError("denied", "authentication failed")
         return {"limits": LIMITS, "durability": self.home.durability, "time": self.now_str(), "knownHeads": self._heads_for(who, known_heads or [])}
 
@@ -188,6 +225,18 @@ class Sequencer:
                 seen.add(sp); out.append(S["records"][-1]["receipt"])
         return out
 
+    # ── routing (D1) ──
+    def route(self, space):
+        """A server answers every call naming a space it does not host with `moved` and `movedTo` = the server that does: the one
+        that took it over, or the one named in the space id. (Callers that follow with `not_found` for a missing local space.)
+        Profile spaces of other servers' actors are served from the verified copy when federating."""
+        if not (isinstance(space, str) and P._space(space)): return
+        to = self.home.moved.get(space)
+        if to: raise WireError("moved", "this space moved", moved_to=to)
+        if space in self.home.spaces or P.server_of(space) == self.server: return
+        if self.fed and space.startswith("profile:"): return
+        raise WireError("moved", "this server does not host the space", moved_to=P.server_of(space))
+
     # ── append: §4.1 ──
     def append(self, entry, content=None):
         if self.broken: raise WireError("unavailable", "storage failure; restart")
@@ -201,6 +250,7 @@ class Sequencer:
             if err: raise _invalid(err)
             if len(P.jcs(entry)) > LIMITS["maxHeaderBytes"]: raise _invalid("header too large")
             if content is not None and len(P.jcs(content)) > LIMITS["maxContentBytes"]: raise _invalid("content too large")
+            self.route(sp)                                                               # 2 not home: moved (D1), for space.create too
             S = self.home.spaces.get(sp)
             state = S["state"] if S else None
             need = self.pin_actors(state, dict(entry, id=eid))                           # 4 profiles (all of P-01)
@@ -295,6 +345,7 @@ class Sequencer:
         """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing.
         `at` (with `state`): the state after record `at` instead of the head; the read right is judged on the CURRENT state (P-02)."""
         if not (isinstance(space, str) and P._space(space) and P._int(after)): raise _invalid("read args")
+        self.route(space)
         if at is not None and not (state and P._int(at) and at >= 1): raise _invalid("at needs state and a seq >= 1")
         limit = 1000 if limit is None else limit
         if not (P._int(limit) and 1 <= limit <= 1000): raise _invalid("limit")
@@ -309,8 +360,8 @@ class Sequencer:
             if at > st["head"]: raise _invalid("at is beyond the head")
             past = self._state_at(S, at)
             if not P.can_read(st, who, at): raise WireError("denied", "state needs read rights at that seq")
-            items = [{"type": "state", "state": {k: v for k, v in past.items() if k != "entries"}}] + items
-        head = [i for i in items if i["type"] == "state"]
+            items = [{"type": "state", "state": {k: v for k, v in wire_state(past).items() if k != "entries"}}] + items
+        head = [{"type": "state", "state": wire_state(i["state"])} for i in items if i["type"] == "state"]
         recs = [i for i in items if i["type"] == "record"]
         out = head + ([{"type": "heads", "heads": self._heads_for(who, known_heads)}] if known_heads is not None else []) + recs[:limit]
         sub = None
@@ -322,11 +373,13 @@ class Sequencer:
         """T-01/T-05 for `who`: records and signals of `space` (and, on one's own profile, notices). Live from the head,
         or from after `after` first."""
         if not (isinstance(space, str) and P._space(space)) or (after is not None and not P._int(after)): raise _invalid("subscribe args")
+        self.route(space)
         S = self.home.spaces.get(space)
+        if not S and not space.startswith("profile:"): raise WireError("not_found", "no such space")
         if not S or not P.can_read(S["state"], who, S["state"]["head"]): raise WireError("denied", "cannot follow this space")
         st = S["state"]
         items = [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, who, r["receipt"]["seq"])] if after is not None else []
-        sub = Sub(who, space, st["head"]); self.subs.setdefault(space, set()).add(sub)
+        sub = Sub(who, space, st["head"], signals=True); self.subs.setdefault(space, set()).add(sub)
         if space == "profile:" + who:                                                   # G-03/G-04: only the actor gets its notices
             self.notice_subs.setdefault(who, set()).add(sub)
             items += list(self.home.inbox.get(who, []))
@@ -338,12 +391,13 @@ class Sequencer:
 
     # ── signals (G-04) ──
     def signal(self, who, space, body):
-        if not (isinstance(space, str) and P._space(space)) or not P.json_ok(body): raise _invalid("signal args")
+        if not (isinstance(space, str) and P._space(space)) or not P.json_ok(body) or len(P.jcs(body)) > 65536: raise _invalid("signal args")
+        self.route(space)
         code, detail = self.home.signal(space, who, body)
         if code != "ok": raise WireError(code, detail if isinstance(detail, str) else "")
         st = self.home.spaces[space]["state"]
         for sub in list(self.subs.get(space, ())):
-            if sub.actor != who and P.can_read(st, sub.actor, st["head"]): sub.push({"type": "signal", "from": who, "body": body})
+            if sub.signals and sub.actor != who and P.can_read(st, sub.actor, st["head"]): sub.push({"type": "signal", "from": who, "body": body})
 
     # ── blobs (G-01, G-02) ──
     def blob_put(self, who, ref, offset, data):
@@ -352,11 +406,20 @@ class Sequencer:
         if offset + len(data) > ref["size"]: raise _invalid("bytes beyond ref.size")
         if who in self.home.uploads.get(ref["hash"], ()):                                # this uploader already completed it
             return {"have": ref["size"], "complete": True}
-        res = self.home.blob_put_part(ref, offset, data, who)
-        if res["complete"]:
-            self.home.parts.pop((ref["hash"], who), None)
-            self.store.add_upload(ref["hash"], who); self.store.commit()
-        return res
+        key = (ref["hash"], who)
+        if self.part_refs.setdefault(key, (ref["size"], ref["type"])) != (ref["size"], ref["type"]): raise _invalid("ref.size and ref.type must repeat")
+        buf = self.home.parts.setdefault(key, bytearray())
+        if offset > len(buf): raise _invalid(f"gap: part starts after the bytes held ({len(buf)})")       # D8: parts are contiguous
+        over = bytes(buf[offset:offset + len(data)])
+        if data[:len(over)] != over: raise _invalid("part differs from bytes already held")
+        buf.extend(data[len(over):])
+        if len(buf) < ref["size"]: return {"have": len(buf), "complete": False}                        # a valid partial upload
+        self.home.parts.pop(key, None); self.part_refs.pop(key, None)
+        if hashlib.sha256(bytes(buf)).hexdigest() != ref["hash"]: raise _invalid("bytes do not hash to ref.hash")      # parts discarded
+        self.home.blobs[ref["hash"]] = bytes(buf); self.home.uploads.setdefault(ref["hash"], set()).add(who)
+        self.upload_times[key] = self.now()
+        self.store.add_upload(ref["hash"], who, self.upload_times[key]); self.store.commit()
+        return {"have": ref["size"], "complete": True}
 
     def supply(self, space, ref, data: bytes):
         """G-02: bytes fetched from another server and already hash-checked are held for `space` from now on."""
@@ -368,13 +431,24 @@ class Sequencer:
         length = LIMITS["maxBlobRangeBytes"] if length is None else length
         if not (W._blobref(ref) and isinstance(space, str) and P._space(space) and P._int(offset) and P._int(length) and length >= 1):
             raise _invalid("blobGet args")
+        self.route(space)
         code, data = self.home.blob_get(ref, space, who)
         if code != "ok" and self._context_blob(who, ref, space): code, data = "ok", self.home.blobs[ref["hash"]]
-        if code != "ok": raise WireError(code, "blob not available")
+        if code != "ok" and self._own_blob(who, ref, space): code, data = "ok", self.home.blobs[ref["hash"]]
+        if code != "ok": raise WireError("not_found" if code == "denied" else code, "blob not available")       # never confirm that a blob exists
         return self.blob_range(data, offset, length)
+
+    def _own_blob(self, who, ref, space) -> bool:
+        """D3, G-01: an uploader may read its own completed upload for 24 hours whether or not a record references it, with `space`
+        any space it can read."""
+        S = self.home.spaces.get(space)
+        at = self.upload_times.get((ref["hash"], who))
+        return bool(S and at is not None and self.now() - at < OWN_BLOB_SECONDS and ref["hash"] in self.home.blobs
+                    and P.can_read(S["state"], who, S["state"]["head"]))
 
     @staticmethod
     def blob_range(data: bytes, offset: int, length: int) -> dict:
+        if offset > len(data): raise _invalid("offset past the end")
         return {"data": data[offset:offset + min(length, LIMITS["maxBlobRangeBytes"])], "size": len(data), "offset": offset}
 
     def _context_blob(self, who, ref, space) -> bool:
@@ -406,6 +480,7 @@ class Sequencer:
     def stream(self, who, item):
         if not self._valid_item(item) or len(P.jcs(item)) > LIMITS["maxStreamItemBytes"]: raise _invalid("StreamItem")
         space, session = item["space"], item["session"]
+        self.route(space)
         st, sess = self._session(space, session)
         if sess["actor"] != who: raise WireError("denied", "only the session's actor publishes")
         if not P.session_access(st, who, session)["watch"]: raise WireError("denied", "session not live")
@@ -421,7 +496,50 @@ class Sequencer:
             if acc["watch"] and (item["type"] != "context" or acc["read"]): sub.push(item)
 
     def watch(self, who, space, session):
+        self.route(space)
         st, _ = self._session(space, session)
         if not P.session_access(st, who, session)["watch"]: raise WireError("denied", "no watch right on this session")
         sub = Sub(who, space); self.watchers.setdefault((space, session), set()).add(sub)
         return sub
+
+    # ── move handover (G-06, §7.3) ──
+    def host(self, who, space, records, head=None):
+        """Server to server, as `@:A` the current home: take the next contiguous records of `space`, verified (R-14) with wire.Mirror
+        (the chain is held in `self.chains`, not in `home.spaces`: this server serves no reads and orders nothing for the space
+        yet). `head` asks for our signed acceptance of the chain through it. When the last record held is a `space.move` to
+        this server the space becomes ours. -> {have, accept?}"""
+        if not (isinstance(who, str) and who.startswith("@:") and who[2:] != self.server): raise WireError("denied", "host is for a home server acting as @:A")
+        if not (isinstance(space, str) and P._space(space) and isinstance(records, list) and len(records) <= 1000
+                and all(isinstance(r, dict) for r in records) and (head is None or isinstance(head, dict))): raise _invalid("host args")
+        if space in self.home.spaces or self.home.moved.get(space): raise WireError("denied", "this server already has a home record of the space")
+        held = self.chains.records(space)
+        if (W.home_at(held, len(held) + 1) if held else P.server_of(space)) != who[2:]:
+            raise WireError("denied", "the caller is not the home of the space at the last record held")
+        for rec in records:
+            try:
+                if rec["entry"]["space"] != space or rec["receipt"]["space"] != space: raise _invalid("record of another space")
+                ok, why = self.chains.mirror.ingest(rec, self.now_str())
+            except (KeyError, TypeError, ValueError, AttributeError, IndexError, RecursionError): ok, why = False, "malformed record"
+            if not ok:
+                S = self.chains.mirror.spaces.get(space)
+                if S: S.pop("faulty", None)                                             # not a verdict on the caller; the chain held stays usable
+                raise _invalid(f"record does not verify: {why}")
+            self.store.add_peer_record(rec)
+        self.store.commit()
+        held = self.chains.records(space)
+        if head is not None and not (held and head == held[-1]["receipt"]): raise _invalid("head is not the last record held")
+        out = {"have": len(held)}
+        if held and held[-1]["entry"]["kind"] == "space.move" and held[-1]["entry"]["body"]["to"] == self.server:
+            self._promote(space); out["have"] = len(self.home.spaces[space]["records"])
+        if head is not None:
+            out["accept"] = {"keyId": self.key_id, "sig": W.accept_move(self.key, space, head)}
+        return out
+
+    def _promote(self, space):
+        """The chain handed over becomes ours: stored as home records (pinning the profile views its receipts name), then loaded."""
+        for rec in self.chains.records(space):
+            self.store.add_record(rec, {a: self.chains.profile(a, n) for a, n in rec["receipt"]["profiles"].items()})
+            if rec.get("redacted"): self.store.mark_redacted(space, rec["receipt"]["id"], rec["redactedBy"])
+        self.store.commit()
+        self.chains.mirror.spaces.pop(space, None)
+        self._load_space(space)

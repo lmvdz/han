@@ -5,6 +5,7 @@
 // (vecreplay.ts) take a URL and a ServerName. Only world() provisions actors by calling the in-process Sequencer; a foreign server
 // needs its own provisioning (profile spaces created by its server actor, §4.3) and a way to hand the harness the actors' keys.
 import fs from "node:fs";
+import { createHash as createHashNode } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
@@ -154,23 +155,34 @@ async function protocol() {
       ok(ch.server === SERVER && ch.versions.includes(1) && typeof ch.challenge === "string" && !("id" in ch), "bare Challenge first");
       r.send({ id: 1, call: "read", args: { space: SP, after: 0 } });
       let m = await r.next(); ok(m.id === 1 && m.error?.code === "denied", "call before hello is denied");
-      r.send({ id: 2, call: "hello", args: { who: ada.id, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, "other.test")), version: 1 } });
+      const hello = (id: number, who: string, challenge: string, dialed: string, version = 1) => ({ id, call: "hello", args: { who, keyId: "k1", proof: signBytes(ada.key, helloMessage(challenge, dialed)), version } });
+      r.send(hello(2, ada.id, ch.challenge, "other.test"));
       m = await r.next(); ok(m.error?.code === "denied", "proof over another server name is denied");
-      r.send({ id: 3, call: "hello", args: { who: ada.id, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, SERVER)), version: 2 } });
-      m = await r.next(); ok(m.error?.code === "invalid", "unsupported version is invalid (R-08)");
-      r.send({ id: 4, call: "hello", args: { who: ada.id, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, SERVER)), version: 1 } });
-      m = await r.next(); ok(m.id === 4 && m.ok?.limits?.maxFrameBytes === 1310720 && m.ok.durability === "local", "good proof");
+      r.send(hello(3, ada.id, ch.challenge, SERVER));
+      m = await r.next(); ok(m.error?.code === "denied", "G-08: the challenge is used by the first hello that names it, even a failed one");
+      const r2 = await raw(w.url); const ch2 = await r2.next();
+      r2.send(hello(3, ada.id, ch2.challenge, SERVER, 2)); m = await r2.next(); ok(m.error?.code === "invalid", "unsupported version is invalid (R-08)");
+      r2.send(hello(4, ada.id, ch2.challenge, SERVER));
+      m = await r2.next(); ok(m.id === 4 && m.ok?.limits?.maxFrameBytes === 1310720 && m.ok.durability === "local", "good proof");
+      r2.send(hello(5, ada.id, ch2.challenge, SERVER)); m = await r2.next(); ok(m.error?.code === "invalid", "a second hello on an authenticated connection is invalid");
+      r2.ws.close();
       r.ws.close();
       let e = ""; try { await HanClient.connect(w.url, "other.test", ada.id, ada.key); } catch (x) { e = (x as Error).message; }
       ok(/challenge names/.test(e), "the client aborts when the challenge names another server");
     });
     await scenario("frames: malformed, binary, duplicate stream id", async () => {
+      // D2: a frame that is not I-JSON gets {id:0, invalid} and the server closes the connection
+      for (const bad of ["{not json", '{"id":6,"call":"append","args":{"entry":{"a":1.0}}}', '{"id":7,"id":8,"call":"cancel","args":{"target":1}}']) {
+        const q = await raw(w.url); await q.next();
+        q.send(bad); const mm = await q.next(); ok(mm.id === 0 && mm.error.code === "invalid", "not I-JSON -> id 0 invalid: " + bad);
+        await sleep(100); ok(q.closed, "the server closes the connection after a non-I-JSON frame");
+      }
       const r = await raw(w.url); const ch = await r.next();
-      r.send("{not json"); let m = await r.next(); ok(m.id === 0 && m.error.code === "invalid", "unparseable frame -> id 0 invalid");
       r.send({ id: 5, call: "hello", args: { who: ada.id, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, SERVER)), version: 1 } });
-      await r.next();
-      r.send('{"id":6,"call":"append","args":{"entry":{"a":1.0}}}'); m = await r.next(); ok(m.error.code === "invalid", "1.0 is not I-JSON");
-      r.send('{"id":7,"id":8,"call":"cancel","args":{"target":1}}'); m = await r.next(); ok(m.error.code === "invalid", "duplicate keys are invalid");
+      let m = await r.next();
+      r.send({ id: 5, call: "cancel", args: { target: 1 }, extra: true }); m = await r.next(); ok(m.id === 5 && m.error.code === "invalid", "extra frame member: invalid on its own id");
+      r.send({ id: 5, call: "cancel" }); m = await r.next(); ok(m.id === 5 && m.error.code === "invalid", "missing args: invalid");
+      r.send({ id: 0, call: "cancel", args: { target: 1 } }); m = await r.next(); ok(m.id === 0 && m.error.code === "invalid", "id 0 is unusable");
       r.send({ id: 9, call: "nonsense", args: {} }); m = await r.next(); ok(m.error.code === "invalid", "unknown call");
       r.send({ id: 10, call: "subscribe", args: { space: "profile:" + ada.id } }); // live-only stream
       await sleep(50); r.send({ id: 10, call: "subscribe", args: { space: "profile:" + ada.id } });
@@ -265,9 +277,9 @@ async function protocol() {
     });
     await scenario("notices (G-03): only to the actor's own sessions on its profile follow", async () => {
       const got: A[] = [], other: A[] = [];
-      const s1 = nina.client.stream("read", { space: `profile:${nina.id}`, after: 99999, follow: true }, (i) => got.push(i));
+      const s1 = nina.client.stream("subscribe", { space: `profile:${nina.id}` }, (i) => got.push(i));
       const bob2 = await HanClient.connect(w.url, SERVER, ada.id, ada.key);
-      const s2 = bob2.stream("read", { space: `profile:${nina.id}`, after: 99999, follow: true }, (i) => other.push(i));
+      const s2 = bob2.stream("subscribe", { space: `profile:${nina.id}` }, (i) => other.push(i));
       await sleep(80);
       await send(ada, SP, "member.set", { actor: nina.id, role: "guest" });
       await until(() => got.length === 1, 3000, "notice");
@@ -531,9 +543,131 @@ async function vectors() {
   });
 }
 
+// ═════════════════════════════════════ R21. wire decisions D1-D14 ═════════════════════════════════════
+async function round21() {
+  const w = await newWorld();
+  try {
+    const ada = addPerson(w, "ada"), bob = addPerson(w, "bob");
+    for (const p of [ada, bob]) await login(w, p);
+    const SP = "w1:" + SERVER, FOREIGN = "q1:other.test";
+    await createSpace(ada, SP); await send(ada, SP, "member.set", { actor: bob.id, role: "member" });
+    await scenario("D1: a foreign space is `moved` for every call naming it; a missing local one is not_found", async () => {
+      const c = ada.client, ref = { hash: "0".repeat(64), size: 1, type: "text/plain" };
+      const mv = async (p: Promise<unknown>) => { try { await p; return "ok"; } catch (e) { return e instanceof WireFault ? e.code + ":" + e.movedTo : String(e); } };
+      for (const [n, call] of [["read", () => c.read(FOREIGN, 0)], ["subscribe", () => c.call("subscribe", { space: FOREIGN })],
+        ["signal", () => c.call("signal", { space: FOREIGN, body: {} })], ["blobGet", () => c.call("blobGet", { ref, space: FOREIGN })],
+        ["watch", () => c.call("watch", { space: FOREIGN, session: "0".repeat(64) })],
+        ["space.create", () => c.append(mk(ada, FOREIGN, "space.create", { policy: POLICY() }, { name: "x" }).entry, { name: "x" })]] as [string, () => Promise<unknown>][])
+        ok(await mv(call()) === "moved:other.test", n + " of a foreign space is moved");
+      ok(await code(c.read("w9:" + SERVER, 0)) === "not_found", "a missing local space is not_found");
+    });
+    await scenario("D2: frames are exactly {id, call, args}; args are closed", async () => {
+      const r = await raw(w.url); const ch = await r.next();
+      r.send({ id: 1, call: "hello", args: { who: ada.id, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, SERVER)), version: 1 } }); await r.next();
+      r.send({ id: 7, call: "read", args: { space: SP, after: 0, bogus: 1 } }); let m = await r.next(); ok(m.id === 7 && m.error.code === "invalid", "unknown read arg");
+      r.send({ id: 8, call: "append", args: { entry: {}, bogus: 1 } }); m = await r.next(); ok(m.id === 8 && m.error.code === "invalid", "unknown append arg");
+      r.send({ id: 9, call: "cancel", args: { target: 1, x: 1 } }); m = await r.next(); ok(m.id === 9 && m.error.code === "invalid", "unknown cancel arg");
+      r.ws.close();
+    });
+    await scenario("D4/D8/D9/D11/D12/D13/D14: base64url, blobPut, limits, hello errors, challenge, well-known, settled", async () => {
+      const data = Buffer.from("probe blob bytes"), ref = { hash: sha256Hex(data), size: 16, type: "text/plain" };
+      const put = (extra: A) => ada.client.call("blobPut", { ref, offset: 0, data: data.toString("base64url"), ...extra });
+      ok(await code(ada.client.call("blobPut", { ref, offset: 5, data: data.subarray(5).toString("base64url") })) === "invalid", "gap is invalid (D8)");
+      ok(await code(ada.client.call("blobPut", { ref, offset: 0, data: data.toString("base64url") + "==" })) === "invalid", "padding is invalid (D4)");
+      const bad = { hash: sha256Hex(Buffer.from("abd")), size: 3, type: "text/plain" };
+      ok(await code(ada.client.call("blobPut", { ref: bad, offset: 0, data: Buffer.from("abc").toString("base64url") })) === "invalid", "hash mismatch is invalid and discarded (D8)");
+      ok((await put({})).complete === true, "a valid upload completes");
+      ok((await ada.client.call("blobGet", { ref, space: SP })).size === 16, "uploader reads its own unreferenced blob (D3)");
+      ok(ada.client.limits.maxClockSkewSeconds === 60, "hello limits carry maxClockSkewSeconds (D9)");
+      const r = await raw(w.url); const ch = await r.next();
+      ok(/^[A-Za-z0-9_-]{43}$/.test(ch.challenge), "challenge is 43 characters (D12)");
+      r.send({ id: 1, call: "hello", args: { who: "@nobody:" + SERVER, keyId: "k1", proof: signBytes(ada.key, helloMessage(ch.challenge, SERVER)), version: 1 } });
+      let m = await r.next(); ok(m.error?.code === "not_found", "unknown actor is not_found (D11)");
+      r.ws.close();
+      const rq = await raw(w.url); const chq = await rq.next();
+      rq.send({ id: 2, call: "hello", args: { who: ada.id, keyId: "nokey", proof: signBytes(ada.key, helloMessage(chq.challenge, SERVER)), version: 1 } });
+      m = await rq.next(); ok(m.error?.code === "denied", "unknown key is denied (D11)");
+      rq.ws.close();
+      const base = `http://127.0.0.1:${new URL(w.url).port}`;
+      const wk = await (await fetch(base + "/.well-known/han")).json() as A;
+      ok(wk.server === SERVER && /\/han$/.test(wk.sequencer) && Array.isArray(wk.keys) && wk.keys[0].from, "/.well-known/han shape (D13)");
+      ok(Array.isArray((await (await fetch(base + "/.well-known/han-peers")).json() as A).peers), "/.well-known/han-peers shape (D13)");
+      const st = (await ada.client.read(SP, 0, { state: true })).find((i: A) => i.type === "state").state;
+      ok(typeof st === "object", "state view");
+    });
+    await scenario("D10: signal `from` only on a server-actor connection", async () => {
+      ok(await code(ada.client.call("signal", { space: SP, body: {}, from: bob.id })) === "invalid", "from on a user connection is invalid");
+    });
+  } finally { await stop(w); }
+}
+const sha256Hex = (b: Buffer) => createHashNode("sha256").update(b).digest("hex");
+
+// ═════════════════════════════════════ R21b. executor early start (D5), host (G-06), relayed signal (D10) ═════════════════════════════════════
+async function round21b() {
+  await scenario("D5: an executor started before its space exists retries with back-off and claims once the space appears", async () => {
+    const w = await newWorld();
+    try {
+      const ada = addPerson(w, "ada"), ops = addPerson(w, "ops");
+      const execDir = path.join(w.tmp, "exec"), sandbox = path.join(w.tmp, "sandbox");
+      const inst = Executor.init(execDir, "inst1"); const key = importFromDir(execDir);
+      const fx = addPerson(w, "fx", "service", ops, key);
+      await login(w, ada); await login(w, ops);
+      await send(ops, `profile:${fx.id}`, "member.set", { actor: ops.id, role: "owner" });
+      void inst;
+      const SP = "e1:" + SERVER;
+      const ex = new Executor({ actor: fx.id, server: SERVER, url: w.url, dir: execDir, sandbox, spaces: [SP], retryMs: 150 });
+      await ex.start();                                     // the space does not exist yet: not_found, no stream
+      const pol = POLICY({ approvals: [{ action: "file.write", approvers: ["owner"] }], separateApprover: false });
+      await createSpace(ada, SP, pol); await send(ada, SP, "member.set", { actor: fx.id, role: "member" });
+      const plan = planOf("file.write", "out/early.txt", "early\n");
+      const prop = await send(ada, SP, "effect.propose", { executor: fx.id, action: "file.write", planDigest: digestOf(plan), repeatable: false }, { plan });
+      await send(ada, SP, "effect.approve", { proposal: prop.id, planDigest: digestOf(plan) }, { note: "ok" });
+      await until(() => w.seq.stateOf(SP)!.effects[prop.id].phase === "succeeded", 10000, "effect succeeded after an early start");
+      const claim = w.seq.stateOf(SP)!.effects[prop.id].claims[0];
+      ok(claim.outcome === "succeeded", "claim outcome");
+      await ex.stop();
+    } finally { await stop(w); }
+  });
+  await scenario("G-06/D10: server-actor connection relays signals and hands a space over with `host`", async () => {
+    const A = await newWorld({ seq: { } });
+    const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "han-host-"));
+    const B = new Sequencer({ server: "b.test", dir: dirB, port: 0, peers: { [SERVER]: { [A.seq.keys().keyId]: A.seq.keys().publicKey } } });
+    const portB = await B.listen();
+    try {
+      const ada = addPerson(A, "ada"), bob = addPerson(A, "bob");
+      await login(A, ada); await login(A, bob);
+      const SP = "m1:" + SERVER;
+      await createSpace(ada, SP); await send(ada, SP, "member.set", { actor: bob.id, role: "member" });
+      // relay: a server actor connection may speak for a user of its server
+      const peersA = { peers: { "b.test": { [B.keys().keyId]: B.keys().publicKey } } };
+      void peersA;
+      const got: A[] = []; const sub = ada.client.stream("subscribe", { space: SP }, (i) => got.push(i)); void sub;
+      await sleep(50);
+      const asServer = await HanClient.connect(A.url.replace(/:\d+/, ":" + new URL(A.url).port), SERVER, "@:" + SERVER, A.seq.signer()).catch((e) => e);
+      ok(!(asServer instanceof Error), "the server actor can authenticate with its own published key: " + (asServer as Error).message);
+      await (asServer as HanClient).call("signal", { space: SP, body: { hi: 1 }, from: bob.id });
+      await until(() => got.some((i) => i.type === "signal" && i.from === bob.id), 3000, "relayed signal");
+      ok(await code((asServer as HanClient).call("signal", { space: SP, body: {}, from: "@x:other.test" })) === "denied", "a relay may speak only for its own actors");
+      (asServer as HanClient).close();
+      // host: A pushes the chain to B
+      const recs = ada.client.records(await ada.client.read(SP, 0));
+      ok(await code(new Promise((res, rej) => ada.client.call("host", { space: SP, records: recs }).then(res, rej))) === "denied", "host from a user connection is denied");
+      const toB = await HanClient.connect(`ws://127.0.0.1:${portB}/han`, "b.test", "@:" + SERVER, A.seq.signer());
+      ok(await code(toB.call("host", { space: SP, records: recs.slice(1) })) === "invalid", "records must be contiguous from have + 1");
+      const head = recs[recs.length - 1].receipt;
+      const res1 = await toB.call("host", { space: SP, records: recs, head });
+      ok(res1.have === recs.length && res1.accept?.keyId === B.keys().keyId, "B holds the chain and signs its acceptance");
+      ok(await code(toB.call("host", { space: SP, records: [{ ...recs[0], receipt: { ...recs[0].receipt, seq: recs.length + 1 } }] })) === "invalid", "a record that doesn't continue the chain");
+      toB.close();
+    } finally { await stop(A); await B.close(); fs.rmSync(dirB, { recursive: true, force: true }); }
+  });
+}
+
 const t0 = Date.now();
 await scenario("A. end to end: create, members, propose, approve, claim, execute, report, verify", e2e);
 await protocol();
+await round21();
+await round21b();
 await durability();
 await executorScenarios();
 await abandon();

@@ -1,0 +1,1180 @@
+{
+ "format": "han-wire-vectors/1",
+ "kind": "decided",
+ "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.",
+ "vectors": [
+  {
+   "id": "D11a",
+   "title": "hello for an actor with no profile on this server",
+   "expect": "not_found",
+   "rules": [
+    "G-08",
+    "D11"
+   ],
+   "source": "P05",
+   "steps": [
+    {
+     "conn": "raw:1",
+     "expect": {
+      "challenge": "<challenge-shape>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    },
+    {
+     "conn": "raw:1",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@nobody:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "raw:1",
+     "expect": {
+      "id": 1,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D12a",
+   "title": "the challenge is 43 characters of canonical base64url (32 bytes)",
+   "rules": [
+    "G-08",
+    "D12"
+   ],
+   "source": "P49",
+   "steps": [
+    {
+     "conn": "raw:1",
+     "expect": {
+      "challenge": "<challenge>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    }
+   ]
+  },
+  {
+   "id": "D2a",
+   "title": "text that is valid JSON but not I-JSON (a fraction): id 0, invalid, the server closes",
+   "expect": "id 0, invalid, close",
+   "rules": [
+    "G-07",
+    "D2"
+   ],
+   "source": "P09",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send_raw": "{\"id\": 7, \"call\": \"read\", \"args\": {\"space\": \"s1:a.localhost\", \"after\": 0.5}}"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 0,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect_close": true
+    }
+   ]
+  },
+  {
+   "id": "D2b",
+   "title": "a request frame with an extra member: invalid on its own id, connection stays open",
+   "rules": [
+    "G-07",
+    "D2"
+   ],
+   "source": "P10",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send_raw": "{\"id\": 5, \"call\": \"cancel\", \"args\": {\"target\": 1}, \"extra\": true}"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 5,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 6,
+      "call": "cancel",
+      "args": {
+       "target": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 6,
+      "ok": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "D2c",
+   "title": "a request frame without args",
+   "rules": [
+    "G-07",
+    "D2"
+   ],
+   "source": "P11",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send_raw": "{\"id\": 5, \"call\": \"cancel\"}"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 5,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D2d",
+   "title": "args that is not an object; an id that is not a positive integer",
+   "rules": [
+    "G-07",
+    "D2"
+   ],
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send_raw": "{\"id\": 5, \"call\": \"cancel\", \"args\": [1]}"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 5,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send_raw": "{\"id\": 0, \"call\": \"cancel\", \"args\": {\"target\": 1}}"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 0,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send_raw": "{\"id\": \"5\", \"call\": \"cancel\", \"args\": {\"target\": 1}}"
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 0,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D2e",
+   "title": "read with an unknown argument member",
+   "rules": [
+    "G-07",
+    "G-09",
+    "D2"
+   ],
+   "source": "P22",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 0,
+       "bogus": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D1a",
+   "title": "space.create for a space homed on another server",
+   "expect": "moved",
+   "rules": [
+    "§4.1",
+    "D1",
+    "W-13"
+   ],
+   "source": "P18",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "q1:other.localhost",
+        "kind": "space.create",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "policy": {
+          "visibility": "members",
+          "join": "invite",
+          "membersMayInvite": false,
+          "allowAgents": "any",
+          "approvals": [
+           {
+            "action": "file.write",
+            "approvers": [
+             "owner"
+            ]
+           }
+          ],
+          "separateApprover": true,
+          "budget": null,
+          "maxDelegationDepth": 2,
+          "minDurability": "local",
+          "launchWindow": 15,
+          "extensionsMinRole": "member",
+          "sessions": {
+           "watch": "member",
+           "read": "member",
+           "steer": "owner",
+           "modes": [
+            "auto",
+            "guarded"
+           ]
+          },
+          "servers": {
+           "deny": []
+          }
+         }
+        },
+        "contentHash": "a57f43246bdaf859bd970c2126b2aebd05bfc269ea531412f328e40ceca1a2ca",
+        "refs": [],
+        "seen": 0,
+        "nonce": "37i7efr3tcibtknkerpiggs2b7",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "q6pi8Gsr1Uz3pmyb5F2qOyhTfdEg_k5iYP3zYUIfokC2pKBfE94EmpyYO7kV43UW2iXMUyy6J3NnkHNBya2wAg"
+       },
+       "content": {
+        "name": "elsewhere"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D1b",
+   "title": "every call that names a space homed elsewhere is moved",
+   "rules": [
+    "§4.1",
+    "D1",
+    "D5"
+   ],
+   "source": "P56",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "q1:other.localhost",
+       "after": 0
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "subscribe",
+      "args": {
+       "space": "q1:other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 4,
+      "call": "signal",
+      "args": {
+       "space": "q1:other.localhost",
+       "body": {}
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 4,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 5,
+      "call": "watch",
+      "args": {
+       "space": "q1:other.localhost",
+       "session": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 5,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 6,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1,
+        "type": "text/plain"
+       },
+       "space": "q1:other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 6,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 7,
+      "call": "stream",
+      "args": {
+       "item": {
+        "space": "q1:other.localhost",
+        "session": "0000000000000000000000000000000000000000000000000000000000000000",
+        "n": 1,
+        "time": "2026-01-01T00:00:00Z",
+        "type": "output",
+        "text": "x"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 7,
+      "error": {
+       "code": "moved",
+       "movedTo": "other.localhost"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D1c",
+   "title": "follow of an unknown local space is answered at once, not held open",
+   "rules": [
+    "§3",
+    "D5"
+   ],
+   "source": "P19",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "nospace:a.localhost",
+       "after": 0,
+       "follow": true
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "subscribe",
+      "args": {
+       "space": "nospace:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 4,
+      "call": "watch",
+      "args": {
+       "space": "nospace:a.localhost",
+       "session": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 4,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D10a",
+   "title": "signal carrying a relayed `from` on a connection that is not a server actor",
+   "rules": [
+    "G-04",
+    "D10"
+   ],
+   "source": "P27",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "signal",
+      "args": {
+       "space": "s1:a.localhost",
+       "body": {
+        "a": 1
+       },
+       "from": "@bob:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D10b",
+   "title": "signals ride subscribe, never read with follow, and are not echoed to the sender's connection",
+   "rules": [
+    "G-09",
+    "W-22",
+    "G-04"
+   ],
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "subscribe",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "read",
+      "args": {
+       "space": "s1:a.localhost",
+       "after": 999999,
+       "follow": true
+      }
+     }
+    },
+    {
+     "conn": "@vera:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "signal",
+      "args": {
+       "space": "s1:a.localhost",
+       "body": {
+        "typing": true
+       }
+      }
+     }
+    },
+    {
+     "conn": "@vera:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": null
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "item": {
+       "type": "signal",
+       "from": "@vera:a.localhost",
+       "body": {
+        "typing": true
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect_silence": true
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "cancel",
+      "args": {
+       "target": 2
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": null
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "cancel",
+      "args": {
+       "target": 2
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "D8a",
+   "title": "blobPut with a gap (offset 5 before any part)",
+   "rules": [
+    "G-01",
+    "D8"
+   ],
+   "source": "P32",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "offset": 5,
+       "data": "IGJsb2IgYnl0ZXM"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D8b",
+   "title": "blobPut whose bytes do not hash to ref.hash: invalid and the bytes are discarded",
+   "rules": [
+    "G-01",
+    "D8"
+   ],
+   "source": "P33",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "3608bca1e44ea6c4d268eb6db02260269892c0b42b86bbf1e77a6fa16c3c9282",
+        "size": 3,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "YWJj"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "3608bca1e44ea6c4d268eb6db02260269892c0b42b86bbf1e77a6fa16c3c9282",
+        "size": 3,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "eHl6"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": {
+       "have": 3,
+       "complete": true
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D4a",
+   "title": "blobPut with padded base64",
+   "rules": [
+    "§2",
+    "D4"
+   ],
+   "source": "P34",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "offset": 0,
+       "data": "cHJvYmUgYmxvYiBieXRlcw==="
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D4b",
+   "title": "append whose signature has non-zero padding bits in its last character",
+   "rules": [
+    "§2",
+    "D4"
+   ],
+   "source": "P28b",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "message",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {},
+        "contentHash": "481f24fa3cf84628d339c061d45d5b7e27e0dd5e2de6ebd6e108959a9d11ba8e",
+        "refs": [],
+        "seen": 0,
+        "nonce": "sic5lwkynxrsptizwqwceur73i",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "ni4Bf0fyCAIme3hJPis7-IfdbKQxbY4adsL6vxtzyphn8SrrKAFs5Kceq9Mo_y-1cElIjqwP2qBvngfxEZ3mAR"
+       },
+       "content": {
+        "text": "noncanonical signature"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D3a",
+   "title": "the uploader reads its own unreferenced blob (24 h rule); a non-uploader gets not_found",
+   "rules": [
+    "G-01",
+    "D3"
+   ],
+   "source": "P36 P37",
+   "steps": [
+    {
+     "conn": "@bob:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "not_found"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "ok": {
+       "data": "cHJvYmUgYmxvYiBieXRlcw",
+       "size": 16,
+       "offset": 0
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D3b",
+   "title": "blobGet ranges: offset past the end and length 0 are invalid, a huge length is clamped, offset = size is empty",
+   "rules": [
+    "G-01",
+    "W-29"
+   ],
+   "source": "P38 P39",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost",
+       "offset": 9999
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 3,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost",
+       "offset": 0,
+       "length": 99999999
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 3,
+      "ok": {
+       "data": "cHJvYmUgYmxvYiBieXRlcw",
+       "size": 16,
+       "offset": 0
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 4,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost",
+       "offset": 0,
+       "length": 0
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 4,
+      "error": {
+       "code": "invalid"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 5,
+      "call": "blobGet",
+      "args": {
+       "ref": {
+        "hash": "6af1057906d95743267bd2f1abb38932278d61a9c9011b01d6497df2caa3bce5",
+        "size": 16,
+        "type": "text/plain"
+       },
+       "space": "s1:a.localhost",
+       "offset": 16
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 5,
+      "ok": {
+       "data": "",
+       "size": 16,
+       "offset": 16
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D13a",
+   "title": "GET /.well-known/han",
+   "rules": [
+    "§4.3",
+    "D13",
+    "D7"
+   ],
+   "source": "W-12 W-50",
+   "steps": [
+    {
+     "http_get": "/.well-known/han",
+     "expect_status": 200,
+     "expect_type": "application/json",
+     "expect_json": {
+      "server": "a.localhost",
+      "sequencer": "<url-of-the-binding>",
+      "keys": [
+       {
+        "keyId": "h1",
+        "publicKey": "dQWTdAnET1np2Xh93ckRTT8OE0xZHe8PLXhmqofsvbE",
+        "from": "1970-01-01T00:00:00Z"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "D13b",
+   "title": "GET /.well-known/han-peers on a server with no peers",
+   "rules": [
+    "§4.3",
+    "D13"
+   ],
+   "source": "W-12 W-50",
+   "steps": [
+    {
+     "http_get": "/.well-known/han-peers",
+     "expect_status": 200,
+     "expect_type": "application/json",
+     "expect_json": {
+      "peers": []
+     }
+    }
+   ]
+  },
+  {
+   "id": "D6a",
+   "title": "G-06: host from a connection that is not a server actor is denied",
+   "rules": [
+    "G-06"
+   ],
+   "source": "P58",
+   "steps": [
+    {
+     "conn": "@alice:a.localhost",
+     "send": {
+      "id": 2,
+      "call": "host",
+      "args": {
+       "space": "s1:a.localhost",
+       "records": []
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "expect": {
+      "id": 2,
+      "error": {
+       "code": "denied"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "D9a",
+   "title": "hello ok carries every Limits member including maxClockSkewSeconds",
+   "rules": [
+    "G-08",
+    "D9"
+   ],
+   "source": "P50",
+   "steps": [
+    {
+     "conn": "raw:1",
+     "expect": {
+      "challenge": "<challenge-shape>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    },
+    {
+     "conn": "raw:1",
+     "send": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "raw:1",
+     "expect": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256,
+        "maxClockSkewSeconds": 60
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

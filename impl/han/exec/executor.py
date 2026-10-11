@@ -116,7 +116,9 @@ class Executor:
         delay = self.retry[0]
         while True:
             try: head = await self._reconcile(space); break
-            except WireError as ex: log.warning("%s: %s", space, ex); await asyncio.sleep(delay)
+            except WireError as ex:                                   # D5: a missing space answers at once; ask again, backing off
+                log.warning("%s: %s", space, ex); await asyncio.sleep(delay); delay = min(delay * 2, self.retry[1])
+        delay = self.retry[0]
         ev = self._wake[space]
         self._tasks.append(asyncio.create_task(self._guard(self._follow, space, head, ev)))
         while True:

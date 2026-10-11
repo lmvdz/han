@@ -1,0 +1,58 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "session.open",
+ "description": "append session.open -> receipt",
+ "rules": [
+  "P-15"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "append",
+    "args": {
+     "entry": {
+      "v": 1,
+      "space": "s1:a.localhost",
+      "kind": "session.open",
+      "author": "@alice:a.localhost",
+      "keyId": "k1",
+      "body": {
+       "steerMode": "auto"
+      },
+      "contentHash": "814c45e7ad4aded59fa5472454b38b373b1cf7ae72643b6ba72e6988a30b4fff",
+      "refs": [],
+      "seen": 12,
+      "nonce": "jdl7xu62f2urmuj3dwshgyx6z2",
+      "time": "2026-01-01T00:00:00Z",
+      "sig": "RoUlc84nQVO1DxbHpJM6HjhZBS19dtvZO2A4uf5RRM6pK-SR2LZbIahmyL_MYXBuz5QRjD5Buru67ehO-yjrAQ"
+     },
+     "content": {
+      "title": "terminal"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "space": "s1:a.localhost",
+     "seq": 13,
+     "id": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
+     "prev": "16d7b62be979ba88e74e83d0e23df69f4bf2c7dd1235ba00e4e18fbcc50ce846",
+     "home": "a.localhost",
+     "homeKey": "h1",
+     "time": "2026-01-01T00:00:00Z",
+     "durability": "local",
+     "profiles": {
+      "@alice:a.localhost": 1
+     },
+     "homeSig": "C9qMJV7LklbHfSjzoaUNEULWZAjqngQ7foBpxBv0MvHw63hTaEXFTZvSWxo1Mt5f7Ib_7-IO5tuaWl_lvlGxDA"
+    }
+   }
+  }
+ ]
+}

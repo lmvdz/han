@@ -26,12 +26,17 @@ export function profileViews(actor: string, recs: LogRecord[]): ProfileView[] {
 export async function verifySpace(space: string, recs: LogRecord[], deps: VerifyDeps): Promise<Verdict> {
   const faults: string[] = []; let st: SpaceState | undefined; let through = 0;
   const cache = new Map<string, ProfileView[]>();
-  const viewOf = async (actor: string, seq: number): Promise<ProfileView | undefined> => {
+  const viewOf = async (actor: string, seq: number, time: string, serverKeyIds: string[]): Promise<ProfileView | undefined> => {
     if (actor.startsWith("@:")) {
       const server = actor.slice(2);
       const keys: A = {};
-      // synthetic view: the server's keys valid at the receipt time (§4.3); here every key id the checker knows
-      for (const kid of ["srv1"]) { const k = deps.serverKeys(server, kid); if (k) keys[kid] = { publicKey: k.publicKey, status: "valid" }; }
+      // synthetic view (§4.3, D6): the keys the server publishes at /.well-known/han whose window holds the receipt time. No key id is
+      // assumed: the ones in play are named by the records themselves (the receipt's homeKey, the entry's keyId).
+      const t = parseTimeMs(time);
+      for (const kid of serverKeyIds) {
+        const k = deps.serverKeys(server, kid);
+        if (k && t >= parseTimeMs(k.from) && !(k.until && t >= parseTimeMs(k.until))) keys[kid] = { publicKey: k.publicKey, status: "valid" };
+      }
       return { actor: actor as A, seq: 0, actorKind: "service", operatorConfirmed: false, keys };
     }
     if (!cache.has(actor)) cache.set(actor, profileViews(actor, await deps.profileRecords(actor)));
@@ -63,7 +68,7 @@ export async function verifySpace(space: string, recs: LogRecord[], deps: Verify
     const profiles: A = {};
     for (const [actor, seq] of Object.entries(rc.profiles)) {
       const own = st?.profile !== undefined && actor === profileActorOf(space);
-      const v = await viewOf(actor, seq as number);
+      const v = await viewOf(actor, seq as number, rc.time, [rc.homeKey, e.keyId]);
       if (!v) { bad(`cannot reconstruct pinned profile ${actor}@${seq}`); break; }
       if (!own) profiles[actor] = v;
     }

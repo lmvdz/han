@@ -29,8 +29,10 @@ export const isNonce = (s: unknown): s is string => typeof s === "string" && reN
 export const isKeyId = (s: unknown): s is string => typeof s === "string" && reKeyId.test(s);
 export const isAction = (s: unknown, star = false): s is string => typeof s === "string" && ((star && s === "*") || reAction.test(s));
 export const isUnit = (s: unknown): s is string => typeof s === "string" && reUnit.test(s);
-export const isSig = (s: unknown): s is string => typeof s === "string" && /^[A-Za-z0-9_-]{86}$/.test(s);
-export const isPublicKey = (s: unknown): s is string => typeof s === "string" && s.length >= 1 && s.length <= 128 && reB64.test(s);
+/** D4: base64url is unpadded, URL-safe and canonical (the unused trailing bits are zero): it re-encodes to itself. */
+export const isCanonB64u = (s: unknown): s is string => typeof s === "string" && s.length > 0 && reB64.test(s) && Buffer.from(s, "base64url").toString("base64url") === s;
+export const isSig = (s: unknown): s is string => typeof s === "string" && /^[A-Za-z0-9_-]{86}$/.test(s) && isCanonB64u(s);
+export const isPublicKey = (s: unknown): s is string => typeof s === "string" && s.length >= 1 && s.length <= 128 && reB64.test(s);   // Policy layer: vectors use dummy keys; the Log checks canonical form (isCanonB64u)
 export const isInt = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 export function isSpaceId(s: unknown): s is string {
   if (typeof s !== "string") return false;

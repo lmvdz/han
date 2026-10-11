@@ -103,12 +103,11 @@ async def test_frames_are_ijson(env):
     """§2 Encoding: duplicate keys and fractional numbers in a frame are invalid."""
     import json
     from websockets.asyncio.client import connect
-    async with connect(env.srv.url) as ws:
-        await ws.recv()
-        await ws.send('{"id":1,"call":"hello","call":"x","args":{}}')
-        assert json.loads(await ws.recv())["error"]["code"] == "invalid"
-        await ws.send('{"id":1.0,"call":"hello","args":{}}')
-        assert json.loads(await ws.recv())["error"]["code"] == "invalid"
+    for bad in ('{"id":1,"call":"hello","call":"x","args":{}}', '{"id":1.0,"call":"hello","args":{}}'):      # D2: each one is answered, then closed
+        async with connect(env.srv.url) as ws:
+            await ws.recv()
+            await ws.send(bad)
+            assert json.loads(await ws.recv())["error"]["code"] == "invalid"
 
 async def test_head_gossip_only_for_readable(env):
     """R-15, §3 hello: knownHeads are answered only for spaces the asker named and may read."""

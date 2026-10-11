@@ -1,0 +1,109 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "task",
+ "description": "append task, task.update",
+ "rules": [
+  "P-04"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "append",
+    "args": {
+     "entry": {
+      "v": 1,
+      "space": "s1:a.localhost",
+      "kind": "task",
+      "author": "@alice:a.localhost",
+      "keyId": "k1",
+      "body": {
+       "to": [
+        "@bob:a.localhost"
+       ]
+      },
+      "contentHash": "24ac63204c8a755299af380d4321ffc2257ff851c46c72b30d3c6caed31db9c6",
+      "refs": [],
+      "seen": 15,
+      "nonce": "smeqwdc3vca5zrs4hbpepwj2t3",
+      "time": "2026-01-01T00:00:00Z",
+      "sig": "1K038OnvYqg0WJdM5ePlDuij7MXyaAvqojFkj0ahRP8kGgbkGdNc3_p-qV8c6Yod_YmgiO8y5M0sx6E6fEJeDA"
+     },
+     "content": {
+      "ask": "write the report"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "space": "s1:a.localhost",
+     "seq": 16,
+     "id": "3bd993b5a8d8e745288be0af7c5367a0de837498b5083ca9cb4dce39aa7775e2",
+     "prev": "c82605196b0a0f983b2e51a8bba801d5444179170ba4464f6149bca88b29c556",
+     "home": "a.localhost",
+     "homeKey": "h1",
+     "time": "2026-01-01T00:00:00Z",
+     "durability": "local",
+     "profiles": {
+      "@alice:a.localhost": 1
+     },
+     "homeSig": "ESU2JKkMxI5jPIyKbwEaycDYMgT6xxhwap9R7H3HM_rSkfrbrrjcDIq1DnHuZGT_EaD0JpBN-Y5nTBKByMZ7Cw"
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "append",
+    "args": {
+     "entry": {
+      "v": 1,
+      "space": "s1:a.localhost",
+      "kind": "task.update",
+      "author": "@bob:a.localhost",
+      "keyId": "k1",
+      "body": {
+       "task": "3bd993b5a8d8e745288be0af7c5367a0de837498b5083ca9cb4dce39aa7775e2",
+       "state": "accepted"
+      },
+      "contentHash": "0f404a02da127a8e0002cbb208bed3d5fd3a7b8625939d3a9085222ff787c1d9",
+      "refs": [],
+      "seen": 16,
+      "nonce": "sz4mppih2le2mxzn4sbcd4pc6r",
+      "time": "2026-01-01T00:00:00Z",
+      "sig": "VqN-WgIfopcM_RYdpN26XHkVnvSvp1ovt8fiqNzPwnRlmHER15jJVRpwrc3IJZnTNvrwqnX5zYhaPQAnchhTCg"
+     },
+     "content": {
+      "text": "on it"
+     }
+    }
+   }
+  },
+  {
+   "conn": "@bob:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "space": "s1:a.localhost",
+     "seq": 17,
+     "id": "a1343d0f40ad10fc46b279587961c5faaba47f8494cfe5878581aea4a6c10205",
+     "prev": "d1910963fe8e303b74bb129b2539c42215aacf2c1962c1bfe5cc7126f8e64377",
+     "home": "a.localhost",
+     "homeKey": "h1",
+     "time": "2026-01-01T00:00:00Z",
+     "durability": "local",
+     "profiles": {
+      "@bob:a.localhost": 1
+     },
+     "homeSig": "aW6kXYFzACKElydt-IhkWzfurrvcvDuYKf__g9G95VKyoB5MlLCO1Ry65ms1XD17idCHetXOb5pYRm732_SHDw"
+    }
+   }
+  }
+ ]
+}

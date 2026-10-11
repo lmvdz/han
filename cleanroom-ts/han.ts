@@ -190,7 +190,7 @@ export interface SpaceState {
         window: number;                             // the launchWindow in force when the claim was ordered (pinned for X-04, P-09)
         approval?: EntryId;                         // the approval this claim consumed (E3)
         guardApprovals?: EntryId[];                 // the guards' approvals it consumed (P-15)
-        reserved?: Budget; source?: ["task", EntryId] | ["space", null]; settled?: true;   // P-06 reservation
+        reserved?: Budget; source?: ["task", EntryId] | ["space", null]; settled: boolean;   // P-06 reservation; settled on every claim (§6.1)
         outcome?: EffectResult; started?: Started;
       }[];
     };
@@ -224,13 +224,14 @@ export interface Limits {
   maxFollows: 256;
   maxClockSkewSeconds: 60;     // R-03a: the one future-time tolerance; a receipt dated further ahead of a verifier's clock is a `future-time` fault
 }
-export interface Challenge { challenge: string; server: ServerName; versions: number[]; time: Time }
+export interface Challenge { challenge: string /* 43 chars: 32 random bytes, base64url; a client accepts 22–128 of [A-Za-z0-9_-] (G-08) */; server: ServerName; versions: number[]; time: Time }
+/** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never host:port). */
 export type StateView = Omit<SpaceState, "entries">;   // the wire state; too big for one frame → `limit`, replay records instead
 export type ReadItem =
   | { type: "state"; state: StateView }                  // first item when `state: true` and the reader may read at head (or at `at`, then StateView.head = at)
   | { type: "heads"; heads: Receipt[] }                  // the server's latest receipts, when the reader sent knownHeads (R-15)
   | { type: "record"; record: LogRecord }
-  | { type: "signal"; from: ActorId; body: Json };       // from the transport (T-05): ephemeral, unordered with records, never authority
+  | { type: "signal"; from: ActorId; body: Json };       // T-05, G-09: only on `subscribe` (never on `read`); ephemeral, unordered with records, never authority
 
 export interface Calls {
   hello: { args: { who: ActorId; keyId: KeyId; proof: Sig; version: 1; knownHeads?: Receipt[] };
@@ -249,24 +250,29 @@ export type ReplyFrame =
 // ───────────────────────── the generic binding's frames (§8.3) ─────────────────────────
 // One WebSocket, text frames of I-JSON. The server speaks first with a bare `Challenge` (no id). The client's first call
 // is `hello`; any other call before it is `denied`. Request ids are integers in [0, 2^53), chosen by the client; a streaming
-// call whose id is still open is `invalid`. A frame that doesn't parse, or has no valid id/call/args, is answered with
-// `{ id: 0, error: invalid }`. Binary frames close the connection. Streaming calls (`read`, `subscribe`, `watch`) answer with
+// call whose id is still open is `invalid`. A request frame is exactly {id, call, args} (id in [1, 2^53), args an object, closed per call);
+// text that is not an I-JSON object is answered `{ id: 0, error: invalid }` and the server closes; an object that is not a request frame is
+// answered `invalid` with its own id when that is usable, else 0 (G-07). Binary frames close the connection. Streaming calls (`read`, `subscribe`, `watch`) answer with
 // `item` frames: `read` without `follow` then ends with `{ id, end: true }`; the others, and `read` with `follow`, run until
 // `cancel`, the connection closing, or `{ id, error: unavailable }` (the subscriber fell too far behind: read again).
 // `data` is base64url without padding. Every call below is a RequestFrame with the same envelope.
 export interface BindingCalls {
   subscribe: { args: { space: SpaceId; after?: Seq };            // without `after`: live only; with it, replays records after `after`, atomically with registration (no gap)
-               item: ReadItem };                                  // records and signals; a reader who may not read the space gets `denied`
-  signal:    { args: { space: SpaceId; body: Json }; ok: null };  // T-05, G-04
-  blobPut:   { args: { ref: BlobRef; offset: number; data: string };   // one part of at most maxBlobPartBytes, at `offset`
+               item: ReadItem };                                  // records and signals (G-09); a reader who may not read the space gets `denied` (a profile space: records only)
+  signal:    { args: { space: SpaceId; body: Json; from?: ActorId }; ok: null };   // T-05, G-04. `from` only on a server's relay: the user it speaks for, who must live on the relaying server; otherwise the connection's actor is the sender
+  host:      { args: { space: SpaceId; records: LogRecord[]; head?: Receipt };      // §7.3, G-06: server to server, authenticated as `@:A`, the home: the next contiguous records of the space to move; `head` asks B to sign its acceptance once it holds the chain through it
+               ok: { have: Seq; accept?: { keyId: KeyId; sig: Sig } } };
+  blobPut:   { args: { ref: BlobRef; offset: number; data: string };   // one part of at most maxBlobPartBytes, at `offset`; parts contiguous, overlaps must agree, a gap or a hash mismatch is `invalid` (G-01, D8)
                ok: { have: number; complete: boolean } };         // bytes held so far from this uploader; `complete` once all of ref.size hash-match (G-01)
   blobGet:   { args: { ref: BlobRef; space: SpaceId; offset?: number; length?: number };
-               ok: { data: string; size: number; offset: number } };   // at most maxBlobRangeBytes per call; `size` is the whole blob
-  stream:    { args: { item: StreamItem }; ok: null };            // G-05: only the session's actor, `n` one more than its last (a repeat of the last item is ok)
-  watch:     { args: { space: SpaceId; session: EntryId }; item: StreamItem };   // live items only, while sessionAccess grants watch
+               ok: { data: string; size: number; offset: number } };   // at most maxBlobRangeBytes per call (longer `length` is clamped, 0 is `invalid`, `offset` > size is `invalid`); `size` is the whole blob; no access is `not_found` (G-01)
+  stream:    { args: { item: StreamItem }; ok: null };            // G-05: only the session's actor, `n` one more than its last (an identical repeat of the last item is ok)
+  watch:     { args: { space: SpaceId; session: EntryId }; item: StreamItem };   // live items only, while sessionAccess grants watch; stays open and silent when the right goes (G-05)
   cancel:    { args: { target: number }; ok: null };              // ends the streaming call whose request id is `target`
 }
 export type BindingCallName = keyof BindingCalls;
+/** §7.3: signals in the space being moved. The owner asks; the current home A answers with the target's acceptance of its head. */
+export type MoveSignal = { type: "host-request"; to: ServerName } | { type: "host-accept"; to: ServerName; head: Receipt; keyId: KeyId; sig: Sig };
 export type BindingRequestFrame<C extends BindingCallName = BindingCallName> = { id: number; call: C; args: BindingCalls[C]["args"] };
 export type AnyRequestFrame = RequestFrame | BindingRequestFrame;
 
@@ -322,6 +328,29 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
   | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01)
 );
+// ───────────────────────── the Matrix binding's shapes (§8.2) ─────────────────────────
+/** `GET https://<server>/_han/v1/challenge` answers a `Challenge`. `GET .../read` carries `Authorization: HAN <actor> <keyId> <proof>`
+ *  and `HAN-Challenge: <challenge>` (the challenge that was signed; single-use, 120 s), with proof = Ed25519(key,
+ *  "han-hello-v1\n" ‖ challenge ‖ "\n" ‖ <server>). It answers `HttpReadResponse`, with HTTP status 400 invalid, 401 denied,
+ *  404 not_found, 421 moved, 429 limit, 503 unavailable. No `follow`, no `knownHeads`. */
+export interface HttpReadRequest { space: SpaceId; after: Seq; state?: boolean; at?: Seq; limit?: number }   // the query string
+export type HttpReadResponse = { items: ReadItem[] } | { error: WireError };
+/** §4.3, D13: `GET /.well-known/han` and `GET /.well-known/han-peers`, both `200 application/json`; an absent optional member is omitted, never null. */
+export interface ServerKey { keyId: KeyId; publicKey: string; from: Time; until?: Time; compromised?: true }
+export interface WellKnownHan { server: ServerName; sequencer: string /* the complete WebSocket URL, path included, e.g. wss://a.example/han */; keys: ServerKey[] }
+export interface WellKnownPeers { peers: { server: ServerName; url: string /* that peer's /.well-known/han */ }[] }
+/** Room events. All carry no authority (T-05, R-12); a client honours `org.han.space`, receipts, rejects and `org.han.session` only
+ *  from the room's sequencer user (§8.2, trust anchor). */
+export interface MatrixEvents {
+  "org.han.space": { spaceId: SpaceId; sequencer: string /* the Matrix user @han-seq:<server of the space id> */ };   // state event, state key ""; a room keeps its first binding
+  "org.han.entry": { entry: Entry; content?: Json }                        // sent by a member (append)
+                 | { id: EntryId; kind: string; author: ActorId };         // the sequencer's header-only copy: nothing P-02 might hide
+  "org.han.receipt": { receipt: Receipt };                                   // m.relates_to (m.reference) the entry's event
+  "org.han.reject": { id: EntryId; code: "denied" | "invalid" | "not_found" | "moved"; reason: string };   // m.relates_to the entry's event; `unavailable` and `limit` get none
+  "org.han.signal": { body: Json };                                          // room-wide, T-05
+  "org.han.session": { session: EntryId; watch: string; read: string };      // state event in the space room, state key = the session id; room ids of the two stream rooms
+  "org.han.stream": StreamItem & { file?: { url: string; key: Json; iv: string; hashes: { [alg: string]: string }; v: string } };   // in a stream room; `file` = Matrix EncryptedFile info of a context item's blob
+}
 /** M7: what HAN needs from a transport (T-01…T-07). The Matrix binding implements it with org.han.* room events. */
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order

@@ -131,3 +131,85 @@ Ten that matter most (an implementer from the text alone would break interoperab
 8. W-31/W-32 `stream`/`watch` rules and codes.
 9. W-34/W-35 executor needs state to build a claim; "first send".
 10. W-13/W-14 unknown/foreign spaces and the precedence of `limit`/`unavailable` over `invalid`/`denied`.
+
+---
+
+## Resolution (round 21, wire-precision round)
+
+Every item below now has its answer in architecture.md (section named per row), han.ts and, where the two reference servers answered alike, the wire vectors in `ref/wire-vectors/` (see `ref/wire-vectors/README.md`). The gap text above is left as written. W-48…W-51 were found by the interop harness (`interop/RESULTS.md`) and are not in the list above. "Resolved" means a stranger can build the behaviour from the text; any residual that is left to the implementation, and why, is stated in the last column. Decisions D1…D15 are `interop/DECISIONS-r21.md`; D16…D24 were added by the spec round for items it left open.
+
+| Item | Where it now lives | Status |
+|---|---|---|
+| W-01 | §8.3 G-08 (challenge: 32 random bytes, 43 chars; signed bytes; Sig encoding); §2 base64url; ref/wire-vectors/README.md (worked bytes) | resolved; D12 |
+| W-02 | §8.3 G-08 (`dialed` is the ServerName intended, never host:port; abort unless equal; probe P07) | resolved |
+| W-03 | §8.3 G-08 codes: unknown actor `not_found`; bad proof, unknown or revoked key, used or expired challenge `denied`; version/args `invalid`; second hello `invalid`; a failed hello leaves the connection open and unauthenticated | resolved; D11 (changed from the draft: unknown actor is `not_found`, not `invalid`) |
+| W-04 | §8.3 G-07 (exact `{id, call, args}`; non-I-JSON text: id 0 and close; other non-requests: invalid on their own id when usable, else 0); han.ts frames comment | resolved; D2 (the draft's "answer a non-I-JSON frame on its own id" is not adopted: D2 closes the connection) |
+| W-05 | §8.3 G-07 order (frames in arrival order, replies in order, appends ordered, id reuse) | resolved |
+| W-06 | §8.3 G-07 `cancel` (silent end, ok null for any target) | resolved |
+| W-07 | §8.3 G-07 endpoint (path `/han`, no subprotocol, frame size is the UTF-8 length of the text message, 1009/1003 closes) | resolved; D7. Idle timeouts and connection caps are deliberately left to the server (nothing a peer can observe is pinned) |
+| W-08 | §8.3 G-07 (`maxFollows` per connection; open `read`+`follow`, `subscribe` and `watch`; over it `limit`) | resolved |
+| W-09 | §2 `receipt.profiles` (a) `@:S` = 0, (b) own profile space = seq−1, (c) profile creation `{"@:S": 0}` | resolved; agreed by both servers (golden, verifier cells) |
+| W-10 | §4.3 "Which key signs what" (keys of `@:S` = S's well-known keys whose window holds the receipt time; any KeyId; receipt key and entry key chosen independently) | resolved; D6 |
+| W-11 | §4.3 "Profile-space bootstrap" (exact `space.create` body and content; the canonical profile PolicyDoc; Policy ignores it) | resolved; D17 (added) |
+| W-12 | §4.3 "Server keys and the two HTTPS documents" (shapes, Time grammar, 200 application/json, 300 s cache); han.ts `WellKnownHan`, `WellKnownPeers` | resolved; D13, D22 (added) |
+| W-13 | §4.1 step 2 (three-row routing table for every call that names a space) | resolved; D1 |
+| W-14 | §4.1 "Order of verdicts" (dedupe, routing, shape, `limit`, profiles, signature, Policy, then the moment-dependent `unavailable`) | resolved; D18 (added) |
+| W-15 | §2 sizes row (header JCS of the Entry as sent, `sig` included) | resolved |
+| W-16 | §4.1 step 3 content rules (a) null = absent, (b) content with empty hash `invalid`, (c) "—" kinds, (d) resend without content (step 1) | resolved; probes P15, P29, P30 |
+| W-17 | §4.1 step 5 (unknown keyId `denied`; signature of a known key checked even if revoked; non-canonical `invalid`); §2 base64url | resolved; D4 |
+| W-18 | §4.1 "Order of verdicts" (`retryAfterMs` = the larger remaining wait); R-16 unchanged | resolved. Residual: what a sequencer persists across a restart stays its own business, R-16's rule (wait a full A) is the contract |
+| W-19 | §7.3 step 4 (B answers `moved` to A until it holds the move; it gets the chain only through A's `host`; it publishes `accept.keyId` in its well-known), G-06 (`host` from a non-server is `denied`), G-04 | resolved in the text; no wire vector (moves are not in the test-mode scenario) |
+| W-20 | §4.1 step 4 (remote profiles read as `@:S'` with its well-known keys; pin never lower than before; 300 s on the steady clock; remote down is `unavailable`) | resolved. Residual: caching of remote profiles is the implementation's; no single-server vector |
+| W-21 | §3 read row; §8.3 G-09 (closed args, item order, `heads` even when empty, `after` at or beyond head, `state` at a non-readable head `denied`, per-record P-02 at fan-out, `limit` with `follow`) | resolved; probes P20, P21, P53, P54 |
+| W-22 | §3 read row, §8.1 T-05, §8.3 G-09: signals only on `subscribe`, never on `read`; han.ts `ReadItem` comment | resolved; D19 (added; the draft's first option) |
+| W-23 | §8.3 G-04; han.ts `BindingCalls.signal` (`from?`): server-actor connection only, own users only; otherwise `invalid` (another server's actor `denied`) | resolved; D10 |
+| W-24 | §8.3 G-04 (every subscription that may read, except the sender's own connection; body 64 KiB; `limit`; missing space `not_found`/`moved`; no read right `denied`) | resolved; D19 |
+| W-25 | §8.3 G-03 (trigger roles, `to` of message and task, best effort with a 10 minute retry, duplicates harmless, `not_found` if S doesn't host the actor, over `@:home`) | resolved. Residual: cross-server notices have no vector (single-server test mode) |
+| W-26 | §8.3 G-04 (a stranger's `subscribe` to a profile space gets records only) | resolved |
+| W-27 | §8.3 G-01 `blobPut` bullets (contiguous, overlap agrees, past `size` invalid, hash mismatch `invalid` and discard, idempotent after complete, zero-length blob) | resolved; D8; vectors D8a, D8b, D4a |
+| W-28 | §8.3 G-01 (progress keyed by uploader and hash, shared across connections; quota `limit`; own-blob rule only for completed uploads) | resolved |
+| W-29 | §8.3 G-01 `blobGet` paragraph (no access `not_found`; match by hash and size; ranges; clamp; length 0 invalid; missing bytes `unavailable`; own-upload rule needs a readable `space`) | resolved; D3, D20 (added); vectors D3a, D3b |
+| W-30 | §8.3 G-02 (fetched lazily on a reader's `blobGet`; the author's server answers because the author uploaded there) | resolved. Residual: server-to-server transfer has no vector |
+| W-31 | §8.3 G-05 `stream` (check order and every code; `n` per session from 1; identical repeat ok; `time` grammar only; published to every entitled watch incl. the actor's own) | resolved; probes P40-P46 |
+| W-32 | §8.3 G-05 `watch` (codes; no initial reply; stays open and silent when the right goes or the session closes, as both servers do) | resolved from the agreed behaviour (P57); D21 (added) |
+| W-33 | §8.3 G-05 (the head used at delivery is the head the home holds when it handles the `stream` call) | resolved for one process. Open for homes running as several processes: R-02's one serial transaction per space is the only rule, and no peer can observe the difference |
+| W-34 | §4.5 X-03 (the executor takes `launchWindow` and earlier claims from `read {state: true}` or by folding the records it follows; a stale claim is `denied`, re-read and rebuild) | resolved; D23 (added) |
+| W-35 | §4.5 X-02/X-04 (the reading is taken once before the first attempt on the wire, never refreshed) | resolved; D23 |
+| W-36 | §4.5 X-06 (refused claim: journal `refused`, report nothing; a journaled but unreported result is reported; no re-armed deadline) | resolved; D23 |
+| W-37 | §4.5 X-02 (named platform clocks; the executor states its clock at start-up) | resolved; D23. The "no more than stallBound between check and launch" stays an implementation duty a black box cannot test |
+| W-38 | §4.5 X-07 (a refusal is a non-zero exit with a message naming X-07; a stale lock never blocks a restart) | resolved; D23 |
+| W-39 | §4.5 X-10 (`evidence` is an `application/json` document `{journal: [...], outside: {...}}`) | resolved; D23 |
+| W-40 | §4.5 X-11 (message `to` the proposer, `refs` the proposal, once per proposal per process; 1 s doubling to 60 s) | resolved; D23 |
+| W-41 | §4.5 X-09 (plan check before `claiming` and before `launching`; never claims `awaiting-approval`; losers of a race journal `refused`) | resolved; D23 |
+| W-42 | §5 Plans (`file.write` target and args rules) | resolved (informative) |
+| W-43 | §4.5 X-12 (cost reported only when the action has one; omitted settles the full reservation) | resolved; D23 |
+| W-44 | §4.1 "Order of verdicts", last sentences (`heads` for listed readable spaces; the sequencer does not act on the receipts in `knownHeads`) | resolved. The 10 minute gossip schedule stays a verifier duty (R-15) |
+| W-45 | §4.1 "Order of verdicts" (a sequencer does not check `Entry.time`) | resolved; D18 |
+| W-46 | §2 R-04 (append-only means headers and receipts; content stores may be rewritten for `redact`; a torn last line is dropped) | resolved. Power-cut durability stays untestable here (§10) |
+| W-47 | §4.1 "Order of verdicts" (the R-08 durability refusal comes after Policy allows the entry) | resolved; D18 |
+| W-48 | §3 read row (follow of a missing space answered at once, never held open; a follower retries 1 s doubling to 30 s); §4.5 X-12 | resolved; D5 |
+| W-49 | §8.3 G-08 result (`limits` has exactly the nine han.ts members); han.ts | resolved; D9; vector 01-hello |
+| W-50 | §4.3 (`/.well-known/han` `{server, sequencer, keys}`; `/.well-known/han-peers` `{peers: [{server, url}]}`); han.ts types | resolved; D13, D22; vectors D13a, D13b |
+| W-51 | §6.1 (`settled` on every claim, `false` until its outcome or a resolve settles it; absent members omitted, never null); han.ts `settled: boolean`; ref/policy.py | resolved; D14 |
+
+**Open after this round:** none unresolved. Residuals (left to the implementation, stated above): idle timeouts and connection caps (W-07), restart memory for R-16 (W-18), remote profile caching (W-20), several-process homes (W-33), the stallBound check (W-37), power-cut durability (W-46). Unexercised by any wire vector because test mode is one server: moves, federation notices, server-to-server blob transfer, key rotation, executor crash recovery, R-16 clock behaviour.
+
+---
+
+## Round 21 notes from the TypeScript clean room (appended; resolutions are the spec agent's to mark)
+
+Implemented from DECISIONS-r21.md D1-D14, architecture.md §3, §4.1, §4.3, §8.3 (G-01...G-11) as they stood at the end of this pass. Wire vectors: 82/82 vectors, 203/203 expectations (`run_wire_vectors.py --launch ts`). Points where the text still left a choice, and what the TypeScript took:
+
+- **N-01 (G-08 challenge consumption).** "consumed by the first `hello` that names it, successful or not" does not say whether a `hello` with malformed args or `version` other than 1 names it. TS: those are `invalid` and do NOT consume; the challenge is consumed once the args are well formed (before the actor lookup, so an unknown actor, a bad proof and an unknown key all burn it).
+- **N-02 (`host`, G-06/§7.3: what "verifies (R-14)" means for B).** R-14 needs the profile spaces of every pinned actor at the pinned seqs; B has no stated way to get them for actors of other servers during `host`. TS verifies the chain (seq, prev, receipt id, homeSig under the home's published key, receipt time monotone, content hash), folds with Policy, and checks entry signatures only for pinned profile views it can obtain (local profile spaces, `@:S` keys from peers, `remoteProfile` hook); otherwise the entry-signature check is skipped. Redaction proofs of `redacted` records are not checked. Please say whether B must refuse (`unavailable`) when it cannot obtain a pinned view.
+- **N-03 (`host`: state between calls).** B keeps the received chain in memory until a record moving the space to B arrives, then writes it to its log. After a restart it forgets the partial chain and answers `have: 0`. The text does not say whether `have` must survive a restart.
+- **N-04 (`host` `head`).** If `head` is given but is not the last record B holds after this call, TS answers `invalid`. The text says only "once it holds the chain through it".
+- **N-05 (`host` check order).** TS checks args first (`invalid`), then server-actor authentication (`denied`), then ownership of the space. G-07 says args are checked after authentication; the order of "unauthenticated as server" versus "bad args" for `host` is therefore `denied` first by G-07, but `host` args are checked before the actor kind here. A vector for `host` from a user connection with bad args would pin it.
+- **N-06 (G-04 relayed `from`).** A `from` that is itself a server actor (`@:S`) is `invalid` in TS (only users are relayed). A relayed signal is checked for read rights of `from`, not of the relaying `@:S`. Rate limiting of signals uses the same per-connection bucket as appends (`appendsPerSecond`); the text names no limit value.
+- **N-07 (G-01 own upload).** "`space` is a space the caller can read (otherwise `not_found`)": TS reads this as read rights at the head. A foreign space is `moved` (step 2) before this applies.
+- **N-08 (profile spaces and `subscribe`).** Any actor may subscribe to a profile space; TS delivers signals only to the profile actor's own subscription (G-04) and records to the rest.
+- **N-09 (executor and `moved`).** D5/§3 say retry on `not_found` or `moved`. For `moved` the executor has only one URL; TS keeps retrying the same URL. Following `movedTo` through `/.well-known/han` is not implemented (the text says a client MUST retry a `moved` call at `movedTo`).
+- **N-10 (frames).** G-07 (1) lists "an array" among the non-objects that close the connection; TS treats every non-object JSON value (array, scalar, null) the same way. An unknown `call` is answered `invalid` before authentication (G-07 order (2) before authentication), carrying its own `id`.
+- **N-11 (test mode).** `node dist/seq.js` cannot be put into the G-11 test mode (no frozen clock, no provisioning, key id `srv1` not `h1`); `interop/ts_host.mjs` does it. A `--test-mode` flag set on the stock CLI is the implementation's business per G-11, but the TS CLI does not have one yet.
+- **N-12 (D14 in the engine).** `settled: false` is now set where Policy creates the claim (`policy.ts`), so the folded state and the StateView agree without a wire-level fix-up.
+- **N-13 (D4 layering).** Policy (`isPublicKey`) still checks only the grammar of a public key because the Policy vectors use dummy keys; the Log (step 3) rejects a non-canonical `publicKey` in `key.add` and in a profile `space.create` as `invalid`.

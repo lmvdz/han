@@ -1,0 +1,89 @@
+{
+ "format": "han-wire-vector/1",
+ "name": "blobPut.multipart",
+ "description": "blobPut 1,700,000 bytes in three parts",
+ "rules": [
+  "G-01",
+  "W-27"
+ ],
+ "steps": [
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 1,
+    "call": "blobPut",
+    "args": {
+     "ref": {
+      "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+      "size": 1700000,
+      "type": "application/octet-stream"
+     },
+     "offset": 0,
+     "data": "<b64u len=1048576 sha256=a70b934cf69c32cb>"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 1,
+    "ok": {
+     "have": 786432,
+     "complete": false
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 2,
+    "call": "blobPut",
+    "args": {
+     "ref": {
+      "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+      "size": 1700000,
+      "type": "application/octet-stream"
+     },
+     "offset": 786432,
+     "data": "<b64u len=1048576 sha256=d92d32a44b45b181>"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 2,
+    "ok": {
+     "have": 1572864,
+     "complete": false
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "send": {
+    "id": 3,
+    "call": "blobPut",
+    "args": {
+     "ref": {
+      "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+      "size": 1700000,
+      "type": "application/octet-stream"
+     },
+     "offset": 1572864,
+     "data": "<b64u len=169515 sha256=2f05398a66532fe2>"
+    }
+   }
+  },
+  {
+   "conn": "@alice:a.localhost",
+   "expect": {
+    "id": 3,
+    "ok": {
+     "have": 1700000,
+     "complete": true
+    }
+   }
+  }
+ ]
+}

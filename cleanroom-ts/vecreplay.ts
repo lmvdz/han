@@ -94,11 +94,12 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
   };
   let states: Record<string, A> = {};
   try {
-    const h = (await connect(harness))!;
+    let h = (await connect(harness))!;
     for (let i = 0; i < v.steps.length; i++) {
       const st = v.steps[i], tag = `${f}#${i}`;
       if (st.profiles) Object.assign(profiles, clone(st.profiles));
       if (st.time) clock.ms = Date.parse(st.time);
+      if (h.closed) { conns.delete(harness); h = (await connect(harness))!; }   // D2: the server closes the connection after a frame that is not I-JSON
       if (st.entry) {
         res.steps++;
         const ve = clone(st.entry); const vid = ve.id; delete ve.id;
@@ -125,7 +126,12 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
         const mk = makeEntry(known, { space: e.space, kind: e.kind, author: e.author, body: e.body, content, refs: e.refs, seen: e.seen, time: timeString(clock.ms) });
         let got: string, why = "";
         try {
-          const r = await h.append(mk.entry, mk.content);
+          let r: A;
+          try { r = await h.append(mk.entry, mk.content); }
+          catch (x) {   // D2: the previous step's frame may have made the server close the connection (not I-JSON); reconnect and send again
+            if (!(x instanceof WireFault) || x.code !== "unavailable" || !/connection closed/.test(x.message)) throw x;
+            conns.delete(harness); h = (await connect(harness))!; r = await h.append(mk.entry, mk.content);
+          }
           got = "allow"; idMap.set(vid, r.id);
           const s = seq.stateOf(e.space); if (s) states[e.space] = s;
         } catch (x) {

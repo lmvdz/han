@@ -1,6 +1,7 @@
 """han-seq over the generic binding (§8.3): one WebSocket per connection, JSON frames per han.ts (RequestFrame / ReplyFrame).
 The server speaks first with a Challenge; the client answers with `hello`. Streaming calls (read, subscribe, watch) reply
-with `item` frames and finish with `end`; `cancel {target}` stops one. Everything else is han.seq.sequencer."""
+with `item` frames and finish with `end`; `cancel {target}` stops one. Everything else is han.seq.sequencer.
+The binding is served at `/han` (D7); other paths are upgraded too, but nothing documents them."""
 from __future__ import annotations
 import asyncio, json, logging, os
 from http import HTTPStatus
@@ -10,6 +11,13 @@ from ..core import P, W, LIMITS, WireError
 from .sequencer import key_list
 
 log = logging.getLogger("han.seq")
+PATH = "/han"                  # D7: the generic binding's WebSocket path
+CHALLENGE_SECONDS = 60         # D12: a challenge is single use and good for this long
+# D2: a request frame is exactly {id, call, args}; each call's `args` is closed
+CALL_ARGS = {"hello": {"who", "keyId", "proof", "version", "knownHeads"}, "cancel": {"target"}, "append": {"entry", "content"},
+             "signal": {"space", "body", "from"}, "blobPut": {"ref", "offset", "data"}, "blobGet": {"ref", "space", "offset", "length"},
+             "stream": {"item"}, "read": {"space", "after", "follow", "state", "limit", "knownHeads", "at"},
+             "subscribe": {"space", "after"}, "watch": {"space", "session"}, "host": {"space", "records", "head"}}
 
 class DropConnection(Exception):
     """Raised by the `after_append` test hook: close the socket without replying (the receipt is lost in transit)."""
@@ -47,21 +55,22 @@ class SeqServer:
         if self._srv: self._srv.close(); await self._srv.wait_closed()
 
     @property
-    def url(self): return f"ws://{self.host}:{self.port}"
+    def url(self): return f"ws://{self.host}:{self.port}{PATH}"
 
     def _http(self, connection, request):
         """§4.3: the two HTTP documents share the WebSocket port (a plain GET; the upgrade request passes through). Over TLS in production."""
         path = request.path.split("?")[0]
         if path == "/.well-known/han": doc = self.seq.wellknown(self.advertise or self.url)
-        elif path == "/.well-known/han-peers": doc = {s: key_list(k) for s, k in self.seq.server_keys.items()}      # the key sets we verify with
+        elif path == "/.well-known/han-peers": doc = self.seq.peers_doc()                                  # D13
         else: return None
         resp = connection.respond(HTTPStatus.OK, json.dumps(doc, separators=(",", ":")) + "\n")
-        resp.headers["Content-Type"] = "application/json"
+        del resp.headers["Content-Type"]; resp.headers["Content-Type"] = "application/json; charset=utf-8"
         return resp
 
     async def _handle(self, ws):
         conn = {"who": None, "tasks": {}, "subs": set()}
-        challenge = W.b64(os.urandom(24))
+        conn["challenge"], conn["issued"] = W.b64(os.urandom(32)), self.seq.clock.mono()      # D12: 32 random bytes, 43 characters
+        challenge = conn["challenge"]
         async def send(obj):
             try: await ws.send(json.dumps(obj, separators=(",", ":"), ensure_ascii=False))
             except ConnectionClosed: pass
@@ -69,12 +78,18 @@ class SeqServer:
             await send({"challenge": challenge, "server": self.seq.server, "versions": [1], "time": self.seq.now_str()})
             async for raw in ws:
                 if isinstance(raw, bytes): await ws.close(1003, "text frames only"); return
-                try:
-                    req = parse(raw)
-                    rid, call, args = req["id"], req["call"], req.get("args", {})
-                    if not (P._int(rid) and isinstance(call, str) and isinstance(args, dict)): raise ValueError("frame")
-                except (ValueError, KeyError, TypeError, UnicodeEncodeError, RecursionError):
-                    await send({"id": 0, "error": WireError("invalid", "bad frame").to_wire()}); continue
+                try: req = parse(raw)
+                except (ValueError, TypeError, UnicodeEncodeError, RecursionError):                 # not I-JSON (D2): id 0, then close
+                    await send({"id": 0, "error": WireError("invalid", "frame is not I-JSON").to_wire()})
+                    await ws.close(1007, "not I-JSON"); return
+                if not isinstance(req, dict):                                                       # not an I-JSON object (G-07 case 1)
+                    await send({"id": 0, "error": WireError("invalid", "a frame is one JSON object").to_wire()})
+                    await ws.close(1007, "not an object"); return
+                bad = self._frame_error(req)
+                if bad:
+                    rid = req.get("id")
+                    await send({"id": rid if P._int(rid) and rid >= 1 else 0, "error": WireError("invalid", bad).to_wire()}); continue
+                rid, call, args = req["id"], req["call"], req["args"]
                 try:
                     await self._call(ws, conn, send, rid, call, args, challenge)
                 except WireError as ex:
@@ -90,17 +105,37 @@ class SeqServer:
             for t in conn["tasks"].values(): t.cancel()
             for s in conn["subs"]: self.seq.unsubscribe(s)
 
+    @staticmethod
+    def _frame_error(req) -> str | None:
+        """D2: exactly {id, call, args}: `id` a positive integer, `call` a known name, `args` an object with only the call's members."""
+        if not isinstance(req, dict) or set(req) != {"id", "call", "args"}: return "a request is exactly {id, call, args}"
+        if not (P._int(req["id"]) and req["id"] >= 1): return "id must be a positive integer"
+        if not isinstance(req["call"], str): return "call must be a string"
+        if req["call"] not in CALL_ARGS: return f"unknown call {req['call']}"
+        if not isinstance(req["args"], dict): return "args must be an object"
+        return None
+
+    @staticmethod
+    def _args_error(call, args) -> str | None:
+        """D2: `args` is closed; checked after authentication (G-07: frame shape, then authentication, then args)."""
+        extra = set(args) - CALL_ARGS[call]
+        return f"unknown args for {call}: {', '.join(sorted(extra))}" if extra else None
+
     async def _call(self, ws, conn, send, rid, call, args, challenge):
         S = self.seq
         fed = S.fed
+        if call != "hello" and not conn["who"]: raise WireError("denied", "hello first")
+        bad = self._args_error(call, args)
+        if bad: raise WireError("invalid", bad)
         if call == "hello":
             if conn["who"]: raise WireError("invalid", "already authenticated")
+            if conn.pop("challenge", None) is None: raise WireError("denied", "the challenge was already used")      # D12: single use
+            if S.clock.mono() - conn["issued"] > CHALLENGE_SECONDS: raise WireError("denied", "the challenge expired")
             if fed: await fed.prepare_hello(args.get("who"), args.get("keyId"))
             ok = S.hello(args.get("who"), args.get("keyId"), args.get("proof"), args.get("version"), challenge, args.get("knownHeads"))
             conn["who"] = args["who"]
             return await send({"id": rid, "ok": ok})
         who = conn["who"]
-        if not who: raise WireError("denied", "hello first")
         if call == "cancel":
             t = conn["tasks"].pop(args.get("target"), None)
             if t: t.cancel()
@@ -113,6 +148,9 @@ class SeqServer:
         if call == "signal":
             await self._signal(who, args)
             return await send({"id": rid, "ok": None})
+        if call == "host":
+            if fed: await fed.prepare_host(who, args.get("records"))
+            return await send({"id": rid, "ok": S.host(who, args.get("space"), args.get("records"), args.get("head"))})
         if call == "blobPut":
             try: data = W.unb64(args["data"])
             except (KeyError, ValueError, TypeError): raise WireError("invalid", "blobPut data")
@@ -124,18 +162,26 @@ class SeqServer:
             S.stream(who, args.get("item"))
             return await send({"id": rid, "ok": None})
         if call == "read":
+            self._room(conn, rid, bool(args.get("follow")))
             if fed: await fed.prepare_read(args.get("space"))
             items, sub = S.read(who, args.get("space"), args.get("after"), args.get("follow", False), args.get("state", False),
                                 args.get("limit"), args.get("knownHeads"), args.get("at"))
         elif call == "subscribe":
+            self._room(conn, rid)
             items, sub = S.subscribe(who, args.get("space"), args.get("after"))
         elif call == "watch":
+            self._room(conn, rid)
             items, sub = [], S.watch(who, args.get("space"), args.get("session"))
         else:
             raise WireError("invalid", f"unknown call {call}")
-        if rid in conn["tasks"]: raise WireError("invalid", "duplicate request id")
         if sub: conn["subs"].add(sub)
         conn["tasks"][rid] = asyncio.create_task(self._drain(send, rid, items, sub, conn))
+
+    @staticmethod
+    def _room(conn, rid, counts=True):
+        """G-07: a request id still open is `invalid`; at most `maxFollows` open follows, subscribes and watches, one more is `limit`."""
+        if rid in conn["tasks"]: raise WireError("invalid", "request id still open")
+        if counts and len(conn["subs"]) >= LIMITS["maxFollows"]: raise WireError("limit", "too many open streams")
 
     async def _signal(self, who, args):
         """G-04, G-03 and the federation cases of `signal`. A server connection (`@:S`) may relay a signal `from` one of its own
@@ -143,6 +189,7 @@ class SeqServer:
         S, fed, space, body, frm = self.seq, self.seq.fed, args.get("space"), args.get("body"), args.get("from")
         remote = isinstance(space, str) and P._space(space) and P.server_of(space) != S.server and space not in S.home.spaces
         if frm is not None:                                                  # the home side of a relay
+            if not who.startswith("@:"): raise WireError("invalid", "from is for a server's relay")        # D10
             if not (who.startswith("@:") and isinstance(frm, str) and P._actor(frm) and not frm.startswith("@:") and P.server_of(frm) == who[2:]):
                 raise WireError("denied", "a server may relay signals only from its own actors")
             who = frm

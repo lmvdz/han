@@ -30,7 +30,13 @@ def fmt(sec: int) -> str:
     return datetime.datetime.fromtimestamp(sec, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def b64(b: bytes) -> str: return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
-def unb64(s: str) -> bytes: return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+_B64URL = re.compile(r"[A-Za-z0-9_-]*", re.ASCII)
+def unb64(s: str) -> bytes:
+    """base64url as §2 and D4 want it: unpadded, URL-safe alphabet, canonical (the unused trailing bits are zero). ValueError otherwise."""
+    if not isinstance(s, str) or not _B64URL.fullmatch(s) or len(s) % 4 == 1: raise ValueError("not canonical base64url")
+    b = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+    if b64(b) != s: raise ValueError("not canonical base64url")
+    return b
 
 class Key:
     """Deterministic test key from a seed string."""
