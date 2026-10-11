@@ -1,0 +1,173 @@
+{
+ "note": "see each file; `agree` false means the two servers answered differently for that client",
+ "ops": [
+  {
+   "op": "hello",
+   "vector": null,
+   "agree": {
+    "ts-client": false,
+    "py-client": false
+   }
+  },
+  {
+   "op": "space.create",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "member.set",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "message",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "read",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "read.state",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "follow",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "subscribe",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "signal",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "propose",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "approve",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "blobPut",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "blobGet",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "blobPut.multipart",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "blobGet.multipart",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "session.open",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "session.input",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "stream+watch",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "session.close",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "task",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  },
+  {
+   "op": "redact",
+   "vector": "ts-client",
+   "agree": {
+    "ts-client": true,
+    "py-client": true
+   }
+  }
+ ]
+}
