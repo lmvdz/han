@@ -5,7 +5,9 @@ outside steer into one of its guarded or suggest sessions (outside = neither the
 operator explicitly releases it. Properties:
 - GuardedClaimsNeedTheirHuman: every claim Policy allows on an effect proposed by a held agent is covered by an approval
   of the holding operator not used by an earlier claim, while that operator holds a role and its key is valid;
-- HeldInstructNoOne: Policy never allows a held agent to create a task, approve, or put input into another's session.
+- HeldInstructNoOne: Policy never allows a held agent to create a task, approve, or put input into another's session;
+- NeverLooser: no outside steer is allowed into a session whose mode the space no longer allows at least as cautiously;
+- GuardRightsNeedRole: a guard without a role has no watch, read or steer right on its agent's session.
 Two agents with different operators, an outsider human, an approval rule and the allowed modes all vary.
 Non-vacuity: some run claims a held agent's effect, and some run is refused a claim for lack of the guard's approval.
 
@@ -15,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import policy as POL
 
 SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.py"), encoding="utf-8").read()
-DEPTH = 5                      # the one depth used everywhere (run_all, §10); runs start with BOT already held
+DEPTH = 5                      # full runs (run_all, §10); --quick runs depth 4. Runs start with BOT already held
 SP = "sg:a.example"
 O, P, OP, OP2, X = "@o:a.example", "@p:a.example", "@op:b.example", "@op2:b.example", "@x:c.example"
 BOT, BOT2 = "@bot:b.example", "@bot2:b.example"
@@ -28,12 +30,14 @@ def human(rev=False): return {"actorKind": "human", "operatorConfirmed": False, 
 def agent(op): return {"actorKind": "agent", "operator": op, "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
 XS = {"actorKind": "service", "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
 
-def policy(rule=False, guarded_only=False):
+MODESETS = (("auto", "guarded", "suggest"), ("guarded",), ("auto",))
+
+def policy(rule=False, modes=MODESETS[0]):
     return {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any",
             "approvals": [{"action": "pay", "approvers": ["member"]}] if rule else [], "separateApprover": True, "budget": None,
             "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member",
             "sessions": {"watch": "member", "read": "member", "steer": "member",
-                         "modes": ["guarded"] if guarded_only else ["auto", "guarded", "suggest"]}, "servers": {"deny": []}}
+                         "modes": list(modes)}, "servers": {"deny": []}}
 
 def E(label, kind, author, body):
     return {"id": H(label), "v": 1, "space": SP, "kind": kind, "author": author, "keyId": "k1", "body": body,
@@ -42,6 +46,13 @@ def E(label, kind, author, body):
 S1, S2 = H("s1"), H("s2")
 SESS_OF = {S1: BOT, S2: BOT2}
 PROPS = {"pr1": BOT, "pr2": BOT2}
+CLAIMABLE = ("pr0", "pr1", "pr2")
+CAUTION = ("auto", "guarded", "suggest")
+
+def ghost_mode(state, sess_id):
+    """The model's own reading of P-15's effective mode: never looser than opened; None = dead."""
+    mode = state["sessions"][sess_id]["steerMode"]
+    return next((x for x in CAUTION[CAUTION.index(mode):] if x in state["policy"]["sessions"]["modes"]), None)
 
 class M:
     __slots__ = ("labels", "state", "oprev", "held", "need", "covered", "used")
@@ -68,6 +79,8 @@ def init(pol):
         m, d = apply(pol, m, E(lab, "member.set", O, {"actor": a, "role": "member"}), lab); assert m, (lab, d)
     for lab, a, mode in (("s1", BOT, "guarded"), ("s2", BOT2, "auto")):
         m, d = apply(pol, m, E(lab, "session.open", a, {"steerMode": mode}), lab); assert m, (lab, d)
+    m, d = apply(pol, m, E("pr0", "effect.propose", BOT, {"executor": X, "action": "pay", "planDigest": DG, "repeatable": False}), "pr0")
+    assert m, d                                                                               # proposed before any hold
     m, d = apply(pol, m, E("in0", "session.input", P, {"session": S1}), "in0"); assert m, d     # P's outside steer: BOT is held
     return m.with_(held=((BOT, OP),))
 
@@ -77,11 +90,11 @@ def bump(t, k, n=1): d = dict(t); d[k] = d.get(k, 0) + n; return tuple(sorted(d.
 def ghost_after_input(m, author, sess_id, release):
     """The independent ground truth for holds."""
     agent_ = SESS_OF[sess_id]; held = dict(m.held)
-    mode = m.state["sessions"][sess_id]["steerMode"]
-    effective = mode if mode in m.state["policy"]["sessions"]["modes"] else "guarded"
+    effective = ghost_mode(m.state, sess_id)
     if release:
-        if held.get(agent_) == author: held.pop(agent_)
-    elif author not in (agent_, GUARD[agent_]) and effective != "auto":
+        g = held.get(agent_)
+        if g == author or (author == O and g and m.state["roles"].get(g) is None): held.pop(agent_, None)
+    elif author not in (agent_, GUARD[agent_]) and effective == "guarded":
         held[agent_] = GUARD[agent_]
     return tuple(sorted(held.items()))
 
@@ -96,7 +109,7 @@ def successors(pol, m):
         for sid in (S1, S2):
             go(f"{author} steers {SESS_OF[sid]}", "session.input", author, {"session": sid},
                lambda n, a=author, s=sid: n.with_(held=ghost_after_input(m, a, s, False)))
-    for author in (OP, OP2):
+    for author in (OP, OP2, O):
         go(f"{author} releases BOT", "session.input", author, {"session": S1, "release": True},
            lambda n, a=author: n.with_(held=ghost_after_input(m, a, S1, True)))
     go("BOT tasks BOT2", "task", BOT, {"to": [BOT2]})
@@ -106,7 +119,7 @@ def successors(pol, m):
         held_now = dict(m.held).get(author)
         go(f"{author} proposes {pr}", "effect.propose", author, body,
            lambda n, pr=pr, g=held_now: n.with_(need=n.need | ({(pr, g)} if g else set())), label=pr)
-    for pr in PROPS:
+    for pr in CLAIMABLE:
         pid = H(pr); eff = m.state["effects"].get(pid)
         if not eff or eff["phase"] in POL.FINAL or len(eff["claims"]) >= 2: continue
         for who in (OP, OP2, P, BOT):
@@ -127,14 +140,23 @@ def successors(pol, m):
     if not m.oprev:
         out.append(("OP key revoked", "key", OP, {}, m.with_(oprev=True, labels=m.labels + ("OP key revoked",)), {"allow": True}))
     pol_now = m.state["policy"]
-    rule, gonly = bool(pol_now["approvals"]), pol_now["sessions"]["modes"] == ["guarded"]
-    go("O toggles approval rule", "policy.set", O, {"policy": policy(not rule, gonly)})
-    go("O toggles guarded-only", "policy.set", O, {"policy": policy(rule, not gonly)})
+    rule, modes = bool(pol_now["approvals"]), tuple(pol_now["sessions"]["modes"])
+    go("O toggles approval rule", "policy.set", O, {"policy": policy(not rule, modes)})
+    for ms_ in MODESETS:
+        if ms_ != modes: go(f"O sets modes {'/'.join(ms_)}", "policy.set", O, {"policy": policy(rule, ms_)})
     return out
+
+def check_state(pol, m):
+    if m.state["roles"].get(OP) is None and any(pol.session_access(m.state, OP, S1).values()):
+        return "a guard without a role keeps rights on its agent's session"
+    return None
 
 def check(m, name, kind, author, body, d):
     if not d["allow"]: return None
     held = dict(m.held)
+    if kind == "session.input" and not body.get("release") and author != SESS_OF[body["session"]] \
+            and ghost_mode(m.state, body["session"]) is None:
+        return f"outside steer allowed into {SESS_OF[body['session']]}'s session though no allowed mode is as cautious as its own"
     if author in held:
         if kind in ("task", "effect.approve"): return f"held {author} allowed {kind}"
         if kind == "session.input" and SESS_OF.get(body["session"]) != author: return f"held {author} allowed to steer another's session"
@@ -161,6 +183,8 @@ def explore(pol, depth):
                 if kind == "effect.claim" and any(p_ == name.split()[2].split("#")[0] for (p_, _) in m.need):
                     saw_claim |= d["allow"]; saw_denial |= (not d["allow"] and "guard" in d.get("reason", ""))
                 if m2 is not None and m2.key() not in seen:
+                    v = check_state(pol, m2)
+                    if v: return n, v, path + (name,), saw_claim, saw_denial
                     seen.add(m2.key()); nxt.append((m2, path + (name,)))
         frontier = nxt
     return n, None, None, saw_claim, saw_denial
@@ -181,8 +205,11 @@ MUTATIONS = {
     "guard-role-ignored": ('    if role_of(state, g) not in READ_ROLES: return "none", None', '    pass'),
     "guard-key-ignored": ('        if st == "valid": return "ok", a\n    return "none", None\n\ndef live', '        return "ok", a\n    return "none", None\n\ndef live'),
     "any-guard-input-releases": ('        if b.get("release"): s["held"].pop(x, None)', '        if b.get("release") or author == sess.get("guard"): s["held"].pop(x, None)'),
-    "anyone-releases": ('        if state["held"].get(sess["actor"]) != entry["author"]: return deny("only the guard holding this agent releases it")', '        pass'),
-    "modes-ignored-for-open-sessions": ('    if sess["steerMode"] in allowed: return sess["steerMode"]', '    return sess["steerMode"]'),
+    "anyone-releases": ('        return deny("only the guard holding this agent releases it")', '        return ALLOW'),
+    "modes-ignored-for-open-sessions": ('    return next((m for m in CAUTION[CAUTION.index(sess["steerMode"]):] if m in allowed), None)', '    return sess["steerMode"]'),
+    "owners-may-loosen-modes": ('    return next((m for m in CAUTION[CAUTION.index(sess["steerMode"]):] if m in allowed), None)', '    return next((m for m in CAUTION if m in allowed), None)'),
+    "banned-guard-keeps-rights": ('    if actor == s["actor"] or (actor == s.get("guard") and role_of(state, actor) in READ_ROLES):', '    if actor == s["actor"] or actor == s.get("guard"):'),
+    "owners-release-over-live-guard": ('        if role == "owner" and role_of(state, g) not in READ_ROLES: return ALLOW     # the guard is gone: owners recover', '        if role == "owner": return ALLOW'),
     "guard-approval-reused": ('        for a in chosen: a["consumedBy"] = eid', '        pass'),
 }
 
@@ -202,7 +229,7 @@ def main():
     n, v, path, g, gd = explore(POL, a.depth)
     if v: print(f"VIOLATION after {n} transitions: {v}\n  path: {' → '.join(path)}"); sys.exit(1)
     if not (g and gd): print(f"VACUOUS: held claim seen={g}, guard denial seen={gd}"); sys.exit(1)
-    print(f"[guard] {n} transitions to depth {a.depth}; GuardedClaimsNeedTheirHuman and HeldInstructNoOne HOLD (non-vacuous)")
+    print(f"[guard] {n} transitions to depth {a.depth}; GuardedClaimsNeedTheirHuman, HeldInstructNoOne, NeverLooser and GuardRightsNeedRole HOLD (non-vacuous)")
 
 if __name__ == "__main__":
     main()
