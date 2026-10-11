@@ -1,10 +1,10 @@
 """Bounded exhaustive check of P-15 guarded steering against the real policy.py.
 
 The model keeps its own ground truth (a *ghost*), independent of Policy: an agent is held by its operator from the first
-outside steer into one of its guarded or suggest sessions (outside = neither the agent nor its operator) until that
-operator explicitly releases it. Properties:
+outside steer into any of its sessions while one of its live sessions is guarded (outside = neither the agent nor its
+operator) until that operator, or an owner once the operator is gone, explicitly releases it. Properties:
 - GuardedClaimsNeedTheirHuman: every claim Policy allows on an effect proposed by a held agent is covered by an approval
-  of the holding operator not used by an earlier claim, while that operator holds a role and its key is valid;
+  not used by an earlier claim, of the holding operator while it holds a role (and its key is valid), else of an owner;
 - HeldInstructNoOne: Policy never allows a held agent to create a task, approve, or put input into another's session;
 - NeverLooser: no outside steer is allowed into a session whose mode the space no longer allows at least as cautiously;
 - GuardRightsNeedRole: a guard without a role has no watch, read or steer right on its agent's session.
@@ -30,7 +30,7 @@ def human(rev=False): return {"actorKind": "human", "operatorConfirmed": False, 
 def agent(op): return {"actorKind": "agent", "operator": op, "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
 XS = {"actorKind": "service", "operatorConfirmed": True, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
 
-MODESETS = (("auto", "guarded", "suggest"), ("guarded",), ("auto",))
+MODESETS = (("auto", "guarded"), ("guarded",), ("auto",))
 
 def policy(rule=False, modes=MODESETS[0]):
     return {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any",
@@ -43,11 +43,12 @@ def E(label, kind, author, body):
     return {"id": H(label), "v": 1, "space": SP, "kind": kind, "author": author, "keyId": "k1", "body": body,
             "contentHash": "", "refs": [], "seen": 0, "nonce": label, "time": T0}
 
-S1, S2 = H("s1"), H("s2")
-SESS_OF = {S1: BOT, S2: BOT2}
+S1, S2, S3 = H("s1"), H("s2"), H("s3")
+SESS_OF = {S1: BOT, S2: BOT2, S3: BOT}      # S3: BOT's auto side-session
+SESS_NAME = {S1: "s1", S2: "s2", S3: "s3"}
 PROPS = {"pr1": BOT, "pr2": BOT2}
 CLAIMABLE = ("pr0", "pr1", "pr2")
-CAUTION = ("auto", "guarded", "suggest")
+CAUTION = ("auto", "guarded")
 
 def ghost_mode(state, sess_id):
     """The model's own reading of P-15's effective mode: never looser than opened; None = dead."""
@@ -55,10 +56,10 @@ def ghost_mode(state, sess_id):
     return next((x for x in CAUTION[CAUTION.index(mode):] if x in state["policy"]["sessions"]["modes"]), None)
 
 class M:
-    __slots__ = ("labels", "state", "oprev", "held", "need", "covered", "used")
+    __slots__ = ("labels", "state", "oprev", "held", "need", "covered", "used", "lastk")
     def __init__(self, **kw):
         for k in self.__slots__: setattr(self, k, kw[k])
-    def key(self): return (self.labels, self.oprev, self.held, self.need, self.covered, self.used)
+    def key(self): return (self.labels, self.oprev, self.held, self.need, self.covered, self.used, self.lastk)
     def with_(self, **kw):
         d = {k: getattr(self, k) for k in self.__slots__}; d.update(kw); return M(**d)
 
@@ -73,11 +74,11 @@ def apply(pol, m, e, label):
     return m.with_(labels=m.labels + (label,), state=s), d
 
 def init(pol):
-    m = M(labels=(), state=None, oprev=False, held=(), need=frozenset(), covered=(), used=())
+    m = M(labels=(), state=None, oprev=False, held=(), need=frozenset(), covered=(), used=(), lastk=())
     m, d = apply(pol, m, E("C", "space.create", O, {"policy": policy()}), "C"); assert m, d
     for lab, a in (("m1", P), ("m2", X), ("m3", OP), ("m4", OP2), ("m5", BOT), ("m6", BOT2)):
         m, d = apply(pol, m, E(lab, "member.set", O, {"actor": a, "role": "member"}), lab); assert m, (lab, d)
-    for lab, a, mode in (("s1", BOT, "guarded"), ("s2", BOT2, "auto")):
+    for lab, a, mode in (("s1", BOT, "guarded"), ("s2", BOT2, "auto"), ("s3", BOT, "auto")):
         m, d = apply(pol, m, E(lab, "session.open", a, {"steerMode": mode}), lab); assert m, (lab, d)
     m, d = apply(pol, m, E("pr0", "effect.propose", BOT, {"executor": X, "action": "pay", "planDigest": DG, "repeatable": False}), "pr0")
     assert m, d                                                                               # proposed before any hold
@@ -85,18 +86,29 @@ def init(pol):
     return m.with_(held=((BOT, OP),))
 
 def cnt(t, k): return dict(t).get(k, 0)
+def setk(t, k, v): d = dict(t); d[k] = v; return tuple(sorted(d.items()))
 def bump(t, k, n=1): d = dict(t); d[k] = d.get(k, 0) + n; return tuple(sorted(d.items()))
+
+def ghost_live(state, sid):
+    se = state["sessions"][sid]; mode = ghost_mode(state, sid)
+    if not se["open"] or state["roles"].get(SESS_OF[sid]) is None or mode is None: return False
+    return mode == "auto" or state["roles"].get(GUARD[SESS_OF[sid]]) is not None
+
+def ghost_guarded(state, agent_):
+    return any(SESS_OF[sid] == agent_ and ghost_live(state, sid) and ghost_mode(state, sid) == "guarded" for sid in SESS_OF)
 
 def ghost_after_input(m, author, sess_id, release):
     """The independent ground truth for holds."""
     agent_ = SESS_OF[sess_id]; held = dict(m.held)
-    effective = ghost_mode(m.state, sess_id)
     if release:
         g = held.get(agent_)
         if g == author or (author == O and g and m.state["roles"].get(g) is None): held.pop(agent_, None)
-    elif author not in (agent_, GUARD[agent_]) and effective == "guarded":
+    elif author not in (agent_, GUARD[agent_]) and ghost_guarded(m.state, agent_):
         held[agent_] = GUARD[agent_]
     return tuple(sorted(held.items()))
+
+def approver_for(m, g):
+    return g if m.state["roles"].get(g) else O       # owners stand in for a departed guard
 
 def successors(pol, m):
     out = []
@@ -106,13 +118,14 @@ def successors(pol, m):
         if m2 and after: m2 = after(m2)
         out.append((name, kind, author, body, m2, d))
     for author in (P, OP2, OP, BOT, BOT2):
-        for sid in (S1, S2):
-            go(f"{author} steers {SESS_OF[sid]}", "session.input", author, {"session": sid},
+        for sid in (S1, S2, S3):
+            go(f"{author} steers {SESS_NAME[sid]}", "session.input", author, {"session": sid},       # names must differ per session: states are deduplicated by history
                lambda n, a=author, s=sid: n.with_(held=ghost_after_input(m, a, s, False)))
     for author in (OP, OP2, O):
         go(f"{author} releases BOT", "session.input", author, {"session": S1, "release": True},
            lambda n, a=author: n.with_(held=ghost_after_input(m, a, S1, True)))
     go("BOT tasks BOT2", "task", BOT, {"to": [BOT2]})
+    if m.state["sessions"][S1]["open"]: go("BOT closes S1", "session.close", BOT, {"session": S1})
     for pr, author in PROPS.items():
         if H(pr) in m.state["effects"]: continue
         body = {"executor": X, "action": "pay", "planDigest": DG, "repeatable": pr == "pr1"}
@@ -122,18 +135,20 @@ def successors(pol, m):
     for pr in CLAIMABLE:
         pid = H(pr); eff = m.state["effects"].get(pid)
         if not eff or eff["phase"] in POL.FINAL or len(eff["claims"]) >= 2: continue
-        for who in (OP, OP2, P, BOT):
+        for who in (OP, OP2, P, BOT, O):
             if cnt(m.covered, (pr, who)) - cnt(m.used, (pr, who)) >= 1: continue
             go(f"{who} approves {pr}", "effect.approve", who, {"proposal": pid, "planDigest": DG},
                lambda n, who=who, pr=pr: n.with_(covered=bump(n.covered, (pr, who))))
         a = len(eff["claims"]) + 1
         g = next((g for (p_, g) in m.need if p_ == pr), None)
+        k = approver_for(m, g) if g else None
         go(f"X claims {pr}#{a}", "effect.claim", X, {"proposal": pid, "attempt": a, "instance": "k1", "window": 30},
-           (lambda n, pr=pr, g=g: n.with_(used=bump(n.used, (pr, g)))) if g else None)
+           (lambda n, pr=pr, k=k: n.with_(used=bump(n.used, (pr, k)), lastk=setk(n.lastk, pr, k))) if g else None)
         if eff["phase"] == "claimed":
             c = eff["claims"][-1]
+            lk = dict(m.lastk).get(pr)
             go(f"X not started {pr}", "effect.outcome", X, {"claim": c["id"], "result": "failed", "started": "no"},
-               (lambda n, pr=pr, g=g: n.with_(used=bump(n.used, (pr, g), -1))) if g else None)
+               (lambda n, pr=pr, lk=lk: n.with_(used=bump(n.used, (pr, lk), -1))) if (g and lk) else None)
             go(f"X failed {pr}", "effect.outcome", X, {"claim": c["id"], "result": "failed", "started": "yes"})
     if m.state["roles"].get(OP): go("O removes OP", "member.set", O, {"actor": OP, "role": "none"})
     else: go("O re-adds OP", "member.set", O, {"actor": OP, "role": "member"})
@@ -147,7 +162,7 @@ def successors(pol, m):
     return out
 
 def check_state(pol, m):
-    if m.state["roles"].get(OP) is None and any(pol.session_access(m.state, OP, S1).values()):
+    if m.state["roles"].get(OP) is None and any(any(pol.session_access(m.state, OP, sid).values()) for sid in (S1, S3)):
         return "a guard without a role keeps rights on its agent's session"
     return None
 
@@ -155,8 +170,8 @@ def check(m, name, kind, author, body, d):
     if not d["allow"]: return None
     held = dict(m.held)
     if kind == "session.input" and not body.get("release") and author != SESS_OF[body["session"]] \
-            and ghost_mode(m.state, body["session"]) is None:
-        return f"outside steer allowed into {SESS_OF[body['session']]}'s session though no allowed mode is as cautious as its own"
+            and not ghost_live(m.state, body["session"]):
+        return f"outside steer allowed into {SESS_OF[body['session']]}'s dead session (no mode as cautious as its own, or a guarded session whose guard is gone)"
     if author in held:
         if kind in ("task", "effect.approve"): return f"held {author} allowed {kind}"
         if kind == "session.input" and SESS_OF.get(body["session"]) != author: return f"held {author} allowed to steer another's session"
@@ -164,9 +179,9 @@ def check(m, name, kind, author, body, d):
         pr = name.split()[2].split("#")[0]
         g = next((g for (p_, g) in m.need if p_ == pr), None)
         if g:
-            if m.state["roles"].get(g) not in POL.READ_ROLES: return f"claim of {pr} allowed while its guard holds no role"
-            if g == OP and m.oprev: return f"claim of {pr} allowed after its guard's key was revoked"
-            if cnt(m.covered, (pr, g)) - cnt(m.used, (pr, g)) < 1: return f"claim of {pr} allowed without an unused approval by {g}"
+            k = approver_for(m, g)
+            if k == OP and m.oprev: return f"claim of {pr} allowed after its guard's key was revoked"
+            if cnt(m.covered, (pr, k)) - cnt(m.used, (pr, k)) < 1: return f"claim of {pr} allowed without an unused approval by {k}"
     return None
 
 def explore(pol, depth):
@@ -202,7 +217,10 @@ MUTATIONS = {
     "held-may-approve": ('HELD_KINDS = {"message",', 'HELD_KINDS = {"effect.approve", "message",'),
     "held-proposals-unguarded": ('        if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"', '        pass'),
     "guards-not-required": ('        if res == "none": return deny("E3 a guard hasn\'t approved")', '        pass'),
-    "guard-role-ignored": ('    if role_of(state, g) not in READ_ROLES: return "none", None', '    pass'),
+    "departed-guard-still-approves": ('    return actor == g and role_of(state, g) in READ_ROLES or (', '    return actor == g or ('),
+    "owners-stand-in-over-live-guard": (' or (role_of(state, g) not in READ_ROLES and role_of(state, actor) == "owner")', ' or role_of(state, actor) == "owner"'),
+    "hold-per-session-only": ('and "guard" in sess and agent_guarded(s, x):', 'and "guard" in sess and effective_mode(s, sess) == "guarded":'),
+    "guarded-without-guard-stays-live": (' or role_of(state, sess.get("guard")) in READ_ROLES))', ' or "guard" in sess))'),
     "guard-key-ignored": ('        if st == "valid": return "ok", a\n    return "none", None\n\ndef live', '        return "ok", a\n    return "none", None\n\ndef live'),
     "any-guard-input-releases": ('        if b.get("release"): s["held"].pop(x, None)', '        if b.get("release") or author == sess.get("guard"): s["held"].pop(x, None)'),
     "anyone-releases": ('        return deny("only the guard holding this agent releases it")', '        return ALLOW'),

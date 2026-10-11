@@ -107,8 +107,7 @@
        "steer": "owner",
        "modes": [
         "auto",
-        "guarded",
-        "suggest"
+        "guarded"
        ]
       },
       "servers": {
@@ -342,10 +341,42 @@
    "expect": "allow"
   },
   {
+   "entry": {
+    "id": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.open",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "steerMode": "auto"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-s2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow"
+  },
+  {
    "sessionAccess": {
     "space": "s1:a.example",
     "actor": "@op:b.example",
     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+   },
+   "expect": {
+    "watch": false,
+    "read": false,
+    "steer": false
+   }
+  },
+  {
+   "sessionAccess": {
+    "space": "s1:a.example",
+    "actor": "@op:b.example",
+    "session": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c"
    },
    "expect": {
     "watch": false,
@@ -362,7 +393,7 @@
     "author": "@op:b.example",
     "keyId": "k1",
     "body": {
-     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+     "session": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c"
     },
     "contentHash": "",
     "refs": [],
@@ -370,9 +401,9 @@
     "nonce": "n-q",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:11Z",
+   "time": "2026-10-10T12:00:12Z",
    "expect": "denied",
-   "note": "banned guard can't steer"
+   "note": "banned guard can't watch or steer even its agent's live auto session"
   },
   {
    "entry": {
@@ -392,7 +423,7 @@
     "nonce": "n-r0",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:12Z",
+   "time": "2026-10-10T12:00:13Z",
    "expect": "denied",
    "note": "members can't release"
   },
@@ -414,7 +445,7 @@
     "nonce": "n-r1",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:13Z",
+   "time": "2026-10-10T12:00:14Z",
    "expect": "allow",
    "check": {
     "held": {}
@@ -435,6 +466,7 @@
   "q": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
   "r0": "cc05e6dcadb12728c242423a3ce9ca6e6ce2b30c3d178f6dca53b5a8c1985fab",
   "r1": "98a7b13f6218fe6e3f84ce6eda37943da85bcc3aeb39c803706f825498926ea5",
-  "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+  "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
+  "s2": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c"
  }
 }

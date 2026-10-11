@@ -30,7 +30,7 @@ def profiles(seq=1): return {a: view(a, seq) for a in KEYS}
 
 POLICY = {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any", "approvals": [],
           "separateApprover": False, "budget": None, "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30,
-          "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded", "suggest"]}, "servers": {"deny": []}}
+          "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded"]}, "servers": {"deny": []}}
 
 N = [0]
 def nonce():
