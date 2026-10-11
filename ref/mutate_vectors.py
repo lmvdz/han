@@ -8,7 +8,7 @@ try:
 except Exception:
     pass
 
-MUTATIONS = [  # (rule, description, exact text in policy.py, replacement)
+MUTATIONS = [  # (rule, description, exact text in policy.py, replacement); text and replacement may be tuples for edits in several places
     ("P-07 E1", "claim by any actor", 'if author != eff["executor"] or b["instance"] != entry["keyId"]: return deny("E1 not the named executor instance")', "pass"),
     ("P-07 E1", "removed executor may claim", 'if role not in ("owner", "member"): return deny("E1 executor no longer a member")', "pass"),
     ("P-07 E2", "ignore proposer revocation", 'return deny("E2 proposer no longer authorized")', "pass"),
@@ -133,13 +133,86 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement)
     ('P-15', 'release clears up to its receipt', 's["cleared"][x] = e["seen"]', 's["cleared"][x] = rc["seq"]'),
     ('P-07', 'agents draw on the space budget', '        if effect_source(state, eff)[0] == "space" and not is_human(ctx, eff["proposer"]):', '        if False:'),
     ('§2', 'trailing newline accepted', 'def _actor(v): return isinstance(v, str) and bool(ACTOR.fullmatch(v))', 'def _actor(v): return isinstance(v, str) and bool(ACTOR.match(v))'),
+    # ── round 18: spec precision ──
+    ("P-02", "roleHistory 'to' bound inclusive", '("to" not in h or seq < h["to"])', '("to" not in h or seq <= h["to"])'),
+    ("P-08", "approver roles match by rank", 'any(x == actor or x == role for x in rule["approvers"])', 'any(x == actor or (x in READ_ROLES and READ_ROLES.index(role) <= READ_ROLES.index(x)) for x in rule["approvers"])'),
+    ("P-11", "any owner's server protected, not all", 'if all(server_of(a) in deny_list for a, r in state["roles"].items() if r == "owner")', 'if any(server_of(a) in deny_list for a, r in state["roles"].items() if r == "owner")'),
+    ("P-11", "owners' servers may all be denied", 'if all(server_of(a) in deny_list for a, r in state["roles"].items() if r == "owner"): return deny("can\'t deny every owner\'s server")', 'pass'),
+    ("P-03", "agent check also on bans and removals", 'if new in READ_ROLES and cur not in READ_ROLES:\n        prof', 'if cur not in READ_ROLES:\n        prof'),
+    ("P-03", "agent check also on role changes", 'if new in READ_ROLES and cur not in READ_ROLES:\n        prof', 'if new in READ_ROLES:\n        prof'),
+    ("P-12", "redact by the author needs a role", 'return ALLOW if (entry["author"] == t["author"] or role == "owner")', 'return ALLOW if ((entry["author"] == t["author"] and role in READ_ROLES) or role == "owner")'),
+    ("P-05", "owner-assignees force-close too", 'if role == "owner" and final and entry["author"] not in t["to"]: return ALLOW', 'if role == "owner" and final: return ALLOW'),
+    ("P-16", "task.update on a non-task is denied", 'def _task_update(state, entry, ctx, role):\n    t = state["tasks"].get(entry["body"]["task"])\n    if not t: return invalid("no such task")', 'def _task_update(state, entry, ctx, role):\n    t = state["tasks"].get(entry["body"]["task"])\n    if not t: return deny("no such task")'),
+    ("P-16", "task.cancel on a non-task is denied", 'def _task_cancel(state, entry, ctx, role):\n    t = state["tasks"].get(entry["body"]["task"])\n    if not t: return invalid("no such task")', 'def _task_cancel(state, entry, ctx, role):\n    t = state["tasks"].get(entry["body"]["task"])\n    if not t: return deny("no such task")'),
+    ("P-16", "propose naming a non-task is denied", '        if not t: return invalid("no such task")\n        if not t["open"]: return deny("task not open")', '        if not t: return deny("no such task")\n        if not t["open"]: return deny("task not open")'),
+    ("P-16", "approve of a non-proposal is denied", 'def _approve(state, entry, ctx, role):\n    b, author = entry["body"], entry["author"]\n    eff = state["effects"].get(b["proposal"])\n    if not eff: return invalid("no such proposal")', 'def _approve(state, entry, ctx, role):\n    b, author = entry["body"], entry["author"]\n    eff = state["effects"].get(b["proposal"])\n    if not eff: return deny("no such proposal")'),
+    ("P-16", "claim of a non-proposal is denied", 'def _claim(state, entry, ctx, role):\n    b, author = entry["body"], entry["author"]\n    eff = state["effects"].get(b["proposal"])\n    if not eff: return invalid("no such proposal")', 'def _claim(state, entry, ctx, role):\n    b, author = entry["body"], entry["author"]\n    eff = state["effects"].get(b["proposal"])\n    if not eff: return deny("no such proposal")'),
+    ("P-16", "cancel of a non-proposal is denied", 'def _cancel(state, entry, ctx, role):\n    eff = state["effects"].get(entry["body"]["proposal"])\n    if not eff: return invalid("no such proposal")', 'def _cancel(state, entry, ctx, role):\n    eff = state["effects"].get(entry["body"]["proposal"])\n    if not eff: return deny("no such proposal")'),
+    ("P-16", "outcome on a non-claim is denied", 'if not c: return invalid("no such claim")', 'if not c: return deny("no such claim")'),
+    ("P-16", "resolve of a non-proposal is denied", 'def _resolve(state, entry, ctx, role):\n    b, author = entry["body"], entry["author"]\n    eff = state["effects"].get(b["proposal"])\n    if not eff: return invalid("no such proposal")', 'def _resolve(state, entry, ctx, role):\n    b, author = entry["body"], entry["author"]\n    eff = state["effects"].get(b["proposal"])\n    if not eff: return deny("no such proposal")'),
+    ("P-16", "redact of a missing entry is denied", 'if not t: return invalid("no such entry")', 'if not t: return deny("no such entry")'),
+    ("P-16", "seen beyond head is denied", 'return invalid("seen beyond head")', 'return deny("seen beyond head")'),
+    ("P-16", "second space.create is denied", 'if kind == "space.create": return invalid("space.create only at seq 1")', 'if kind == "space.create": return deny("space.create only at seq 1")'),
+    ("P-16", "a first entry that isn't space.create is denied", 'if entry["kind"] != "space.create": return invalid("first entry must be space.create")', 'if entry["kind"] != "space.create": return deny("first entry must be space.create")'),
+    ("P-16", "missing pinned profile is denied", 'if actor not in ctx["profiles"]: return invalid(f"no pinned profile for {actor}")', 'if actor not in ctx["profiles"]: return deny("no pinned profile")'),
+    ("P-16", "the key is checked before the shape", 'def decide(state, entry, ctx) -> dict:\n    err = validate(entry)', 'def decide(state, entry, ctx) -> dict:\n    if key_status(ctx, entry.get("author"), entry.get("keyId")) != "valid": return deny("author key not valid")\n    err = validate(entry)'),
+    ("P-16", "the key is checked before the pins", '    for actor in (ra[:2] if kind == "effect.claim" else ra):', '    if key_status(ctx, author, entry["keyId"]) != "valid": return deny("author key not valid")\n    for actor in (ra[:2] if kind == "effect.claim" else ra):'),
+    ("P-16", "the key is checked after the references",
+        ('    if key_status(ctx, author, entry["keyId"]) != "valid": return deny("author key not valid")\n',
+         '    if server_of(author) in state["policy"]["servers"]["deny"] and kind not in ("effect.outcome", "effect.resolve"):\n'),
+        ('    pass\n',
+         '    if key_status(ctx, author, entry["keyId"]) != "valid": return deny("author key not valid")\n    if server_of(author) in state["policy"]["servers"]["deny"] and kind not in ("effect.outcome", "effect.resolve"):\n')),
+    ("P-16", "denied servers are judged before references", 'if r not in state["entries"]: return invalid("ref not in space")', 'if r not in state["entries"] and server_of(author) not in state["policy"]["servers"]["deny"]: return invalid("ref not in space")'),
+    ("R-25", "Policy validates the header time", 'if entry.get("v") != 1: return "version"', 'if entry.get("v") != 1 or not _time(entry.get("time", "")): return "version"'),
+    ("P-16", "checkpoint position before role", '    if role not in ("owner", "member"): return deny("not allowed")\n    return ALLOW if entry["body"]["through"] <= state["head"] else invalid("through beyond head")',
+                                               '    if entry["body"]["through"] > state["head"]: return invalid("through beyond head")\n    if role not in ("owner", "member"): return deny("not allowed")\n    return ALLOW'),
+    ("P-16", "approve judges the phase before the digest", '    if b["planDigest"] != eff["planDigest"]: return invalid("planDigest mismatch")\n    if eff["phase"] not in ("awaiting-approval", "ready", "claimed"): return deny(f"cannot approve in {eff[\'phase\']}")',
+                                                          '    if eff["phase"] not in ("awaiting-approval", "ready", "claimed"): return deny(f"cannot approve in {eff[\'phase\']}")\n    if b["planDigest"] != eff["planDigest"]: return invalid("planDigest mismatch")'),
+    ("P-16", "outcome judges the pair before the claim", '    if c is not latest_claim(eff) or eff["phase"] != "claimed": return deny("claim not open")\n    if (b["result"], b["started"]) not in VALID_PAIRS: return invalid("inconsistent result/started")',
+                                                        '    if (b["result"], b["started"]) not in VALID_PAIRS: return invalid("inconsistent result/started")\n    if c is not latest_claim(eff) or eff["phase"] != "claimed": return deny("claim not open")'),
+    ("P-16", "outcome costs are judged only for the reporter", '    if "cost" in b:\n        if b["started"] != "yes": return invalid("cost only with started:yes")', '    if "cost" in b and author == eff["executor"] and entry["keyId"] == c["instance"]:\n        if b["started"] != "yes": return invalid("cost only with started:yes")'),
+    ("P-16", "resolve judges the cost before the author",
+        ('    if author != eff["executor"] and role != "owner": return deny("executor or owner only")\n',
+         '        if not _cost_ok(state, b["cost"], c.get("reserved") if c else None): return invalid("cost not covered by the reservation")\n    return ALLOW\n\ndef _checkpoint'),
+        ('    pass\n',
+         '        if not _cost_ok(state, b["cost"], c.get("reserved") if c else None): return invalid("cost not covered by the reservation")\n    if author != eff["executor"] and role != "owner": return deny("executor or owner only")\n    return ALLOW\n\ndef _checkpoint')),
+    ("P-16", "empty assignee lists accepted", '"to": (lambda v: _actors(v) and len(v) > 0, True)', '"to": (_actors, True)'),
+    ("P-03", "the server confirms for the operator", 'if op and author == op and b == {"actor": op, "role": "owner"}:', 'if op and author in (op, server) and b == {"actor": op, "role": "owner"}:'),
+    ("P-03", "anyone withdraws an operator", 'if op and author in (op, server) and b == {"actor": op, "role": "none"}:', 'if op and b["role"] == "none":'),
+    ("P-03", "any member.set in a profile space", 'return deny("only operator confirmation or withdrawal allowed")', 'return ALLOW'),
+    ("§4.3", "profile spaces need no profile", 'if "profile" not in b: return invalid("profile space needs profile")', 'pass'),
+    ("§4.3", "plain spaces may carry a profile", 'if "profile" in b: return invalid("profile only in profile spaces")', 'pass'),
+    ("§4.3", "revoking an unknown key is denied", 'return invalid("no such valid key")', 'return deny("no such valid key")'),
+    ("P-01", "relevantActors lists an actor twice", 'return list(dict.fromkeys(out))', 'return out'),
+    ("P-06", "owners need to be assignees to charge a task", 'if author not in t["to"] and role != "owner": return deny("only an assignee or owner charges a task")', 'if author not in t["to"]: return deny("only an assignee charges a task")'),
+    ("P-06", "only budgeted tasks need an assignee", 'if author not in t["to"] and role != "owner": return deny("only an assignee or owner charges a task")', 'if author not in t["to"] and role != "owner" and t.get("left"): return deny("only an assignee or owner charges a task")'),
+    ("P-04", "consumed approvals can't cancel", 'any(x["author"] == a for x in eff["approvals"])', 'any(x["author"] == a and not x.get("dropped") and not x.get("consumedBy") for x in eff["approvals"])'),
+    ("P-08", "approval expiring now is still valid (approve)", 'if b.get("expiresAt") and ts(b["expiresAt"]) <= ts(ctx["time"]): return deny("approval already expired")', 'if b.get("expiresAt") and ts(b["expiresAt"]) < ts(ctx["time"]): return deny("approval already expired")'),
+    ("P-07 E3", "approval expiring now is still a candidate", 'a.get("expiresAt") and ts(a["expiresAt"]) <= ts(time)', 'a.get("expiresAt") and ts(a["expiresAt"]) < ts(time)'),
+    ("P-07 E5", "proposal expiring now is still claimable", 'ts(eff["expiresAt"]) <= ts(ctx["time"]): return deny("E5 proposal expired")', 'ts(eff["expiresAt"]) < ts(ctx["time"]): return deny("E5 proposal expired")'),
+    ("P-09", "abandon needs strictly more than A", 'if ts(ctx["time"]) >= ts(c["time"]) + abandon_after(c["window"]): return ALLOW', 'if ts(ctx["time"]) > ts(c["time"]) + abandon_after(c["window"]): return ALLOW'),
+    ("P-08", "approvals while claimed are refused", 'if eff["phase"] not in ("awaiting-approval", "ready", "claimed")', 'if eff["phase"] not in ("awaiting-approval", "ready")'),
+    ("P-08", "approvals while unknown are accepted", 'if eff["phase"] not in ("awaiting-approval", "ready", "claimed")', 'if eff["phase"] in FINAL'),
+    ("P-04", "guests may checkpoint", 'def _checkpoint(state, entry, ctx, role):\n    if role not in ("owner", "member")', 'def _checkpoint(state, entry, ctx, role):\n    if role not in READ_ROLES'),
+    ("P-05", "a second task.cancel is denied", 'if entry["author"] != t["author"] and role != "owner": return deny("only asker or owner")', 'if entry["author"] != t["author"] and role != "owner": return deny("only asker or owner")\n    if t["cancelRequested"]: return deny("already requested")'),
+    ("P-11", "a move to the current home is denied", 'if role != "owner": return deny("owners only")\n    if any(e["phase"] == "claimed"', 'if role != "owner": return deny("owners only")\n    if entry["body"]["to"] == state["home"]: return deny("same home")\n    if any(e["phase"] == "claimed"'),
+    ("P-06", "refunds credit closed tasks", 'if t and t["open"] and t.get("left"):', 'if t and t.get("left"):'),
+    ("P-09", "a failed attempt always re-readies", '("ready" if approvals_complete(state, eff) else "awaiting-approval")', '"ready"'),
+    ("P-10", "resolve failed keeps open approvals", 'for a in eff["approvals"]:\n                if not a.get("consumedBy"): a["dropped"] = True', 'pass'),
+    ("P-06", "claim reservations don't lock the budget", '        if c and c.get("reserved") and not c.get("settled"): return True', '        pass'),
+    ("P-10", "cost on resolve failed accepted", 'if b["result"] == "failed": return invalid("no cost on failed")', 'pass'),
+    ("P-06", "cost unit unchecked against the reservation", 'return cost["unit"] == reserved["unit"] and cost["amount"] <= reserved["amount"]', 'return cost["amount"] <= reserved["amount"]'),
+    ('P-03', 'agents create spaces', '    if not is_human(ctx, author): return deny("owners are human: only a human creates a space (P-03)")', '    pass'),
+    ('P-11', 'space may deny its home', '    if server_of(space) in b["policy"]["servers"]["deny"]: return invalid("a space can' + "'" + 't deny its own home")', '    pass'),
 ]
 
 def load_mutant(old, new):
     src = open(os.path.join(HERE, "policy.py"), encoding="utf-8").read()
-    if src.count(old) != 1: raise SystemExit(f"mutation anchor not found exactly once: {old[:70]}")
+    for o, n in (zip(old, new) if isinstance(old, tuple) else [(old, new)]):      # a tuple is a multi-place edit
+        if src.count(o) != 1: raise SystemExit(f"mutation anchor not found exactly once: {o[:70]}")
+        src = src.replace(o, n)
     mod = types.ModuleType("policy")
-    exec(compile(src.replace(old, new), "policy_mutant.py", "exec"), mod.__dict__)
+    exec(compile(src, "policy_mutant.py", "exec"), mod.__dict__)
     return mod
 
 def main():

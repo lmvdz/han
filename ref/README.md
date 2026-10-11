@@ -5,9 +5,9 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
 | File | What it is |
 |---|---|
 | `policy.py` | Reference Policy: `decide`, `fold`, `can_read`, `relevant_actors`, `session_access`, closed body schemas (R-09). Pure Python, no dependencies. |
-| `vectors/*.json` | 111 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
+| `vectors/*.json` | 132 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
 | `run_vectors.py` | Runs the vectors against `policy.py`, or any implementation exposing the same five functions. Also checks purity and determinism (R-11) on every step. |
-| `mutate_vectors.py` | Breaks one Policy rule at a time (116 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
+| `mutate_vectors.py` | Breaks one Policy rule at a time (173 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
 | `wire.py` | Signed layer with real Ed25519 (`cryptography` package): ids, signatures, receipts, header **and content** validation, a reference **home** (the §4.1 append pipeline) and a verifying **mirror** (R-14), equivocation and wrong-home proofs, notices, signal rights, per-space blob supply and transfer. |
 | `run_wire.py` | 30 scenarios over `wire.py`, each with its expected result stated from the spec. |
 | `mutate_wire.py` | Breaks one wire-layer rule at a time (24 mutations) and requires the scenarios to fail. |
@@ -26,7 +26,7 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
     { "entry": <Entry with explicit 64-hex "id">, "time": "<receipt time>", "expect": "allow" | "denied" | "invalid",
       "check": { "<dotted path into the space state>": <value> },        // optional
       "profiles": { "<actor>": <view> },                                  // optional; persists for later steps
-      "predecessor": "<space id>" },                                      // optional; ctx.predecessor = that space's state
+      "note": "<why>" },                                                  // optional
     { "read": { "space", "actor", "seq" }, "expect": true | false },
     { "relevantActors": <Entry>, "expect": ["<actor>", ...] },
     { "sessionAccess": { "space", "actor", "session" }, "expect": { "watch": bool, "read": bool, "steer": bool } }
@@ -34,6 +34,25 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
 ```
 
 Every vector is fully expanded: every entry field, every profile, the whole policy. Entry ids are real 64-hex strings, but they're derived from labels (listed in `ids`) rather than from the entry hash. That keeps vectors stable and readable, and Policy never recomputes ids. `00-entry-id.json` tests the real id derivation byte for byte, and `wire.py` uses real ids throughout. Checks read the state of the space named by the step's entry. Dotted keys may contain dots (actor ids); resolve them greedily. Policy checks no signatures; `wire.py` does.
+
+A step runs `decide(states[space], entry, ctx)` with `ctx = {time, profiles}` (there is no other context: a fork takes nothing from its parent, P-13). If `expect` is `allow`, the runner folds the entry with a receipt that holds only `space`, `seq` (head + 1), `id` (the entry's `id`) and `time`, and then reads `check`. Profile views are the vector's `profiles` with `actor` and a `seq` added; a step's `profiles` replaces a view from that step on. An actor missing from `profiles` is one the receipt did not pin (`decide` answers `invalid`, P-16).
+
+### What vectors may leave out or stub, and why
+
+Two layers judge an entry (architecture.md R-25). The **Log** owns the wire form; **Policy** owns the body and everything in P-16. Vectors test Policy, so they are written by hand and stub what the Log owns:
+
+| Stubbed or absent | Why it is safe |
+|---|---|
+| `id` is a label hashed to 64 hex digits, not the §2 derivation | Policy never recomputes ids; it only needs them to be distinct and to resolve. `00-entry-id` and `00-jcs-utf16-order` test the real derivation byte for byte, and `run_wire.py` uses real ids |
+| no `sig` | signatures are the Log's (R-12 "bad signature"); Policy only reads whether the key is `valid` in the pinned profile |
+| `nonce` is a placeholder such as `n-C`, `contentHash` is `""` with no content, header `time` is fixed | these are Log-owned fields and Policy never reads them (vector `decide-ignores-log-fields` pins that) |
+| `accept.sig` is any string | the target's signature is verified by the Log and by mirrors (§7.3); Policy needs only the shape `{keyId, sig}` |
+| receipts hold only `space`, `seq`, `id`, `time` | `fold` reads nothing else |
+| profile views hold dummy keys (`"publicKey": "pk"`) | Policy reads a key's `status` only |
+
+An implementation that rejects these is checking the wrong layer, and will fail nearly every vector. What vectors never stub: every body is a legal R-09 body unless the step expects `invalid` for that reason, and every policy document is complete.
+
+**What `invalid` and `denied` mean in a vector** is architecture.md P-16: `invalid` when the entry is malformed, names something missing or of the wrong kind, contradicts what it names, or has an impossible place; `denied` when authority or the present state forbids a well-formed entry. The vectors `references-must-be-the-right-kind`, `decision-order` and `kind-check-order` pin the order of checks where both could apply.
 
 ## Model-checked properties
 

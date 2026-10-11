@@ -352,6 +352,8 @@ def _decide_create(entry, ctx):
         if b["profile"].get("operator") == actor: return invalid("an actor can't be its own operator")
         return ALLOW
     if "profile" in b: return invalid("profile only in profile spaces")
+    if server_of(space) in b["policy"]["servers"]["deny"]: return invalid("a space can't deny its own home")
+    if not is_human(ctx, author): return deny("owners are human: only a human creates a space (P-03)")
     return ALLOW
 
 def _decide_profile(state, entry, ctx):

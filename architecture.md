@@ -1,6 +1,6 @@
 # HAN v1 — architecture
 
-Status: design draft, round 17. Companions: [goal.md](goal.md) (why), [han.ts](han.ts) (exact types; normative for shapes), [coverage.md](coverage.md) (fate of every v0.4 guarantee), [ref/](ref/) (executable reference, conformance vectors, fuzzer, model checker; run `python ref/run_all.py`).
+Status: design draft, round 18. Companions: [goal.md](goal.md) (why), [han.ts](han.ts) (exact types; normative for shapes), [coverage.md](coverage.md) (fate of every v0.4 guarantee), [ref/](ref/) (executable reference, conformance vectors, fuzzer, model checker; run `python ref/run_all.py`).
 Normative words MUST / MUST NOT / SHOULD / MAY follow BCP 14. Rules are `R-xx` (sequencer and verification), `P-xx` (Policy), `X-xx` (executor), `T-xx` (what HAN requires of a transport). §10 lists every rule with its check, or says plainly that none exists. Retired rule numbers are not reused.
 
 ---
@@ -93,7 +93,7 @@ Here **home** means the space's current sequencer server. Every `‖` concatenat
 | EntryId, Hex | `[0-9a-f]{64}` |
 | nonce | `[a-z2-7]{26}` (128 bits, base32) |
 | KeyId | `[A-Za-z0-9_-]{1,64}`; single-use per actor (§4.3) |
-| Time | `YYYY-MM-DDTHH:MM:SSZ`: UTC, a real proleptic Gregorian date, seconds 00–59, no fraction. A sequencer writes `receipt.time` by **rounding its clock down** to the second. |
+| Time | `YYYY-MM-DDTHH:MM:SSZ`: UTC, a real proleptic Gregorian date, seconds 00–59, no fraction. A sequencer writes `receipt.time` by **rounding its clock down** to the second. Times compare as instants, and a time is **expired** when it is at or before the time it is compared with (`expiresAt` ≤ `ctx.time`). |
 | action | `[a-z0-9][a-z0-9._-]{0,127}`; `*` only in approval rules |
 | Budget | `unit` `[A-Za-z0-9_-]{1,32}`, `amount` integer |
 | BlobRef | `hash` Hex; `size` ≤ 4 GiB; `type` a media type, each half `[a-z0-9][a-z0-9!#$&^_.+-]{0,63}`; optional `uri` (transport locator, ≤ 1,024 bytes) |
@@ -158,7 +158,7 @@ On `append(entry, content)` the sequencer runs these steps. Steps 2–9 run in o
 
 1. **Dedupe:** if `id` exists, return its receipt (R-01).
 2. **Not home?** Answer `moved` with the current home. A `space.create` is accepted only by the sequencer named in its space id, which decides by its own rules whether to host it.
-3. **Shape:** the header has exactly the `Entry` fields, each in its grammar (§2); the body matches the kind's closed schema (R-09); content is present iff `contentHash ≠ ""`, matches it, and matches the kind's content schema and checks (§5: `planDigest = sha256(JCS(plan))`, `plan.action = action`); sizes are within limits; `seen` ≤ head; references resolve (R-05). For a `space.move`, `accept` verifies (§7.3). Rate limits and block lists apply here.
+3. **Shape:** the header has exactly the `Entry` fields, each in its grammar (§2); the body matches the kind's closed schema (R-09); content is present iff `contentHash ≠ ""`, matches it, and matches the kind's content schema and checks (§5: `planDigest = sha256(JCS(plan))`, `plan.action = action`); sizes are within limits; `seen` ≤ head; references resolve (R-05). For a `space.move`, `accept` verifies (§7.3). Rate limits and block lists apply here. R-25 says which of these checks `Policy.decide` repeats and which it never sees.
 4. **Profiles:** pin `Identity.profile(actor)` for the author and the other actors `relevantActors` names (P-01, R-10). If a required profile is unavailable → `unavailable`.
 5. **Signature:** `Identity.verify(entry, profiles[author])`.
 6. **Policy:** `Policy.decide(state, entry, ctx)` with `ctx = {time: now, profiles}`. `now` is the steady clock rounded down (R-03a).
@@ -174,12 +174,20 @@ On `append(entry, content)` the sequencer runs these steps. Steps 2–9 run in o
 
 **R-11 Determinism.** Policy's five functions depend only on their arguments. `ctx.time` is the receipt time, and `ctx.profiles` are the profile views at the seqs pinned in the receipt. Every conforming implementation MUST give identical results; [ref/policy.py](ref/policy.py) is the reference and [ref/vectors/](ref/vectors/) the tests. Wall clocks, outside reputation and rate limits are *not* inputs. Rate limits and block lists live in Log (step 3) and can only refuse.
 
+**R-25 Validation boundary.** Two layers judge an entry, and a verifier replaying the log (R-14) runs both.
+- **Log** (steps 1–5) owns the wire form: the header has exactly the `Entry` fields, each in its grammar (§2), including `nonce`, `time`, `contentHash` and `sig`; `id` is derived as in §2 and drives dedupe (R-01); content is present iff `contentHash ≠ ""`, matches it, and fits the kind's content schema (§5); every size and list limit; the signature against the pinned key (a bad one is `invalid`, a revoked key is Policy's `denied`, R-12); for a `space.move`, the signature in `accept` (§7.3); rate limits and block lists.
+- **Policy `decide`** is called with an entry that already passed those. It checks the fields it reads (`v`, `space`, `kind`, `author`, `keyId`, `refs`, `seen`) and the whole `body` against the kind's closed schema (R-09). That covers every ActorId, EntryId, KeyId, Time, Budget and `PolicyDoc` inside the body, and, for an extension kind, a body that is an object of Json holding only integers in [0, 2^53). Everything else it does is P-16.
+- `decide` and `fold` **never read** `nonce`, the header `time`, `contentHash`, `sig`, `accept.sig` (the body check needs `accept` to be `{keyId, sig}` with a KeyId and any string), content, or an entry `id`. An implementation MUST NOT reject on them inside `decide`. Header fields outside `Entry` are the Log's to reject; `decide` MAY ignore them (`ref/policy.py` also rejects them, and accepts a vector-only `id`).
+- The body shape, `seen ≤ head` and the existence of `refs` are checked by both layers (Log step 3, P-16 steps 1 and 5), and fail as `invalid` in both, so each layer reaches the same verdict alone.
+- `decide` doesn't need the entry's own id. `fold` takes it from `record.receipt.id` (equal to the §2 derivation for every record the Log accepted), and otherwise reads from the receipt only `seq` and `time`.
+- **Vectors may stub what the Log owns**, because they are written by hand: ids are labels hashed to 64 hex digits (`00-entry-id` tests the real derivation separately), there is no `sig`, `nonce` is a placeholder, `accept.sig` is any string, `contentHash` is `""` without content, receipts carry only `space`, `seq`, `id` and `time`, and profile views hold dummy keys. A Policy that rejects these is checking the wrong layer. Vectors never stub what Policy owns: no vector holds a body that breaks R-09.
+
 ### 4.3 M3 Identity: identities are spaces too
 
 - An actor ID is `@name:server`; on Matrix it is the Matrix user ID. HAN keys are separate from transport credentials. HAN never trusts a transport login as authorship (R-12).
 - The actor's **profile space** `profile:@name:server` is sequenced by `server`'s HAN sequencer and is world-readable. Its `space.create` is appended by the server actor `@:server`, with `profile: {actorKind, operator?, key}` naming the first key. **Verifiers of any space MUST also verify, retain and serve the profile spaces of every actor pinned in its receipts**, so profiles outlive their server.
-- `key.add` / `key.revoke` may be appended by the actor (with any un-revoked key) or by `@:server` (account recovery). **KeyIds are single-use**, so a revoked key never becomes valid again. A stolen key can revoke the others, and the server can add keys and so impersonate its users. Both are stated trade-offs (§7.5).
-- **Agents and services** name an `operator`, who must be a different, **human** actor. The operator confirms with `member.set {actor: <operator>, role: "owner"}` in the agent's profile space, and withdraws with `role: "none"`; the server may also withdraw. An actor naming itself as operator is `invalid`.
+- `key.add` / `key.revoke` may be appended by the actor (signing with any valid key, R-12) or by `@:server` (account recovery); anyone else is `denied`. **KeyIds are single-use**, so a revoked key never becomes valid again: a `key.add` of a keyId already in the profile (even a revoked one), and a `key.revoke` of a key that is not currently valid (unknown or already revoked), are `invalid` (P-16). Revoking an actor's last valid key is allowed. A stolen key can revoke the others, and the server can add keys and so impersonate its users. Both are stated trade-offs (§7.5).
+- **Agents and services** name an `operator`, who must be a different, **human** actor. The operator confirms with `member.set {actor: <operator>, role: "owner"}` in the agent's profile space, and withdraws with `role: "none"`; the server may also withdraw. An actor naming itself as operator is `invalid`. The operator's confirmation and withdrawal are the only `member.set`s a profile space accepts (P-03).
 - A server's HAN keys are published at `https://<server>/.well-known/han` as `{keys: [{keyId, publicKey, from, until?, compromised?}]}`, fetched over TLS. A receipt is valid only if its `time` lies in its key's `[from, until)`. A key marked `compromised` is trusted only for receipts a verifier recorded before first seeing the mark. Every server MUST keep the key sets it has used for verification and serve them at `https://<itself>/.well-known/han-peers` as `{server: keys}`. A key that changes for an already-seen window is a fault. These two HTTPS documents are part of the HAN wire surface.
 
 - **Adding a device (enrollment).** A new device generates its own key and shows its public key, for example as a QR code. An existing device of the same actor appends `key.add` for it. If no existing device is available, the server appends it (account recovery). Clients MUST then show a visible warning in every space where that actor is a member, because recovery is also how a server could impersonate the actor (§7.5).
@@ -201,7 +209,7 @@ A verifier is any party that checks a space: a member's client, a member's serve
 - for a `space.move`, the target's `accept` signature;
 - a replay of `Policy.decide`.
 
-On failure it stops trusting the space above the last good seq, tells the room (T-05) with `{type: "fault", proof: {kind: "equivocation" | "wrong-home" | "forbidden-accept" | "bad-signature" | "chain" | "bad-redaction" | "bad-move" | "future-time", receipts, record?}}`, and keeps the proof.
+On failure it stops trusting the space above the last good seq, tells the room (T-05) with `{type: "fault", proof}`, and keeps the proof. A `proof` is a portable `FaultProof` (han.ts): `equivocation` and `future-time` need only the receipts (the latter with the verifier's `observedAt`); every other kind carries the verified `chain` before the fault, the `profiles` chains it pins, the offending `record` and the `serverKeys` used, so that anyone can replay the check from nothing against server keys they trust. A proof can't be stripped of content, because the content hash check needs it, so a proof of a private space is private. A verifier reports `ok`, `stopped` (it couldn't continue: connection lost, a seq gap because P-02 hid records from it, an unavailable profile chain; never a fault), `faulty` (with the proof) or `moved` (`VerifierStatus`).
 **R-15 Head gossip.** In `hello` (both directions) and in `read` (`knownHeads` argument; `{type:"heads"}` item), each side lists the spaces it asks about. The other side answers only for listed spaces the asker may read, as `@:asker` for a server (P-02). A mismatch that forms an equivocation or wrong-home proof is handled as an R-14 failure. A server verifier MUST exchange heads with at least one other verifier of each space it verifies, at least every 10 minutes.
 
 ### 4.5 M5 Executor: the only thing that touches the world
@@ -278,7 +286,9 @@ Exact body and content schemas: [han.ts](han.ts) `Bodies` and `Contents`. A kind
 
 **Blobs.** A `BlobRef` names bytes by hash. The bytes travel on the transport (T-03), and anyone using them MUST verify the hash. Positions that reference blobs: `content.blobs[]` (any kind, extensions included), `effect.propose.plan.argsBlob`, and `effect.outcome/resolve.evidence`.
 
-**Extensions** add kinds `<prefix>.<name>` (grammar in §2) whose prefix the core doesn't use. The core prefixes `space`, `member`, `policy`, `key`, `message`, `task`, `effect`, `checkpoint`, `redact` and `session` are reserved, and an unknown kind under them is `invalid`. To the core, an extension's body and content are opaque Json. Members holding at least `policy.extensionsMinRole` (default `member`) may append one, subject to size limits and the number rule. Extensions define their own meaning; the core neither enforces nor depends on it.
+**Plans.** The core fixes only the shape `Plan {action, target, args?, argsBlob?}` and `sha256(JCS(plan)) = planDigest`. What `target` and `args` mean belongs to the action and its executor. The reference executor's plans are informative: `file.write` has `target` = a path relative to the executor's sandbox and `args = {content}`; `http.post` has `target` = a URL and `args` = the JSON body. An executor refuses (never claims) a plan it can't run or check (X-09).
+
+**Extensions** add kinds `<prefix>.<name>` (grammar in §2) whose prefix the core doesn't use. The core prefixes `space`, `member`, `policy`, `key`, `message`, `task`, `effect`, `checkpoint`, `redact` and `session` are reserved, and an unknown kind under them is `invalid`. To the core, an extension's body and content are opaque Json. Actors holding at least `policy.extensionsMinRole` (default `member`) may append one, subject to size limits and the number rule. "At least" is by rank owner > member > guest; no role, or `banned`, is below every minimum, and the result is `denied` (P-16). Extensions define their own meaning; the core neither enforces nor depends on it.
 
 ---
 
@@ -288,7 +298,48 @@ Exact body and content schemas: [han.ts](han.ts) `Bodies` and `Contents`. A kind
 
 `SpaceState` (han.ts) is the fold of all records. `ctx = {time, profiles}` (§4.1).
 
-**P-01 Relevant actors.** `relevantActors(state, entry, time)` is the author, plus the target of a `member.set`, plus, for an `effect.claim`, the proposer, the authors of the approval *candidates* (E3) in order, then the effect's guards (P-15: at most two, the proposer's and the executor's). The sequencer MUST pin the author, the target, the proposer and the guards. It pins candidates in order, up to and including the first whose signing key is valid. If it can't pin a candidate before that point, it answers `unavailable`. So an unreachable approver matters only if every earlier approver's key was revoked. At most 16 approvals are open per proposal, plus at most two guards (P-08, P-15), which bounds `receipt.profiles`.
+**P-01 Relevant actors.** `relevantActors(state, entry, time)` is a list with each actor once, at its first position, in this order: the author; the target of a `member.set`; for an `effect.claim` of a proposal in the state, the proposer, then the authors of the approval *candidates* (E3, unexpired at `time`) in candidate order, then the effect's guards (P-15: at most two, the proposer's and the executor's). Policy can't see key validity, so the function lists **every** candidate. The sequencer MUST pin the author, the target, the proposer and the guards. It pins candidates in order, up to and including the first whose signing key is valid. `decide` needs the author, the target and the proposer in `ctx.profiles`, and a candidate only if it reaches one (P-16). If it can't pin a candidate before that point, it answers `unavailable`. So an unreachable approver matters only if every earlier approver's key was revoked. At most 16 approvals are open per proposal, plus at most two guards (P-08, P-15), which bounds `receipt.profiles`.
+
+
+**P-16 `invalid` and `denied`, and the order of checks.** `decide` answers `allow`, `denied` or `invalid` (han.ts `Decision`). Neither can be retried (§3).
+- **`invalid`**: the entry is wrong whoever sends it. It depends only on the entry and on facts the log can't change: which entries exist and of what kind, their digests, a claim's reservation, a profile's key list, the head. So the entry is malformed (R-09); or it names something that isn't there, or is there as another kind (a `task` that is a message counts as missing); or it contradicts what it names (a different `planDigest`, a `(result, started)` pair outside the table, a cost the claim's reservation can't cover); or its place is impossible (`seen` or `checkpoint.through` beyond the head, a `space.create` on an existing space, a first entry that isn't one, a reused keyId, a `key.revoke` of a key that isn't valid); or the caller left a required profile out of `ctx` (R-25).
+- **`denied`**: the entry is well formed and names real things, but the author's authority or the space's present state forbids it: the key, role, kind, server or accountability of the author; the policy; the phase or flags of the task or effect; time (expiry, the abandon wait); budgets; counts and caps. In another state of the same space the same entry could be allowed.
+- **Order.** The verdict is that of the first failing check. All kinds share the common steps below, then follow the kind's own list. The kind lists are in the order `ref/policy.py` runs them, and where they interleave `invalid` and `denied` the order is part of the rule (vectors `decision-order` and `kind-check-order`).
+
+Common steps:
+1. Shape of the header fields Policy reads and of the body (R-25, R-09): `invalid`.
+2. Pins: every actor of `relevantActors` has a view in `ctx.profiles` (for an `effect.claim` only the author and the proposer here; a candidate or guard is checked when E3 reaches it): else `invalid`.
+3. The author's key is `valid` in `profiles[author]` (R-12): else `denied`.
+4. The space has no state yet: only `space.create` is possible (else `invalid`). In a profile space, the author must be `@:<server of the actor>` (`denied`), the body needs `profile` (`invalid`) and an operator other than the actor (`invalid`). In a plain space the body must not carry `profile` (`invalid`).
+5. The space exists: a `space.create` is `invalid`; `seen` > head is `invalid`; a `refs` entry not in the space is `invalid` (R-05).
+6. The author's server is in `policy.servers.deny` and the kind isn't `effect.outcome` or `effect.resolve`: `denied`.
+7. In a profile space: `key.add`, `key.revoke`, `member.set` follow the table, every other kind is `denied`.
+8. The author is held (P-15, §6.6).
+9. An extension kind: `denied` unless the author's role is at least `extensionsMinRole`. Nothing else is checked.
+10. The kind's own list.
+
+In the kind lists, **I** is `invalid`, **D** is `denied`, and a check that allows ends the list. "No role" means the author doesn't hold owner, member or guest. "Accountable" is P-03. A role named here is the author's *current* role.
+
+| Kind | Checks in order |
+|---|---|
+| `member.set` | D the target is the only owner and the new role isn't owner · D a readable role for a target on a denied server · D owner for a non-human target · D the P-03 agent check · allow: author is an owner · allow: self-leave · allow: open join · allow: invite · D |
+| `policy.set` | D author isn't an owner · D the home's server is in the new `deny` · D every current owner's server is in it · D the budget change is not allowed (P-06) |
+| `message` | D no role |
+| `task` | D no role · D an assignee has no role · with `parent`: I it isn't a task · D closed · D author isn't an assignee of it · D depth over `maxDelegationDepth` · D parent has a budget and the task has none · without `parent`: D author is a guest · with `budget`: D not accountable · D a non-human author whose `parent` isn't an open budgeted task assigned to it · D the space has no budget · D unit differs · D amount exceeds what the source holds |
+| `task.update` | I not a task · D closed · D no role · allow: author is an owner and not an assignee, state final · D author is an assignee, state final, and an effect naming the task is `claimed` or `unknown` · allow: author is an assignee · D |
+| `task.cancel` | I not a task · D closed · D no role · D author is neither the task's author nor an owner |
+| `effect.propose` | D author isn't owner or member · with `task`: I it isn't a task · D closed · D author is neither an assignee nor an owner · D budgeted space and no `cost` or another unit · D not accountable · D budgeted space, non-human author, and `task` isn't an open budgeted task assigned to the author |
+| `effect.approve` | I not a proposal · I `planDigest` differs · D phase isn't `awaiting-approval`, `ready` or `claimed` · D `expiresAt` already passed · D author isn't an approver of the rule that applies (P-08) and isn't a guard · D `separateApprover` and author is the proposer (guards exempt) · D 16 open approvals by other authors (guards exempt) |
+| `effect.claim` | I not a proposal · D E1 author isn't the executor, or `instance` isn't the signing keyId · D executor isn't owner or member · D executor not accountable · D proposal expired · D E2 proposer isn't owner or member now, or its proposal key isn't valid · D proposer not accountable · D `window` ≠ `launchWindow` · E3: I a candidate reached has no pinned profile, D none has a valid key (P-15 guards follow) · D cancel requested · D phase isn't `ready` · D the task is closed · D `attempt` ≠ 1 + earlier claims · E6 in a budgeted space: D no `cost` or another unit · D less left than `cost` · D charged to the space and the proposer isn't human |
+| `effect.cancel` | I not a proposal · D no role · D author isn't the proposer, an owner, a guard, or an earlier approver · D phase is final · D phase is `claimed` or `unknown` and a cancel was already requested |
+| `effect.outcome` | I no such claim · D not the effect's latest claim, or phase isn't `claimed` · I `(result, started)` outside the table · with `cost`: I `started` isn't `yes` · I the cost exceeds the claim's reservation or is in another unit, or there is none and the space has a budget · allow: author is the executor signing with the claim's `instance` · allow: author is an owner, `unknown`/`unknown`, and `ctx.time` ≥ claim time + A · D otherwise |
+| `effect.resolve` | I not a proposal · D phase isn't `unknown` · D author is neither the executor nor an owner · with `cost`: I result is `failed` · I the cost exceeds the latest claim's reservation or is in another unit, or there is none and the space has a budget |
+| `checkpoint` | D author isn't owner or member · I `through` > head |
+| `redact` | I target isn't in the space · D target is a `redact` · D target is an `effect.propose` whose effect isn't final · D author is neither the target's author nor an owner |
+| `space.move` | D author isn't an owner · D an effect is `claimed` |
+| `key.add`, `key.revoke` | in a plain space D · in a profile space D author is neither the actor nor `@:server` · `key.add`: I keyId already in the profile · `key.revoke`: I the key isn't currently valid |
+| `member.set` in a profile space | allow the confirmation or the withdrawal of P-03 (confirmation: D if the operator isn't human) · D |
+| `session.open`, `session.input`, `session.close` | §6.6 |
 
 ### 6.2 Roles, joining, reading
 
@@ -297,19 +348,21 @@ Roles: `owner`, `member`, `guest`, `banned`, or none (absent). **Owners are huma
 **P-02 Read.** `canRead(state, reader, seq)` is true if:
 - `policy.visibility = "public"`; or
 - `reader` is owner/member/guest now; or
-- `reader` held such a role at `seq`, meaning former members keep what they saw; or
-- `reader` is a server actor `@:S`, and either `S` is the space's current home, or `S` is not in `policy.servers.deny` and some actor on `S` holds or held a readable role at `seq`.
+- `reader` held such a role at `seq`, meaning former members keep what they saw: `roleHistory` has an interval `{from, to?}` with `from ≤ seq < to` (no `to` while the role lasts). `from` is the seq of the `member.set` that gave a readable role to an actor with none (or banned), the creator's is 1, and `to` is the seq of the `member.set` that ended it (to `banned` or `none`). So a removed member reads what came before the removal, not the removal entry itself. Moving between readable roles opens no interval. A role held **now** reads every seq, the ones before it was granted included; or
+- `reader` is a server actor `@:S`, and either `S` is the space's current home, or `S` is not in `policy.servers.deny` and some actor on `S` holds a readable role now or at `seq` (as above).
 
 Profile spaces are public. The `state` item of `read` needs read rights at the head. On a transport, chat visibility is the transport's business, and HAN's read rights govern only the HAN log.
 
 **P-03 Membership** (`member.set {actor, role}` by `author`, with target's current role `cur`):
-- An **owner** may set any role, except that a set leaving zero owners is denied, and a non-human can't be made owner.
-- **Self-leave:** anyone except a banned actor may set themselves to none, unless they are the last owner.
-- **Open join:** if `join = "open"`, an actor with `cur` = none may set themselves to `member`. Banned actors may not.
-- **Invite:** if `membersMayInvite`, a member may set an actor with `cur` = none to `guest` or `member`.
-- **Agents:** for a target whose profile `actorKind ≠ "human"`, `allowAgents = "none"` denies, and `"with-operator"` requires `operatorConfirmed`. The same check, called *accountability*, is re-applied to a non-human author at every `effect.propose`, `effect.claim` and budgeted `task`, and to the *proposer* at claim time (E2). So withdrawing an operator's confirmation, or switching `allowAgents` to `"none"`, stops agents already in the space.
+- An **owner** may set any role (their own included), except that a set leaving zero owners is denied (even when an owner demotes or bans themself), and a non-human can't be made owner.
+- **Self-leave:** an owner, member or guest may set themselves to none (the last owner can't, above). A banned actor may not.
+- **Open join:** if `join = "open"`, an actor with `cur` = none may set themselves to `member` (not `guest`). Banned actors may not.
+- **Invite:** if `membersMayInvite`, a member (not a guest) may set an actor with `cur` = none to `guest` or `member`.
+- Anything else is denied. `member.set` is never `invalid` once its shape is right.
+- **Agents:** when a readable role is *granted* to a target whose profile `actorKind ≠ "human"` and who holds none (no role, or banned), `allowAgents = "none"` denies, and `"with-operator"` requires `operatorConfirmed`. Moving between readable roles, banning and removing are never re-checked. The same check, called *accountability*, is re-applied to a non-human author at every `effect.propose`, `effect.claim` and budgeted `task`, and to the *proposer* at claim time (E2). So withdrawing an operator's confirmation, or switching `allowAgents` to `"none"`, stops agents already in the space.
 - **Servers:** *granting* a readable role to an actor on a denied server is denied. Banning or removing such an actor is always allowed.
-- **Profile spaces:** owners are the actor and `@:server`. The only other allowed `member.set` is the operator's confirmation or withdrawal (§4.3).
+- **Profile spaces:** the actor and `@:server` are the owners, fixed at creation, and `roles` never changes afterwards. The only `member.set`s allowed are (a) the **confirmation**: author = the profile's `operator`, body `{actor: operator, role: "owner"}`, and the operator is `human` in `ctx.profiles`; and (b) the **withdrawal**: author = the operator or `@:server`, body `{actor: operator, role: "none"}`. Each sets `operatorConfirmed` to `true` or `false`. Everything else is denied, including the actor's own and the server's confirmation, and any `member.set` in a profile with no operator. §4.3.
+- **Creation.** `space.create` makes its author the owner (roleHistory `[{from: 1}]`) and `budgetLeft` the whole budget. Owners are human, so a creator that isn't human is `denied`; a policy whose `servers.deny` names the space's own home is `invalid`. Whether to host a space at all is still the sequencer's decision (§4.1 step 2). A fork's `forkOf` is checked for its shape only.
 
 **P-04 Who may append what** (beyond the kind-specific rules below). "Holding a role" means owner, member or guest *now*. Approvers must also hold one. Authors on a denied server may append nothing, except fact reports (`effect.outcome`, `effect.resolve`).
 
@@ -320,37 +373,38 @@ Profile spaces are public. The `state` item of `read` needs read rights at the h
 | `task.update` | an assignee of `task` who still holds a role; or an owner, with a final state only (force-close) |
 | `task.cancel` | the task's author, or an owner, holding a role |
 | `effect.propose` | owner, member |
-| `effect.approve` | an actor matching the action's approvers (P-08), or one of the effect's guards (P-15) |
+| `effect.approve` | an actor matching the action's approvers by exact role or ID (P-08) and holding that role now, or one of the effect's guards (P-15) |
 | `effect.claim` | the named executor, still a member or owner and accountable (P-07) |
 | `effect.outcome`, `effect.resolve` | the claim's instance or executor, **regardless of current role or server**: they report facts about work already authorized; owners as P-09/P-10 allow |
-| `effect.cancel` | proposer, any approver of it, any of its guards, or an owner, holding a role |
+| `effect.cancel` | proposer, anyone who ever approved it (consumed or superseded approvals count), any of its guards, or an owner, holding a role |
 | extension kinds | roles at or above `policy.extensionsMinRole` |
 | `checkpoint` | owner, member |
-| `redact` | the target's author, or an owner |
+| `redact` | the target's author (whatever role they hold now), or an owner |
 | `policy.set`, `space.move` | owner |
 | `session.open` | any role holder, accountable (P-15) |
 | `session.input` | holders of the session's steer right (P-15) |
 | `session.close` | the session's actor, or an owner |
 | `key.add`, `key.revoke` | profile spaces only (§4.3) |
-| `space.create` | only at seq 1 |
+| `space.create` | never in an existing space (`invalid`, P-16) |
 
 ### 6.3 Tasks and the budget
 
 A space has at most **one budget**, `policy.budget = {unit, amount}`, or `null`. Amounts are integers in minor units. `budgetLeft` is the budget minus everything *committed* (reserved or spent). Amounts only move between the space, task budgets and claim reservations, or are spent at settlement. The fuzzer checks that task remainders never go negative, that no remainder exceeds its budget, and that the space remainder goes negative only through a cut.
 
 **P-05 Tasks.**
-- `to` is non-empty and every assignee currently holds a role.
-- A `parent` must be an open task in this space, and the author must be one of its assignees. Top-level tasks have depth 0; a child's depth is its parent's + 1, which must be ≤ `maxDelegationDepth` (so 0 forbids delegation).
+- `to` is non-empty (an empty list is `invalid`) and every assignee currently holds a role (`denied` if not).
+- A `parent` must be an open task in this space (an id that isn't a task is `invalid`), and the author must be one of its assignees: a guest assignee may delegate, an owner who isn't an assignee may not. Top-level tasks have depth 0; a child's depth is its parent's + 1, which must be ≤ `maxDelegationDepth` (so 0 forbids delegation).
 - **Task budgets** exist only in budgeted spaces and use the space's unit. A task's budget is reserved from its parent if the parent has a budget, otherwise from the space, and must fit what is left there. A child of a budgeted parent MUST carry a budget. An agent or service may create a budgeted task only as a child of an open budgeted task assigned to it.
-- A final `task.update` (`done`, `failed`, `declined`, `cancelled`) closes the task and refunds its unspent remainder to the nearest *open* budgeted ancestor, or to the space if there is none. An assignee can't close a task while an effect naming it is `claimed` or `unknown`. An **owner** may close any open task (force-close), for example when its assignees are gone.
+- A final `task.update` (`done`, `failed`, `declined`, `cancelled`) closes the task and refunds its unspent remainder to the nearest *open* budgeted ancestor, starting at its parent, or to the space if there is none. The closed task's own remainder becomes 0. An assignee can't close a task while an effect naming it is `claimed` or `unknown`. An **owner who is not an assignee** may close any open task with a final update (force-close), for example when its assignees are gone, even over a claimed effect; an owner who is an assignee closes under the assignee rule.
 - On a closed task, these are refused: `task.update`, `task.cancel`, a child `task`, and an `effect.propose` that names it.
-- `task.cancel` sets `cancelRequested`. The task stays open until an assignee, or an owner, posts a final update.
+- `task.cancel` sets `cancelRequested`, and may be repeated. The task stays open until an assignee, or an owner, posts a final update.
 
 **P-06 Costs.**
-- **Budgeted spaces are closed.** If `policy.budget` is set, every `effect.propose` MUST carry a `cost` in its unit, and a claim of an effect without one is denied (E6). An outcome or resolve may report a cost only within its claim's reservation. With no reservation, it may report a cost only in an unbudgeted space, where costs are informational.
+- **Budgeted spaces are closed.** If `policy.budget` is set, every `effect.propose` MUST carry a `cost` in its unit, and a claim of an effect without one is denied (E6). An outcome or resolve may report a cost only within its claim's reservation (the same unit, an amount no larger). With no reservation, it may report a cost only in an unbudgeted space, where costs are informational. Any other cost is `invalid`, not `denied` (P-16), because the reservation is fixed by the claim.
 - **Only humans draw on the space budget.** In a budgeted space, an agent or service MUST name, in every proposal, an open budgeted task assigned to it, and its costs are charged there. E6 checks it again at claim, so a budget added after an agent's proposal still can't be spent by it. Agents can't be owners (§6.2), so they can't change the budget either.
-- **Charging:** an effect's cost goes to its named task if that task has a budget, otherwise to the space. It is reserved at claim and settled at outcome or resolve. The difference is refunded by the P-05 refund rule.
-- **Changing the budget** (`policy.set`): with the same unit, `budgetLeft` = new amount − committed, which can go negative after a cut. Nothing new can be reserved until refunds bring it back up. Changing the unit, or adding or removing the budget, is allowed only while nothing is reserved; the remainder then starts fresh.
+- **Naming a task:** an `effect.propose` that names a task is `denied` unless its author is an assignee of that task or an owner, whether or not the task has a budget.
+- **Charging:** an effect's cost goes to its named task if that task has a budget when the claim is ordered, otherwise to the space. It is reserved at claim and settled at outcome or resolve. Settling with a cost refunds the difference, and a settlement with no cost charges the whole reservation. A refund goes to the claim's source task if that task is still open and budgeted, otherwise to the nearest open budgeted ancestor of it, otherwise to the space (as in P-05).
+- **Changing the budget** (`policy.set`): with the same unit, `budgetLeft` = new amount − committed, which can go negative after a cut. Nothing new can be reserved until refunds bring it back up. Changing the unit, or adding or removing the budget, is allowed only while nothing is reserved, meaning no open task holds a budget and no claim holds an unsettled reservation (money already spent isn't reserved); the remainder then starts fresh.
 
 ### 6.4 The effect state machine
 
@@ -369,6 +423,8 @@ Phases: `awaiting-approval`, `ready`, `claimed`, `unknown`, and the final phases
 
 `effect.propose` → `awaiting-approval` if its action needs approval (P-08) or its proposer is held (P-15), else `ready`. An executor's hold (P-15) doesn't change the phase; it adds a guard that E3 checks at claim.
 
+**Re-arm.** After an attempt ends without success and the effect may run again, its phase is `cancelled` if `cancelRequested`; else `ready` if its approvals are in hand: the rule that applies, if any, has an unconsumed, undropped candidate (E3, without the expiry and key checks, which E3 repeats at claim), and each guard has one (P-15); else `awaiting-approval`. A fresh proposal, a returned approval and a failed resolve all use this test.
+
 **P-07 Claim** (`effect.claim {proposal, attempt, instance, window}`). Allowed only when all of these hold:
 - **E1** The author is the proposal's `executor`, still holds owner or member, is accountable (P-03), and `instance` is the valid keyId that signed this claim.
 - **E2** The proposer still holds owner/member, is still accountable (P-03), and the key that signed the proposal is still valid in the proposer's pinned profile.
@@ -379,14 +435,14 @@ Phases: `awaiting-approval`, `ready`, `claimed`, `unknown`, and the final phases
 
 The claim records its receipt time and pins its `window`.
 
-**P-08 Approvals.** A client MUST display the plan whose `planDigest` it is about to sign, and MUST NOT offer an approval for a plan it hasn't fetched and hash-checked. `policy.approvals` is a list of `{action, approvers}`. The first entry whose `action` equals the proposal's action, or is `"*"`, applies, and `approvers` is a non-empty list of roles (`owner`, `member`, `guest`) or actor IDs. If none applies, no approval is needed. With `separateApprover: true`, the proposer can't approve their own proposal. An approval for a proposal not in this space, or with a wrong `planDigest`, is `invalid`. An approval whose `expiresAt` has already passed is denied. A new approval **supersedes** its author's open ones on the same proposal (so approvals can be refreshed, and each author has at most one). At most 16 unexpired approvals by other authors may be open; a guard's approval (P-15) doesn't count, so others can't crowd it out. After a `policy.set`, an effect in `awaiting-approval` whose action no longer needs approval becomes `ready`.
+**P-08 Approvals.** A client MUST display the plan whose `planDigest` it is about to sign, and MUST NOT offer an approval for a plan it hasn't fetched and hash-checked. `policy.approvals` is a list of `{action, approvers}`. The first entry whose `action` equals the proposal's action, or is `"*"`, applies, and `approvers` is a non-empty list of roles (`owner`, `member`, `guest`) or actor IDs. A role entry matches an actor whose current role is exactly that role (an owner doesn't satisfy `["member"]`; list both to allow both), an ID entry matches that actor, and either way the approver must hold a role now. If none applies, no approval is needed. With `separateApprover: true`, the proposer can't approve their own proposal. An approval for a proposal not in this space, or with a wrong `planDigest`, is `invalid`. An approval is accepted while the effect is `awaiting-approval`, `ready` or `claimed`, and `denied` in any other phase. An approval whose `expiresAt` has already passed (at or before `ctx.time`) is denied. A new approval **supersedes** its author's open ones on the same proposal (they are dropped; a consumed one stays consumed), so approvals can be refreshed, and each author has at most one open. An approval is **open** while it is unconsumed, undropped and unexpired. At most 16 open approvals by other authors may exist when a new one arrives; a guard's approval (P-15) doesn't count, so others can't crowd it out. After a `policy.set`, an effect in `awaiting-approval` whose approvals are now in hand under the new policy (the re-arm test, §6.4; no rule at all is the simplest case) becomes `ready`.
 
-**P-09 Outcome** (`effect.outcome {claim, result, started, cost?}` for the latest claim, at most once per claim):
+**P-09 Outcome** (`effect.outcome {claim, result, started, cost?}` for the latest claim, at most once per claim: it needs phase `claimed`, so an older claim, or one that already has an outcome, is `denied`; an id that is no claim is `invalid`):
 - **Author:** normally the claim's instance, i.e. the same actor with `keyId = claim.instance`.
-- **Abandon:** an owner may append it with `result: "unknown"` and `started: "unknown"` only if `ctx.time ≥ claim.time + A`, where `A = ⌈claim.window × 1.01 / 0.99⌉ + 2`, and the sequencer's steady clock agrees (R-16). For example, 30 s gives 33 s and 3600 s gives 3675 s. An abandon always leaves the effect `unknown`, even if it is repeatable, because it might still be running. An outcome counts as the executor's own report only when signed with the claim's `instance` key; any other key, even the executor's, is an abandon and leaves `unknown`.
-- **`started: "no"`** (result `failed` or `cancelled`): the consumed approval and the cost reservation are returned. The phase becomes `cancelled` if `cancelRequested`, else `ready`.
-- **`started: "yes"`:** cost settles at `cost`, which must be ≤ the reservation (default: the reservation), and the rest is refunded. `succeeded` → phase `succeeded`. `failed`, or `cancelled` (stopped partway) → phase `failed`; but if the effect is `repeatable` and no cancel is requested, → `ready` instead.
-- **The executor's own `unknown`:** the reservation stays charged and the phase becomes `unknown`. If `repeatable` and no cancel is requested, the reservation is instead settled as spent in full and the phase becomes `ready`: the proposer declared that running it again is harmless.
+- **Abandon:** an owner may append it with `result: "unknown"` and `started: "unknown"` only if `ctx.time ≥ claim.time + A`, where `A = ⌈claim.window · 101 / 99⌉ + 2` computed in integers, and the sequencer's steady clock agrees (R-16). For example, 30 s gives 33 s and 3600 s gives 3675 s. An abandon by anyone but an owner, or before `A`, is `denied`. An abandon always leaves the effect `unknown`, even if it is repeatable, because it might still be running. An outcome counts as the executor's own report only when signed with the claim's `instance` key; any other key, even the executor's, is an abandon and leaves `unknown`.
+- **`started: "no"`** (result `failed` or `cancelled`): the consumed approvals and the cost reservation are returned. A returned approval is **dropped** if its author has approved again since (a newer open approval on the same proposal supersedes it, P-08). The phase is then `cancelled` if `cancelRequested`, else re-armed (§6.4), normally `ready`.
+- **`started: "yes"`:** cost settles at `cost`, which must be ≤ the reservation (default: the reservation), and the rest is refunded. `succeeded` → phase `succeeded`. `failed`, or `cancelled` (stopped partway) → phase `failed`; but if the effect is `repeatable` and no cancel is requested, → re-armed (§6.4) instead: the consumed approvals stay consumed, so an effect that needs approval waits in `awaiting-approval` for a fresh one.
+- **The executor's own `unknown`:** the reservation stays charged and the phase becomes `unknown`. If `repeatable` and no cancel is requested, the reservation is instead settled as spent in full and the phase is re-armed (§6.4): the proposer declared that running it again is harmless.
 
 Valid `(result, started)` pairs:
 
@@ -397,24 +453,24 @@ Valid `(result, started)` pairs:
 | `cancelled` | ✓ (stopped partway) | ✓ (never launched) | — |
 | `unknown` | ✓ (launched, result lost) | — | ✓ |
 
-All other pairs are `invalid`. `cost` is allowed only with `started: "yes"`.
+All other pairs are `invalid`. `cost` is allowed only with `started: "yes"` (else `invalid`), and must lie within the reservation (P-06).
 
 **P-10 Resolve** (`effect.resolve {proposal, result, cost?}` with evidence, in phase `unknown`):
 - **Author:** the proposal's executor (any instance), or an owner.
-- `succeeded` → phase `succeeded`, with cost settled as in P-09. `failed` → the reservation is refunded, and the phase becomes `cancelled` if `cancelRequested`, otherwise `awaiting-approval` or `ready` as for a fresh proposal, with no approvals carried.
+- `succeeded` → phase `succeeded`, with cost settled as in P-09. `failed` → the reservation is refunded, every unconsumed approval is dropped (none is carried), and the phase becomes `cancelled` if `cancelRequested`, otherwise re-armed as in §6.4 (`awaiting-approval` when approval is needed). A `cost` with `failed` is `invalid`.
 - Resolving is a statement of fact, and the *only* way a non-repeatable effect with an uncertain past can run again. `unknown` is reached only by the executor's report, or by an abandon after the claim's window, so the claim can no longer launch. A resolve that is true when made therefore never leads to a second run (model property UnknownNeverSilentlyRetried, which counts only resolves already false when made).
 
 ### 6.5 Redaction, checkpoints, forks
 
 **P-11 Kind-specific checks.**
-- `checkpoint.through` ≤ the current head.
-- `space.move` is denied while any effect is `claimed`, so one sequencer orders a claim and its abandon (R-16).
-- `policy.set` replaces the whole policy, applying the P-06 budget rules and the P-08 release rule. It can't change the `window` pinned in existing claims. It can't deny the current home's server, or the servers of every owner. Roles are untouched, because roles live only in `member.set`.
-- `space.create` is only valid at seq 1.
+- `checkpoint.through` ≤ the current head, else `invalid`; the author is an owner or a member.
+- `space.move` is denied while any effect is `claimed`, so one sequencer orders a claim and its abandon (R-16). A move to the current home is allowed.
+- `policy.set` replaces the whole policy, applying the P-06 budget rules and the P-08 release rule. It can't change the `window` pinned in existing claims. It can't put the current home's server in `servers.deny`, and can't leave every current owner on a denied server (denying some owners' servers is allowed). Roles are untouched, because roles live only in `member.set`.
+- `space.create` is only valid as the first entry: in a space that has any entry it is `invalid`, and the first entry of a space must be one (P-16).
 
-**P-12 Redact** (`redact {target}`): the target's content is deleted wherever honoured, its `redacted` flag set and its blob references released. A `redact` can't target another `redact`. The plan of an unfinished effect can't be redacted (cancel it first).
+**P-12 Redact** (`redact {target}`): the target's content is deleted wherever honoured, its `redacted` flag set and its blob references released. The target must be in the space (`invalid`). A `redact` can't target another `redact`. The plan of an unfinished effect can't be redacted (cancel it first). The author must be the target's author, whatever role they hold now, or an owner. Both refusals are `denied`.
 
-**P-13 Forks carry no authority.** A space with `forkOf {space, through}` starts from its own `space.create` alone: creator as owner, the new policy, and nothing carried over (no members, tasks, approvals, budget commitments or effects). The parent's records are history to read, never authority.
+**P-13 Forks carry no authority.** A space with `forkOf {space, through}` starts from its own `space.create` alone: creator as owner, the new policy, and nothing carried over (no members, tasks, approvals, budget commitments or effects). The parent's records are history to read, never authority. Policy checks `forkOf` for its shape only.
 
 ### 6.6 Live sessions and steering
 
@@ -575,8 +631,8 @@ Run `python ref/run_all.py`. Results: [ref/RESULTS.md](ref/RESULTS.md).
 | Tool | What it does |
 |---|---|
 | `ref/policy.py` | executable reference of §6 and the R-09 body schemas |
-| `ref/vectors/` + `run_vectors.py` | 111 vectors, 1115 steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
-| `ref/mutate_vectors.py` | 116 single-rule Policy mutations; the vectors must catch each one |
+| `ref/vectors/` + `run_vectors.py` | 132 vectors, 1367 steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
+| `ref/mutate_vectors.py` | 173 single-rule Policy mutations; the vectors must catch each one |
 | `ref/fuzz_fold.py` | 2,000 random histories in populated rooms: `decide`/`fold` never fail on an allowed entry, stay pure, keep budgets in bounds, never change a final phase |
 | `ref/wire.py` + `run_wire.py` | the generic binding with real Ed25519: reference sequencer (the §4.1 pipeline) and verifier (R-14); 30 scenarios |
 | `ref/mutate_wire.py` | 24 single-rule mutations of the sequencer and verifier; the scenarios must catch each one |
@@ -602,22 +658,24 @@ Run `python ref/run_all.py`. Results: [ref/RESULTS.md](ref/RESULTS.md).
 | R-15 head gossip | wire "head gossip finds a fork, privately"; wire mutations; the 10-minute schedule is not exercised | ✓ |
 | R-16 abandon needs elapsed time | model (the sequencer's clock is the model's true time; drift scenario). Not yet a wire scenario. | partial |
 | R-17 / R-18 agent inputs, recovery | **procedure:** crash an agent host mid-task, restart, and check that no intent appears twice and every entry's `seen`/`refs` identify its inputs. Needs an implementation. | ✗ |
-| P-01 | vector `relevant-actors`; vector `open-approvals-capped` | ✓ |
-| P-02 | vectors `read-rights`, `read-public`; wire "state needs read rights at head"; mutations | ✓ |
-| P-03 | vectors `membership-rules`, `open-join-and-ban`, `agents-*`, `server-deny`, `denied-server-users-can-be-removed`, `operator-withdrawal-stops-agent`, `operator-withdrawn-before-claim`, `owners-are-human`, `agents-off-stops-agents`; mutations | ✓ |
-| P-04 | vectors `tasks-and-delegation`, `banned-loses-task-authority`, `owner-force-closes-task`; mutations | ✓ |
-| P-05, P-06 | vectors `task-budgets`, `budgeted-child-of-unbudgeted-task`, `E6-*`, `budget-*`, `agent-*`, `no-closing-over-running-effects`; fuzz; mutations | ✓ |
-| P-07 E1–E6 | vectors `E1`…`E6`, `banned-executor`, `proposal-expiry`, `launch-window-is-policy`, `closed-tasks-stop-their-effects`; mutations; model (E2, last run round 7) | ✓ (model: partial) |
-| P-08 | vectors `E3-*`, `approval-rule-removed`, `open-approvals-capped`; mutations | ✓ |
-| P-09 | vectors `outcome-rules`, `result-started-table`, `repeatable-*`, `window-pinned-in-claim`, `abandon-never-rereadies`, `abandon-never-rearms`; model NoLaunchAfterAbandon and its five timing mutations; margin mutations (model last run round 7) | ✓ (model: partial) |
-| P-10 | vectors `outcome-rules`, `resolve-cost-rules`; model UnknownNeverSilentlyRetried (last run round 7) | ✓ (model: partial) |
-| P-11 | vectors `checkpoint-move-policy`, `no-move-while-claimed`, `approval-rule-removed`, `budget-unit-locked-while-reserved`, `cant-deny-own-home` | ✓ |
-| P-12, P-13 | vectors `redact`, `no-redacting-live-plans`, `fork-fresh-authority`; mutations | ✓ |
+| R-25 validation boundary | vector `decide-ignores-log-fields` (Policy reads no `nonce`, header `time`, `contentHash` or `sig`); every vector stubs what the Log owns (ref/README.md); wire "header is exact", "content is validated"; mutation | ✓ |
+| P-01 | vectors `relevant-actors`, `relevant-actors-order`, `open-approvals-capped` | ✓ |
+| P-02 | vectors `read-rights`, `role-history-bounds`, `read-public`; wire "state needs read rights at head"; mutations | ✓ |
+| P-03 | vectors `membership-rules`, `open-join-and-ban`, `agents-*`, `server-deny`, `denied-server-users-can-be-removed`, `operator-withdrawal-stops-agent`, `operator-withdrawn-before-claim`, `owners-are-human`, `agents-off-stops-agents`, `agent-check-only-on-grant`, `profile-space-membership`; mutations | ✓ |
+| P-04 | vectors `tasks-and-delegation`, `banned-loses-task-authority`, `owner-force-closes-task`, `cancel-by-past-approvers`, `small-p04-rules`; mutations | ✓ |
+| P-05, P-06 | vectors `task-budgets`, `budgeted-child-of-unbudgeted-task`, `E6-*`, `budget-*`, `agent-*`, `no-closing-over-running-effects`, `owner-assignee-still-waits`, `owners-may-charge-any-task`, `refunds-skip-closed-tasks`, `reservations-block-budget-changes`; fuzz; mutations | ✓ |
+| P-07 E1–E6 | vectors `E1`…`E6`, `banned-executor`, `proposal-expiry`, `launch-window-is-policy`, `closed-tasks-stop-their-effects`; mutations; | ✓ |
+| P-08 | vectors `E3-*`, `approval-rule-removed`, `open-approvals-capped`, `approver-roles-are-exact`, `approval-time-boundaries`, `approve-phases-and-resolve`; mutations | ✓ |
+| P-09 | vectors `outcome-rules`, `result-started-table`, `repeatable-*`, `window-pinned-in-claim`, `abandon-never-rereadies`, `abandon-never-rearms`, `repeatable-rearm-needs-approval`, `outcome-cost-codes`; model NoLaunchAfterAbandon and its five timing mutations; margin mutations | ✓ |
+| P-10 | vectors `outcome-rules`, `resolve-cost-rules`, `approve-phases-and-resolve`, `outcome-cost-codes`; model UnknownNeverSilentlyRetried | ✓ |
+| P-11 | vectors `checkpoint-move-policy`, `no-move-while-claimed`, `approval-rule-removed`, `budget-unit-locked-while-reserved`, `cant-deny-own-home`, `owner-servers-rule`, `small-p04-rules` | ✓ |
+| P-12, P-13 | vectors `redact`, `redact-needs-no-role`, `no-redacting-live-plans`, `fork-fresh-authority`; mutations | ✓ |
+| P-16 | vectors `references-must-be-the-right-kind`, `decision-order`, `kind-check-order`, `create-once`, `keyid-single-use`, `outcome-cost-codes`, `refs-and-seen`, `profile-space-membership`; one mutation per code and per order the vectors pin | ✓ |
 | P-15 | vectors `session-rights`, `sessions-nobody`, `session-policy-shape`, `guarded-steer-holds`, `held-agents-instruct-no-one`, `only-release-releases`, `modes-apply-to-open-sessions`, `owners-only-tighten-modes`, `guard-rights-need-a-role`, `held-may-cancel-its-delegations`, `two-operators`, `guard-takes-the-wheel`, `guards-are-checked`, `guarded-needs-an-operator`, `open-approvals-capped`, `expired-approvals-crowd-no-one`, `nobody-stands-in-for-a-guard`, `held-executors-need-their-guard`, `tasks-hold-guarded-agents`, `side-door-sessions-are-covered`, `guarded-is-sticky`, `modes-toggle-cannot-unguard`, `only-the-agent-unguards-itself`, `naming-a-guarded-executor-holds-it`, `returned-approvals-stay-superseded`, `owner-forced-guarding-covers-every-instruction`, `held-proposers-need-their-guard-for-older-proposals`, `agents-can-always-unguard`, `guarding-holds-for-open-outside-instructions`, `tasks-hold-every-guarded-assignee`; policy mutations; guard model (depth 5) with six properties and 27 mutations; the fuzzer | ✓ |
 | R-24, T-07, G-05, §8.4 | **procedure:** steer a `guarded` Claude Code session from another member and check that a push becomes a proposal awaiting the agent's human; check that the agent can't relay or delegate while held; check that text in a watched stream never acts as input; remove a watcher's role and check delivery stops. Needs an implementation. | ✗ |
 | §4.3 identity rules | vectors `profile-space`, `keyid-single-use`, `operator-must-be-another-human`; mutations | ✓ |
 | X-01 | vector `E1-executor-instance` | ✓ |
-| X-02 … X-06, X-10 | **partial since round 9:** the effect fold has changed (guard approvals, supersession, rearm) and the timing model hasn't been rerun on this machine for lack of memory; last full run round 7 (log: `v1-mc-r7.log`, not in the repo's RESULTS.md, which `--quick` regenerates). Model (timing, drift, single): AtMostOneLaunchPerClaim, NoLaunchWithoutReceipt, NoLaunchAfterAbandon, Honest*. The model's executor follows X-10 when its outcome is refused. Mutations. | partial |
+| X-02 … X-06, X-10 | model on the current fold, round 17 ([ref/logs/model_check-r17.log](ref/logs/model_check-r17.log)): timing (1,555,218 states), drift (246,464), single (1,464,163), all properties hold; 10/10 mutations caught. Properties AtMostOneLaunchPerClaim, NoLaunchWithoutReceipt, NoLaunchAfterAbandon, Honest*; the model's executor follows X-10 when its outcome is refused. The implementation adds crash, deadline, lock and abandon tests (impl/tests/test_exec_*). | ✓ |
 | X-09 | the plan-digest check: wire "content is validated" (sequencer and verifier) | partial |
 | X-07 | **procedure:** start two processes with one instance key; the second MUST refuse to start (lock), and restoring a key without its journal MUST be refused. Needs an implementation. | ✗ |
 | T-01 … T-06 | the generic binding exercises T-01 and T-05 in wire scenarios ("signals ride follow streams", "notices stay private", "first contact across servers", "blob refs per kind and transfer", "blob theft by hash is refused"). The Matrix binding has no tests yet. | partial |
