@@ -11,7 +11,7 @@ Conversations already have good open networks; Matrix is the first target. HAN d
 | bots that are just users | **accountable agents**: every agent has a human operator who vouches for it, and can withdraw that |
 | no notion of money | **budgets** reserved before an action and settled after it, delegated down task trees |
 | coarse power levels | **approvals bound to the exact plan**, with expiry and separation of duties |
-| a timeline of finished messages | **live sessions across silos**: watch, read and steer other people's and agents' work while it happens, with who-may-what set per space by its owners; every steer is signed; an outside steer into a `guarded` agent holds it for its own human, so it can't delegate, relay or approve, and the effects it proposes wait for that human (§7.5 lists what this doesn't cover) |
+| a timeline of finished messages | **live sessions across silos**: watch, read and steer other people's and agents' work while it happens, with who-may-what set per space by its owners; every steer is signed; an outside instruction (steer or task) to a `guarded` agent holds it for its own human, so it can't delegate, relay or approve, and nothing it proposes or executes runs without that human (§7.5 lists what this doesn't cover) |
 | complex state resolution | **pure, replayable policy**: any participant can re-check every decision, and a cheating sequencer leaves a portable proof |
 
 ## v1 is done when all three hold
