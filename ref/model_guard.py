@@ -11,7 +11,8 @@ naming it, a proposal naming it as executor. Two agents, BOT (operator OP) and B
 become guarded; owner O and member P instruct; OP's role and key vary; the approval rule and allowed modes vary.
 
 Properties: GuardedClaimsNeedTheirHuman, HeldInstructNoOne (no task, approval or steer of another's session by a held
-agent), NeverLooser (no outside steer into a dead session), GuardRightsNeedRole, OneOpenApprovalPerAuthor.
+agent), NeverLooser (no outside steer into a dead session), GuardRightsNeedRole, OneOpenApprovalPerAuthor, and
+ExactHolds (Policy holds exactly the agents the invariant holds: never fewer, never more).
 States are deduplicated on content (Policy state minus history, plus the ghost).
 
 Usage: python ref/model_guard.py [--depth N] [--all-mutations]"""
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import policy as POL
 
 SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.py"), encoding="utf-8").read()
-DEPTH = 5                      # full and --quick runs (run_all, §10); mutations at the same depth
+DEPTH = 5                      # full runs (run_all, §10); --quick runs depth 4; mutations run at depth 4
 SP = "sg:a.example"
 O, P, OP, OP2, X = "@o:a.example", "@p:a.example", "@op:b.example", "@op2:b.example", "@x:c.example"
 BOT, BOT2 = "@bot:b.example", "@bot2:b.example"
@@ -47,19 +48,19 @@ def E(label, kind, author, body):
 S1, S2, S3, S4 = H("s1"), H("s2"), H("s3"), H("s4")
 SESS = {S1: ("s1", BOT, "guarded"), S2: ("s2", BOT2, "auto"), S3: ("s3", BOT, "auto"), S4: ("s4", BOT2, "guarded")}
 OPENED_AT_START = (S1, S2, S3)                                   # S4: BOT2 may open it later (becoming guarded)
-PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT), "pr4": (BOT, BOT2)}
-CLAIMABLE = ("pr0", "pr1", "pr2", "pr3", "pr4")
-TASKS = {"P tasks BOT": (P, [BOT]), "P tasks BOT2+BOT": (P, [BOT2, BOT]), "BOT tasks BOT2": (BOT, [BOT2])}
+PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT), "pr4": (BOT, BOT2), "pr5": (OP, BOT)}   # pr5: its own guard's
+CLAIMABLE = ("pr0", "pr1", "pr2", "pr3", "pr4", "pr5")
+TASKS = {"P tasks BOT": (P, [BOT]), "P tasks BOT2+BOT": (P, [BOT2, BOT]), "BOT tasks BOT2": (BOT, [BOT2]), "BOT2 tasks BOT": (BOT2, [BOT])}
 
 def fz(d): return tuple(sorted(d.items()))
 
 class M:
-    __slots__ = ("labels", "state", "oprev", "gd", "held", "need", "covered", "used", "lastk")
+    __slots__ = ("labels", "state", "oprev", "gd", "held", "need", "covered", "used", "lastk", "cl")
     def __init__(self, **kw):
         for k in self.__slots__: setattr(self, k, kw[k])
     def key(self):
         st = {k: v for k, v in self.state.items() if k not in ("entries", "head", "roleHistory")}
-        return (json.dumps(st, sort_keys=True), self.oprev, self.gd, self.held, self.need, self.covered, self.used, self.lastk)
+        return (json.dumps(st, sort_keys=True), self.oprev, self.gd, self.held, self.need, self.covered, self.used, self.lastk, self.cl)
     def with_(self, **kw):
         d = {k: getattr(self, k) for k in self.__slots__}; d.update(kw); return M(**d)
 
@@ -99,6 +100,21 @@ def instruct(m, author, a):
     if a in GUARD and guarded(m, a) and author not in (a, GUARD[a]) and a not in held: held[a] = GUARD[a]
     return fz(held)
 
+def settle(m):
+    """The invariant's "while guarded": after every step, a guarded agent with an outside instruction still open that its
+    guard hasn't cleared (since its last release) is held, and an open effect aimed at it records the guard. Read from
+    the facts in the log (who tasked whom, who proposed what), not from Policy's rules."""
+    held = dict(m.held); need = set(m.need); cl = dict(m.cl)
+    for a, g in GUARD.items():
+        if not guarded(m, a): continue
+        since = cl.get(a, 0)
+        tasks = [t for t in m.state["tasks"].values() if t["open"] and a in t["to"] and t["author"] not in (a, g) and t["seq"] > since]
+        effs = [(pr, e) for pr in CLAIMABLE for e in [m.state["effects"].get(H(pr))]
+                if e and e["phase"] not in POL.FINAL and e["executor"] == a and e["proposer"] not in (a, g) and e["seq"] > since]
+        if (tasks or effs) and a not in held: held[a] = g
+        for pr, _ in effs: need.add((pr, g))
+    return m.with_(held=fz(held), need=frozenset(need))
+
 def required(m, pr, proposer, executor):
     """Whose own approval a claim of `pr` needs: a guard the proposer was held for when proposing, and the guards its
     proposer and executor are held for now."""
@@ -108,7 +124,7 @@ def required(m, pr, proposer, executor):
     return out
 
 def init(pol):
-    m = M(labels=(), state=None, oprev=False, gd=(), held=(), need=frozenset(), covered=(), used=(), lastk=())
+    m = M(labels=(), state=None, oprev=False, gd=(), held=(), need=frozenset(), covered=(), used=(), lastk=(), cl=())
     m, d = apply(pol, m, E("C", "space.create", O, {"policy": policy()}), "C"); assert m, d
     for lab, a in (("m1", P), ("m2", X), ("m3", OP), ("m4", OP2), ("m5", BOT), ("m6", BOT2)):
         m, d = apply(pol, m, E(lab, "member.set", O, {"actor": a, "role": "member"}), lab); assert m, (lab, d)
@@ -116,10 +132,12 @@ def init(pol):
         lab, a, mode = SESS[sid]
         m, d = apply(pol, m, E(lab, "session.open", a, {"steerMode": mode}), lab); assert m, (lab, d)
     m = m.with_(gd=fz({BOT: True}))
-    m, d = apply(pol, m, E("pr0", "effect.propose", BOT, {"executor": X, "action": "pay", "planDigest": DG, "repeatable": False}), "pr0")
+    m, d = apply(pol, m, E("pr0", "effect.propose", BOT, {"executor": X, "action": "pay", "planDigest": DG, "repeatable": True}), "pr0")
     assert m, d                                                                               # proposed before any hold
     m2, d = apply(pol, m, E("in0", "session.input", P, {"session": S1}), "in0"); assert m2, d     # P's outside steer
-    return m2.with_(held=instruct(m, P, BOT))
+    m2 = settle(m2.with_(held=instruct(m, P, BOT)))
+    m3, d = apply(pol, m2, E("ap0", "effect.approve", OP, {"proposal": H("pr0"), "planDigest": DG}), "ap0"); assert m3, d   # its guard approves once
+    return m3.with_(covered=setk(m3.covered, ("pr0", OP), 1))
 
 def successors(pol, m):
     out = []
@@ -127,6 +145,7 @@ def successors(pol, m):
         lab = label or (name + "#" + str(sum(1 for x in m.labels if x == name)))
         m2, d = apply(pol, m, E(lab, kind, author, body), name)
         if m2 and after: m2 = after(m2)
+        if m2: m2 = settle(m2)
         out.append((name, kind, author, body, m2, d))
     for author in (P, O, OP2, OP, BOT, BOT2):
         for sid, (lab, actor, _) in SESS.items():
@@ -136,7 +155,8 @@ def successors(pol, m):
     for author in (OP, OP2, O):
         for sid, a in ((S1, BOT), (S2, BOT2)):
             go(f"{author} releases {SESS[sid][0]}", "session.input", author, {"session": sid, "release": True},
-               (lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}))) if dict(m.held).get(a) == author else None)
+               (lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}), cl=setk(m.cl, a, n.state["head"])))
+               if dict(m.held).get(a) == author else None)
     for name, (author, to) in TASKS.items():
         def after(n, author=author, to=to):
             mm = m
@@ -145,12 +165,7 @@ def successors(pol, m):
         go(name, "task", author, {"to": to}, after)
     if S4 not in m.state["sessions"]:
         def opened(n):
-            # becoming guarded: BOT2 chose it; outside instructions still open hold it at once
-            pending = any(t["open"] and BOT2 in t["to"] and t["author"] not in (BOT2, OP2) for t in m.state["tasks"].values()) or \
-                      any(e["phase"] not in POL.FINAL and e["executor"] == BOT2 and e["proposer"] not in (BOT2, OP2) for e in m.state["effects"].values())
-            held = dict(m.held)
-            if pending and BOT2 not in held: held[BOT2] = OP2
-            return n.with_(gd=setk(m.gd, BOT2, True), held=fz(held))
+            return n.with_(gd=setk(m.gd, BOT2, True))          # becoming guarded; settle() applies open outside instructions
         go("BOT2 opens s4 guarded", "session.open", BOT2, {"steerMode": "guarded"}, opened, label="s4")
     for author in (BOT, O):
         def closed(n, author=author):
@@ -191,6 +206,8 @@ def successors(pol, m):
     return out
 
 def check_state(pol, m):
+    if dict(m.held) != m.state["held"]:
+        return f"ExactHolds: Policy holds {m.state['held']} but the invariant holds {dict(m.held)}"
     if m.state["roles"].get(OP) is None and any(any(pol.session_access(m.state, OP, sid).values()) for sid in (S1, S3)):
         return "a guard without a role keeps rights on its agent's session"
     for pid, eff in m.state["effects"].items():
@@ -216,7 +233,10 @@ def check(m, name, kind, author, body, d):
     return None
 
 def explore(pol, depth):
-    start = init(pol)
+    try:
+        start = init(pol)
+    except AssertionError as ex:                             # Policy disagrees with the invariant already in the setup
+        return 0, f"setup step refused or diverged: {ex}", ("init",), False, False
     seen = {start.key()}; frontier = [(start, ())]
     n, saw_claim, saw_denial = 0, False, False
     for _ in range(depth):
@@ -258,13 +278,15 @@ MUTATIONS = {
     "held-proposals-unguarded": ('        if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"', '        pass'),
     "held-proposers-older-proposals-free": ('    for who in (eff["proposer"], eff["executor"]):', '    for who in (eff["executor"],):'),
     "held-executors-unguarded": ('    for who in (eff["proposer"], eff["executor"]):', '    for who in (eff["proposer"],):'),
-    "tasks-never-hold": ('        for x in b["to"]: hold_on_instruction(s, x, author)\n', ''),
-    "tasks-hold-first-assignee-only": ('        for x in b["to"]: hold_on_instruction(s, x, author)', '        for x in b["to"][:1]: hold_on_instruction(s, x, author)'),
-    "executor-naming-no-instruction": ('        hold_on_instruction(s, b["executor"], author)\n', ''),
+    "no-settling": ('    settle_holds(s)\n', ''),
+    "settled-holds-ignore-tasks": ('        if (tasks or effs) and x not in s["held"]: s["held"][x] = g', '        if effs and x not in s["held"]: s["held"][x] = g'),
+    "settled-holds-ignore-effects": ('        if (tasks or effs) and x not in s["held"]: s["held"][x] = g', '        if tasks and x not in s["held"]: s["held"][x] = g'),
+    "settled-tasks-first-assignee-only": ('        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"]', '        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"][:1]'),
+    "executor-guard-not-recorded": ('                e.setdefault("guards", []).append(g)', '                pass'),
+    "release-does-not-clear": ('        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = rc["seq"]', '        if b.get("release"): s["held"].pop(x, None)'),
     "owner-forced-guarding-ignored": ('    for se in state["sessions"].values():\n        if se["actor"] == x and "guard" in se and live(state, se) and effective_mode(state, se) == "guarded": return se["guard"]\n    return None', '    return None'),
-    "guarded-not-sticky": ('                g = s["guarded"][author] = p["operator"]                        # sticky until it unguards itself', '                g = p["operator"]'),
+    "guarded-not-sticky": ('                s["guarded"][author] = p["operator"]                            # sticky until it unguards itself', '                pass'),
     "anyone-closing-unguards": ('        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"', '        if (x not in s["held"] and sess["steerMode"] == "guarded"'),
-    "no-retro-hold": ('                if pending and author not in s["held"]: s["held"][author] = g   # outside instructions still open: held at once', '                pass'),
     "guards-not-required": ('        if res == "none": return deny("E3 a guard hasn\'t approved")', '        pass'),
     "guard-approval-needs-no-role": ('    if role_of(state, g) not in READ_ROLES: return "none", None\n    for a in eff["approvals"]:\n        if a["author"] != g', '    for a in eff["approvals"]:\n        if a["author"] != g'),
     "owners-stand-in": [('    is_guard = author in guards and role in READ_ROLES', '    is_guard = (author in guards or role == "owner") and role in READ_ROLES'),
@@ -296,7 +318,7 @@ def main():
     if v: print(f"VIOLATION after {n} transitions: {v}\n  path: {' → '.join(path)}"); sys.exit(1)
     if not (g and gd): print(f"VACUOUS: guarded claim seen={g}, guard denial seen={gd}"); sys.exit(1)
     print(f"[guard] {n} transitions to depth {a.depth}; GuardedClaimsNeedTheirHuman, HeldInstructNoOne, NeverLooser, "
-          f"GuardRightsNeedRole and OneOpenApprovalPerAuthor HOLD (non-vacuous)")
+          f"GuardRightsNeedRole, OneOpenApprovalPerAuthor and ExactHolds HOLD (non-vacuous)")
 
 if __name__ == "__main__":
     main()

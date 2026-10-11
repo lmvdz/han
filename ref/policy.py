@@ -64,7 +64,7 @@ def server_of(actor_or_space: str) -> str:
 SERVER_RE = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*"
 SERVER = re.compile(r"^" + SERVER_RE + r"$")
 ACTOR = re.compile(r"^@[a-z0-9._-]{0,64}:" + SERVER_RE + r"$")
-SPACE = re.compile(r"^([a-z0-9]{1,26}:" + SERVER_RE + r"|profile:@[a-z0-9._-]{0,64}:" + SERVER_RE + r")$")
+SPACE = re.compile(r"^((?!profile:)[a-z0-9]{1,26}:" + SERVER_RE + r"|profile:@[a-z0-9._-]{0,64}:" + SERVER_RE + r")$")   # "profile" is reserved
 HEX = re.compile(r"^[0-9a-f]{64}$")
 KEYID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
@@ -248,7 +248,7 @@ def approval_candidates(state, eff, time):
 
 def relevant_actors(state, entry, time=None) -> list[str]:
     """P-01: actors whose profiles the receipt must pin: the author; the target of member.set; for a claim, the proposer
-    and the author of every approval candidate (E3 order, without the time filter)."""
+    and the author of every approval candidate (E3 order, unexpired at `time`), then the effect's guards."""
     out = [entry["author"]]
     b = entry["body"]
     if entry["kind"] == "member.set":
@@ -529,6 +529,7 @@ def _claim(state, entry, ctx, role):
         if res == "none": return deny("E3 a guard hasn't approved")
     if eff["cancelRequested"]: return deny("E4 cancel requested")
     if eff["phase"] != "ready": return deny(f"E5 phase {eff['phase']}")
+    if eff.get("task") and not state["tasks"][eff["task"]]["open"]: return deny("E5 the effect's task is closed")
     if b["attempt"] != len(eff["claims"]) + 1: return deny("E5 attempt number")
     unit = space_unit(state)
     if unit:
@@ -626,6 +627,24 @@ def hold_on_instruction(s, x, author):
     it, or a proposal naming it as executor) from anyone but itself and its guard holds it for that guard."""
     g = guarded_now(s, x)
     if g and author not in (x, g) and x not in s["held"]: s["held"][x] = g
+
+def settle_holds(s):
+    """P-15, after every entry: an agent that is guarded now and has an outside instruction still open that its guard
+    hasn't cleared (a task naming it, or an unfinished effect naming it as executor, from anyone but itself and its guard,
+    since its last release) is held; such effects record the guard. One place, so every way of becoming guarded
+    (choosing it, owners forcing it, a guard regaining its role) behaves alike."""
+    agents = set(s["guarded"]) | {se["actor"] for se in s["sessions"].values() if "guard" in se}
+    for x in sorted(agents):
+        g = guarded_now(s, x)
+        if not g: continue
+        since = s["cleared"].get(x, 0)
+        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"] and t["author"] not in (x, g) and t["seq"] > since]
+        effs = [e for e in s["effects"].values() if e["phase"] not in FINAL and e["executor"] == x and e["proposer"] not in (x, g) and e["seq"] > since]
+        if (tasks or effs) and x not in s["held"]: s["held"][x] = g
+        for e in effs:
+            if g not in e.get("guards", []):
+                e.setdefault("guards", []).append(g)
+                if e["phase"] == "ready": e["phase"] = "awaiting-approval"
 
 def guards_of(state, eff):
     """Whose own approval the effect needs, besides any rule: the guard its proposer was held for when it proposed, and
@@ -754,9 +773,9 @@ def fold(state, record, ctx) -> dict:
                 eff["phase"] = "ready"
     elif kind == "task":
         parent = s["tasks"].get(b.get("parent")) if b.get("parent") else None
-        t = {"author": author, "to": b["to"], "open": True, "state": "pending", "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0}
+        t = {"author": author, "to": b["to"], "open": True, "state": "pending", "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0,
+             "seq": rc["seq"]}
         if parent: t["parent"] = b["parent"]
-        for x in b["to"]: hold_on_instruction(s, x, author)
         if "budget" in b:
             _debit(s, task_source(s, b.get("parent")), b["budget"]["amount"])
             t["budget"] = dict(b["budget"]); t["left"] = dict(b["budget"])
@@ -775,13 +794,12 @@ def fold(state, record, ctx) -> dict:
     elif kind == "effect.propose":
         eff = {"proposer": author, "proposerKey": e["keyId"], "executor": b["executor"], "action": b["action"],
                "planDigest": b["planDigest"], "repeatable": b["repeatable"], "cancelRequested": False,
-               "approvals": [], "claims": [],
+               "approvals": [], "claims": [], "seq": rc["seq"],
                "phase": "awaiting-approval" if approval_rule(s["policy"], b["action"]) else "ready"}
         if "cost" in b: eff["cost"] = dict(b["cost"])
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
         if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"
-        hold_on_instruction(s, b["executor"], author)
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
@@ -828,7 +846,7 @@ def fold(state, record, ctx) -> dict:
                         a["dropped"] = True                    # superseded while it was consumed
             eff["phase"] = rearm(s, eff)
         elif b["result"] == "unknown":
-            if eff["repeatable"] and not eff["cancelRequested"] and author == eff["executor"]:
+            if eff["repeatable"] and not eff["cancelRequested"] and author == eff["executor"] and e["keyId"] == c["instance"]:
                 _settle(s, c, None)                    # charged in full, then retry
                 eff["phase"] = rearm(s, eff)
             else:
@@ -858,10 +876,7 @@ def fold(state, record, ctx) -> dict:
             p = ctx["profiles"][author]
             if p.get("operatorConfirmed") and p.get("operator"): s["sessions"][eid]["guard"] = p["operator"]
             if b["steerMode"] == "guarded":
-                g = s["guarded"][author] = p["operator"]                        # sticky until it unguards itself
-                pending = any(t["open"] and author in t["to"] and t["author"] not in (author, g) for t in s["tasks"].values()) or \
-                          any(e["phase"] not in FINAL and e["executor"] == author and e["proposer"] not in (author, g) for e in s["effects"].values())
-                if pending and author not in s["held"]: s["held"][author] = g   # outside instructions still open: held at once
+                s["guarded"][author] = p["operator"]                            # sticky until it unguards itself
         if "task" in b: s["sessions"][eid]["task"] = b["task"]
     elif kind == "session.close":
         sess = s["sessions"][b["session"]]
@@ -874,8 +889,9 @@ def fold(state, record, ctx) -> dict:
         sess = s["sessions"][b["session"]]
         sess["steers"] += 1
         x = sess["actor"]
-        if b.get("release"): s["held"].pop(x, None)                    # its guard releases it, explicitly
+        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = rc["seq"]   # its guard releases it, explicitly
         else: hold_on_instruction(s, x, author)
+    settle_holds(s)
     return s
 
 def _debit(s, src, amount):
@@ -901,7 +917,7 @@ def _credit(s, task_id, amount):
 def _fold_create(e, rc, ctx, eid):
     b, author, space = e["body"], e["author"], e["space"]
     base = {"space": space, "head": rc["seq"], "home": server_of(space), "policy": b["policy"], "roles": {}, "roleHistory": {},
-            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
+            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "cleared": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
             "entries": {eid: {"author": author, "kind": "space.create"}}}
     if space.startswith("profile:"):
         actor = space[len("profile:"):]
