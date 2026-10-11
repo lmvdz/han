@@ -27,6 +27,7 @@ class V:
     def __init__(self, name, rules, desc):
         self.v = {"name": name, "rules": rules, "description": desc, "profiles": {}, "steps": []}
         self.t = 0
+        self.heads = {}                  # space → seq of its last allowed entry (for `seen`)
     def prof(self, actor, view):
         self.v["profiles"][actor] = view; return self
     def step(self, entry, expect, *, dt=1, at=None, check=None, profiles=None, predecessor=None, note=None):
@@ -36,7 +37,13 @@ class V:
         if profiles: st["profiles"] = profiles
         if predecessor: st["predecessor"] = predecessor
         if note: st["note"] = note
+        if expect == "allow": self.heads[entry["space"]] = self.heads.get(entry["space"], 0) + 1
         self.v["steps"].append(st); return self
+    def rel(self, id, author, session, seen=None, space=S):
+        """A guard's release, signed having seen the space up to its current head (or `seen`)."""
+        e = E(id, "session.input", author, {"session": session, "release": True}, space=space)
+        e["seen"] = self.heads.get(space, 0) if seen is None else seen
+        return e
     def read(self, actor, seq, expect, space=S):
         self.v["steps"].append({"read": {"space": space, "actor": actor, "seq": seq}, "expect": expect}); return self
     def access(self, actor, session, expect, space=S):
@@ -90,7 +97,7 @@ def appr(id, pr, author=O, digest=None, expires=None):
     return E(id, "effect.approve", author, b)
 
 USD = lambda n: {"unit": "USD-cent", "amount": n}
-ACCEPT = {"keyId": "h1", "sig": "signature-checked-by-Log-and-mirrors"}   # Policy checks only its shape (R-23)
+ACCEPT = {"keyId": "h1", "sig": "signature-checked-by-Log-and-mirrors"}   # Policy checks only its shape (§7.3)
 
 def digest_of(label):
     return hashlib.sha256(("plan:" + label).encode()).hexdigest()
@@ -813,7 +820,7 @@ v.step(prop("p1", author=BOT), "allow", check={"effects.p1.phase": "ready"})
 v.step(E("g", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("i2", "session.input", M, {"session": "s"}), "allow", check={"held": {BOT: OP}})
 v.step(prop("p2", author=BOT), "allow", check={"effects.p2.guards": [OP]}, note="steering its auto side-session holds it once any of its sessions is guarded")
 v.step(E("i3", "session.input", BOT, {"session": "g"}), "allow")
-v.step(E("i3r", "session.input", BOT, {"session": "g", "release": True}), "denied", note="an agent can't release itself")
+v.step(v.rel("i3r", BOT, "g"), "denied", note="an agent can't release itself")
 v.step(E("h", "session.open", M, {"steerMode": "guarded"}), "allow").step(E("i5", "session.input", P, {"session": "h"}), "allow")
 v.step(prop("p5", author=M), "allow", check={"effects.p5.phase": "ready"}, note="humans are their own guard")
 add(v.done())
@@ -837,12 +844,12 @@ agents(v, policy(sessions=sess("member", "member", "owner")))
 v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
 v.step(E("in", "session.input", O, {"session": "s"}), "allow", check={"held": {BOT: OP}})
 v.step(E("q", "session.input", OP, {"session": "s"}), "allow", check={"held": {BOT: OP}}, note="the guard may steer even though steer is owner-only; 'status?' doesn't release")
-v.step(E("r0", "session.input", M, {"session": "s", "release": True}), "denied", note="only the guard releases")
+v.step(v.rel("r0", M, "s"), "denied", note="only the guard releases")
 v.step(E("c", "session.close", BOT, {"session": "s"}), "allow", check={"held": {BOT: OP}}, note="closing doesn't escape")
 v.step(prop("p1", author=BOT), "allow", check={"effects.p1.guards": [OP]})
-v.step(E("ro", "session.input", O, {"session": "s", "release": True}), "denied", note="owners can't override a guard who is still here")
-v.step(E("r1", "session.input", OP, {"session": "s", "release": True}), "allow", check={"held": {}})
-v.step(E("r2", "session.input", OP, {"session": "s", "release": True}), "denied", note="not held")
+v.step(v.rel("ro", O, "s"), "denied", note="owners can't override a guard who is still here")
+v.step(v.rel("r1", OP, "s"), "allow", check={"held": {}})
+v.step(v.rel("r2", OP, "s"), "denied", note="not held")
 v.step(prop("p2", author=BOT), "allow", check={"effects.p2.phase": "ready"})
 add(v.done())
 
@@ -863,7 +870,7 @@ v.step(ms("op", O, OP, "member"), "allow").step(ms("op2", O, OP2, "member"), "al
 v.step(ms("b", O, BOT, "member"), "allow").step(ms("b2", O, BOT2, "member"), "allow")
 v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s2", "session.open", BOT2, {"steerMode": "guarded"}), "allow")
 v.step(E("in", "session.input", OP2, {"session": "s"}), "allow", check={"held": {BOT: OP}}, note="OP2 is an outsider to BOT")
-v.step(E("r", "session.input", OP2, {"session": "s", "release": True}), "denied")
+v.step(v.rel("r", OP2, "s"), "denied")
 v.step(prop("p", author=BOT), "allow").step(appr("a2", "p", author=OP2), "denied", note="not BOT's guard, no rule")
 v.step(appr("a1", "p", author=OP), "allow").step(claim("c", "p"), "allow")
 add(v.done())
@@ -922,9 +929,9 @@ v.access(OP, "s", ALL).access(M, "s", NONE)
 v.step(ms("ban", O, OP, "none"), "allow")
 v.step(E("s2", "session.open", BOT, {"steerMode": "auto"}), "allow")
 v.access(OP, "s", NONE).access(OP, "s2", NONE).step(E("q", "session.input", OP, {"session": "s2"}), "denied", note="banned guard can't watch or steer even its agent's live auto session")
-v.step(E("r0", "session.input", M, {"session": "s", "release": True}), "denied", note="members can't release")
-v.step(E("r1", "session.input", O, {"session": "s", "release": True}), "denied", note="nobody stands in for a guard")
-v.step(ms("back", O, OP, "member"), "allow").step(E("r2", "session.input", OP, {"session": "s", "release": True}), "allow", check={"held": {}})
+v.step(v.rel("r0", M, "s"), "denied", note="members can't release")
+v.step(v.rel("r1", O, "s"), "denied", note="nobody stands in for a guard")
+v.step(ms("back", O, OP, "member"), "allow").step(v.rel("r2", OP, "s"), "allow", check={"held": {}})
 add(v.done())
 
 v = V("held-may-cancel-its-delegations", ["P-15", "P-04"], "a held agent may still cancel tasks it delegated earlier (the safe direction)")
@@ -949,7 +956,7 @@ v.step(prop("p", author=BOT), "allow", check={"effects.p.guards": [OP]})
 v.step(ms("gone", O, OP, "none"), "allow")
 v.access(M, "s", NONE).step(E("in2", "session.input", M, {"session": "s"}), "denied", note="guarded without its guard: dead")
 v.step(appr("a1", "p", author=O), "denied", note="the steering owner can't approve its own steer by evicting the guard")
-v.step(E("r", "session.input", O, {"session": "s", "release": True}), "denied")
+v.step(v.rel("r", O, "s"), "denied")
 v.step(E("x", "effect.cancel", O, {"proposal": "p"}), "allow", check={"effects.p.phase": "cancelled"}, note="owners may always cancel")
 add(v.done())
 
@@ -989,7 +996,7 @@ v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow", check={"
 v.step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
 v.step(E("c", "session.close", O, {"session": "s1"}), "allow", check={"guarded": {BOT: OP}}, note="an owner closing it doesn't un-guard")
 v.step(E("t", "task", O, {"to": [BOT]}), "allow", check={"held": {BOT: OP}}, note="A1: close-then-task still holds")
-v.step(E("r", "session.input", OP, {"session": "s1", "release": True}), "allow", check={"held": {}})
+v.step(v.rel("r", OP, "s1"), "allow", check={"held": {}})
 v.step(ms("ev", O, OP, "none"), "allow", check={"guarded": {BOT: OP}})
 v.step(E("in", "session.input", O, {"session": "s3"}), "allow", check={"held": {BOT: OP}}, note="A2: evict-then-steer still holds")
 v.step(prop("p", author=BOT), "allow", check={"effects.p.guards": [OP]})
@@ -1008,7 +1015,7 @@ agents(v, policy(sessions=sess("member", "member", "member")))
 v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
 v.step(E("in", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}})
 v.step(E("c1", "session.close", BOT, {"session": "s1"}), "allow", check={"guarded": {BOT: OP}}, note="held: closing doesn't unguard")
-v.step(E("r", "session.input", OP, {"session": "s1", "release": True}), "allow")
+v.step(v.rel("r", OP, "s1"), "allow")
 v.step(E("s2", "session.open", BOT, {"steerMode": "guarded"}), "allow")
 v.step(E("c2", "session.close", BOT, {"session": "s2"}), "allow", check={"guarded": {}}, note="its own choice, not held")
 v.step(E("in2", "session.input", P, {"session": "s3"}), "allow", check={"held": {}})
@@ -1034,7 +1041,7 @@ agents(v, policy(sessions=sess("member", "member", "member")))
 v.step(E("s", "session.open", BOT, {"steerMode": "auto"}), "allow")
 v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["guarded"]))}), "allow")
 v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {BOT: OP}}, note="CE1: a task holds it")
-v.step(E("r", "session.input", OP, {"session": "s", "release": True}), "allow")
+v.step(v.rel("r", OP, "s"), "allow")
 v.step(prop("d", author=P, executor=BOT), "allow", check={"held": {BOT: OP}}, note="so does naming it as executor")
 add(v.done())
 
@@ -1075,7 +1082,7 @@ v.step(E("s", "session.open", BOT, {"steerMode": "auto"}), "allow")
 v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {}})
 v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["guarded"]))}), "allow", check={"held": {BOT: OP}}, note="CX1")
 v.step(E("t2", "task", BOT, {"to": [BOT2]}), "denied", note="held: can't delegate P's task")
-v.step(E("r", "session.input", OP, {"session": "s", "release": True}), "allow", check={"held": {}}, note="the guard reviewed it")
+v.step(v.rel("r", OP, "s"), "allow", check={"held": {}}, note="the guard reviewed it")
 v.step(E("x", "message", M, {}), "allow", check={"held": {}}, note="cleared instructions don't re-hold")
 add(v.done())
 
@@ -1083,7 +1090,7 @@ v = V("executor-guards-survive-release", ["P-15", "P-07 E3"], "an effect an outs
 agents(v, policy(sessions=sess("member", "member", "member")))
 v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
 v.step(prop("d", author=P, executor=BOT), "allow", check={"held": {BOT: OP}, "effects.d.guards": [OP]})
-v.step(E("r", "session.input", OP, {"session": "s", "release": True}), "allow", check={"held": {}})
+v.step(v.rel("r", OP, "s"), "allow", check={"held": {}})
 v.step(claim("c0", "d", author=BOT), "denied", note="CX3: still needs OP")
 v.step(appr("a", "d", author=OP), "allow").step(claim("c1", "d", author=BOT), "allow")
 add(v.done())
@@ -1113,6 +1120,44 @@ v.step(E("own", "session.input", OP, {"session": "s"}), "allow", check={"held": 
 v.step(E("in", "session.input", P, {"session": "s"}), "allow", check={"held": {BOT: OP}})
 v.step(claim("c0", "d", author=BOT), "denied", note="its executor is held")
 v.step(appr("a", "d", author=M), "denied", note="not a guard, no rule")
+add(v.done())
+
+v = V("stale-releases-are-refused", ["P-15"], "a release covers only what its guard had seen: newer outside instructions keep the agent held")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("in", "session.input", P, {"session": "s"}), "allow")
+seen_at = v.heads[S]
+v.step(E("t1", "task", P, {"to": [BOT]}), "allow")
+v.step(v.rel("r0", OP, "s", seen=seen_at), "denied", note="D1: signed before t1 arrived")
+v.step(v.rel("r1", OP, "s"), "allow", check={"held": {}})
+add(v.done())
+
+v = V("agents-never-draw-on-the-space-budget", ["P-05", "P-07 E6"], "an agent's effect without a budgeted task can't be claimed against the space budget, even if the budget appeared after it was proposed")
+v.prof(BOT, AG)
+team(v)
+v.step(ms("op", O, OP, "member"), "allow").step(ms("b", O, BOT, "member"), "allow")
+v.step(prop("p", author=BOT, cost=USD(400)), "allow")
+v.step(E("ps", "policy.set", O, {"policy": policy(budget=USD(1000))}), "allow")
+v.step(claim("c", "p"), "denied", note="D2")
+add(v.done())
+
+v = V("grammar-is-strict-ascii", ["§2", "R-09"], "trailing newlines and non-ASCII digits are invalid, as the §2 grammar says")
+team(v)
+v.step(E("m", "message", M + "\n", {}), "invalid", note="author with a trailing newline")
+bad = prop("p"); bad["body"]["action"] = "git.push\n"
+v.step(bad, "invalid", note="action with a trailing newline")
+v.step(E("ps", "policy.set", O, {"policy": policy(approvals=[{"action": "git.push\n", "approvers": ["owner"]}])}), "invalid", note="an approval rule that would match nothing")
+dl = E("t", "task", M, {"to": [P], "deadline": "\u0662\u0660\u0662\u0666-10-10T12:00:00Z"})
+v.step(dl, "invalid", note="Arabic-Indic digits")
+add(v.done())
+
+v = V("releases-clear-only-what-was-seen", ["P-15"], "work that arrived before the agent became guarded, and after its guard last looked, stays pending after a release")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "auto"}), "allow")
+seen_at = v.heads[S]
+v.step(E("t", "task", P, {"to": [BOT]}), "allow", check={"held": {}}, note="not guarded yet")
+v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["guarded"]))}), "allow", check={"held": {BOT: OP}})
+v.step(v.rel("r0", OP, "s", seen=seen_at), "allow", check={"held": {BOT: OP}}, note="OP never saw t: still held")
+v.step(v.rel("r1", OP, "s"), "allow", check={"held": {}})
 add(v.done())
 
 # ── R-01 id derivation ──

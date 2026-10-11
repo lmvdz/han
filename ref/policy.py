@@ -61,32 +61,37 @@ def server_of(actor_or_space: str) -> str:
     return actor_or_space.rsplit(":", 1)[1]
 
 # ───────────────────────── R-09 grammar and schemas (mirrored in han.ts) ─────────────────────────
+def _rx(pattern):
+    """§2 grammar: ASCII only, and the whole string must match (Python's `$` would also accept a trailing newline)."""
+    return re.compile(pattern, re.ASCII)
+
 SERVER_RE = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*"
-SERVER = re.compile(r"^" + SERVER_RE + r"$")
-ACTOR = re.compile(r"^@[a-z0-9._-]{0,64}:" + SERVER_RE + r"$")
-SPACE = re.compile(r"^((?!profile:)[a-z0-9]{1,26}:" + SERVER_RE + r"|profile:@[a-z0-9._-]{0,64}:" + SERVER_RE + r")$")   # "profile" is reserved
-HEX = re.compile(r"^[0-9a-f]{64}$")
-KEYID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-ACTION = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
-UNIT = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+SERVER = _rx(r"^" + SERVER_RE + r"$")
+ACTOR = _rx(r"^@[a-z0-9._-]{0,64}:" + SERVER_RE + r"$")
+SPACE = _rx(r"^((?!profile:)[a-z0-9]{1,26}:" + SERVER_RE + r"|profile:@[a-z0-9._-]{0,64}:" + SERVER_RE + r")$")   # "profile" is reserved
+HEX = _rx(r"^[0-9a-f]{64}$")
+KEYID = _rx(r"^[A-Za-z0-9_-]{1,64}$")
+TIME = _rx(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+ACTION = _rx(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+UNIT = _rx(r"^[A-Za-z0-9_-]{1,32}$")
 INT_MAX = 2 ** 53
 
 def _int(v): return isinstance(v, int) and not isinstance(v, bool) and 0 <= v < INT_MAX
-def _budget(v): return isinstance(v, dict) and set(v) == {"unit", "amount"} and isinstance(v["unit"], str) and bool(UNIT.match(v["unit"])) and _int(v["amount"])
-def _actor(v): return isinstance(v, str) and bool(ACTOR.match(v))
-def _id(v): return isinstance(v, str) and bool(HEX.match(v))
-def _hex(v): return isinstance(v, str) and bool(HEX.match(v))
-def _keyid(v): return isinstance(v, str) and bool(KEYID.match(v))
+def _budget(v): return isinstance(v, dict) and set(v) == {"unit", "amount"} and isinstance(v["unit"], str) and bool(UNIT.fullmatch(v["unit"])) and _int(v["amount"])
+def _actor(v): return isinstance(v, str) and bool(ACTOR.fullmatch(v))
+def _id(v): return isinstance(v, str) and bool(HEX.fullmatch(v))
+def _hex(v): return isinstance(v, str) and bool(HEX.fullmatch(v))
+def _keyid(v): return isinstance(v, str) and bool(KEYID.fullmatch(v))
 def _time(v):
-    if not (isinstance(v, str) and TIME.match(v)): return False
+    if not (isinstance(v, str) and TIME.fullmatch(v)): return False
     try:
         datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ"); return True       # a real proleptic Gregorian date, seconds 00–59
     except ValueError:
         return False
 def _actors(v): return isinstance(v, list) and len(v) <= 64 and all(_actor(x) for x in v)
-def _pubkey(v): return isinstance(v, str) and 1 <= len(v) <= 128
-def _space(v): return isinstance(v, str) and bool(SPACE.match(v))
+B64URL = _rx(r"^[A-Za-z0-9_-]{1,128}$")
+def _pubkey(v): return isinstance(v, str) and bool(B64URL.fullmatch(v))
+def _space(v): return isinstance(v, str) and bool(SPACE.fullmatch(v))
 def json_ok(v, depth=0) -> bool:
     """Opaque Json (extension bodies, plan.args): integers in [0, 2^53) only, no floats, bounded nesting (R-09)."""
     if depth > 32: return False
@@ -108,7 +113,7 @@ def _policy(v):
     if v["allowAgents"] not in ("any", "with-operator", "none") or v["minDurability"] not in ("local", "replicated"): return False
     if not (isinstance(v["approvals"], list) and len(v["approvals"]) <= 64 and all(
             isinstance(a, dict) and set(a) == {"action", "approvers"}
-            and isinstance(a["action"], str) and (a["action"] == "*" or bool(ACTION.match(a["action"])))
+            and isinstance(a["action"], str) and (a["action"] == "*" or bool(ACTION.fullmatch(a["action"])))
             and isinstance(a["approvers"], list) and 0 < len(a["approvers"]) <= 64
             and all(x in READ_ROLES or _actor(x) for x in a["approvers"]) for a in v["approvals"])): return False
     if not (v["budget"] is None or _budget(v["budget"])): return False
@@ -123,14 +128,14 @@ def _policy(v):
     m = ss["modes"]
     if not (isinstance(m, list) and m and len(set(m)) == len(m) and all(x in STEER_MODES for x in m)): return False
     if not (isinstance(v["servers"], dict) and set(v["servers"]) == {"deny"} and isinstance(v["servers"]["deny"], list)
-            and len(v["servers"]["deny"]) <= 256 and all(isinstance(x, str) and bool(SERVER.match(x)) for x in v["servers"]["deny"])): return False
+            and len(v["servers"]["deny"]) <= 256 and all(isinstance(x, str) and bool(SERVER.fullmatch(x)) for x in v["servers"]["deny"])): return False
     return True
 
 RECEIPT_FIELDS = {"space", "seq", "id", "prev", "home", "homeKey", "time", "durability", "profiles", "homeSig"}
 def _receipt(v):
     return (isinstance(v, dict) and set(v) == RECEIPT_FIELDS and _space(v["space"])
             and _int(v["seq"]) and v["seq"] >= 1 and _id(v["id"]) and (v["prev"] == "" or _hex(v["prev"]))
-            and isinstance(v["home"], str) and bool(SERVER.match(v["home"])) and _keyid(v["homeKey"]) and _time(v["time"])
+            and isinstance(v["home"], str) and bool(SERVER.fullmatch(v["home"])) and _keyid(v["homeKey"]) and _time(v["time"])
             and v["durability"] in ("local", "replicated") and isinstance(v["profiles"], dict)
             and all(_actor(a) and _int(n) for a, n in v["profiles"].items()) and isinstance(v["homeSig"], str))
 def _profile(v):
@@ -151,7 +156,7 @@ SCHEMA = {
     "task": {"to": (lambda v: _actors(v) and len(v) > 0, True), "budget": (_budget, False), "parent": (_id, False), "deadline": (_time, False)},
     "task.update": {"task": (_id, True), "state": (lambda v: v in ("accepted", "progress") + TASK_FINAL, True)},
     "task.cancel": {"task": (_id, True)},
-    "effect.propose": {"executor": (_actor, True), "action": (lambda v: isinstance(v, str) and bool(ACTION.match(v)), True),
+    "effect.propose": {"executor": (_actor, True), "action": (lambda v: isinstance(v, str) and bool(ACTION.fullmatch(v)), True),
                        "planDigest": (_hex, True), "cost": (_budget, False), "repeatable": (lambda v: isinstance(v, bool), True), "task": (_id, False),
                        "expiresAt": (_time, False)},
     "effect.approve": {"proposal": (_id, True), "planDigest": (_hex, True), "expiresAt": (_time, False)},
@@ -166,15 +171,15 @@ SCHEMA = {
     "session.open": {"task": (_id, False), "steerMode": (lambda v: v in STEER_MODES, True)},
     "session.close": {"session": (_id, True)},
     "session.input": {"session": (_id, True), "release": (lambda v: v is True, False)},
-    "space.move": {"to": (lambda v: isinstance(v, str) and bool(SERVER.match(v)), True),
+    "space.move": {"to": (lambda v: isinstance(v, str) and bool(SERVER.fullmatch(v)), True),
                    "accept": (lambda v: isinstance(v, dict) and set(v) == {"keyId", "sig"} and _keyid(v["keyId"]) and isinstance(v["sig"], str), True)},
 }
 CORE_PREFIXES = {"space", "member", "policy", "key", "message", "task", "effect", "checkpoint", "redact", "session"}
-EXT = re.compile(r"^[a-z][a-z0-9-]{0,31}\.[a-z0-9][a-z0-9._-]{0,63}$")
+EXT = _rx(r"^[a-z][a-z0-9-]{0,31}\.[a-z0-9][a-z0-9._-]{0,63}$")
 
 def is_extension(kind) -> bool:
     """Extension kinds: `<prefix>.<name>` with a prefix the core doesn't use (§5). Bodies are opaque to Policy."""
-    return isinstance(kind, str) and bool(EXT.match(kind)) and kind.split(".")[0] not in CORE_PREFIXES
+    return isinstance(kind, str) and bool(EXT.fullmatch(kind)) and kind.split(".")[0] not in CORE_PREFIXES
 
 POLICY_HEADER = {"v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig", "id"}
 
@@ -535,6 +540,8 @@ def _claim(state, entry, ctx, role):
     if unit:
         if not eff.get("cost") or eff["cost"]["unit"] != unit: return deny("E6 uncosted effect in budgeted space")
         if remaining(state, effect_source(state, eff)) < eff["cost"]["amount"]: return deny("E6 budget")
+        if effect_source(state, eff)[0] == "space" and not is_human(ctx, eff["proposer"]):
+            return deny("E6 agents spend only from a budgeted task assigned to them")
     return ALLOW
 
 def _cancel(state, entry, ctx, role):
@@ -627,6 +634,10 @@ def hold_on_instruction(s, x, author):
     it, or a proposal naming it as executor) from anyone but itself and its guard holds it for that guard."""
     g = guarded_now(s, x)
     if g and author not in (x, g) and x not in s["held"]: s["held"][x] = g
+
+def note_outside(s, x, author, seq):
+    g = guarded_now(s, x)
+    if g and author not in (x, g): s["outside"][x] = seq
 
 def settle_holds(s):
     """P-15, after every entry: an agent that is guarded now and has an outside instruction still open that its guard
@@ -726,6 +737,8 @@ def _session_input(state, entry, ctx, role):
     if not sess: return invalid("no such session")
     if entry["body"].get("release"):
         if state["held"].get(sess["actor"]) != entry["author"]: return deny("only the guard holding this agent releases it")
+        if state["outside"].get(sess["actor"], 0) > entry["seen"]:
+            return deny("stale release: an outside instruction arrived after what the guard had seen")
         return ALLOW if role in READ_ROLES else deny("guard holds no role")
     if not live(state, sess): return deny("session not live")
     if not _accountable(state, ctx, entry["author"]): return deny("agent's operator confirmation withdrawn")
@@ -776,6 +789,7 @@ def fold(state, record, ctx) -> dict:
         t = {"author": author, "to": b["to"], "open": True, "state": "pending", "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0,
              "seq": rc["seq"]}
         if parent: t["parent"] = b["parent"]
+        for x in b["to"]: note_outside(s, x, author, rc["seq"])
         if "budget" in b:
             _debit(s, task_source(s, b.get("parent")), b["budget"]["amount"])
             t["budget"] = dict(b["budget"]); t["left"] = dict(b["budget"])
@@ -800,6 +814,7 @@ def fold(state, record, ctx) -> dict:
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
         if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"
+        note_outside(s, b["executor"], author, rc["seq"])
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
@@ -889,8 +904,10 @@ def fold(state, record, ctx) -> dict:
         sess = s["sessions"][b["session"]]
         sess["steers"] += 1
         x = sess["actor"]
-        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = rc["seq"]   # its guard releases it, explicitly
-        else: hold_on_instruction(s, x, author)
+        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = e["seen"]   # reviewed: what the guard had seen
+        else:
+            hold_on_instruction(s, x, author)
+            note_outside(s, x, author, rc["seq"])
     settle_holds(s)
     return s
 
@@ -917,7 +934,7 @@ def _credit(s, task_id, amount):
 def _fold_create(e, rc, ctx, eid):
     b, author, space = e["body"], e["author"], e["space"]
     base = {"space": space, "head": rc["seq"], "home": server_of(space), "policy": b["policy"], "roles": {}, "roleHistory": {},
-            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "cleared": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
+            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "cleared": {}, "outside": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
             "entries": {eid: {"author": author, "kind": "space.create"}}}
     if space.startswith("profile:"):
         actor = space[len("profile:"):]

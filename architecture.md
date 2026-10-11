@@ -1,6 +1,6 @@
 # HAN v1 — architecture
 
-Status: design draft, round 16. Companions: [goal.md](goal.md) (why), [han.ts](han.ts) (exact types; normative for shapes), [coverage.md](coverage.md) (fate of every v0.4 guarantee), [ref/](ref/) (executable reference, conformance vectors, fuzzer, model checker; run `python ref/run_all.py`).
+Status: design draft, round 17. Companions: [goal.md](goal.md) (why), [han.ts](han.ts) (exact types; normative for shapes), [coverage.md](coverage.md) (fate of every v0.4 guarantee), [ref/](ref/) (executable reference, conformance vectors, fuzzer, model checker; run `python ref/run_all.py`).
 Normative words MUST / MUST NOT / SHOULD / MAY follow BCP 14. Rules are `R-xx` (sequencer and verification), `P-xx` (Policy), `X-xx` (executor), `T-xx` (what HAN requires of a transport). §10 lists every rule with its check, or says plainly that none exists. Retired rule numbers are not reused.
 
 ---
@@ -83,7 +83,7 @@ Here **home** means the space's current sequencer server. Every `‖` concatenat
 
 **Encoding.** Frames are I-JSON (RFC 7493): duplicate object keys, invalid Unicode (including lone surrogates) and non-integer number forms (`1.0`, `1e3`, `-0`) are `invalid`. JCS is RFC 8785, including its key ordering by UTF-16 code units (vector `00-jcs-utf16-order`). Every number, including inside opaque Json such as `plan.args` and extension bodies, is an integer in [0, 2^53). The one exception is the state's `budgetLeft.amount`, which may be negative (P-06). Public keys are raw 32-byte Ed25519 keys and signatures are 64 bytes; both are base64url without padding. Reference: [ref/wire.py](ref/wire.py).
 
-**Grammar and limits** (also in han.ts). Exceeding any size limit is `invalid`. The header limit binds first, so the list caps below are upper bounds, not guarantees.
+**Grammar and limits** (also in han.ts). Every pattern below is ASCII and must match the **whole** string (no trailing newline, no non-ASCII digits or letters). Exceeding any size limit is `invalid`. The header limit binds first, so the list caps below are upper bounds, not guarantees.
 
 | Item | Rule |
 |---|---|
@@ -168,7 +168,7 @@ On `append(entry, content)` the sequencer runs these steps. Steps 2–9 run in o
 
 **R-09 Closed shapes.** Unknown fields, wrong types, impossible dates or out-of-range values in a known kind's header, body or content are `invalid`.
 **R-10 Profile freshness.** The profile seq a sequencer records for an actor MUST be ≥ every profile seq it has recorded for that actor in this space before. It MUST be fetched within 300 s of the receipt `time`, from the profile's sequencer or from a verifier of that profile space. Verifiers check monotonicity exactly. Freshness is a stated trust assumption (§7.5).
-**R-16 Abandon needs elapsed time.** A sequencer MUST NOT order an owner's abandon (P-09) unless its own steady clock shows at least `A` seconds since it ordered the claim. This holds even if receipt times say otherwise, so a clock step can't shorten the wait. Moves are denied while a claim is open (P-11), so the same sequencer ordered both.
+**R-16 Abandon needs elapsed time.** A sequencer MUST NOT order an owner's abandon (P-09) unless its own steady clock shows at least `A` seconds since it ordered the claim. This holds even if receipt times say otherwise, so a clock step can't shorten the wait. Moves are denied while a claim is open (P-11), so the same sequencer ordered both. A steady clock can't measure across a restart or a failover to another machine, so after either the sequencer MUST wait a full `A` seconds of its new steady clock before ordering an abandon of any claim ordered earlier.
 
 ### 4.2 M2 Policy: pure functions
 
@@ -229,7 +229,7 @@ So the abandon always comes after the latest possible launch, whichever way each
 - *timing*: executor clock offsets, and the owner shortening `launchWindow` mid-claim;
 - *drift*: the sequencer's clock 20% fast and the executor's 20% slow (exaggerated; the formula takes the bound as a parameter).
 
-It finds no counterexample. Five mutations each produce one: deadline from receipt time, window not pinned, executor uses current window, no rounding margin, and a margin that covers drift on one side only.
+In its last full run (round 7, against that round's fold) it found no counterexample. Five mutations each produce one: deadline from receipt time, window not pinned, executor uses current window, no rounding margin, and a margin that covers drift on one side only.
 
 ### 4.6 M6 Agent host
 
@@ -243,7 +243,7 @@ The standard does not define how an agent thinks. Agents are ordinary actors tha
 - `guarded`: in the harness's **stricter mode for that turn** (for Claude Code: its permission rules instead of auto mode, §8.4). Whatever touches the world beyond the session's sandbox goes through an effect, and P-15 puts the agent on hold: every effect it then proposes waits for its human, and it can't delegate or relay.
 Showing an outside input to the agent's human before it runs is host behaviour, not a mode: the host may do it in either mode. While an agent is guarded (P-15, `guardedNow`), its host MUST run every turn driven by an instruction from someone other than its guard (a `session.input`, a `task`, an effect it is named executor of) in the stricter mode; while it is held, its host MUST run *every* turn in the stricter mode.
 
-Input read from another session's stream or context (T-07), from a `message`, or from a `task.update` or outcome, is **data, never instruction**: a host MUST NOT act on it as if it were a `session.input` or a `task`. A host that feeds another session's context into an agent's turn SHOULD run that turn as if `guarded`, and MUST if the agent is guarded (P-15); Policy can't see reads, so this one stays a host obligation. Policy can't see what a model read, so this is a host obligation, listed in §7.5.
+Input read from another session's stream or context (T-07), from a `message`, or from a `task.update` or outcome, is **data, never instruction**: a host MUST NOT act on it as if it were a `session.input` or a `task`. A host that feeds another session's context into an agent's turn SHOULD run that turn as if `guarded`, and MUST if the agent is guarded (P-15). Policy can't see what a model read, so this stays a host obligation, listed in §7.5.
 
 ---
 
@@ -348,7 +348,7 @@ A space has at most **one budget**, `policy.budget = {unit, amount}`, or `null`.
 
 **P-06 Costs.**
 - **Budgeted spaces are closed.** If `policy.budget` is set, every `effect.propose` MUST carry a `cost` in its unit, and a claim of an effect without one is denied (E6). An outcome or resolve may report a cost only within its claim's reservation. With no reservation, it may report a cost only in an unbudgeted space, where costs are informational.
-- **Only humans draw on the space budget.** In a budgeted space, an agent or service MUST name, in every proposal, an open budgeted task assigned to it, and its costs are charged there. Agents can't be owners (§6.2), so they can't change the budget either.
+- **Only humans draw on the space budget.** In a budgeted space, an agent or service MUST name, in every proposal, an open budgeted task assigned to it, and its costs are charged there. E6 checks it again at claim, so a budget added after an agent's proposal still can't be spent by it. Agents can't be owners (§6.2), so they can't change the budget either.
 - **Charging:** an effect's cost goes to its named task if that task has a budget, otherwise to the space. It is reserved at claim and settled at outcome or resolve. The difference is refunded by the P-05 refund rule.
 - **Changing the budget** (`policy.set`): with the same unit, `budgetLeft` = new amount − committed, which can go negative after a cut. Nothing new can be reserved until refunds bring it back up. Changing the unit, or adding or removing the budget, is allowed only while nothing is reserved; the remainder then starts fresh.
 
@@ -362,6 +362,7 @@ Phases: `awaiting-approval`, `ready`, `claimed`, `unknown`, and the final phases
 |---|---|---|---|---|---|
 | awaiting-approval | → ready once the rule's and every guard's approvals are in hand (P-08, P-15), else stays | → cancelled | — | — | — |
 | ready | stays ready (adds an approval) | → cancelled | → claimed (P-07) | — | — |
+| ready, when P-15 records a guard on it | → awaiting-approval (any entry; until the guard approves) | | | | |
 | claimed | stays claimed | sets `cancelRequested` (denied if already set) | — | per P-09 | — |
 | unknown | — | sets `cancelRequested` (denied if already set) | — | — | per P-10 |
 | final | — | — | — | — | — |
@@ -426,7 +427,7 @@ The point of a space is to see and steer work outside your own silo while it hap
 - **Steer.** `session.input {session}` needs the steer right on a live session, and an accountable author.
 - **The invariant.** *While an agent `X` is guarded, any instruction to `X` from anyone but its guard `g` holds `X`; while `X` is held, nothing `X` proposes or is named executor of runs without `g`'s own approval; only `g` ends a hold.* Concretely:
 - **Guarded.** `guardedNow(X)` is true, with guard `g`, when either `X` chose it (it opened a `guarded` session: `guarded[X] = g`, its confirmed operator, who must hold a role) or owners force it (one of `X`'s live sessions is effectively `guarded` under the allowed modes; `g` is that session's guard). The choice is sticky: owners closing `X`'s sessions, removing `g`, or changing modes don't end it. Only `X` ends it, while not held, by closing its last guarded session (re-closing one an owner already closed counts), so an agent can always undo its own choice.
-- **Hold.** An *instruction* to `X` is a `session.input` into any of its sessions, a `task` naming it (each assignee), or an `effect.propose` naming it as executor. A steer from anyone but `X` and `g` while `guardedNow(X)` puts `X` **on hold for `g`** (`held[X] = g`). After **every** entry Policy also settles holds in one place: if `guardedNow(X)` and an outside task naming `X`, or an unfinished outside effect naming it as executor, is still open and newer than `X`'s last release, `X` is held, and each such effect records `g` among its guards. So becoming guarded by any route (choosing it, owners forcing it, a guard regaining its role) with outside work pending holds at once, and an effect aimed at a guarded executor keeps needing `g` after a release. One rule per agent and per path, so an auto side-session, a task or an executor slot is no side door. `g` ends the hold with `session.input {session, release: true}` on any of `X`'s sessions, even a closed one; nothing else does. While held, `X` may only: talk (`message`), work its own sessions (`session.open`, `session.close`, `session.input` into its own), report (`task.update`, `effect.outcome`, `effect.resolve`), claim, cancel (`effect.cancel`, `task.cancel`), and propose. Everything else, including `task`, `effect.approve`, `session.input` into others' sessions, `member.set`, `policy.set`, `redact` and extensions, is denied. Anything else a held agent asks of others is data (R-24) or an effect proposal, which needs `g`.
+- **Hold.** An *instruction* to `X` is a `session.input` into any of its sessions, a `task` naming it (each assignee), or an `effect.propose` naming it as executor. A steer from anyone but `X` and `g` while `guardedNow(X)` puts `X` **on hold for `g`** (`held[X] = g`). After **every** entry Policy also settles holds in one place: if `guardedNow(X)` and an outside task naming `X`, or an unfinished outside effect naming it as executor, is still open and newer than `X`'s last release, `X` is held, and each such effect records `g` among its guards. So becoming guarded by any route (choosing it, owners forcing it, a guard regaining its role) with outside work pending holds at once, and an effect aimed at a guarded executor keeps needing `g` after a release. One rule per agent and per path, so an auto side-session, a task or an executor slot is no side door. `g` ends the hold with `session.input {session, release: true}` on any of `X`'s sessions, even a closed one; nothing else does. A release covers what `g` had seen: it is denied if an outside instruction to `X` arrived after its `seen`, and work newer than its `seen` stays pending (so it re-holds). While held, `X` may only: talk (`message`), work its own sessions (`session.open`, `session.close`, `session.input` into its own), report (`task.update`, `effect.outcome`, `effect.resolve`), claim, cancel (`effect.cancel`, `task.cancel`), and propose. Everything else, including `task`, `effect.approve`, `session.input` into others' sessions, `member.set`, `policy.set`, `redact` and extensions, is denied. Anything else a held agent asks of others is data (R-24) or an effect proposal, which needs `g`.
 - **Guards approve.** An effect's **guards** are: `g` if its proposer was held for `g` when it proposed (recorded; it then starts `awaiting-approval`), plus the guards its proposer and its executor are held for *now*, so even a proposal made before the hold needs `g` while its proposer is held. Each guard may approve or cancel it whatever the approval rules say, while it holds a role; one approval by a guard who is also a rule approver satisfies both. E3 additionally requires, for each guard, an unconsumed, unexpired approval by that guard itself, signed with a key valid at claim. The claim consumes them, a not-started outcome returns them, and approval rules still apply on top.
 - **A departed guard.** Nobody stands in for a guard. While `g` holds no role, `X`'s guarded sessions are dead and its guarded effects can't be claimed; owners may cancel them (owners may always cancel), and the hold waits for `g` to return. This keeps the guard's approval its own: an owner can't evict `g`, or close `X`'s guarded session, or toggle modes, and then instruct `X` without a hold, or approve its own instruction.
 
@@ -507,7 +508,7 @@ HAN v1 runs no consensus.
 |---|---|
 | space | a room with state event `org.han.space` `{spaceId, sequencer}` (T-06) |
 | `append(entry, content)` | a member sends the event `org.han.entry` `{entry, content}` to the room. The sequencer runs as an **application service** for its server. It sees the event, runs §4.1, and answers with an `org.han.receipt` event `{receipt}` (T-01). A resend of the same entry gets the same receipt (R-01), so Matrix's at-least-once delivery is harmless. |
-| refusal | for a `denied` or `invalid` entry, the sequencer sends `org.han.reject {id, code, reason}`, related to the entry's Matrix event. A client shows an entry as *pending* until it sees a receipt or a reject. Interactive clients MAY append over the generic binding instead, which answers at once. |
+| refusal | for a `denied` or `invalid` entry, the sequencer sends `org.han.reject {id, code, reason}`, related to the entry's Matrix event. Clients honour a reject **only** from the sequencer's application-service user named in `org.han.space`; anyone else's is ignored. A client shows an entry as *pending* until it sees a receipt or a reject. Interactive clients MAY append over the generic binding instead, which answers at once. |
 | `read` | the room timeline (`org.han.*` events), plus `GET /_han/v1/read` on the sequencer for the full chain and state. That request carries `Authorization: HAN <actor> <keyId> <proof>`, where the proof signs a challenge from `GET /_han/v1/challenge` exactly as in `hello`, so P-02 read rights apply. |
 | signals (T-05) | room-wide signals (faults, executor progress) are ordinary room events `org.han.signal {body}` that carry no authority. Private ones (notices, the move handshake) are to-device events of the same type. Executor progress uses `{type: "progress", claim, step, text}`. |
 | verifier | any client or server in the room. Clients SHOULD show unverified or faulty HAN state as such. |
@@ -574,8 +575,8 @@ Run `python ref/run_all.py`. Results: [ref/RESULTS.md](ref/RESULTS.md).
 | Tool | What it does |
 |---|---|
 | `ref/policy.py` | executable reference of §6 and the R-09 body schemas |
-| `ref/vectors/` + `run_vectors.py` | 107 vectors, 1074 steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
-| `ref/mutate_vectors.py` | 112 single-rule Policy mutations; the vectors must catch each one |
+| `ref/vectors/` + `run_vectors.py` | 111 vectors, 1115 steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
+| `ref/mutate_vectors.py` | 116 single-rule Policy mutations; the vectors must catch each one |
 | `ref/fuzz_fold.py` | 2,000 random histories in populated rooms: `decide`/`fold` never fail on an allowed entry, stay pure, keep budgets in bounds, never change a final phase |
 | `ref/wire.py` + `run_wire.py` | the generic binding with real Ed25519: reference sequencer (the §4.1 pipeline) and verifier (R-14); 30 scenarios |
 | `ref/mutate_wire.py` | 24 single-rule mutations of the sequencer and verifier; the scenarios must catch each one |

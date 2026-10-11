@@ -122,13 +122,17 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement)
     ('P-15', 'guarded not sticky', '                s["guarded"][author] = p["operator"]                            # sticky until it unguards itself', '                pass'),
     ('P-15', 'no settling of holds', '    settle_holds(s)\n', ''),
     ('P-15', 'settled holds ignore tasks', '        if (tasks or effs) and x not in s["held"]: s["held"][x] = g', '        if effs and x not in s["held"]: s["held"][x] = g'),
-    ('P-15', 'release does not clear', '        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = rc["seq"]', '        if b.get("release"): s["held"].pop(x, None)'),
+    ('P-15', 'release does not clear', '        if b.get("release"): s["held"].pop(x, None); s["cleared"][x] = e["seen"]', '        if b.get("release"): s["held"].pop(x, None)'),
     ('P-09', 'any executor key re-arms', ' and author == eff["executor"] and e["keyId"] == c["instance"]:', ' and author == eff["executor"]:'),
     ('P-07', 'closed task effects claimable', '    if eff.get("task") and not state["tasks"][eff["task"]]["open"]: return deny("E5 the effect\'s task is closed")', '    pass'),
     ('§2', 'profile not reserved', '(?!profile:)', ''),
     ('P-15', 'settled holds ignore effects', '        if (tasks or effs) and x not in s["held"]: s["held"][x] = g', '        if tasks and x not in s["held"]: s["held"][x] = g'),
     ('P-15', 'settled effects not guarded', '                e.setdefault("guards", []).append(g)', '                pass'),
     ('P-15', 'settled tasks first assignee only', '        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"]', '        tasks = [t for t in s["tasks"].values() if t["open"] and x in t["to"][:1]'),
+    ('P-15', 'stale releases accepted', '        if state["outside"].get(sess["actor"], 0) > entry["seen"]:', '        if False:'),
+    ('P-15', 'release clears up to its receipt', 's["cleared"][x] = e["seen"]', 's["cleared"][x] = rc["seq"]'),
+    ('P-07', 'agents draw on the space budget', '        if effect_source(state, eff)[0] == "space" and not is_human(ctx, eff["proposer"]):', '        if False:'),
+    ('§2', 'trailing newline accepted', 'def _actor(v): return isinstance(v, str) and bool(ACTOR.fullmatch(v))', 'def _actor(v): return isinstance(v, str) and bool(ACTOR.match(v))'),
 ]
 
 def load_mutant(old, new):
