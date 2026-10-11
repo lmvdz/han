@@ -3,7 +3,7 @@
  "rules": [
   "P-15"
  ],
- "description": "an agent may open a guarded or suggest session only if its confirmed operator holds a role",
+ "description": "an agent may open a guarded session only if its confirmed operator holds a role",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",

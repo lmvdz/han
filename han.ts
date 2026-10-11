@@ -177,8 +177,8 @@ export interface SpaceState {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
       expiresAt?: Time;                             // E5: no claim at or after this time
-      guards?: ActorId[];                           // the proposer's guard if it was held when proposing (P-15); the executor's
-                                                    // guard, if it is held now, is added at claim time
+      guards?: ActorId[];                           // the proposer's guard if it was held when proposing (P-15). The executor's
+                                                    // guard, while the executor is held, is required too but derived, not stored
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId; dropped?: true }[];
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
@@ -195,6 +195,7 @@ export interface SpaceState {
   sessions: { [id: EntryId]: { actor: ActorId; open: boolean; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId;
                                 human: boolean; guard?: ActorId } };   // the guard is an agent's confirmed operator at open
   held: { [agent: ActorId]: ActorId };                          // P-15: agent → the human it waits for
+  guarded: { [agent: ActorId]: ActorId };                       // P-15: agent → its guard; the agent's own sticky choice
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };

@@ -1,8 +1,11 @@
 """Bounded exhaustive check of P-15 guarded steering against the real policy.py.
 
-The model keeps its own ground truth (a *ghost*) from the intent of P-15, not from Policy's code: BOT is held from the
-first instruction to it (a steer into any of its sessions, or a task naming it) by anyone but itself and its operator OP
-while it has a live guarded session, until OP itself releases it. Nobody stands in for OP. Properties:
+The model keeps its own ground truth (a *ghost*) from the intent of P-15, not from Policy's code. BOT *chose* to be
+guarded (it opened a guarded session); that choice is sticky and only BOT itself, while not held, undoes it by closing
+its last guarded session; owners closing sessions, evicting OP or toggling modes don't. Owners can also force BOT's auto
+session to act guarded through the allowed modes. BOT is held from the first instruction to it (a steer into any of its
+sessions, a task naming it, a proposal naming it as executor) by anyone but itself and OP while guarded, until OP itself
+releases it. Nobody stands in for OP. Properties:
 - GuardedClaimsNeedTheirHuman: a claim Policy allows on an effect that BOT proposed while held, or that names BOT as
   executor while BOT is held, is covered by an unused approval of OP, while OP holds a role and its key is valid;
 - HeldInstructNoOne: Policy never lets a held agent create a task, approve, or steer another's session;
@@ -48,12 +51,12 @@ PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT)}       # pr3: BOT as
 CLAIMABLE = ("pr0", "pr1", "pr2", "pr3")
 
 class M:
-    __slots__ = ("labels", "state", "oprev", "held", "need", "covered", "used", "lastk")
+    __slots__ = ("labels", "state", "oprev", "held", "need", "covered", "used", "lastk", "gd")
     def __init__(self, **kw):
         for k in self.__slots__: setattr(self, k, kw[k])
     def key(self):
         st = {k: v for k, v in self.state.items() if k not in ("entries", "head", "roleHistory")}
-        return (json.dumps(st, sort_keys=True), self.oprev, self.held, self.need, self.covered, self.used, self.lastk)
+        return (json.dumps(st, sort_keys=True), self.oprev, self.held, self.need, self.covered, self.used, self.lastk, self.gd)
     def with_(self, **kw):
         d = {k: getattr(self, k) for k in self.__slots__}; d.update(kw); return M(**d)
 
@@ -68,7 +71,7 @@ def apply(pol, m, e, label):
     return m.with_(labels=m.labels + (label,), state=s), d
 
 def init(pol):
-    m = M(labels=(), state=None, oprev=False, held=False, need=frozenset(), covered=(), used=(), lastk=())
+    m = M(labels=(), state=None, oprev=False, held=False, need=frozenset(), covered=(), used=(), lastk=(), gd=True)
     m, d = apply(pol, m, E("C", "space.create", O, {"policy": policy()}), "C"); assert m, d
     for lab, a in (("m1", P), ("m2", X), ("m3", OP), ("m4", OP2), ("m5", BOT), ("m6", BOT2)):
         m, d = apply(pol, m, E(lab, "member.set", O, {"actor": a, "role": "member"}), lab); assert m, (lab, d)
@@ -97,11 +100,11 @@ def alive(state, sid):
     if mode is None: return False
     return mode == "auto" or state["roles"].get(OP if actor == BOT else OP2) is not None
 
-def bot_guarded(state):
-    return any(SESS[sid][1] == BOT and alive(state, sid) and mode_now(state, sid) == "guarded" for sid in SESS)
-
-def instructs_bot(author, state):
-    return author not in (BOT, OP) and bot_guarded(state)
+def instructs_bot(author, m, steered=None):
+    """An instruction to BOT holds it if BOT chose guarded (sticky), or if it steers a session owners force guarded."""
+    if author in (BOT, OP) or m.held: return False
+    forced = steered is not None and alive(m.state, steered) and mode_now(m.state, steered) == "guarded"
+    return m.gd or forced
 
 def successors(pol, m):
     out = []
@@ -112,21 +115,24 @@ def successors(pol, m):
         out.append((name, kind, author, body, m2, d))
     for author in (P, O, OP2, OP, BOT, BOT2):
         for sid, (lab, actor, _) in SESS.items():
-            hold = actor == BOT and instructs_bot(author, m.state)
+            hold = actor == BOT and instructs_bot(author, m, sid)
             go(f"{author} steers {lab}", "session.input", author, {"session": sid},
                (lambda n: n.with_(held=True)) if hold else None)
     for author in (OP, OP2, O):
         go(f"{author} releases BOT", "session.input", author, {"session": S1, "release": True},
            (lambda n: n.with_(held=False)) if author == OP else None)
-    go("P tasks BOT", "task", P, {"to": [BOT]}, (lambda n: n.with_(held=True)) if instructs_bot(P, m.state) else None)
+    go("P tasks BOT", "task", P, {"to": [BOT]}, (lambda n: n.with_(held=True)) if instructs_bot(P, m) else None)
     go("BOT tasks BOT2", "task", BOT, {"to": [BOT2]})
-    if m.state["sessions"][S1]["open"]: go("BOT closes s1", "session.close", BOT, {"session": S1})
+    if m.state["sessions"][S1]["open"]:
+        go("BOT closes s1", "session.close", BOT, {"session": S1}, (lambda n: n.with_(gd=False)) if not m.held else None)
+        go("O closes s1", "session.close", O, {"session": S1})
     for pr, (author, executor) in PROPS.items():
         if H(pr) in m.state["effects"]: continue
         body = {"executor": executor, "action": "pay", "planDigest": DG, "repeatable": pr == "pr1"}
         guarded = author == BOT and m.held
+        holds = executor == BOT and instructs_bot(author, m)
         go(f"{author} proposes {pr}", "effect.propose", author, body,
-           lambda n, pr=pr, g=guarded: n.with_(need=n.need | ({pr} if g else set())), label=pr)
+           lambda n, pr=pr, g=guarded, h=holds: n.with_(need=n.need | ({pr} if g else set()), held=n.held or h), label=pr)
     for pr in CLAIMABLE:
         pid = H(pr); eff = m.state["effects"].get(pid)
         if not eff or eff["phase"] in POL.FINAL or len(eff["claims"]) >= 2: continue
@@ -219,7 +225,10 @@ MUTATIONS = {
     "held-proposals-unguarded": ('        if author in s["held"]: eff["guards"] = [s["held"][author]]; eff["phase"] = "awaiting-approval"', '        pass'),
     "held-executors-unguarded": ('    h = state["held"].get(eff["executor"])\n    if h and h not in g: g.append(h)', '    pass'),
     "tasks-never-hold": ('        for x in b["to"]: hold_on_instruction(s, x, author)\n', ''),
-    "hold-per-session-only": ('    g = agent_guard(s, x)\n', '    g = None\n'),
+    "guarded-not-sticky": ('            if b["steerMode"] == "guarded": s["guarded"][author] = p["operator"]       # sticky until it unguards itself', '            pass'),
+    "anyone-closing-unguards": ('        if (author == x and x not in s["held"] and sess["steerMode"] == "guarded"', '        if (x not in s["held"] and sess["steerMode"] == "guarded"'),
+    "executor-naming-no-instruction": ('        hold_on_instruction(s, b["executor"], author)\n', ''),
+    "owner-forced-modes-ignored": ('        else: hold_on_instruction(s, x, author, sess.get("guard") if effective_mode(s, sess) == "guarded" else None)', '        else: hold_on_instruction(s, x, author)'),
     "guards-not-required": ('        if res == "none": return deny("E3 a guard hasn\'t approved")', '        pass'),
     "guard-approval-needs-no-role": ('    if role_of(state, g) not in READ_ROLES: return "none", None\n    for a in eff["approvals"]:\n        if a["author"] != g', '    for a in eff["approvals"]:\n        if a["author"] != g'),
     "owners-stand-in": [('    is_guard = author in guards and role in READ_ROLES', '    is_guard = (author in guards or role == "owner") and role in READ_ROLES'),

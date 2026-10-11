@@ -983,6 +983,52 @@ v.step(E("s2", "session.open", BOT, {"steerMode": "guarded"}), "allow", profiles
 v.step(E("in", "session.input", M, {"session": "s1"}), "allow", check={"held": {BOT: OP}}, note="held via its guarded session's guard")
 add(v.done())
 
+v = V("guarded-is-sticky", ["P-15"], "owners can't un-guard an agent: closing its session, evicting its guard or toggling modes leaves it guarded")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow", check={"guarded": {BOT: OP}})
+v.step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("c", "session.close", O, {"session": "s1"}), "allow", check={"guarded": {BOT: OP}}, note="an owner closing it doesn't un-guard")
+v.step(E("t", "task", O, {"to": [BOT]}), "allow", check={"held": {BOT: OP}}, note="A1: close-then-task still holds")
+v.step(E("r", "session.input", OP, {"session": "s1", "release": True}), "allow", check={"held": {}})
+v.step(ms("ev", O, OP, "none"), "allow", check={"guarded": {BOT: OP}})
+v.step(E("in", "session.input", O, {"session": "s3"}), "allow", check={"held": {BOT: OP}}, note="A2: evict-then-steer still holds")
+v.step(prop("p", author=BOT), "allow", check={"effects.p.guards": [OP]})
+v.step(appr("a", "p", author=O), "denied", note="nobody stands in")
+add(v.done())
+
+v = V("modes-toggle-cannot-unguard", ["P-15"], "switching modes to auto-only and back doesn't let an outside steer through")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["auto"]))}), "allow")
+v.step(E("in", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}}, note="A3: still guarded")
+add(v.done())
+
+v = V("only-the-agent-unguards-itself", ["P-15"], "an agent that isn't held stops being guarded by closing its last guarded session; a held one can't")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s3", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("in", "session.input", P, {"session": "s3"}), "allow", check={"held": {BOT: OP}})
+v.step(E("c1", "session.close", BOT, {"session": "s1"}), "allow", check={"guarded": {BOT: OP}}, note="held: closing doesn't unguard")
+v.step(E("r", "session.input", OP, {"session": "s1", "release": True}), "allow")
+v.step(E("s2", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(E("c2", "session.close", BOT, {"session": "s2"}), "allow", check={"guarded": {}}, note="its own choice, not held")
+v.step(E("in2", "session.input", P, {"session": "s3"}), "allow", check={"held": {}})
+add(v.done())
+
+v = V("naming-a-guarded-executor-holds-it", ["P-15"], "a proposal naming a guarded agent as executor is an instruction: from anyone but its guard it holds the agent")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(prop("q", author=OP, executor=BOT), "allow", check={"held": {}}, note="its own guard's proposal")
+v.step(prop("d", author=P, executor=BOT), "allow", check={"held": {BOT: OP}}, note="A4")
+v.step(claim("c0", "d", author=BOT), "denied", note="its guard must approve")
+add(v.done())
+
+v = V("returned-approvals-stay-superseded", ["P-08"], "an approval returned by a not-started outcome is dropped if its author approved again meanwhile")
+team(v, policy(approvals=[{"action": "*", "approvers": ["owner"]}]))
+v.step(prop("p"), "allow").step(appr("a1", "p", author=O), "allow").step(claim("c", "p"), "allow")
+v.step(appr("a2", "p", author=O), "allow")
+v.step(outc("o", "c", "failed", "no"), "allow", check={"effects.p.approvals.0.dropped": True}, note="A5: one open approval per author")
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",
