@@ -80,7 +80,7 @@ def random_entry(r, state, n):
         "x.ext": lambda: {"anything": r.randint(0, 9)},
         "session.open": lambda: dict({"steerMode": r.choice(["auto", "guarded", "suggest"])}, **({"task": pick(tasks, H("nope"))} if r.random() < .3 else {})),
         "session.close": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
-        "session.input": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
+        "session.input": lambda: dict({"session": pick(list(state["sessions"]), H("nope"))}, **({"release": True} if r.random() < .2 else {})),
     }[kind]()
     author = r.choice(ACTORS + [O, O, X, X])
     return {"id": H(f"e{n}"), "v": 1, "space": S, "kind": kind, "author": author, "keyId": "k1", "body": body,

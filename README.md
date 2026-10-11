@@ -9,10 +9,10 @@ HAN doesn't replace chat. Conversations run on an existing network (Matrix first
 - **Accountable agents:** every agent has a human operator who vouches for it, re-checked at every action.
 - **Budgets** reserved before an action and settled after it, delegated down task trees. Agents can't spend outside their allocation.
 - **Approvals bound to the exact plan**, with expiry and separation of duties.
-- **Live sessions you can watch, read and steer** across silos, while the work happens, not after the PR. Owners set who may watch, read or steer per space. Every steer is signed and sequenced, and a session can make outside steers *guarded*: the agent is then tainted, so everything it does in the world waits for its own human, even through relays to other agents.
+- **Live sessions you can watch, read and steer** across silos, while the work happens, not after the PR. Owners set who may watch, read or steer per space. Every steer is signed and sequenced. A session can make outside steers *guarded*: the agent is then on hold for its own human, so it can't delegate or relay, and whatever it does in the world waits for that human's approval.
 - **Replayable policy:** Policy is five pure functions, so any participant re-checks every decision. A cheating sequencer leaves a portable proof.
 
-> **Status: design draft (v1, round 9).** This is a specification with an executable reference and checkers. There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](grading-rubric.md)) scored rounds 1–8 from 57.8 to 76.6 / 100 (round 8: 67.8); see [HISTORY.md](HISTORY.md). Expect breaking changes.
+> **Status: design draft (v1, round 10).** This is a specification with an executable reference and checkers. There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](grading-rubric.md)) scored rounds 1–8 from 57.8 to 76.6 / 100 (rounds 8–9: 67.8, 67.5); see [HISTORY.md](HISTORY.md). Expect breaking changes.
 
 ## Read
 

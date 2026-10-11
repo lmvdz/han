@@ -1,6 +1,6 @@
 # HAN v1 — coverage of v0.4
 
-Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7 and 8): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
+Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–10): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
 v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18 and R-24, P-01…P-13 and P-15, X-01…X-07, X-09, X-10, T-01…T-07, G-01…G-05 (the generic binding, §8.3).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
@@ -64,7 +64,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | context.fork | `space.create` with `forkOf` (P-13) | kept |
 | context.publish | effect `action: publish`. The stale-target compare-and-swap moves into the plan: `plan.args` carries the expected target version, and the executor reports `failed` (`started: "no"`) on mismatch. **Weakened:** this is an executor obligation, not a protocol-enforced check. | weakened |
 
-## Ports (≈85 methods → 7 modules, 15 calls/functions)
+## Ports (≈85 methods → 7 modules, 16 calls/functions)
 
 | v0.4 port / helper | v1 | Status |
 |---|---|---|

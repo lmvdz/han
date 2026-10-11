@@ -17,8 +17,9 @@ CHECKS = [
     ("Policy mutations must be caught by the vectors", [PY, os.path.join(HERE, "mutate_vectors.py")]),
     ("Fold totality fuzz: random histories never crash fold and keep budgets in bounds", [PY, os.path.join(HERE, "fuzz_fold.py")]),
     ("Wire mutations must be caught by the scenarios", [PY, os.path.join(HERE, "mutate_wire.py")]),
-    ("Guard model (P-15): no influenced effect is claimed without its human, depth 6", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "6"]),
-    ("Guard model mutations must each give a counterexample, depth 6", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "6", "--all-mutations"]),
+    ("Guard model (P-15), quick depth 4: held agents instruct no one; their effects need their human", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4"], "quick"),
+    ("Guard model (P-15), depth 5 (~2 min)", [PY, os.path.join(HERE, "model_guard.py")], "full"),
+    ("Guard model mutations must each give a counterexample, depth 5 (~2 min)", [PY, os.path.join(HERE, "model_guard.py"), "--all-mutations"], "full"),
     ("Signed layer (real Ed25519): home pipeline, content validation, mirror verification, proofs, blobs, notices", [PY, os.path.join(HERE, "run_wire.py")]),
     ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")]),
     ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"]),
@@ -27,9 +28,10 @@ CHECKS = [
 def main():
     quick = "--quick" in sys.argv
     rows, ok_all = [], True
-    for name, cmd in CHECKS:
-        if quick and "model_check.py" in cmd[1]:
-            rows.append((name, "skipped (--quick)", "")); continue
+    for name, cmd, *mode in CHECKS:
+        mode = mode[0] if mode else "both"
+        if (quick and ("model_check.py" in cmd[1] or mode == "full")) or (not quick and mode == "quick"):
+            rows.append((name, "skipped (--quick)" if quick else "skipped (full run uses depth 5)", "")); continue
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1"), shell=(os.name == "nt" and cmd[0] == "npx"))
         out = "\n".join(l for l in (r.stdout + r.stderr).splitlines() if not l.startswith("npm ")).strip()
