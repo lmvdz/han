@@ -9,9 +9,10 @@ HAN doesn't replace chat. Conversations run on an existing network (Matrix first
 - **Accountable agents:** every agent has a human operator who vouches for it, re-checked at every action.
 - **Budgets** reserved before an action and settled after it, delegated down task trees. Agents can't spend outside their allocation.
 - **Approvals bound to the exact plan**, with expiry and separation of duties.
-- **Replayable policy:** Policy is four pure functions, so any participant re-checks every decision. A cheating sequencer leaves a portable proof.
+- **Live sessions you can watch, read and steer** across silos, while the work happens, not after the PR. Owners set who may watch, read or steer per space. Every steer is signed and sequenced, and a session can make outside steers *guarded*: the agent is then tainted, so everything it does in the world waits for its own human, even through relays to other agents.
+- **Replayable policy:** Policy is five pure functions, so any participant re-checks every decision. A cheating sequencer leaves a portable proof.
 
-> **Status: design draft (v1, round 7).** This is a specification with an executable reference and checkers. There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](grading-rubric.md)) scored rounds 1–6 from 57.8 to 76.6 / 100; see [HISTORY.md](HISTORY.md). Expect breaking changes.
+> **Status: design draft (v1, round 9).** This is a specification with an executable reference and checkers. There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](grading-rubric.md)) scored rounds 1–8 from 57.8 to 76.6 / 100 (round 8: 67.8); see [HISTORY.md](HISTORY.md). Expect breaking changes.
 
 ## Read
 

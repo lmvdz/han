@@ -83,7 +83,7 @@ def secs(s): return int((datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzin
 def POLICY(w=W):
     return {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any",
             "approvals": [{"action": "*", "approvers": ["owner"]}], "separateApprover": False, "budget": None,
-            "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": w, "extensionsMinRole": "member", "servers": {"deny": []}}
+            "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": w, "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded", "suggest"]}, "servers": {"deny": []}}
 
 def HX(label):
     """Entry ids are 64-hex (R-09); the model keeps readable labels and hashes them."""

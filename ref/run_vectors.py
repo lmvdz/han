@@ -50,6 +50,11 @@ def run_vector(vec):
             got = P.can_read(states[r["space"]], r["actor"], r["seq"])
             if got != st["expect"]: fails.append(f"step {n} read {r}: expected {st['expect']} got {got}")
             continue
+        if "sessionAccess" in st:
+            q = st["sessionAccess"]
+            got = P.session_access(states[q["space"]], q["actor"], q["session"])
+            if got != st["expect"]: fails.append(f"step {n} sessionAccess {q['actor']}: expected {st['expect']} got {got}")
+            continue
         if "relevantActors" in st:
             e = st["relevantActors"]
             got = P.relevant_actors(states.get(e["space"]), e)
