@@ -1,0 +1,24 @@
+{
+ "name": "jcs-utf16-key-order",
+ "rules": [
+  "§2"
+ ],
+ "description": "keys are ordered by UTF-16 code units, not code points",
+ "entry": {
+  "v": 1,
+  "space": "s1:a.example",
+  "kind": "x.note",
+  "author": "@m:a.example",
+  "keyId": "k1",
+  "body": {
+   "�": 1,
+   "😀": 2
+  },
+  "contentHash": "",
+  "refs": [],
+  "seen": 0,
+  "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "time": "2026-10-10T12:00:00Z"
+ },
+ "preimage": "han-entry-v1\n{\"author\":\"@m:a.example\",\"body\":{\"😀\":2,\"�\":1},\"contentHash\":\"\",\"keyId\":\"k1\",\"kind\":\"x.note\",\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaa\",\"refs\":[],\"seen\":0,\"space\":\"s1:a.example\",\"time\":\"2026-10-10T12:00:00Z\",\"v\":1}"
+}

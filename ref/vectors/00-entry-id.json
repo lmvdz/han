@@ -1,0 +1,27 @@
+{
+ "name": "entry-id",
+ "rules": [
+  "R-01",
+  "§2"
+ ],
+ "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
+ "entry": {
+  "v": 1,
+  "space": "s1:a.example",
+  "kind": "message",
+  "author": "@m:a.example",
+  "keyId": "k1",
+  "body": {
+   "to": [
+    "@o:a.example"
+   ]
+  },
+  "contentHash": "",
+  "refs": [],
+  "seen": 3,
+  "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "time": "2026-10-10T12:00:00Z",
+  "sig": "ignored"
+ },
+ "preimage": "han-entry-v1\n{\"author\":\"@m:a.example\",\"body\":{\"to\":[\"@o:a.example\"]},\"contentHash\":\"\",\"keyId\":\"k1\",\"kind\":\"message\",\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaa\",\"refs\":[],\"seen\":3,\"space\":\"s1:a.example\",\"time\":\"2026-10-10T12:00:00Z\",\"v\":1}"
+}

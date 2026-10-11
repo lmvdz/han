@@ -1,0 +1,170 @@
+{
+ "name": "keyid-single-use",
+ "rules": [
+  "§4.3",
+  "R-12"
+ ],
+ "description": "a revoked keyId can never become valid again",
+ "profiles": {
+  "@:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@bot:b.example": {
+   "actorKind": "agent",
+   "operator": "@op:b.example",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    },
+    "k2": {
+     "publicKey": "pk2",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "648b055b15e75bd1581fb5f32479f1d92e6f839dad86dbf496e261cc87eafb4f",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@op:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-PC",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fe2ec96ec95cc6f459466b154ead45ad1ea40b28e7cc73b419fa54bc21f84718",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.add",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "k2",
+     "publicKey": "pk2"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ka",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d47b7f51b47032ff7911d1ed9dbe89a7a2557b93e7b43b3506cb4ccdbc03e315",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.revoke",
+    "author": "@bot:b.example",
+    "keyId": "k2",
+    "body": {
+     "keyId": "k1"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-kr",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "66adcada6460d65b4cda9b25b0d572b5e7d2e9a3925ca589daab36e62c2a0cbc",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.add",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "k1",
+     "publicKey": "pk-new"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-kb",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "invalid"
+  },
+  {
+   "entry": {
+    "id": "d32f968acde53e1e06da65f28cd9d465cb07a9b3143ff1b2102bf90213e8e52d",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.revoke",
+    "author": "@bot:b.example",
+    "keyId": "k2",
+    "body": {
+     "keyId": "k1"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-kc",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "invalid",
+   "note": "already revoked"
+  }
+ ],
+ "ids": {
+  "PC": "648b055b15e75bd1581fb5f32479f1d92e6f839dad86dbf496e261cc87eafb4f",
+  "ka": "fe2ec96ec95cc6f459466b154ead45ad1ea40b28e7cc73b419fa54bc21f84718",
+  "kb": "66adcada6460d65b4cda9b25b0d572b5e7d2e9a3925ca589daab36e62c2a0cbc",
+  "kc": "d32f968acde53e1e06da65f28cd9d465cb07a9b3143ff1b2102bf90213e8e52d",
+  "kr": "d47b7f51b47032ff7911d1ed9dbe89a7a2557b93e7b43b3506cb4ccdbc03e315"
+ }
+}

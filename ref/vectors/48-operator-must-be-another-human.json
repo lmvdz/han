@@ -1,0 +1,260 @@
+{
+ "name": "operator-must-be-another-human",
+ "rules": [
+  "§4.3"
+ ],
+ "description": "an agent can't operate itself, and operators must be human; operators can withdraw",
+ "profiles": {
+  "@:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@bot2:b.example": {
+   "actorKind": "agent",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@bot:b.example": {
+   "actorKind": "agent",
+   "operator": "@op:b.example",
+   "operatorConfirmed": true,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@op:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "88d748ba552aabc0192426c2486c056179b52f127d9bdf1e90bf162a65b655e6",
+    "v": 1,
+    "space": "profile:@bot2:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@bot2:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-P0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "invalid",
+   "note": "its own operator"
+  },
+  {
+   "entry": {
+    "id": "b3970d62ce4cf35ccdc8234eb4814170dce4c46e0faa46bb080d6e43a15d03c8",
+    "v": 1,
+    "space": "profile:@bot2:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@bot:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-P1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
+    "v": 1,
+    "space": "profile:@bot2:b.example",
+    "kind": "member.set",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@bot:b.example",
+     "role": "owner"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "denied",
+   "note": "an agent can't be an operator"
+  },
+  {
+   "entry": {
+    "id": "bc059db690a5974090aa81ce3d685194ab0978fa7d492c4592e0e1c46e50a14e",
+    "v": 1,
+    "space": "profile:@bot3:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@op:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-P2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+    "v": 1,
+    "space": "profile:@bot3:b.example",
+    "kind": "member.set",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@op:b.example",
+     "role": "owner"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow",
+   "check": {
+    "profile.operatorConfirmed": true
+   }
+  },
+  {
+   "entry": {
+    "id": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+    "v": 1,
+    "space": "profile:@bot3:b.example",
+    "kind": "member.set",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@op:b.example",
+     "role": "none"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow",
+   "check": {
+    "profile.operatorConfirmed": false
+   }
+  }
+ ],
+ "ids": {
+  "P0": "88d748ba552aabc0192426c2486c056179b52f127d9bdf1e90bf162a65b655e6",
+  "P1": "b3970d62ce4cf35ccdc8234eb4814170dce4c46e0faa46bb080d6e43a15d03c8",
+  "P2": "bc059db690a5974090aa81ce3d685194ab0978fa7d492c4592e0e1c46e50a14e",
+  "c0": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
+  "c1": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+  "c2": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7"
+ }
+}

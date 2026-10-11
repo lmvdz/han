@@ -1,0 +1,277 @@
+{
+ "name": "profile-space",
+ "rules": [
+  "§4.3",
+  "R-12"
+ ],
+ "description": "server creates; actor or server manages keys; operator confirms",
+ "profiles": {
+  "@:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@bot:b.example": {
+   "actorKind": "agent",
+   "operator": "@op:b.example",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@op:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@z:d.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "0b49511aa97439336bf4aaa0e4d311d766109b2fc3d93c1fe0fa69f09910b6b7",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "space.create",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@op:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-PC0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "denied"
+  },
+  {
+   "entry": {
+    "id": "648b055b15e75bd1581fb5f32479f1d92e6f839dad86dbf496e261cc87eafb4f",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@op:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-PC",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fe2ec96ec95cc6f459466b154ead45ad1ea40b28e7cc73b419fa54bc21f84718",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.add",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "k2",
+     "publicKey": "pk2"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ka",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "4107232a14341830bd982a75979c03be34c54490e915627638303f4356ce5f2e",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.add",
+    "author": "@z:d.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "k3",
+     "publicKey": "pk3"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-kz",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "denied"
+  },
+  {
+   "entry": {
+    "id": "d47b7f51b47032ff7911d1ed9dbe89a7a2557b93e7b43b3506cb4ccdbc03e315",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "key.revoke",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "k1"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-kr",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow",
+   "check": {
+    "profile.keys.k1.status": "revoked"
+   }
+  },
+  {
+   "entry": {
+    "id": "6b6a4d15e8589250c8b117a1a5ed02f762f850bf987c28d9a0088c7f45cf341e",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "member.set",
+    "author": "@z:d.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@z:d.example",
+     "role": "owner"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-oc0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "denied"
+  },
+  {
+   "entry": {
+    "id": "0b29cfa9959bb2e9908e8d0be9f6b01563ed97c2cd4cf32365c95862da700f00",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "member.set",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@op:b.example",
+     "role": "owner"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-oc",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow",
+   "check": {
+    "profile.operatorConfirmed": true
+   }
+  },
+  {
+   "entry": {
+    "id": "e805a93553fe6867b4b68096aec2127fd825716ef521dfb712dc404e70882152",
+    "v": 1,
+    "space": "profile:@bot:b.example",
+    "kind": "message",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-msg",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "denied"
+  }
+ ],
+ "ids": {
+  "PC": "648b055b15e75bd1581fb5f32479f1d92e6f839dad86dbf496e261cc87eafb4f",
+  "PC0": "0b49511aa97439336bf4aaa0e4d311d766109b2fc3d93c1fe0fa69f09910b6b7",
+  "ka": "fe2ec96ec95cc6f459466b154ead45ad1ea40b28e7cc73b419fa54bc21f84718",
+  "kr": "d47b7f51b47032ff7911d1ed9dbe89a7a2557b93e7b43b3506cb4ccdbc03e315",
+  "kz": "4107232a14341830bd982a75979c03be34c54490e915627638303f4356ce5f2e",
+  "msg": "e805a93553fe6867b4b68096aec2127fd825716ef521dfb712dc404e70882152",
+  "oc": "0b29cfa9959bb2e9908e8d0be9f6b01563ed97c2cd4cf32365c95862da700f00",
+  "oc0": "6b6a4d15e8589250c8b117a1a5ed02f762f850bf987c28d9a0088c7f45cf341e"
+ }
+}
