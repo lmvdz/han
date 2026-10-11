@@ -1,0 +1,81 @@
+{
+ "op": "blobPut",
+ "description": "blobPut a 2000-byte blob in one part",
+ "status": {
+  "ts->py": "pass",
+  "py->ts": "pass",
+  "ts->ts": "pass",
+  "py->py": "pass"
+ },
+ "clients": {
+  "ts-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "55384c31cb0f7eb9abb8e18719553b259f83c506083a7156e123ad613d43fbef",
+        "size": 2000,
+        "type": "application/octet-stream"
+       },
+       "offset": 0,
+       "data": "<b64u len=2667 sha256=55576617d9ba8cd0>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "have": 2000,
+       "complete": true
+      }
+     }
+    }
+   ]
+  },
+  "py-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "55384c31cb0f7eb9abb8e18719553b259f83c506083a7156e123ad613d43fbef",
+        "size": 2000,
+        "type": "application/octet-stream"
+       },
+       "offset": 0,
+       "data": "<b64u len=2667 sha256=55576617d9ba8cd0>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "have": 2000,
+       "complete": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ "vectorFrom": "ts-client",
+ "clientsSendTheSameFrames": true,
+ "vectorRule": "frames below are what the named client sent and BOTH servers answered, byte for byte after JSON parsing (hello challenge/proof masked, blob data >300 chars summarised); keys, nonces, entry times and both server clocks fixed"
+}

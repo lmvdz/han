@@ -1,0 +1,157 @@
+{
+ "op": "signal",
+ "description": "subscribe live-only; another actor signals; signal item with `from`; cancel",
+ "status": {
+  "ts->py": "pass",
+  "py->ts": "pass",
+  "ts->ts": "pass",
+  "py->py": "pass"
+ },
+ "clients": {
+  "ts-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "subscribe",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "signal",
+      "args": {
+       "space": "s1:a.localhost",
+       "body": {
+        "typing": true
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": null
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "signal",
+       "from": "@bob:a.localhost",
+       "body": {
+        "typing": true
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "cancel",
+      "args": {
+       "target": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": null
+     }
+    }
+   ]
+  },
+  "py-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "subscribe",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "signal",
+      "args": {
+       "space": "s1:a.localhost",
+       "body": {
+        "typing": true
+       }
+      }
+     }
+    },
+    {
+     "conn": "@bob:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": null
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "item": {
+       "type": "signal",
+       "from": "@bob:a.localhost",
+       "body": {
+        "typing": true
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "cancel",
+      "args": {
+       "target": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": null
+     }
+    }
+   ]
+  }
+ },
+ "vectorFrom": "ts-client",
+ "clientsSendTheSameFrames": true,
+ "vectorRule": "frames below are what the named client sent and BOTH servers answered, byte for byte after JSON parsing (hello challenge/proof masked, blob data >300 chars summarised); keys, nonces, entry times and both server clocks fixed"
+}

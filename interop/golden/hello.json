@@ -1,0 +1,358 @@
+{
+ "op": "hello",
+ "description": "challenge from the server, hello with proof, hello ok (limits, durability, time, knownHeads)",
+ "status": {
+  "ts->py": "pass",
+  "py->ts": "pass",
+  "ts->ts": "pass",
+  "py->py": "pass"
+ },
+ "clients": {
+  "ts-client": {
+   "pythonServerAndTsServerAgree": false,
+   "pythonServerFrames": [
+    {
+     "event": {
+      "ev": "open",
+      "conn": 0,
+      "path": "/han",
+      "upstreamPath": "/han"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "challenge": "<challenge>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ],
+   "tsServerFrames": [
+    {
+     "event": {
+      "ev": "open",
+      "conn": 0,
+      "path": "/han",
+      "upstreamPath": "/han"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "challenge": "<challenge>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256,
+        "maxClockSkewSeconds": 60
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ],
+   "differences": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "index": 1,
+     "pythonServer": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     },
+     "tsServer": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256,
+        "maxClockSkewSeconds": 60
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ]
+  },
+  "py-client": {
+   "pythonServerAndTsServerAgree": false,
+   "pythonServerFrames": [
+    {
+     "event": {
+      "ev": "open",
+      "conn": 0,
+      "path": "/",
+      "upstreamPath": "/"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "challenge": "<challenge>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ],
+   "tsServerFrames": [
+    {
+     "event": {
+      "ev": "open",
+      "conn": 0,
+      "path": "/",
+      "upstreamPath": "/"
+     }
+    },
+    {
+     "event": {
+      "ev": "upgrade-fail",
+      "conn": 0,
+      "status": 400,
+      "path": "/"
+     }
+    },
+    {
+     "event": {
+      "ev": "open",
+      "conn": 1,
+      "path": "/han",
+      "upstreamPath": "/han"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "challenge": "<challenge>",
+      "server": "a.localhost",
+      "versions": [
+       1
+      ],
+      "time": "2026-01-01T00:00:00Z"
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "hello",
+      "args": {
+       "who": "@alice:a.localhost",
+       "keyId": "k1",
+       "proof": "<proof>",
+       "version": 1
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256,
+        "maxClockSkewSeconds": 60
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ],
+   "differences": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "index": 1,
+     "pythonServer": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     },
+     "tsServer": {
+      "id": 1,
+      "ok": {
+       "limits": {
+        "maxFrameBytes": 1310720,
+        "maxHeaderBytes": 16384,
+        "maxContentBytes": 65536,
+        "maxBlobBytes": 4294967296,
+        "maxBlobPartBytes": 786432,
+        "maxBlobRangeBytes": 786432,
+        "maxStreamItemBytes": 65536,
+        "maxFollows": 256,
+        "maxClockSkewSeconds": 60
+       },
+       "durability": "local",
+       "time": "2026-01-01T00:00:00Z",
+       "knownHeads": []
+      }
+     }
+    }
+   ]
+  }
+ },
+ "vectorFrom": null,
+ "vectorRule": "frames below are what the named client sent and BOTH servers answered, byte for byte after JSON parsing (hello challenge/proof masked, blob data >300 chars summarised); keys, nonces, entry times and both server clocks fixed"
+}

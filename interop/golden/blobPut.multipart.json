@@ -1,0 +1,193 @@
+{
+ "op": "blobPut.multipart",
+ "description": "blobPut 1,700,000 bytes in three parts",
+ "status": {
+  "ts->py": "pass",
+  "py->ts": "pass",
+  "ts->ts": "pass",
+  "py->py": "pass"
+ },
+ "clients": {
+  "ts-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+        "size": 1700000,
+        "type": "application/octet-stream"
+       },
+       "offset": 0,
+       "data": "<b64u len=1048576 sha256=a70b934cf69c32cb>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "have": 786432,
+       "complete": false
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+        "size": 1700000,
+        "type": "application/octet-stream"
+       },
+       "offset": 786432,
+       "data": "<b64u len=1048576 sha256=d92d32a44b45b181>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": {
+       "have": 1572864,
+       "complete": false
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 3,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+        "size": 1700000,
+        "type": "application/octet-stream"
+       },
+       "offset": 1572864,
+       "data": "<b64u len=169515 sha256=2f05398a66532fe2>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 3,
+      "ok": {
+       "have": 1700000,
+       "complete": true
+      }
+     }
+    }
+   ]
+  },
+  "py-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+        "size": 1700000,
+        "type": "application/octet-stream"
+       },
+       "offset": 0,
+       "data": "<b64u len=1048576 sha256=a70b934cf69c32cb>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "have": 786432,
+       "complete": false
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+        "size": 1700000,
+        "type": "application/octet-stream"
+       },
+       "offset": 786432,
+       "data": "<b64u len=1048576 sha256=d92d32a44b45b181>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": {
+       "have": 1572864,
+       "complete": false
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 3,
+      "call": "blobPut",
+      "args": {
+       "ref": {
+        "hash": "d3bc1beaf32e4245896f87f319ccb4785f7f9a18c73d7263211536e2705d5323",
+        "size": 1700000,
+        "type": "application/octet-stream"
+       },
+       "offset": 1572864,
+       "data": "<b64u len=169515 sha256=2f05398a66532fe2>"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 3,
+      "ok": {
+       "have": 1700000,
+       "complete": true
+      }
+     }
+    }
+   ]
+  }
+ },
+ "vectorFrom": "ts-client",
+ "clientsSendTheSameFrames": true,
+ "vectorRule": "frames below are what the named client sent and BOTH servers answered, byte for byte after JSON parsing (hello challenge/proof masked, blob data >300 chars summarised); keys, nonces, entry times and both server clocks fixed"
+}
