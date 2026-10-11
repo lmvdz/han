@@ -147,3 +147,26 @@ async def test_release_ends_hold_and_stale_release_is_refused(env):
     assert (await state(cl["alice"]))["held"] == {}
     await until(lambda: not host.held)
     task.cancel()
+
+async def test_guarded_status_says_it_is_advisory_without_a_sandbox(env):
+    """§8.4: with no OS sandbox the host's `status` items of a guarded session carry detail "guarded: advisory (no sandbox)"; an auto
+    session's carry none."""
+    cl, botc = await world(env)
+    host, task = start_host(env, botc, "guarded")
+    sid = await session_id(host)
+    seen = Collector(cl["alice"].watch(S, sid)); await asyncio.sleep(0.2)
+    await steer(cl["alice"], sid, "hello")                                  # the guard's own steer: working, then idle
+    await seen.wait_for(lambda i: i["type"] == "status" and i["state"] == "idle" and i["n"] > 2)
+    statuses = [i for i in seen.items if i["type"] == "status"]
+    assert statuses and all(i["detail"] == "guarded: advisory (no sandbox)" for i in statuses)
+    seen.stop(); task.cancel()
+
+async def test_auto_status_has_no_advisory_detail(env):
+    cl, botc = await world(env)
+    host, task = start_host(env, botc, "auto")
+    sid = await session_id(host)
+    seen = Collector(cl["alice"].watch(S, sid)); await asyncio.sleep(0.2)
+    await steer(cl["carol"], sid, "hello")
+    await seen.wait_for(lambda i: i["type"] == "status" and i["state"] == "idle" and i["n"] > 2)
+    assert all("detail" not in i for i in seen.items if i["type"] == "status")
+    seen.stop(); task.cancel()

@@ -1,7 +1,10 @@
-"""A HAN actor's client over the Matrix binding (architecture.md §8.2): entries are `org.han.entry` room events, answered by
-`org.han.receipt` or `org.han.reject` from the sequencer's application-service user. Matrix's sender field is never authority:
-a reject or receipt counts only from the user named in the room's `org.han.space` state, and only when that state itself was
-sent by that user and names the conventional service user of the space's server (NOTES.md, "binding trust").
+"""A HAN actor's client over the Matrix binding (architecture.md §8.2): entries are header-only `org.han.entry` room events (their
+content goes ahead by `POST /_han/v1/content`), answered by `org.han.receipt` or `org.han.reject` from the sequencer's
+application-service user. Matrix's sender field is never authority: a reject or receipt counts only from the user named in the room's
+`org.han.space` state, and only when that state itself was sent by that user and names the conventional service user of the space's
+server (NOTES.md, "binding trust"). Content is read back through `GET /_han/v1/read`, which enforces P-02; the room never shows it.
+The class also satisfies `han.client.ClientProtocol` (append, read, subscribe, signal, blob_put, blob_get, stream, watch), so
+han-exec and han-host run over it.
 
     c = MatrixClient("http://127.0.0.1:18008", "@alice:a.localhost", token, "alice.key.json", "alice.outbox.db", service_url="http://127.0.0.1:9300")
     await c.start()
@@ -17,9 +20,10 @@ from ..client.outbox import Outbox
 from ..entries import make_entry, fmt_time
 from . import media
 from .api import MatrixAPI, MatrixError
-from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, SIGNAL, entry_content, service_user
+from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, SIGNAL, entry_header, service_user
 
 log = logging.getLogger("han.matrix.client")
+MAX_MATRIX_ENTRY = 60 * 1024         # header + content (JCS bytes) above this go over the generic binding
 SYNC_FILTER = {"room": {"timeline": {"limit": 100}}, "presence": {"types": []}}
 
 def default_sequencer_for(space: str) -> str:
@@ -60,14 +64,21 @@ class MatrixClient:
         self.rooms: dict[str, RoomView] = {}
         self.heads: dict[str, int] = {}
         self.context_files: dict[str, dict] = {}             # blob hash → encrypted-file info of a context item
+        self._blobs: dict[str, bytes] = {}                   # the last blobs we uploaded, so `stream` of a context item can attach them
+        self._started = False
         self.sync_events = asyncio.Event()
         self._since = None
         self._sync_task = None
         self._stop = False
 
     # ── lifecycle ──
+    async def connect(self, known_heads=None):
+        """`ClientProtocol.connect`: `start` once."""
+        if not self._started: await self.start()
+
     async def start(self):
         """First sync (with backfill), then keep syncing in the background, then finish every unconfirmed outbox entry (R-07)."""
+        self._started = True
         assert await self.api.whoami() == self.actor, "access token belongs to another user"
         await self._sync_once(0)
         while await self._sync_once(0): pass            # Synapse may answer the first sync from a cache: catch up until nothing is new
@@ -140,16 +151,11 @@ class MatrixClient:
         rv.space, rv.sequencer = sp, seqr
 
     def _on_entry(self, rv: RoomView, sender, c):
-        entry, content = c.get("entry"), c.get("content")
-        if not isinstance(entry, dict): return                # redacted by Matrix, or junk
-        try:
-            eid = P.entry_id(entry)
-            if W.content_hash(content) != entry.get("contentHash") and not c.get("redacted"): return     # not the content the header commits to
+        entry = c.get("entry")
+        if not isinstance(entry, dict) or c.get("contentHash") != entry.get("contentHash"): return      # junk, or not a header-only event
+        try: eid = P.entry_id(entry)
         except Exception: return
-        have = rv.entries.get(eid)
-        if have is None or (have["content"] is None and content is not None):
-            rv.entries[eid] = {"entry": entry, "content": content, "redacted": bool(c.get("redacted"))}
-        elif c.get("redacted"): have["redacted"] = True
+        rv.entries.setdefault(eid, {"entry": entry, "content": None, "redacted": False})        # content comes from fill_content, never from the room
         self._try_emit(rv, eid)
 
     def _from_sequencer(self, rv: RoomView, sender) -> bool:
@@ -207,6 +213,19 @@ class MatrixClient:
         """Every LogRecord the room shows, in seq order: entry events joined to the sequencer's receipts. Verify them with a Mirror."""
         rv = self._view(room); red = self._redactions(rv)
         return sorted((self._record(rv, eid, red) for eid in rv.receipts if eid in rv.entries), key=lambda r: r["receipt"]["seq"])
+
+    async def fill_content(self, room: str):
+        """Fetch the content of the room's records through `GET /_han/v1/read` (P-02: only what this actor may read) and keep it, so
+        `records(room)` carries it. Records the actor may not read stay header-only."""
+        rv, last = self._view(room), 0
+        if rv.space is None: return
+        while True:
+            recs = [i["record"] for i in await self.read_http(rv.space, last, limit=1000) if i["type"] == "record"]
+            for rec in recs:
+                have = rv.entries.get(rec["receipt"]["id"])
+                if have and have["content"] is None and rec.get("content") is not None: have["content"] = rec["content"]
+            if len(recs) < 1000: return
+            last = recs[-1]["receipt"]["seq"]
 
     def room_of(self, space: str) -> str | None:
         return next((r for r, v in self.rooms.items() if v.space == space), None)
@@ -269,22 +288,29 @@ class MatrixClient:
             try: rv.provisional[eid] = self.sequencer_for(entry["space"])
             except Exception: pass
         self.outbox.add(eid, entry["space"], entry, content)
+        if content is not None: await self._han("POST", "/_han/v1/content", body=content)       # P-02: content never enters the room
         fut = asyncio.get_running_loop().create_future()
         if eid in rv.receipts: fut.set_result(rv.receipts[eid])
         elif eid in rv.rejects: fut.set_exception(WireError(rv.rejects[eid].get("code", "invalid"), rv.rejects[eid].get("reason", "")))
         else: rv.waiters.setdefault(eid, []).append(fut)
-        ev_id = await self.api.send(room, ENTRY, entry_content(entry, content), txn or f"{eid}-{time.time_ns()}")
+        ev_id = await self.api.send(room, ENTRY, entry_header(entry), txn or f"{eid}-{time.time_ns()}")
         rv.sent[ev_id] = eid
         return Submission(room, ev_id, eid, fut)
 
-    async def append(self, entry: dict, content=None, room: str | None = None, timeout: float | None = None) -> dict:
+    async def append(self, entry: dict, content=None, timeout: float | None = None, room: str | None = None) -> dict:
         """Send and wait for the receipt (pending until then or a reject). Resends the same entry as a new event every
         `resend_after` seconds (R-06; the sequencer's dedupe makes that harmless, R-01). A reject from the bound sequencer raises
-        WireError."""
+        WireError. An entry over 60 KiB (header + content) is refused at once: send it over the generic binding."""
+        size = len(P.jcs(entry)) + (0 if content is None else len(P.jcs(content)))
+        if size > MAX_MATRIX_ENTRY:
+            raise WireError("invalid", f"entry is {size} bytes, over the {MAX_MATRIX_ENTRY} the Matrix binding carries; use the generic binding (WebSocket)")
         deadline = None if timeout is None else time.monotonic() + timeout
         eid = P.entry_id(entry)
         while True:
             try: sub = await self.submit(entry, content, room)
+            except WireError as ex:
+                if ex.code not in ("unavailable", "limit"): self.outbox.rejected(eid, ex.to_wire()); raise
+                await asyncio.sleep(0.5); continue
             except MatrixError as ex:
                 if ex.status < 500 and ex.status != 429:        # Matrix itself refused the event (too large, not in the room): final
                     err = WireError("invalid", f"Matrix refused the event: {ex.errcode} {ex.message}")
@@ -300,26 +326,113 @@ class MatrixClient:
             except WireError as ex:
                 self.outbox.rejected(eid, ex.to_wire()); raise
 
-    # ── read over HTTP (§8.2 `read`) ──
-    async def read_http(self, space: str, after: int = 0, state: bool = False, limit: int | None = None, at: int | None = None) -> list[dict]:
-        """GET /_han/v1/read with `Authorization: HAN <actor> <keyId> <proof>` (the proof signs a fresh challenge, as in hello)."""
+    # ── the service's HTTP side: `Authorization: HAN <actor> <keyId> <proof>` + `HAN-Challenge` (a fresh single-use challenge) ──
+    async def _han(self, method: str, path: str, params: dict | None = None, body=None):
         assert self.service, "service_url not set"
         ch = await self.service.request("GET", "/_han/v1/challenge")
         if ch["server"] != P.server_of(self.actor): raise WireError("denied", f"challenge names {ch['server']}")
         proof = W.hello_proof(self.key, ch["challenge"], ch["server"])
-        params = {"space": space, "after": str(after)} | ({"state": "true"} if state else {}) | ({} if limit is None else {"limit": str(limit)}) \
-            | ({} if at is None else {"at": str(at)})
         try:
-            r = await self.service.request("GET", "/_han/v1/read", params=params,
-                                           headers={"Authorization": f"HAN {self.actor} {self.key.key_id} {proof}", "HAN-Challenge": ch["challenge"]})
+            return await self.service.request(method, path, body=body, params=params,
+                                              headers={"Authorization": f"HAN {self.actor} {self.key.key_id} {proof}", "HAN-Challenge": ch["challenge"]})
         except MatrixError as ex:
             if "error" in ex.body: raise WireError.from_wire(ex.body["error"]) from None
             raise
-        return r["items"]
+
+    async def read_http(self, space: str, after: int = 0, state: bool = False, limit: int | None = None, at: int | None = None) -> list[dict]:
+        """GET /_han/v1/read → `{items: [ReadItem]}`; P-02 is enforced by the service, so this is where content comes from."""
+        params = {"space": space, "after": str(after)} | ({"state": "true"} if state else {}) | ({} if limit is None else {"limit": str(limit)}) \
+            | ({} if at is None else {"at": str(at)})
+        return (await self._han("GET", "/_han/v1/read", params))["items"]
+
+    # ── ClientProtocol: read, subscribe (records through the HTTP read, signals from the room) ──
+    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None):
+        """ReadItems after `after`, as the generic binding gives them. With `follow`, waits for the room's receipts (polling once a
+        second as a fallback) and reads what is new; a backlog cut by `limit` is read on at once. Ends only when closed."""
+        if known_heads is not None: raise WireError("invalid", "knownHeads is not served by the HTTP read")
+        last, first = after, True
+        while True:
+            seen = self.heads.get(space, 0)
+            try: items = await self.read_http(space, last, state=state and first, limit=limit, at=at if first else None)
+            except (aiohttp.ClientError, OSError, asyncio.TimeoutError):
+                if not follow: raise
+                await asyncio.sleep(0.5); continue
+            except WireError as ex:
+                if not follow or ex.code != "unavailable": raise
+                await asyncio.sleep(0.5); continue
+            first = False
+            n = 0
+            for it in items:
+                if it["type"] == "record":
+                    last = it["record"]["receipt"]["seq"]; n += 1; self._note(space, last)
+                yield it
+            if not follow: return
+            if limit and n >= limit: continue
+            deadline = time.monotonic() + 1.0
+            while self.heads.get(space, 0) <= seen and time.monotonic() < deadline:
+                try: await asyncio.wait_for(self.sync_events.wait(), max(deadline - time.monotonic(), 0.01))
+                except asyncio.TimeoutError: pass
+
+    def _note(self, space, seq):
+        if seq > self.heads.get(space, 0): self.heads[space] = seq
+
+    async def read_all(self, space, after=0, **kw) -> list:
+        return [it async for it in self.read(space, after, **kw)]
+
+    async def subscribe(self, space, after=None):
+        """Records (read over HTTP, so P-02 holds) and other members' room signals, live; with `after`, the records after it first."""
+        room = self.room_of(space)
+        sig = asyncio.Queue()
+        rv = self._view(room) if room else None
+        if rv: rv.listeners.append(sig)
+        if after is None: after = (await self.read_http(space, 2 ** 31, state=True))[0]["state"]["head"]
+        records = self.read(space, after, follow=True)
+        nxt, nsig = asyncio.ensure_future(records.__anext__()), asyncio.ensure_future(sig.get())
+        try:
+            while True:
+                done, _ = await asyncio.wait({nxt, nsig}, return_when=asyncio.FIRST_COMPLETED)
+                if nsig in done:
+                    it = nsig.result(); nsig = asyncio.ensure_future(sig.get())
+                    if it["type"] == "signal" and it["from"] != self.actor: yield it
+                if nxt in done:
+                    it = nxt.result(); nxt = asyncio.ensure_future(records.__anext__())
+                    yield it
+        finally:
+            for f in (nxt, nsig): f.cancel()
+            await asyncio.gather(nxt, nsig, return_exceptions=True)
+            await records.aclose()
+            if rv: rv.listeners.remove(sig)
 
     # ── signals (T-05) ──
-    async def signal(self, room: str, body):
+    async def signal(self, space: str, body):
+        """A room signal. `space` is a space id (its room is looked up) or a room id."""
+        room = space if space.startswith("!") else self.room_of(space)
+        if room is None: raise WireError("not_found", "no room is bound to that space")
         await self.api.send(room, SIGNAL, {"body": body}, f"sg-{time.time_ns()}")
+
+    # ── blobs over the service's HTTP side (G-01 is the Sequencer's own check) ──
+    async def blob_put(self, data: bytes, type: str = "application/octet-stream") -> dict:
+        ref = {"hash": hashlib.sha256(data).hexdigest(), "size": len(data), "type": type}
+        offset, part = 0, LIMITS["maxBlobPartBytes"]
+        while True:
+            res = await self._han("PUT", "/_han/v1/blob", body={"ref": ref, "offset": offset, "data": W.b64(data[offset:offset + part])})
+            if res["complete"]: break
+            if res["have"] == offset or res["have"] > len(data): raise WireError("invalid", "upload did not complete")
+            offset = res["have"]
+        self._blobs[ref["hash"]] = data
+        for k in list(self._blobs)[:-16]: del self._blobs[k]
+        return ref
+
+    async def blob_get(self, ref: dict, space: str) -> bytes:
+        out = bytearray()
+        while True:
+            r = await self._han("GET", "/_han/v1/blob", {"hash": ref["hash"], "size": str(ref["size"]), "type": ref["type"], "space": space, "offset": str(len(out))})
+            out += W.unb64(r["data"])
+            if len(out) >= r["size"]: break
+            if not r["data"]: raise WireError("unavailable", "empty range")
+        data = bytes(out)
+        if hashlib.sha256(data).hexdigest() != ref["hash"] or len(data) != ref["size"]: raise ValueError("blob does not match its reference")
+        return data
 
     # ── session streams (T-07) ──
     async def session_rooms(self, space_room: str, session: str, wait: float = 20.0) -> dict:
@@ -332,7 +445,24 @@ class MatrixClient:
         await self.join(room, wait)
         return room
 
-    async def watch(self, room: str, start: int = 0):
+    async def stream(self, item: dict):
+        """`ClientProtocol.stream`: publish to the session's watch room (output, status) or read room (context; its blob must have
+        been uploaded by this client with `blob_put`, and goes out as an encrypted attachment)."""
+        room = self.room_of(item["space"])
+        if room is None: raise WireError("not_found", "no room is bound to that space")
+        blob = None
+        if item.get("type") == "context":
+            blob = self._blobs.get(item["blob"]["hash"])
+            if blob is None: raise WireError("invalid", "a context item's blob must come from this client's blob_put")
+        await self.publish(room, item, blob)
+
+    async def watch(self, space: str, session: str):
+        """`ClientProtocol.watch`: join the session's watch room (we are invited once `sessionAccess` grants it) and yield its items."""
+        room = self.room_of(space)
+        if room is None: raise WireError("not_found", "no room is bound to that space")
+        async for it in self.watch_room(await self.join_session(room, session, "watch")): yield it
+
+    async def watch_room(self, room: str, start: int = 0):
         """StreamItems posted in a session room we have joined, from item index `start` on (context items carry an encrypted
         blob: `fetch_context`)."""
         rv, i = self._view(room), start

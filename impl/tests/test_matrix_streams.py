@@ -99,4 +99,4 @@ async def test_items_reach_only_the_granted_and_membership_follows_sessionAccess
     for r in (watch, read):
         await until(members_are(mx, r, []), what="everyone kicked on session.close")
     with pytest.raises(MatrixError): await bot.client.publish(room, item(space, sid, 5, text="too late"))     # the actor is out too
-    verify_room(mx, alice.client, room)
+    await verify_room(mx, alice.client, room)

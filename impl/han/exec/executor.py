@@ -21,10 +21,11 @@ class Crash(BaseException):
 class Executor:
     def __init__(self, url: str, actor: str, key_path: str, journal: str, spaces, sandbox: str, actions=("file.write", "http.post"),
                  allow_urls=(), instance: str | None = None, server: str | None = None, clock=None, hook=None,
-                 retry_delay: float = 0.2, max_retry_delay: float = 2.0, backoff_base: float = 1.0, backoff_cap: float = 60.0):
+                 retry_delay: float = 0.2, max_retry_delay: float = 2.0, backoff_base: float = 1.0, backoff_cap: float = 60.0, client=None):
         """`clock` is the elapsed-time clock (X-02); `hook(point, **info)` may be sync or async and may raise Crash (tests).
         After a `failed`/`not started` outcome the effect is re-claimed no sooner than `backoff_base` * 2^(failures - 1)
-        seconds later, at most `backoff_cap` (X-11)."""
+        seconds later, at most `backoff_cap` (X-11). `client`: any han.client.ClientProtocol (e.g. a MatrixClient); by default a
+        generic-binding Client dialled at `url`."""
         self.url, self.actor, self.key_path, self.journal_path = url, actor, key_path, journal
         self.spaces, self.instance, self.server = list(spaces), instance, server
         self.actions = Actions(sandbox, allow_urls, actions)
@@ -33,7 +34,8 @@ class Executor:
         self.backoff = (backoff_base, backoff_cap)
         self._fails: dict[str, int] = {}               # proposal id → consecutive failed/not-started outcomes
         self._not_before: dict[str, float] = {}        # proposal id → time.monotonic() before which we don't claim it again
-        self.client = self.journal = None
+        self.client, self._given = None, client
+        self.journal = None
         self.launched: list[str] = []                  # claim ids this process launched
         self.crashed = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
@@ -50,8 +52,8 @@ class Executor:
         self.instance = kp.key_id
         self.journal = Journal(self.journal_path, kp.key_id, self.key_path + ".used")       # X-07: lock, marker (may refuse)
         try:
-            self.client = Client(self.url, self.actor, self.key_path, self.journal_path + ".outbox.db", server=self.server,
-                                 retry_delay=self.retry[0], max_retry_delay=self.retry[1])
+            self.client = self._given or Client(self.url, self.actor, self.key_path, self.journal_path + ".outbox.db", server=self.server,
+                                                retry_delay=self.retry[0], max_retry_delay=self.retry[1])
             await self.client.connect()
         except BaseException:
             await self.stop(); raise

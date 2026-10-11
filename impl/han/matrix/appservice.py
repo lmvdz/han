@@ -4,21 +4,27 @@ It owns the user @han-seq:<server>, joins the rooms it is invited to, and for ea
 the §4.1 pipeline (han.seq.Sequencer, unchanged) and answers with `org.han.receipt` or `org.han.reject` related to that event.
 A resend gets the same receipt (R-01, the sequencer's dedupe). Records that arrive by another binding (the generic one) are
 published to the room too, so the timeline carries the whole log (T-01). It keeps `org.han.space` (T-06), creates and keeps
-the watch and read rooms of every live session (T-07), and serves `GET /_han/v1/read` with HAN authentication.
+the watch and read rooms of every live session (T-07), and serves `/_han/v1/...` with HAN authentication.
+
+P-02 (§8.2): a room carries only `org.han.receipt` and header-only `org.han.entry {entry, contentHash}` events, never content. An
+entry's content reaches the service by `POST /_han/v1/content` (before the event) and is read back by `GET /_han/v1/read`, which
+enforces P-02; so a removed member or a late joiner of the room sees headers and receipts but no content.
 
     python -m han.matrix.appservice --registration REG --homeserver URL --server a.localhost --listen 127.0.0.1:9300 --db seq.db --key key.json"""
 from __future__ import annotations
 import asyncio, json, logging, os, time
 import aiohttp
 from aiohttp import web
-from ..core import P, W, WireError
+from ..core import P, W, LIMITS, WireError
 from ..seq import Sequencer
 from .api import MatrixAPI, MatrixError, register_appservice_user
-from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, relates, service_user, txn_safe
+from .proto import ENTRY, RECEIPT, REJECT, SPACE, SESSION, STREAM, entry_header, relates, service_user, txn_safe
 from .store import AsStore
 
 log = logging.getLogger("han.matrix")
 CHALLENGE_TTL, MAX_CHALLENGES = 120.0, 4096
+CONTENT_TTL, MAX_CONTENT = 600.0, 1024
+_MISSING = object()
 _RETRY = (MatrixError, aiohttp.ClientError, OSError, asyncio.TimeoutError)      # Matrix is unreachable or erred: let Synapse redeliver
 
 class AppService:
@@ -36,8 +42,8 @@ class AppService:
         self._dirty: set[str] = set()                         # spaces whose last publish failed
         self._runner = None
         self._pump_task = None
-        self._append = seq.append
-        seq.append = self._append_and_publish                 # records appended by any binding reach the room (T-01)
+        self.content: dict[str, tuple[object, float]] = {}   # contentHash -> (content, expiry): uploaded ahead of the entry event
+        seq.add_ordered_hook(self._on_ordered)                # records appended by any binding reach the room (T-01)
 
     # ── lifecycle ──
     async def start(self, host: str = "127.0.0.1", port: int = 9300) -> "AppService":
@@ -45,7 +51,8 @@ class AppService:
         app = web.Application(client_max_size=2 * 1024 * 1024)
         app.add_routes([web.put("/_matrix/app/v1/transactions/{txn}", self._txn),
                         web.get("/_matrix/app/v1/users/{user}", self._ok), web.get("/_matrix/app/v1/rooms/{alias}", self._not_found),
-                        web.get("/_han/v1/challenge", self._challenge), web.get("/_han/v1/read", self._read)])
+                        web.get("/_han/v1/challenge", self._challenge), web.get("/_han/v1/read", self._read),
+                        web.post("/_han/v1/content", self._put_content), web.put("/_han/v1/blob", self._blob_put), web.get("/_han/v1/blob", self._blob_get)])
         self._runner = web.AppRunner(app, access_log=None); await self._runner.setup()
         site = web.TCPSite(self._runner, host, port); await site.start()
         self.port = site._server.sockets[0].getsockname()[1]
@@ -58,14 +65,12 @@ class AppService:
         for t in list(self._tasks): t.cancel()
         if self._runner: await self._runner.cleanup()
         await self.api.close()
-        self.seq.append = self._append
+        self.seq.remove_ordered_hook(self._on_ordered)
         self.store.close()
 
     # ── publishing the log to the room (T-01) ──
-    def _append_and_publish(self, entry, content=None):
-        receipt = self._append(entry, content)
-        if isinstance(entry, dict) and isinstance(entry.get("space"), str): self._kick(entry["space"])
-        return receipt
+    def _on_ordered(self, entry, content, state, receipt):
+        if isinstance(entry.get("space"), str): self._kick(entry["space"])
 
     def _kick(self, space: str):
         t = asyncio.get_running_loop().create_task(self._flush_safe(space))
@@ -84,8 +89,7 @@ class AppService:
                 self._dirty.discard(sp); self._kick(sp)
 
     async def flush(self, space: str):
-        """Publish every record of `space` not yet in its room (entry event if none carried it, then the receipt), redact what
-        P-12 redacted, then bring the session rooms in line with the state (T-07)."""
+        """Publish every record of `space` not yet in its room (header-only entry event if none carried it, then the receipt), then bring the session rooms in line with the state (T-07)."""
         async with self._locks.setdefault(space, asyncio.Lock()):
             room, S = self.store.space_room(space), self.seq.home.spaces.get(space)
             if not room or not S: return
@@ -93,22 +97,11 @@ class AppService:
                 r, e = rec["receipt"], rec["entry"]
                 origin = self.store.origin(r["id"])
                 if origin is None:
-                    origin = await self.api.send(room, ENTRY, {"entry": e} | ({} if rec["content"] is None else {"content": rec["content"]}),
-                                                 f"en-{r['id']}")
+                    origin = await self.api.send(room, ENTRY, entry_header(e), f"en-{r['id']}")
                     self.store.add_event(origin, room, r["id"])
                 await self.api.send(room, RECEIPT, {"receipt": r, "m.relates_to": relates(origin)}, f"rc-{txn_safe(origin)}")
-                if e["kind"] == "redact": await self._redact_events(room, space, e["body"]["target"])
                 self.store.set_published(space, r["seq"])
             await self.sync_sessions(space, room, S["state"])
-
-    async def _redact_events(self, room: str, space: str, target: str):
-        """P-12 on Matrix: Matrix redaction strips a whole event, header included, so first post a header-only copy of the
-        entry (R-04: headers stay), then redact every event that carried the content."""
-        n = self.seq.ids.get(space, {}).get(target)
-        if not n: return
-        header = self.seq.home.spaces[space]["records"][n - 1]["entry"]
-        await self.api.send(room, ENTRY, {"entry": header, "redacted": True}, f"rd-{target}")
-        for ev in self.store.events_of(target): await self.api.redact(room, ev, f"rx-{txn_safe(ev)}", "HAN redact")
 
     # ── session streams (T-07) ──
     async def sync_sessions(self, space: str, space_room: str, state: dict):
@@ -178,14 +171,15 @@ class AppService:
         if sender == self.user or not isinstance(room, str): return
         if t == "m.room.member" and ev.get("state_key") == self.user and (ev.get("content") or {}).get("membership") == "invite":
             await self.api.join(room)
-        elif t == ENTRY and not (ev.get("content") or {}).get("redacted"): await self.on_entry(ev)
+        elif t == ENTRY: await self.on_entry(ev)
 
     async def on_entry(self, ev: dict):
         room, ev_id, c = ev["room_id"], ev["event_id"], ev.get("content") or {}
-        entry, content = c.get("entry"), c.get("content")
+        entry = c.get("entry")
         if not isinstance(entry, dict): return await self._reject(room, ev_id, "", "invalid", "no entry in the event")
         try: eid = P.entry_id(entry)
         except Exception: return await self._reject(room, ev_id, "", "invalid", "malformed entry")
+        if "content" in c: return await self._reject(room, ev_id, eid, "invalid", "entry events carry no content; POST /_han/v1/content first")
         sp, bound = entry.get("space"), self.store.room_space(room)
         if bound is None:                                          # T-06: the first entry of a room must open its space
             if entry.get("kind") != "space.create" or not isinstance(sp, str):
@@ -194,18 +188,31 @@ class AppService:
             if other and other != room: return await self._reject(room, ev_id, eid, "denied", "that space is bound to another room")
         elif sp != bound:
             return await self._reject(room, ev_id, eid, "invalid", f"this room is bound to {bound}")
-        try: receipt = self._append(entry, content)           # §4.1: dedupe (R-01), shape, profiles, signature, Policy, durable, receipt
+        content = self._take_content(entry, eid)
+        if content is _MISSING:
+            log.info("entry %s: content not uploaded yet (no answer; the client resends, R-06)", eid); return
+        try: receipt = self.seq.append(entry, content)        # §4.1: dedupe (R-01), shape, profiles, signature, Policy, durable, receipt
         except WireError as ex:
             if ex.code in ("denied", "invalid", "not_found", "moved"): return await self._reject(room, ev_id, eid, ex.code, ex.message)
             log.info("entry %s: %s (no answer; the client resends, R-06)", eid, ex); return
+        self.store.add_event(ev_id, room, eid)                     # before any await: the ordered hook's flush must find the origin
         if bound is None:
-            self.store.bind(room, sp)
-            try: await self.api.put_state(room, SPACE, {"spaceId": sp, "sequencer": self.user})
-            except MatrixError as ex: log.warning("could not set org.han.space in %s (give %s the power to): %s", room, self.user, ex)
-        self.store.add_event(ev_id, room, eid)
+            async with self._locks.setdefault(sp, asyncio.Lock()):    # no receipt before the binding: a client honours receipts only once it has seen org.han.space
+                self.store.bind(room, sp)
+                try: await self.api.put_state(room, SPACE, {"spaceId": sp, "sequencer": self.user})
+                except MatrixError as ex: log.warning("could not set org.han.space in %s (give %s the power to): %s", room, self.user, ex)
         await self.flush(sp)                                       # also answers this event when it carried the record
         if self.store.origin(eid) != ev_id:                        # a resend (R-01): same receipt, related to the new event
             await self.api.send(room, RECEIPT, {"receipt": receipt, "m.relates_to": relates(ev_id)}, f"rc-{txn_safe(ev_id)}")
+
+    def _take_content(self, entry: dict, eid: str):
+        """The content an entry's header commits to, from `POST /_han/v1/content`; None for a header with no content; `_MISSING` if it
+        is not here and the entry is not already ordered (a resend of an ordered entry needs none: R-01)."""
+        h = entry.get("contentHash")
+        if h == "" or not isinstance(h, str): return None
+        got = self.content.pop(h, None)
+        if got is not None and got[1] > time.monotonic(): return got[0]
+        return None if eid in self.seq.ids.get(entry.get("space"), {}) else _MISSING
 
     async def _reject(self, room, ev_id, entry_id, code, reason):
         await self.api.send(room, REJECT, {"id": entry_id, "code": code, "reason": reason, "m.relates_to": relates(ev_id)}, f"rj-{txn_safe(ev_id)}")
@@ -219,19 +226,17 @@ class AppService:
         return web.json_response({"challenge": ch, "server": self.server, "versions": [1], "time": self.seq.now_str()})
 
     def _authenticate(self, request: web.Request) -> str:
-        """`Authorization: HAN <actor> <keyId> <proof>`; the proof signs a challenge we issued (single use). The header does not
-        say which one, so an optional `HAN-Challenge` header names it; without it every open challenge is tried (NOTES.md)."""
+        """`Authorization: HAN <actor> <keyId> <proof>` and `HAN-Challenge: <challenge>`: the proof signs the challenge we issued
+        (single use, 120 s)."""
         parts = request.headers.get("Authorization", "").split(" ")
         if len(parts) != 4 or parts[0] != "HAN": raise WireError("denied", "Authorization: HAN <actor> <keyId> <proof> required")
         _, actor, key_id, proof = parts
         now = time.monotonic()
-        named = request.headers.get("HAN-Challenge")
-        for ch in ([named] if named else list(self.challenges)):
-            if self.challenges.get(ch, 0) < now: continue
-            try: self.seq.hello(actor, key_id, proof, 1, ch)
-            except WireError: continue
-            del self.challenges[ch]; return actor
-        raise WireError("denied", "authentication failed")
+        ch = request.headers.get("HAN-Challenge")
+        if self.challenges.get(ch, 0) < now: raise WireError("denied", "HAN-Challenge missing, unknown or expired")
+        del self.challenges[ch]                                    # single use, whatever the outcome
+        self.seq.hello(actor, key_id, proof, 1, ch)
+        return actor
 
     async def _read(self, request: web.Request):
         try:
@@ -242,9 +247,46 @@ class AppService:
                 except ValueError: raise WireError("invalid", f"{k} must be an integer")
             items, _ = self.seq.read(who, p.get("space"), num("after", 0), False, p.get("state") == "true", num("limit"), None, num("at"))
             return web.Response(text=json.dumps({"items": items}, separators=(",", ":"), ensure_ascii=False), content_type="application/json")
-        except WireError as ex:
-            status = {"denied": 401, "invalid": 400, "not_found": 404, "limit": 429, "unavailable": 503, "moved": 421}.get(ex.code, 400)
-            return web.json_response({"error": ex.to_wire()}, status=status)
+        except WireError as ex: return self._fail(ex)
+
+    def _fail(self, ex: WireError):
+        status = {"denied": 401, "invalid": 400, "not_found": 404, "limit": 429, "unavailable": 503, "moved": 421}.get(ex.code, 400)
+        return web.json_response({"error": ex.to_wire()}, status=status)
+
+    async def _put_content(self, request: web.Request):
+        """`POST /_han/v1/content` (body: the entry's content as JSON), HAN-authenticated: held for ten minutes under its hash until the
+        `org.han.entry` event naming that hash arrives. The event, not this call, is what appends."""
+        try:
+            self._authenticate(request)
+            try: content = await request.json()
+            except ValueError: raise WireError("invalid", "content must be JSON")
+            if not P.json_ok(content) or len(P.jcs(content)) > LIMITS["maxContentBytes"]: raise WireError("invalid", "content too large or not I-JSON")
+            now = time.monotonic()
+            for k in [k for k, (_, t) in self.content.items() if t < now]: del self.content[k]
+            if len(self.content) >= MAX_CONTENT: raise WireError("limit", "too much pending content")
+            self.content[W.content_hash(content)] = (content, now + CONTENT_TTL)
+            return web.json_response({})
+        except WireError as ex: return self._fail(ex)
+
+    async def _blob_put(self, request: web.Request):
+        """`PUT /_han/v1/blob {ref, offset, data}` -> {have, complete}: Sequencer.blob_put (G-01) for the authenticated actor."""
+        try:
+            who = self._authenticate(request)
+            try: b = await request.json(); data = W.unb64(b["data"]); ref, offset = b["ref"], b["offset"]
+            except (ValueError, KeyError, TypeError): raise WireError("invalid", "blob put body")
+            return web.json_response(self.seq.blob_put(who, ref, offset, data))
+        except WireError as ex: return self._fail(ex)
+
+    async def _blob_get(self, request: web.Request):
+        """`GET /_han/v1/blob?hash=&size=&type=&space=&offset=` -> {data (base64url), size, offset}: Sequencer.blob_get (G-01)."""
+        try:
+            who = self._authenticate(request)
+            p = request.query
+            try: ref, offset = {"hash": p["hash"], "size": int(p["size"]), "type": p["type"]}, int(p.get("offset", "0"))
+            except (KeyError, ValueError): raise WireError("invalid", "blob get query")
+            r = self.seq.blob_get(who, ref, p.get("space"), offset)
+            return web.json_response(dict(r, data=W.b64(r["data"])))
+        except WireError as ex: return self._fail(ex)
 
 if __name__ == "__main__":
     import sys
