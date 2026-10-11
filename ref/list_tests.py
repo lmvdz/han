@@ -1,0 +1,72 @@
+"""Lists the implementation's tests (impl/tests/*.py) and the clean-room TypeScript interop scenarios (cleanroom-ts/interop.ts)
+with the rule tags found in their docstrings or names, so architecture.md §10 can be checked against what actually exists.
+  python ref/list_tests.py            one line per test, then totals per file
+  python ref/list_tests.py --rules    rule -> tests (the reverse index)
+Reads source only; imports and runs nothing."""
+import ast, glob, os, re, sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+TAG = re.compile(r"\b(?:[RPXTG]-\d+[a-z]?|E[1-6]|INV-\d+|§\d+(?:\.\d+)?)")
+
+def tags(text): return sorted(set(TAG.findall(text or "")), key=lambda t: (t[0], t))
+
+def cases(fn):
+    """How many cases pytest collects for `fn`: the product of the literal lists of its parametrize decorators."""
+    n = 1
+    for d in fn.decorator_list:
+        if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "parametrize"
+                and len(d.args) > 1 and isinstance(d.args[1], (ast.List, ast.Tuple))): n *= len(d.args[1].elts)
+    return n
+
+def py_tests():
+    """(file, test name, tags, skipped-by-default, cases) for every test function and test method."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "impl", "tests", "test_*.py"))):
+        src = open(path, encoding="utf-8").read()
+        mod = ast.parse(src)
+        live = bool(re.search(r"HAN_LIVE|skipif|pytest\.skip|importorskip", src))
+        def visit(nodes, prefix=""):
+            for n in nodes:
+                if isinstance(n, ast.ClassDef) and n.name.startswith("Test"): visit(n.body, n.name + "::")
+                elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_"):
+                    doc = ast.get_docstring(n) or ""
+                    out.append((os.path.basename(path), prefix + n.name, tags(doc or n.name), live and "live" in os.path.basename(path), cases(n)))
+        visit(mod.body)
+    return out
+
+def ts_scenarios():
+    path = os.path.join(ROOT, "cleanroom-ts", "interop.ts")
+    if not os.path.exists(path): return []
+    src = open(path, encoding="utf-8").read()
+    names = re.findall(r'scenario\(\s*(?:"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)', src)
+    return [(a or b, tags(a or b)) for a, b in names]
+
+def main():
+    tests, scen = py_tests(), ts_scenarios()
+    if "--rules" in sys.argv:
+        idx = {}
+        for f, n, t, *_ in tests:
+            for x in t: idx.setdefault(x, []).append(f"{f}::{n}")
+        for n, t in scen:
+            for x in t: idx.setdefault(x, []).append(f"interop.ts: {n}")
+        for x in sorted(idx): print(f"{x:8} {len(idx[x]):3}  " + "; ".join(idx[x][:4]) + (" …" if len(idx[x]) > 4 else ""))
+        return 0
+    for f, n, t, live, k in tests:
+        print(f"{f}::{n}  [{' '.join(t) or '-'}]" + (f"  ({k} cases)" if k > 1 else "") + ("  (live, skipped by default)" if live else ""))
+    print()
+    for n, t in scen: print(f"interop.ts: {n}  [{' '.join(t) or '-'}]")
+    print()
+    per = {}
+    for f, _n, _t, _l, k in tests: per[f] = per.get(f, 0) + k
+    for f, c in per.items(): print(f"{c:4}  {f}")
+    print(f"{sum(t[4] for t in tests)} impl tests collected by pytest ({len(tests)} test functions) in {len(per)} files "
+          f"({sum(t[4] for t in tests if t[3])} skipped by default as live); "
+          f"{len(scen)} cleanroom-ts interop scenarios; {sum(1 for t in tests if not t[2])} tests carry no rule tag")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

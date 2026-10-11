@@ -257,7 +257,9 @@ export type ReplyFrame =
 export interface BindingCalls {
   subscribe: { args: { space: SpaceId; after?: Seq };            // without `after`: live only; with it, replays records after `after`, atomically with registration (no gap)
                item: ReadItem };                                  // records and signals; a reader who may not read the space gets `denied`
-  signal:    { args: { space: SpaceId; body: Json }; ok: null };  // T-05, G-04
+  signal:    { args: { space: SpaceId; body: Json; from?: ActorId }; ok: null };   // T-05, G-04. `from` only on a server's relay: the user it speaks for, who must live on the relaying server; otherwise the connection's actor is the sender
+  host:      { args: { space: SpaceId; records: LogRecord[]; head?: Receipt };      // §7.3, G-06: server to server, authenticated as `@:A`, the home: the next contiguous records of the space to move; `head` asks B to sign its acceptance once it holds the chain through it
+               ok: { have: Seq; accept?: { keyId: KeyId; sig: Sig } } };
   blobPut:   { args: { ref: BlobRef; offset: number; data: string };   // one part of at most maxBlobPartBytes, at `offset`
                ok: { have: number; complete: boolean } };         // bytes held so far from this uploader; `complete` once all of ref.size hash-match (G-01)
   blobGet:   { args: { ref: BlobRef; space: SpaceId; offset?: number; length?: number };
@@ -267,6 +269,8 @@ export interface BindingCalls {
   cancel:    { args: { target: number }; ok: null };              // ends the streaming call whose request id is `target`
 }
 export type BindingCallName = keyof BindingCalls;
+/** §7.3: signals in the space being moved. The owner asks; the current home A answers with the target's acceptance of its head. */
+export type MoveSignal = { type: "host-request"; to: ServerName } | { type: "host-accept"; to: ServerName; head: Receipt; keyId: KeyId; sig: Sig };
 export type BindingRequestFrame<C extends BindingCallName = BindingCallName> = { id: number; call: C; args: BindingCalls[C]["args"] };
 export type AnyRequestFrame = RequestFrame | BindingRequestFrame;
 
@@ -322,6 +326,27 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
   | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01)
 );
+// ───────────────────────── the Matrix binding's shapes (§8.2) ─────────────────────────
+/** `GET https://<server>/_han/v1/challenge` answers a `Challenge`. `GET .../read` carries `Authorization: HAN <actor> <keyId> <proof>`
+ *  and `HAN-Challenge: <challenge>` (the challenge that was signed; single-use, 120 s), with proof = Ed25519(key,
+ *  "han-hello-v1
+" ‖ challenge ‖ "
+" ‖ <server>). It answers `HttpReadResponse`, with HTTP status 400 invalid, 401 denied,
+ *  404 not_found, 421 moved, 429 limit, 503 unavailable. No `follow`, no `knownHeads`. */
+export interface HttpReadRequest { space: SpaceId; after: Seq; state?: boolean; at?: Seq; limit?: number }   // the query string
+export type HttpReadResponse = { items: ReadItem[] } | { error: WireError };
+/** Room events. All carry no authority (T-05, R-12); a client honours `org.han.space`, receipts, rejects and `org.han.session` only
+ *  from the room's sequencer user (§8.2, trust anchor). */
+export interface MatrixEvents {
+  "org.han.space": { spaceId: SpaceId; sequencer: string /* the Matrix user @han-seq:<server of the space id> */ };   // state event, state key ""; a room keeps its first binding
+  "org.han.entry": { entry: Entry; content?: Json }                        // sent by a member (append)
+                 | { id: EntryId; kind: string; author: ActorId };         // the sequencer's header-only copy: nothing P-02 might hide
+  "org.han.receipt": { receipt: Receipt };                                   // m.relates_to (m.reference) the entry's event
+  "org.han.reject": { id: EntryId; code: "denied" | "invalid" | "not_found" | "moved"; reason: string };   // m.relates_to the entry's event; `unavailable` and `limit` get none
+  "org.han.signal": { body: Json };                                          // room-wide, T-05
+  "org.han.session": { session: EntryId; watch: string; read: string };      // state event in the space room, state key = the session id; room ids of the two stream rooms
+  "org.han.stream": StreamItem & { file?: { url: string; key: Json; iv: string; hashes: { [alg: string]: string }; v: string } };   // in a stream room; `file` = Matrix EncryptedFile info of a context item's blob
+}
 /** M7: what HAN needs from a transport (T-01…T-07). The Matrix binding implements it with org.han.* room events. */
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order
