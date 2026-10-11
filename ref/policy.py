@@ -613,19 +613,28 @@ def held_may(state, entry):
 
 CAUTION = STEER_MODES                          # least to most cautious
 
-def hold_on_instruction(s, x, author, owner_guard=None):
-    """The one hold rule: an instruction to a guarded agent (a steer into any of its sessions, a task naming it, or a
-    proposal naming it as executor) from anyone but itself and its guard holds it for that guard. `guarded[x]` is the
-    agent's own, sticky choice; `owner_guard` is a steered session's guard when the owners' modes force it guarded."""
-    g = s["guarded"].get(x) or owner_guard
+def guarded_now(state, x):
+    """P-15: the guard of agent `x` if `x` is guarded now, else None. Guarded = its own sticky choice (`guarded[x]`), or
+    forced by owners: one of its live sessions is effectively guarded (its mode no longer allowed as auto)."""
+    if x in state["guarded"]: return state["guarded"][x]
+    for se in state["sessions"].values():
+        if se["actor"] == x and "guard" in se and live(state, se) and effective_mode(state, se) == "guarded": return se["guard"]
+    return None
+
+def hold_on_instruction(s, x, author):
+    """The one hold rule: an instruction to an agent that is guarded now (a steer into any of its sessions, a task naming
+    it, or a proposal naming it as executor) from anyone but itself and its guard holds it for that guard."""
+    g = guarded_now(s, x)
     if g and author not in (x, g) and x not in s["held"]: s["held"][x] = g
 
 def guards_of(state, eff):
     """Whose own approval the effect needs, besides any rule: the guard its proposer was held for when it proposed, and
-    the guard its executor is held for now. Nothing a held agent proposes or executes runs without its guard."""
+    the guards its proposer and its executor are held for now. Nothing a held agent proposes or executes runs without
+    its guard, whenever it was proposed."""
     g = list(eff.get("guards", []))
-    h = state["held"].get(eff["executor"])
-    if h and h not in g: g.append(h)
+    for who in (eff["proposer"], eff["executor"]):
+        h = state["held"].get(who)
+        if h and h not in g: g.append(h)
     return g
 
 def effective_mode(state, sess):
@@ -689,7 +698,7 @@ def _session_open(state, entry, ctx, role):
 def _session_close(state, entry, ctx, role):
     sess = state["sessions"].get(entry["body"]["session"])
     if not sess: return invalid("no such session")
-    if not sess["open"]: return deny("session already closed")
+    if not sess["open"] and entry["author"] != sess["actor"]: return deny("session already closed")
     if entry["author"] != sess["actor"] and role != "owner": return deny("only the session's actor or an owner closes it")
     return ALLOW
 
@@ -848,7 +857,11 @@ def fold(state, record, ctx) -> dict:
         if not is_human(ctx, author):
             p = ctx["profiles"][author]
             if p.get("operatorConfirmed") and p.get("operator"): s["sessions"][eid]["guard"] = p["operator"]
-            if b["steerMode"] == "guarded": s["guarded"][author] = p["operator"]       # sticky until it unguards itself
+            if b["steerMode"] == "guarded":
+                g = s["guarded"][author] = p["operator"]                        # sticky until it unguards itself
+                pending = any(t["open"] and author in t["to"] and t["author"] not in (author, g) for t in s["tasks"].values()) or \
+                          any(e["phase"] not in FINAL and e["executor"] == author and e["proposer"] not in (author, g) for e in s["effects"].values())
+                if pending and author not in s["held"]: s["held"][author] = g   # outside instructions still open: held at once
         if "task" in b: s["sessions"][eid]["task"] = b["task"]
     elif kind == "session.close":
         sess = s["sessions"][b["session"]]
@@ -862,7 +875,7 @@ def fold(state, record, ctx) -> dict:
         sess["steers"] += 1
         x = sess["actor"]
         if b.get("release"): s["held"].pop(x, None)                    # its guard releases it, explicitly
-        else: hold_on_instruction(s, x, author, sess.get("guard") if effective_mode(s, sess) == "guarded" else None)
+        else: hold_on_instruction(s, x, author)
     return s
 
 def _debit(s, src, amount):
