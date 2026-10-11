@@ -162,6 +162,7 @@
       "sessions": {},
       "held": {},
       "guarded": {},
+      "agents": {},
       "cleared": {},
       "outside": {},
       "budgetLeft": null

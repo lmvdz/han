@@ -108,8 +108,8 @@ def facts_interop(F):
         F[f"wv_{tag}_py"], F[f"wv_{tag}_ts"] = py, ts
         for who, s in (("Python", py), ("TS", ts)):
             if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s): raise Underivable(f"interop/RESULTS.md: cannot read {who} run {s!r}")
-    a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r21_ts"])
-    if int(a[2]) != F["wv_n"]: raise Underivable(f"interop/RESULTS.md records {a[2]} wire vectors for round 21, list_tests.py finds {F['wv_n']}: record a new run")
+    a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_ts"])      # the latest recorded run covers the vectors that exist now; round 21's is history
+    if int(a[2]) != F["wv_n"]: raise Underivable(f"interop/RESULTS.md records {a[2]} wire vectors for the latest run (round 22), list_tests.py finds {F['wv_n']}: record a new run")
     F["wv_exp"] = int(a[4])
     b = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_py"])
     F["wv_r22_py_fails"] = int(b[2]) - int(b[1])

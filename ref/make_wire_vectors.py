@@ -45,7 +45,7 @@ CONFIG = {
         "generator": "byte i of a blob is (i*7+3) mod 251",
     },
     "limits": {"maxFrameBytes": 1310720, "maxHeaderBytes": 16384, "maxContentBytes": 65536, "maxBlobBytes": 4294967296, "maxBlobPartBytes": 786432,
-               "maxBlobRangeBytes": 786432, "maxStreamItemBytes": 65536, "maxFollows": 256, "maxClockSkewSeconds": 60},
+               "maxBlobRangeBytes": 786432, "maxStreamItemBytes": 65536, "maxFollows": 256, "maxClockSkewSeconds": 60, "maxStateItems": 1000},
     "defaults": {"expectTimeoutMs": 5000, "settleMs": 250, "silenceMs": 400},
 }
 for k in ("b1", "b2"):
@@ -354,9 +354,273 @@ dec.append(vec("D6a", "G-06: host from a connection that is not a server actor i
 dec.append(vec("D9a", "hello ok carries every Limits member including maxClockSkewSeconds", [
     {"conn": "raw:1", "expect": {"challenge": "<challenge-shape>", "server": SERVER, "versions": [1], "time": T0}},
     {"conn": "raw:1", "send": hello_send(1, al)}, {"conn": "raw:1", "expect": HELLO_OK(1)}], ["G-08", "D9"], source="P50"))
+
+# ───────────── probes-r22.json: the E10 coverage of round 22 ─────────────
+# Every expected value of these vectors comes from ref/wire.py (`W.Home`, the executable reading of architecture.md that ref/run_wire.py tests), driven with
+# the same entries, the config server key and the frozen clock; no server's output is copied. The oracle is first checked against the 18 golden receipts
+# and the golden `read`, so it is known to produce the bytes the two reference servers produce.
+SKEYS = {SERVER: {"h1": {"publicKey": KEYS["server"].pub, "from": "1970-01-01T00:00:00Z"}}}
+def new_home(): return W.Home(SERVER, KEYS["server"], clock=lambda: T0, server_keys=SKEYS)
+def pview(nm):
+    return {"actor": A(nm), "seq": 1, "actorKind": "service" if nm == "x" else "human", "operatorConfirmed": False,
+            "keys": {"k1": {"publicKey": KEYS[nm].pub, "status": "valid"}}}
+PROF = {A(nm): pview(nm) for nm in NAMES}
+ORC = new_home()
+_gold = new_home()
+for fn in index["files"][:n]:
+    _st = json.load(open(os.path.join(OUT, fn), encoding="utf-8"))["steps"]
+    for i, st_ in enumerate(_st):
+        f = st_.get("send")
+        if f and f.get("call") == "append":
+            code, r = _gold.append(f["args"]["entry"], f["args"].get("content"), PROF)
+            assert code == "ok" and r == _st[i + 1]["expect"]["ok"], f"the oracle does not reproduce the golden receipt {fn} step {i}: {code} {r}"
+_gread = [x["expect"] for x in json.load(open(os.path.join(OUT, "05-read.json"), encoding="utf-8"))["steps"] if "expect" in x]
+_gitems = [g["item"] for g in _gread if "item" in g]
+assert _gitems == _gold.read("s1:" + SERVER, 0, A("alice"))[1][:len(_gitems)], "the oracle's read of s1 differs from the golden read"
+del _gold
+
+r22 = []
+SP_POLICY = json.load(open(os.path.join(OUT, "02-space.create.json"), encoding="utf-8"))["steps"][0]["send"]["args"]["entry"]["body"]["policy"]
+BIG = 2 ** 53
+va = A("vera")
+
+def oa(actor, kind, body, content=None, space=None, tag="", seen=None, key_id=None):
+    """A signed entry, appended to the oracle: (entry, content, receipt). `seen` defaults to the head."""
+    st_ = ORC.spaces.get(space)
+    e, c = mk(actor, kind, body, content, space=space, tag="r22-" + tag, seen=(st_["state"]["head"] if st_ else 0) if seen is None else seen, key_id=key_id)
+    code, r = ORC.append(e, c, PROF)
+    assert code == "ok", (tag, code, r)
+    return e, c, r
+def bad_shape(actor, kind, body, content=None, space=None, tag="", seen=0, key_id=None):
+    """A well-signed entry whose header is malformed (the nonce is not base32): shape errors, not signature errors."""
+    e, c = mk(actor, kind, body, content, space=space, tag="r22-" + tag, seen=seen, key_id=key_id)
+    e = {k: v for k, v in e.items() if k != "sig"}; e["nonce"] = "NOT-BASE32"
+    return W.sign_entry(e, KEYS[actor]), c
+def forge(e, by):
+    """The same entry signed by another actor's key."""
+    return W.sign_entry({k: v for k, v in e.items() if k != "sig"}, KEYS[by])
+def put(conn, i, e, c, r):
+    """send an append and expect the receipt the oracle gave (exact)."""
+    return [{"conn": conn, "send": append_frame(i, e, c)}, {"conn": conn, "expect": {"id": i, "ok": r}}]
+def rec(space, seq): return ORC.spaces[space]["records"][seq - 1]
+def ritem(i, space, seq): return {"id": i, "item": {"type": "record", "record": rec(space, seq)}}
+def read_expect(conn, i, space, after, as_, **kw):
+    """The frames a server must answer `read` with, from the oracle: the items, then the end (or the error). `next` of a state page is the matcher <cursor>."""
+    code, items = ORC.read(space, after, A(as_), **kw)
+    if code != "ok": return [{"conn": conn, "expect": err(i, code)}]
+    out = []
+    for it in items:
+        it = dict(it)
+        if "next" in it: it["next"] = "<cursor>"
+        out.append({"conn": conn, "expect": {"id": i, "item": it}})
+    return out + [{"conn": conn, "expect": {"id": i, "end": True}}]
+def rd(conn, i, space, after=0, **args): return {"conn": conn, "send": {"id": i, "call": "read", "args": dict({"space": space, "after": after}, **args)}}
+def create_space(conn, space, name, actor="alice", i0=2):
+    e, c, r = oa(actor, "space.create", {"policy": SP_POLICY}, {"name": name}, space=space, tag=space + "-create")
+    return put(conn, i0, e, c, r)
+def member(conn, space, who, role, i, actor="alice"):
+    e, c, r = oa(actor, "member.set", {"actor": A(who), "role": role}, space=space, tag=f"{space}-m-{who}-{role}-{i}")
+    return put(conn, i, e, c, r)
+def message(conn, space, actor, text, i, to=None):
+    e, c, r = oa(actor, "message", {"to": [A(t) for t in to]} if to else {}, {"text": text}, space=space, tag=f"{space}-msg-{text}-{i}")
+    return put(conn, i, e, c, r), (e, c, r)
+
+# ── E8: the state is paged and never refused for its size (§3, G-09). "Enough items": maxStateItems is not lowered, so no server needs a test option ──
+PG = "pg:" + SERVER
+steps = create_space(al, PG, "paging") + member(al, PG, "bob", "member", 3)
+NTASK = 1001
+for k in range(NTASK):
+    e, c, r = oa("alice", "task", {"to": [bo]}, {"ask": f"task {k}"}, space=PG, tag=f"pg-task-{k}")
+    steps += [{"conn": al, "send": append_frame(10 + k, e, c)}, {"conn": al, "expect": receipt(10 + k, r["seq"])}]
+r22.append(vec("E8-setup", f"setup: alice creates `{PG}`, adds bob and orders {NTASK} tasks (one more than maxStateItems, 1,000)", steps, ["§3", "E8"], source="maker"))
+page1 = read_expect(al, 2, PG, 0, "alice", state=True, limit=1)          # limit 1 bounds the records, never the state
+assert len(page1) == 3 and len(page1[0]["expect"]["item"]["state"]["tasks"]) == 1000 and page1[0]["expect"]["item"]["next"] == "<cursor>"
+ORC.max_state_items = 10 ** 6; full = ORC.read(PG, 0, A("alice"), state=True)[1][0]["state"]; ORC.max_state_items = W.MAX_STATE_ITEMS
+last_page = dict(full, tasks=dict(list(full["tasks"].items())[1000:]))
+assert len(last_page["tasks"]) == 1
+steps = [rd(al, 2, PG, 0, state=True, limit=1)] + page1
+steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>"}}},
+          {"conn": al, "expect": {"id": 3, "item": {"type": "state", "state": last_page}}}, {"conn": al, "expect": {"id": 3, "end": True}},
+          {"conn": al, "send": {"id": 4, "call": "read", "args": {"space": PG, "after": 999999, "state": True, "cursor": "<cursor>"}}},      # `after` is ignored with a cursor
+          {"conn": al, "expect": {"id": 4, "item": {"type": "state", "state": last_page}}}, {"conn": al, "expect": {"id": 4, "end": True}},
+          {"conn": al, "send": {"id": 5, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "at": 2}}}, {"conn": al, "expect": err(5, "invalid")},
+          {"conn": al, "send": {"id": 6, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "effect": "0" * 64}}}, {"conn": al, "expect": err(6, "invalid")}]
+r22.append(vec("E8a", f"read {{state, limit: 1}} returns the oldest 1,000 of {NTASK} tasks with a cursor; the cursor returns the rest (the same head, no `next`); a cursor excludes `at` and `effect`; `after` is ignored with a cursor",
+               steps, ["§3", "G-09", "E8"], "page 1: 1,000 tasks + next, 1 record; page 2: 1 task, no next", source="maker (oracle: ref/wire.py Home)"))
+steps = [rd(al, 2, PG, 0, state=True, limit=1)] + page1
+steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "after": 0, "cursor": "<cursor>"}}}, {"conn": al, "expect": err(3, "invalid")},
+          {"conn": al, "send": {"id": 4, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "junk"}}}, {"conn": al, "expect": err(4, "invalid")},
+          {"conn": al, "send": {"id": 5, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": 5}}}, {"conn": al, "expect": err(5, "invalid")},
+          {"conn": ca, "send": {"id": 6, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>"}}}, {"conn": ca, "expect": err(6, "not_found")}]
+r22.append(vec("E8b", "a cursor needs state: true; a malformed cursor is invalid; a reader who may read nothing of the space gets not_found for a valid cursor", steps,
+               ["§3", "G-09", "E8"], "invalid, invalid, invalid, not_found", source="maker"))
+del full, last_page, page1
+
+EF = "ef:" + SERVER
+steps = create_space(al, EF, "effects") + member(al, EF, "bob", "member", 3) + member(al, EF, "x", "member", 4)
+plan = {"action": "file.write", "target": "out/e8.txt", "args": {"content": "effect read"}}
+e, c, r = oa("bob", "effect.propose", {"executor": A("x"), "action": "file.write", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}, {"plan": plan}, space=EF, tag="ef-propose")
+pid = r["id"]
+steps += put(bo, 2, e, c, r)
+steps += [rd(al, 5, EF, 0, state=True, effect=pid)] + read_expect(al, 5, EF, 0, "alice", state=True, effect=pid)
+steps += [rd(al, 6, EF, 999999, state=True, effect=pid, limit=1)] + read_expect(al, 6, EF, 0, "alice", state=True, effect=pid)      # `after` and `limit` do not matter
+steps += [rd(al, 7, EF, 0, state=True, effect="0" * 64), {"conn": al, "expect": err(7, "not_found")},
+          rd(al, 8, EF, 0, effect=pid), {"conn": al, "expect": err(8, "invalid")},
+          rd(al, 9, EF, 0, state=True, effect=5), {"conn": al, "expect": err(9, "invalid")},
+          rd(ca, 10, EF, 0, state=True, effect=pid), {"conn": ca, "expect": err(10, "not_found")}]
+one = read_expect(al, 5, EF, 0, "alice", state=True, effect=pid)[0]["expect"]["item"]["state"]
+assert set(one) == {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents", "effects"} and list(one["effects"]) == [pid], sorted(one)
+r22.append(vec("E8c", "read {state, effect}: one state item holding only that effect, with policy, roles, sessions, held, guarded and agents; an unknown effect is not_found; effect needs state", steps,
+               ["§3", "G-09", "E8"], "the EffectStateView, then end", source="maker (oracle: ref/wire.py Home)"))
+
+# ── G-07 (1a): an integer of 2^53 or more anywhere in a frame ──
+VO = "vo:" + SERVER
+S1 = "s1:" + SERVER
+e_big, c_big = mk("alice", "message", {}, {"text": "seen is huge"}, space=S1, tag="r22-seenbig", seen=BIG)
+frame_big = json.dumps({"id": 5, "call": "append", "args": {"entry": e_big, "content": c_big}}, ensure_ascii=False, separators=(",", ":"))
+steps = [
+    {"conn": al, "send_raw": '{"id":2,"call":"read","args":{"space":"%s","after":%d}}' % (S1, BIG)}, {"conn": al, "expect": err(2, "invalid")},
+    {"conn": al, "send_raw": '{"id":3,"call":"read","args":{"space":"%s","after":%d}}' % (S1, BIG - 1)}, {"conn": al, "expect": {"id": 3, "end": True}},
+    {"conn": al, "send_raw": '{"id":4,"call":"signal","args":{"space":"%s","body":{"n":%d}}}' % (S1, BIG + 1)}, {"conn": al, "expect": err(4, "invalid")},
+    {"conn": al, "send_raw": frame_big}, {"conn": al, "expect": err(5, "invalid")},
+    {"conn": al, "send": {"id": 6, "call": "cancel", "args": {"target": 1}}}, {"conn": al, "expect": OKNULL(6)}]
+r22.append(vec("E7a", "an integer of 2^53 or more in args, in opaque Json or in an entry is invalid on the request's own id (usable id): the connection stays open; 2^53-1 is fine", steps,
+               ["§2", "G-07"], "invalid on the id, the connection open", source="maker"))
+steps = [{"conn": al, "send_raw": '{"id":%d,"call":"cancel","args":{"target":1}}' % BIG}, {"conn": al, "expect": err(0, "invalid")}, {"conn": al, "expect_close": True}]
+for label, text in (("raw:1", '{"call":"cancel","args":{"target":%d}}' % (BIG + 1)), ("raw:2", '{"id":0,"call":"cancel","args":{"target":%d}}' % (BIG + 1)),
+                    ("raw:3", '{"id":"5","call":"cancel","args":{"target":%d}}' % (BIG + 1)), ("raw:4", '{"id":-5,"call":"cancel","args":{"target":%d}}' % (BIG + 1))):
+    steps += [{"conn": label, "send_raw": text}, {"conn": label, "expect": err(0, "invalid")}, {"conn": label, "expect_close": True}]
+r22.append(vec("E7b", "an integer of 2^53 or more with no usable id (id itself 2^53, absent, 0, a string, negative): id 0, invalid, and the server closes the connection", steps,
+               ["§2", "G-07"], "id 0, invalid, close", source="maker"))
+steps = [{"conn": "raw:1", "send_raw": '{"id":2,"call":"read","args":{"space":"s1:%s","after":%d}}' % (SERVER, BIG)}, {"conn": "raw:1", "expect": err(2, "invalid")},
+         {"conn": "raw:1", "send_raw": '{"id":3,"call":"read","args":{"space":"s1:%s","after":0}}' % SERVER}, {"conn": "raw:1", "expect": err(3, "denied")},
+         {"conn": "raw:1", "send_raw": '{"id":4,"call":"cancel","args":{"target":1},"extra":true}'}, {"conn": "raw:1", "expect": err(4, "invalid")},
+         {"conn": "raw:1", "send_raw": '{"id":5,"call":"read","args":{"space":"s1:%s","after":0,"bogus":1}}' % SERVER}, {"conn": "raw:1", "expect": err(5, "denied")}]
+r22.append(vec("E7c", "order of the frame checks: an oversized integer and a malformed frame are invalid before authentication; before hello a well-formed call with bad args is denied (args come last)", steps,
+               ["G-07"], "invalid, denied, invalid, denied", source="maker"))
+
+# ── §4.1 order of verdicts: the adjacent pairs one server can show (E5) ──
+steps = create_space(al, VO, "verdict order") + member(al, VO, "bob", "member", 3)
+m1, (m1e, m1c, m1r) = message(bo, VO, "bob", "first", 2)
+steps += m1 + member(al, VO, "bob", "none", 4)
+r22.append(vec("E5-setup", f"setup: alice creates `{VO}`, adds bob, bob posts a message, alice removes bob (state for E5a-E5d)", steps, ["§4.1", "E5"], source="maker"))
+head = ORC.spaces[VO]["state"]["head"]
+m2e, m2c = mk("bob", "message", {}, {"text": "second"}, space=VO, tag="r22-vo-second", seen=head)
+r22.append(vec("E5a", "dedupe before Policy (steps 1, 5): a stored entry of a removed member gets its receipt again; a new one is denied", [
+    {"conn": bo, "send": append_frame(2, m1e, m1c)}, {"conn": bo, "expect": {"id": 2, "ok": m1r}},
+    {"conn": bo, "send": append_frame(3, m2e, m2c)}, {"conn": bo, "expect": err(3, "denied")}], ["§4.1", "R-01", "E5"], "same receipt, then denied", source="maker"))
+fe, fc = bad_shape("alice", "message", {}, {"text": "foreign, malformed"}, space="q9:other.localhost", tag="vo-foreign-bad")
+fce, fcc = bad_shape("alice", "space.create", {"policy": SP_POLICY}, {"name": "foreign create"}, space="q8:other.localhost", tag="vo-foreign-create-bad")
+ue, uc = bad_shape("alice", "message", {}, {"text": "unknown local, malformed"}, space="nospace:" + SERVER, tag="vo-unknown-bad")
+oe_, oc = bad_shape("alice", "message", {}, {"text": "own space, malformed"}, space=VO, tag="vo-own-bad", seen=head)
+r22.append(vec("E5b", "routing before shape (steps 2, 3): a malformed entry for a foreign space is moved, whatever its kind; for an unknown local space or for this server's own space it is invalid", [
+    {"conn": al, "send": append_frame(2, fe, fc)}, {"conn": al, "expect": err(2, "moved", movedTo="other.localhost")},
+    {"conn": al, "send": append_frame(3, fce, fcc)}, {"conn": al, "expect": err(3, "moved", movedTo="other.localhost")},
+    {"conn": al, "send": append_frame(4, ue, uc)}, {"conn": al, "expect": err(4, "invalid")},
+    {"conn": al, "send": append_frame(5, oe_, oc)}, {"conn": al, "expect": err(5, "invalid")}], ["§4.1", "E5"], "moved, moved, invalid, invalid", source="maker"))
+k9e, k9c = mk("alice", "message", {}, {"text": "unknown key"}, space=VO, tag="r22-vo-k9", seen=head, key_id="k9")
+k9be, k9bc = bad_shape("alice", "message", {}, {"text": "unknown key, malformed"}, space=VO, tag="vo-k9-bad", seen=head, key_id="k9")
+fge, fgc = mk("alice", "message", {}, {"text": "forged by a member"}, space=VO, tag="r22-vo-forged-member", seen=head)
+fge = forge(fge, "bob")
+r22.append(vec("E5c", "shape before the key and the signature (steps 3, 4): an unknown keyId is denied, the same entry malformed is invalid; a forged signature of a member is invalid, not allowed", [
+    {"conn": al, "send": append_frame(2, k9e, k9c)}, {"conn": al, "expect": err(2, "denied")},
+    {"conn": al, "send": append_frame(3, k9be, k9bc)}, {"conn": al, "expect": err(3, "invalid")},
+    {"conn": al, "send": append_frame(4, fge, fgc)}, {"conn": al, "expect": err(4, "invalid")}], ["§4.1", "R-12", "E5"], "denied, invalid, invalid", source="maker"))
+cge, cgc = mk("carol", "message", {}, {"text": "carol is no member"}, space=VO, tag="r22-vo-carol", seen=head)
+cfe, cfc = mk("carol", "message", {}, {"text": "carol, forged"}, space=VO, tag="r22-vo-carol-forged", seen=head)
+cfe = forge(cfe, "bob")
+cke, ckc = mk("carol", "message", {}, {"text": "carol, unknown key"}, space=VO, tag="r22-vo-carol-k9", seen=head, key_id="k9")
+cbe, cbc = bad_shape("carol", "message", {}, {"text": "carol, malformed"}, space=VO, tag="vo-carol-bad", seen=head)
+r22.append(vec("E5d", "signature before Policy (steps 4, 5), shape before Policy (3, 5): for a non-member a genuine entry is denied, a forged one is invalid, an unknown key is denied, a malformed one is invalid", [
+    {"conn": ca, "send": append_frame(2, cge, cgc)}, {"conn": ca, "expect": err(2, "denied")},
+    {"conn": ca, "send": append_frame(3, cfe, cfc)}, {"conn": ca, "expect": err(3, "invalid")},
+    {"conn": ca, "send": append_frame(4, cke, ckc)}, {"conn": ca, "expect": err(4, "denied")},
+    {"conn": ca, "send": append_frame(5, cbe, cbc)}, {"conn": ca, "expect": err(5, "invalid")}], ["§4.1", "R-12", "P-16", "E5"], "denied, invalid, denied, invalid", source="maker"))
+
+# ── read {at} (§3, P-02: rights judged on the current state) ──
+AT = "at:" + SERVER
+steps = create_space(al, AT, "history") + member(al, AT, "bob", "member", 3)
+mm, _ = message(bo, AT, "bob", "from bob", 2); steps += mm
+steps += member(al, AT, "vera", "member", 4) + member(al, AT, "bob", "none", 5)
+steps += [rd(al, 6, AT, 3, state=True, at=2)] + read_expect(al, 6, AT, 3, "alice", state=True, at=2)
+steps += [rd(bo, 3, AT, 5, state=True, at=3)] + read_expect(bo, 3, AT, 5, "bob", state=True, at=3)
+steps += [rd(bo, 4, AT, 5, state=True), {"conn": bo, "expect": err(4, "denied")}]
+steps += [rd(va, 2, AT, 5, state=True, at=2)] + read_expect(va, 2, AT, 5, "vera", state=True, at=2)
+steps += [rd(al, 7, AT, 5, state=True, at=5)] + read_expect(al, 7, AT, 5, "alice", state=True, at=5)
+steps += [rd(al, 8, AT, 0, at=2), {"conn": al, "expect": err(8, "invalid")}, rd(al, 9, AT, 0, state=True, at=0), {"conn": al, "expect": err(9, "invalid")},
+          rd(al, 10, AT, 0, state=True, at=6), {"conn": al, "expect": err(10, "invalid")}, rd(al, 11, AT, 0, state=True, at="2"), {"conn": al, "expect": err(11, "invalid")}]
+assert read_expect(al, 6, AT, 3, "alice", state=True, at=2)[0]["expect"]["item"]["state"]["head"] == 2
+r22.append(vec("E9a", "read {state, at}: the state after record `at` (head = at); a former member reads it while they were in, but not the head; a member who joined later reads an earlier state; at without state, 0, past the head or a string is invalid", steps,
+               ["§3", "P-02", "G-09"], "state at `at` (+ records after `after`), denied for the former member at the head", source="maker (oracle: ref/wire.py Home)"))
+
+# ── follow + limit: the gap ──
+FG = "fg:" + SERVER
+steps = create_space(al, FG, "gap") + member(al, FG, "bob", "member", 3)
+for k in range(3):
+    mm, _ = message(bo, FG, "bob", f"backlog {k}", 10 + k); steps += mm
+steps += [{"conn": al, "send": {"id": 2, "call": "read", "args": {"space": FG, "after": 0, "follow": True, "limit": 2}}}, {"conn": al, "expect": ritem(2, FG, 1)}, {"conn": al, "expect": ritem(2, FG, 2)}]
+mm, _ = message(bo, FG, "bob", "live", 20); steps += mm
+steps += [{"conn": al, "expect": ritem(2, FG, 6)},
+          {"conn": al, "send": {"id": 3, "call": "cancel", "args": {"target": 2}}}, {"conn": al, "expect": OKNULL(3)},
+          rd(al, 4, FG, 2, limit=3), {"conn": al, "expect": ritem(4, FG, 3)}, {"conn": al, "expect": ritem(4, FG, 4)}, {"conn": al, "expect": ritem(4, FG, 5)}, {"conn": al, "expect": {"id": 4, "end": True}}]
+r22.append(vec("E9b", "read {follow, limit: 2} on a backlog of 5: two records, then the live records from the head at registration on (seq 6): records 3-5 are a visible gap that read {after: 2} fills", steps,
+               ["§3", "G-09", "W-22"], "records 1, 2, then 6; the gap re-read gives 3, 4, 5", source="maker"))
+
+# ── knownHeads (R-15) ──
+KH = "kh:" + SERVER
+steps = create_space(al, KH, "heads") + member(al, KH, "bob", "member", 3)
+mm, _ = message(bo, KH, "bob", "head", 2); steps += mm
+r1_, r3_ = rec(KH, 1)["receipt"], rec(KH, 3)["receipt"]
+flipped = dict(r1_, homeSig=r1_["homeSig"][:20] + ("B" if r1_["homeSig"][20] != "B" else "C") + r1_["homeSig"][21:])
+PA = "profile:" + al
+heads = lambda i, hs: {"id": i, "item": {"type": "heads", "heads": hs}}
+steps += [rd(al, 5, KH, 2, knownHeads=[r1_]), {"conn": al, "expect": heads(5, [r3_])}, {"conn": al, "expect": ritem(5, KH, 3)}, {"conn": al, "expect": {"id": 5, "end": True}},
+          rd(al, 6, KH, 3, knownHeads=[]), {"conn": al, "expect": heads(6, [])}, {"conn": al, "expect": {"id": 6, "end": True}},
+          rd(al, 7, KH, 3, knownHeads=[flipped]), {"conn": al, "expect": heads(7, [r3_])}, {"conn": al, "expect": {"id": 7, "end": True}},
+          rd(al, 8, PA, 1, knownHeads=[r1_]), {"conn": al, "expect": heads(8, [r3_])}, {"conn": al, "expect": {"id": 8, "end": True}},
+          rd(ca, 2, PA, 1, knownHeads=[r1_]), {"conn": ca, "expect": heads(2, [])}, {"conn": ca, "expect": {"id": 2, "end": True}},
+          rd(al, 9, KH, 3, knownHeads=[dict(r1_, space="zz:" + SERVER)]), {"conn": al, "expect": heads(9, [])}, {"conn": al, "expect": {"id": 9, "end": True}}]
+for label, who, hs in (("raw:1", al, [r3_]), ("raw:2", ca, [])):
+    steps += [{"conn": label, "expect": {"challenge": "<challenge-shape>", "server": SERVER, "versions": [1], "time": T0}},
+              {"conn": label, "send": {"id": 1, "call": "hello", "args": {"who": who, "keyId": "k1", "proof": "<proof>", "version": 1, "knownHeads": [r1_]}}},
+              {"conn": label, "expect": {"id": 1, "ok": {"limits": LIMITS, "durability": "local", "time": T0, "knownHeads": hs}}}]
+r22.append(vec("E10a", "non-empty knownHeads, in read and in hello: the head receipt of each listed space the asker may read (a stranger gets none, an unknown space none), whatever the listed receipt says; an empty list still gets a `heads` item",
+               steps, ["R-15", "§3", "G-08", "P-02"], "heads item before the records; hello.knownHeads", source="maker (oracle: ref/wire.py Home)"))
+
+# ── profile spaces: the bootstrap record and the notice (§4.3, G-03) ──
+boot = lambda a, who, i, k: [{"conn": who, "send": {"id": i, "call": "read", "args": {"space": "profile:" + a, "after": 0}}},
+                              {"conn": who, "expect": {"id": i, "item": {"type": "record", "record": "<profile-bootstrap %s %s>" % (a, k)}}}, {"conn": who, "expect": {"id": i, "end": True}}]
+r22.append(vec("E3a", "a stranger reads a profile space: its first record is the server's space.create (author @:S, signed by the server key, body.profile with the actor's key, content {name}, receipt pins {@:S: 0})",
+               boot(al, ca, 2, "human") + boot(bo, ca, 3, "human"), ["§4.3", "P-02", "§2"], "the bootstrap record, then end", source="maker"))
+NT = "nt:" + SERVER
+PC = "profile:" + ca       # carol: nothing before this vector has given her a role, so no earlier notice is waiting for her session
+notice = lambda seq: {"id": 2, "item": {"type": "signal", "from": "@:" + SERVER, "body": {"type": "notice", "space": NT, "seq": seq}}}
+steps = [{"conn": ca, "send": {"id": 2, "call": "subscribe", "args": {"space": PC}}}, {"conn": va, "send": {"id": 2, "call": "subscribe", "args": {"space": PC}}}]
+steps += create_space(al, NT, "notices")
+steps += member(al, NT, "carol", "guest", 3) + [{"conn": ca, "expect": notice(2)}]
+steps += member(al, NT, "carol", "member", 4) + [{"conn": ca, "expect": notice(3)}]
+steps += member(al, NT, "carol", "none", 5) + member(al, NT, "carol", "banned", 6)
+steps += member(al, NT, "carol", "member", 7) + [{"conn": ca, "expect": notice(6)}]
+mm, _ = message(al, NT, "alice", "for carol", 8, to=["carol"]); steps += mm + [{"conn": ca, "expect": notice(7)}]
+steps += member(al, NT, "bob", "member", 9) + [{"conn": ca, "expect_silence": True}, {"conn": va, "expect_silence": True},
+          {"conn": ca, "send": {"id": 3, "call": "cancel", "args": {"target": 2}}}, {"conn": ca, "expect": OKNULL(3)},
+          {"conn": va, "send": {"id": 3, "call": "cancel", "args": {"target": 2}}}, {"conn": va, "expect": OKNULL(3)}]
+r22.append(vec("E3b", "notices (G-03): the home signals the actor's own profile space when a member.set gives it guest/member/owner or a message names it in `to`; none and banned send nothing; a stranger subscribed to that profile sees nothing",
+               steps, ["G-03", "G-04", "§4.3"], "signals {type: notice, space, seq} from @:S for seqs 2, 3, 6, 7 only", source="maker"))
+
+def dump_vectors(path, doc):
+    """One step per line: the paging vector holds a thousand."""
+    head = json.dumps({k: v for k, v in doc.items() if k != "vectors"}, ensure_ascii=False)[:-1]
+    parts = []
+    for v in doc["vectors"]:
+        h = json.dumps({k: x for k, x in v.items() if k != "steps"}, ensure_ascii=False)[:-1]
+        parts.append(h + ',"steps":[\n' + ",\n".join(json.dumps(x, ensure_ascii=False, separators=(",", ":")) for x in v["steps"]) + "\n]}")
+    open(path, "w", encoding="utf-8", newline="\n").write(head + ',"vectors":[\n' + ",\n".join(parts) + "\n]}\n")
+dump_vectors(os.path.join(OUT, "probes-r22.json"), {"format": "han-wire-vectors/1", "kind": "r22", "note": "Round-22 coverage (DECISIONS-r22.md E5, E8, E10; architecture.md §3, §4.1, §4.3, G-03, G-07, R-15). Every expected value is from ref/wire.py (W.Home) driven with the same entries. Run after probes-decided.json, in this order: E8-setup builds the paging space, E5-setup the space E5a-E5d and E7a use.", "vectors": r22})
+
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})
-index["files"] += ["probes.json", "probes-decided.json"]
+index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json"]
 dump(os.path.join(OUT, "index.json"), index)
-print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "head after agreed:", HEAD_AFTER_AGREED)
+print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "head after agreed:", HEAD_AFTER_AGREED)

@@ -25,6 +25,7 @@
   "20-task.json",
   "21-redact.json",
   "probes.json",
-  "probes-decided.json"
+  "probes-decided.json",
+  "probes-r22.json"
  ]
 }

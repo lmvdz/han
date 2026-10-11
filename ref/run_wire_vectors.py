@@ -141,7 +141,7 @@ CHALLENGE_SHAPE = re.compile(r"[A-Za-z0-9_-]{22,128}", re.ASCII)
 RECEIPT_FIELDS = {"space", "seq", "id", "prev", "home", "homeKey", "time", "durability", "profiles", "homeSig"}
 
 class Ctx:
-    def __init__(self, cfg, url): self.cfg, self.url, self.ids = cfg, url, {}
+    def __init__(self, cfg, url): self.cfg, self.url, self.ids, self.vars = cfg, url, {}, {}      # vars: values a matcher captured (`<cursor>`)
 
 def mask_actual(f):
     """The documented masking of a server frame before comparing: long blob `data` summarised, error `message` dropped."""
@@ -168,8 +168,14 @@ def match(exp, act, path, ctx, key=None):
             return None if isinstance(act, str) and CHALLENGE_SHAPE.fullmatch(act) else f"{path}: challenge must be 22-128 characters of [A-Za-z0-9_-], got {act!r}"
         if exp == "<url-of-the-binding>":
             return None if isinstance(act, str) and re.fullmatch(r"wss?://\S+/han", act) else f"{path}: sequencer must be a complete ws(s):// URL ending in /han (D7, D13), got {act!r}"
+        if exp == "<cursor>":
+            ok = isinstance(act, str) and 1 <= len(act) <= 1024 and act.isascii() and act.isprintable()
+            if ok: ctx.vars["cursor"] = act
+            return None if ok else f"{path}: a state page's `next` must be an opaque non-empty printable ASCII string of at most 1024 characters, got {act!r:.80}"
         m = re.fullmatch(r"<receipt(?: seq=(\d+))?>", exp)
         if m: return check_receipt(act, int(m.group(1)) if m.group(1) else None, path, ctx, key)
+        m = re.fullmatch(r"<profile-bootstrap (@\S+) (human|agent|service)>", exp)
+        if m: return check_profile_bootstrap(act, m.group(1), m.group(2), path, ctx)
     if isinstance(exp, dict):
         if not isinstance(act, dict): return f"{path}: expected an object, got {type(act).__name__}"
         if set(exp) != set(act): return f"{path}: members differ: expected {sorted(exp)}, got {sorted(act)}"
@@ -197,6 +203,33 @@ def check_receipt(r, seq, path, ctx, key):
     if want and r["id"] != want: return f"{path}: receipt id {r['id']} is not the id of the entry sent ({want})"
     return None
 
+def check_profile_bootstrap(rec, actor, kind, path, ctx):
+    """The first record of `profile:<actor>` (architecture.md §4.3): a space.create authored by the server actor and signed by the server key, body
+    {policy, profile: {actorKind, key}} (the PolicyDoc is any object: the nonce and the PolicyDoc are the server's own), content {name: <actor>}, and a
+    receipt for seq 1 that pins {"@:S": 0}. Everything else is checked exactly."""
+    cfg = ctx.cfg
+    if not isinstance(rec, dict) or set(rec) != {"entry", "content", "redacted", "receipt"}: return f"{path}: not a record: {rec!r:.100}"
+    e, c, r = rec["entry"], rec["content"], rec["receipt"]
+    fields = {"v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig"}
+    if not isinstance(e, dict) or set(e) != fields: return f"{path}.entry: not an Entry: {e!r:.100}"
+    a = next((x for x in cfg.c["actors"] if x["actor"] == actor), None)
+    if a is None: return f"vector error: {actor} is not in config.json"
+    want = {"v": 1, "space": "profile:" + actor, "kind": "space.create", "author": "@:" + cfg.server, "keyId": cfg.server_key["keyId"], "refs": [], "seen": 0, "time": cfg.c["clock"]}
+    for k, v in want.items():
+        if e[k] != v or type(e[k]) is not type(v): return f"{path}.entry.{k}: expected {v!r}, got {e[k]!r:.80}"
+    b = e["body"]
+    if not isinstance(b, dict) or set(b) != {"policy", "profile"} or not isinstance(b["policy"], dict): return f"{path}.entry.body: expected {{policy, profile}}, got {b!r:.100}"
+    if b["profile"] != {"actorKind": kind, "key": {"keyId": a["keyId"], "publicKey": a["publicKey"]}}: return f"{path}.entry.body.profile: got {b['profile']!r:.160}"
+    if c != {"name": actor}: return f"{path}.content: expected {{name: {actor}}}, got {c!r:.80}"
+    if e["contentHash"] != W.content_hash(c): return f"{path}.entry.contentHash does not match the content"
+    eid = P.entry_id(e)
+    if not W.verify_sig(cfg.server_key["publicKey"], e["sig"], b"han-sig-v1\n" + eid.encode()): return f"{path}.entry.sig does not verify under the server key"
+    if rec["redacted"] is not False: return f"{path}.redacted must be false"
+    if not isinstance(r, dict) or r.get("id") != eid or r.get("prev") != "" or r.get("space") != e["space"] or r.get("time") != cfg.c["clock"] or r.get("durability") != "local":
+        return f"{path}.receipt: not the receipt of this entry at seq 1: {r!r:.160}"
+    if r.get("profiles") != {"@:" + cfg.server: 0}: return f"{path}.receipt.profiles: expected {{@:{cfg.server}: 0}}, got {r.get('profiles')!r:.80}"
+    return check_receipt(r, 1, path + ".receipt", ctx, None)
+
 # ───────────── running a vector ─────────────
 class Fail(Exception): pass
 
@@ -205,8 +238,8 @@ def walk(v, fn):
     if isinstance(v, list): return [walk(x, fn) for x in v]
     return fn(v)
 
-def expand_send(frame, conn, cfg):
-    """Placeholders in a client frame: <proof ...>, <b64u len= sha256=> (blob bytes from the config generator), <repeat c n>."""
+def expand_send(frame, conn, cfg, ctx=None):
+    """Placeholders in a client frame: <proof ...>, <b64u len= sha256=> (blob bytes from the config generator), <repeat c n>, <cursor> (the last `next` the server sent)."""
     frame = json.loads(json.dumps(frame))
     a = frame.get("args") if isinstance(frame, dict) else None
     if isinstance(a, dict) and frame.get("call") == "hello" and isinstance(a.get("proof"), str) and a["proof"].startswith("<proof"):
@@ -222,6 +255,9 @@ def expand_send(frame, conn, cfg):
     def rep(v):
         if isinstance(v, str) and v.startswith("<repeat "):
             _, c, k = v.strip("<>").split(); return c * int(k)
+        if v == "<cursor>":
+            if not ctx or "cursor" not in ctx.vars: raise Fail("vector error: <cursor> is used before the server sent a `next`")
+            return ctx.vars["cursor"]
         return v
     return walk(frame, rep)
 
@@ -282,7 +318,7 @@ def run_vector(vec, cfg, url, timeout, verbose=False):
                 if "send_binary" in s: c.send_binary(bytes.fromhex(s["send_binary"])); continue
                 if "send_raw" in s: c.send_text(s["send_raw"])
                 else:
-                    f = expand_send(s["send"], c, cfg)
+                    f = expand_send(s["send"], c, cfg, ctx)
                     e = f.get("args", {}).get("entry") if isinstance(f.get("args"), dict) else None
                     if f.get("call") == "append" and isinstance(e, dict):
                         try: ctx.ids[(s["conn"], f["id"])] = P.entry_id(e)
@@ -441,15 +477,19 @@ def main():
             if a.verbose or fails: print(("PASS " if not fails else "FAIL ") + f"{fn}::{v['id']}" + ("" if not fails else "\n      " + "\n      ".join(f[:300] for f in fails[:3])))
     finally:
         if proc:
-            proc.terminate()
+            if os.name == "nt":      # the venv's python.exe is a launcher: end the whole tree, or the real server keeps running
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            else:
+                proc.terminate()
             try: proc.wait(8)
             except subprocess.TimeoutExpired: proc.kill()
     ops = [r for r in results if r["file"][:2].isdigit()]
     pr = [r for r in results if r["file"] == "probes.json"]
     dc = [r for r in results if r["file"] == "probes-decided.json"]
+    r22 = [r for r in results if r["file"] == "probes-r22.json"]
     def line(name, rs): return f"{name}: {sum(r['pass'] for r in rs)}/{len(rs)} vectors pass ({sum(r['expectations'] for r in rs if r['pass'])}/{sum(r['expectations'] for r in rs)} expectations)"
     print("---")
-    for name, rs in (("operations (golden)", ops), ("agreed probes", pr), ("decided probes", dc)):
+    for name, rs in (("operations (golden)", ops), ("agreed probes", pr), ("decided probes", dc), ("round-22 probes", r22)):
         if rs: print(line(name, rs))
     print(line("TOTAL", results))
     if a.json: json.dump({"url": url, "results": results}, open(a.json, "w", encoding="utf-8"), indent=1)

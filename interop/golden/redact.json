@@ -1128,6 +1128,7 @@
         },
         "held": {},
         "guarded": {},
+        "agents": {},
         "cleared": {},
         "outside": {},
         "budgetLeft": null
@@ -3233,6 +3234,7 @@
         },
         "held": {},
         "guarded": {},
+        "agents": {},
         "cleared": {},
         "outside": {},
         "budgetLeft": null

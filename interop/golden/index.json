@@ -3,10 +3,10 @@
  "ops": [
   {
    "op": "hello",
-   "vector": null,
+   "vector": "ts-client",
    "agree": {
-    "ts-client": false,
-    "py-client": false
+    "ts-client": true,
+    "py-client": true
    }
   },
   {
