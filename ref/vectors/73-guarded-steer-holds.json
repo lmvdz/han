@@ -108,8 +108,7 @@
        "steer": "member",
        "modes": [
         "auto",
-        "guarded",
-        "suggest"
+        "guarded"
        ]
       },
       "servers": {

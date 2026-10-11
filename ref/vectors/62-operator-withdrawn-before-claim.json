@@ -86,8 +86,7 @@
        "steer": "owner",
        "modes": [
         "auto",
-        "guarded",
-        "suggest"
+        "guarded"
        ]
       },
       "servers": {

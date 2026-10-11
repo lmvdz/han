@@ -23,7 +23,7 @@ def _sessions(r):
     L = ["guest", "member", "owner", "nobody"]
     w = r.randrange(4)
     return {"watch": L[w], "read": L[r.randrange(w, 4)], "steer": L[r.randrange(w, 4)],
-            "modes": r.sample(["auto", "guarded", "suggest"], r.randint(1, 3))}
+            "modes": r.sample(["auto", "guarded"], r.randint(1, 2))}
 
 def H(x): return hashlib.sha256(x.encode()).hexdigest()
 
@@ -78,7 +78,7 @@ def random_entry(r, state, n):
         "redact": lambda: {"target": pick(ids, H("nope"))},
         "space.move": lambda: {"to": "b.example"},
         "x.ext": lambda: {"anything": r.randint(0, 9)},
-        "session.open": lambda: dict({"steerMode": r.choice(["auto", "guarded", "suggest"])}, **({"task": pick(tasks, H("nope"))} if r.random() < .3 else {})),
+        "session.open": lambda: dict({"steerMode": r.choice(["auto", "guarded"])}, **({"task": pick(tasks, H("nope"))} if r.random() < .3 else {})),
         "session.close": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
         "session.input": lambda: dict({"session": pick(list(state["sessions"]), H("nope"))}, **({"release": True} if r.random() < .2 else {})),
     }[kind]()

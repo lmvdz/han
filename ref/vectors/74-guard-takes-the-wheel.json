@@ -3,7 +3,7 @@
  "rules": [
   "P-15"
  ],
- "description": "auto and suggest add no hold; an agent can't release itself; humans are never held",
+ "description": "auto adds no hold; one guarded session guards the whole agent; an agent can't release itself; humans are never held",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -106,8 +106,7 @@
        "steer": "member",
        "modes": [
         "auto",
-        "guarded",
-        "suggest"
+        "guarded"
        ]
       },
       "servers": {
@@ -325,7 +324,7 @@
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "steerMode": "suggest"
+     "steerMode": "guarded"
     },
     "contentHash": "",
     "refs": [],
@@ -345,7 +344,7 @@
     "author": "@m:a.example",
     "keyId": "k1",
     "body": {
-     "session": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8"
+     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
     },
     "contentHash": "",
     "refs": [],
@@ -354,7 +353,12 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:12Z",
-   "expect": "allow"
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@bot:b.example": "@op:b.example"
+    }
+   }
   },
   {
    "entry": {
@@ -379,9 +383,11 @@
    "time": "2026-10-10T12:00:13Z",
    "expect": "allow",
    "check": {
-    "effects.9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc.phase": "ready"
+    "effects.9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc.guards": [
+     "@op:b.example"
+    ]
    },
-   "note": "suggest doesn't hold: the input only reaches the agent if its human re-issues it"
+   "note": "steering its auto side-session holds it once any of its sessions is guarded"
   },
   {
    "entry": {

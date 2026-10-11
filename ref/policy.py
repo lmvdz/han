@@ -99,7 +99,7 @@ def json_ok(v, depth=0) -> bool:
 POLICY_FIELDS = {"visibility", "join", "membersMayInvite", "allowAgents", "approvals", "separateApprover", "budget",
                  "maxDelegationDepth", "minDurability", "launchWindow", "extensionsMinRole", "sessions", "servers"}
 SESSION_LEVELS = ("guest", "member", "owner", "nobody")      # least to most restrictive (P-15)
-STEER_MODES = ("auto", "guarded", "suggest")
+STEER_MODES = ("auto", "guarded")
 
 def _policy(v):
     if not (isinstance(v, dict) and set(v) == POLICY_FIELDS): return False
@@ -163,7 +163,7 @@ SCHEMA = {
     "effect.resolve": {"proposal": (_id, True), "result": (lambda v: v in ("succeeded", "failed"), True), "cost": (_budget, False)},
     "checkpoint": {"through": (_int, True)},
     "redact": {"target": (_id, True)},
-    "session.open": {"task": (_id, False), "steerMode": (lambda v: v in ("auto", "guarded", "suggest"), True)},
+    "session.open": {"task": (_id, False), "steerMode": (lambda v: v in STEER_MODES, True)},
     "session.close": {"session": (_id, True)},
     "session.input": {"session": (_id, True), "release": (lambda v: v is True, False)},
     "space.move": {"to": (lambda v: isinstance(v, str) and bool(SERVER.match(v)), True),
@@ -258,7 +258,8 @@ def relevant_actors(state, entry, time=None) -> list[str]:
         if eff:
             out.append(eff["proposer"])
             out.extend(a["author"] for a in approval_candidates(state, eff, time))
-            out.extend(eff.get("guards", []))
+            out.extend(a["author"] for a in eff["approvals"] if any(stands_for(state, g, a["author"]) for g in eff.get("guards", []))
+                       and not a.get("consumedBy") and not a.get("dropped"))
     return list(dict.fromkeys(out))
 
 
@@ -478,13 +479,13 @@ def _approve(state, entry, ctx, role):
     if b["planDigest"] != eff["planDigest"]: return invalid("planDigest mismatch")
     if eff["phase"] not in ("awaiting-approval", "ready", "claimed"): return deny(f"cannot approve in {eff['phase']}")
     rule = approval_rule(state["policy"], eff["action"])
-    is_guard = author in eff.get("guards", [])
-    if is_guard and role not in READ_ROLES: return deny("guard holds no role")
+    is_guard = any(stands_for(state, g, author) for g in eff.get("guards", []))
+    if b.get("expiresAt") and ts(b["expiresAt"]) <= ts(ctx["time"]): return deny("approval already expired")
     if not is_guard and (not rule or not may_approve(state, rule, author)): return deny("not an approver for this action")
     if not is_guard and state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")
-    open_ = [a for a in eff["approvals"] if not a.get("consumedBy") and not a.get("dropped")]
-    if any(a["author"] == author and not (a.get("expiresAt") and ts(a["expiresAt"]) <= ts(ctx["time"])) for a in open_):
-        return deny("already has an open, unexpired approval")
+    open_ = [a for a in eff["approvals"] if not a.get("consumedBy") and not a.get("dropped")
+             and not (a.get("expiresAt") and ts(a["expiresAt"]) <= ts(ctx["time"]))]       # unexpired, usable
+    if any(a["author"] == author for a in open_): return deny("already has an open, unexpired approval")
     if not is_guard and len(open_) >= MAX_OPEN_APPROVALS: return deny("too many open approvals")
     return ALLOW
 
@@ -492,7 +493,7 @@ def approvals_complete(state, eff):
     """Ready once the policy rule (if any) has an approval from an allowed approver and the guard (if any) has approved."""
     open_ = [a for a in eff["approvals"] if not a.get("consumedBy") and not a.get("dropped")]
     ok_rule = not approval_rule(state["policy"], eff["action"]) or bool(approval_candidates(state, eff, None))
-    return ok_rule and all(any(a["author"] == g for a in open_) for g in eff.get("guards", []))
+    return ok_rule and all(any(stands_for(state, g, a["author"]) for a in open_) for g in eff.get("guards", []))
 
 def rearm(state, eff):
     """The phase after an attempt ends without success: cancelled if asked, else ready iff approvals are in hand
@@ -541,7 +542,7 @@ def _cancel(state, entry, ctx, role):
     if not eff: return invalid("no such proposal")
     a = entry["author"]
     if role not in READ_ROLES: return deny("author holds no role")
-    if not (a == eff["proposer"] or role == "owner" or a in eff.get("guards", []) or any(x["author"] == a for x in eff["approvals"])):
+    if not (a == eff["proposer"] or role == "owner" or any(stands_for(state, g, a) for g in eff.get("guards", [])) or any(x["author"] == a for x in eff["approvals"])):
         return deny("not proposer/approver/owner")
     if eff["phase"] in FINAL: return deny("already final")
     if eff["phase"] in ("claimed", "unknown") and eff["cancelRequested"]: return deny("already requested")
@@ -611,7 +612,12 @@ def held_may(state, entry):
         return bool(sess) and sess["actor"] == entry["author"]
     return entry["kind"] in HELD_KINDS
 
-CAUTION = ("auto", "guarded", "suggest")       # least to most cautious
+CAUTION = STEER_MODES                          # least to most cautious
+
+def agent_guarded(state, x):
+    """An agent is guarded in a space while any of its live sessions is effectively guarded: an outside steer into any
+    of its sessions then holds it (one rule per agent, so an auto side-session is no side door)."""
+    return any(se["actor"] == x and live(state, se) and effective_mode(state, se) == "guarded" for se in state["sessions"].values())
 
 def effective_mode(state, sess):
     """A session's mode, or, if the space no longer allows it, the least cautious allowed mode that is at least as
@@ -619,14 +625,17 @@ def effective_mode(state, sess):
     allowed = state["policy"]["sessions"]["modes"]
     return next((m for m in CAUTION[CAUTION.index(sess["steerMode"]):] if m in allowed), None)
 
+def stands_for(state, g, actor):
+    """P-15: `actor` acts as guard `g`: it is `g` while `g` holds a role; once `g` is gone, any owner stands in."""
+    return actor == g and role_of(state, g) in READ_ROLES or (role_of(state, g) not in READ_ROLES and role_of(state, actor) == "owner")
+
 def guard_approval(state, eff, g, ctx):
-    """E3 for a guard: an unconsumed, undropped, unexpired approval by `g`, who still holds a role, signed with a valid
-    key. A guard with no pinned profile → unpinned (invalid claim)."""
-    if role_of(state, g) not in READ_ROLES: return "none", None
+    """E3 for a guard: an unconsumed, undropped, unexpired approval by `g` (or by an owner standing in for a departed
+    `g`), whose author still holds the standing, signed with a valid key. No pinned profile → unpinned (invalid claim)."""
     for a in eff["approvals"]:
-        if a["author"] != g or a.get("consumedBy") or a.get("dropped"): continue
+        if not stands_for(state, g, a["author"]) or a.get("consumedBy") or a.get("dropped"): continue
         if a.get("expiresAt") and ts(a["expiresAt"]) <= ts(ctx["time"]): continue
-        st = key_status(ctx, g, a["keyId"])
+        st = key_status(ctx, a["author"], a["keyId"])
         if st is None: return "unpinned", a
         if st == "valid": return "ok", a
     return "none", None
@@ -636,7 +645,7 @@ def live(state, sess):
     effectively auto."""
     return (bool(sess) and sess["open"] and role_of(state, sess["actor"]) in READ_ROLES
             and effective_mode(state, sess) is not None
-            and (sess["human"] or "guard" in sess or effective_mode(state, sess) == "auto"))
+            and (sess["human"] or effective_mode(state, sess) == "auto" or role_of(state, sess.get("guard")) in READ_ROLES))
 
 def session_access(state, actor, session_id) -> dict:
     """P-15: what `actor` may do with a live session: watch its output, read its full context, steer it.
@@ -762,6 +771,9 @@ def fold(state, record, ctx) -> dict:
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
+        for old in eff["approvals"]:                    # the author's expired approvals are dropped (bounds the list)
+            if old["author"] == author and old.get("expiresAt") and ts(old["expiresAt"]) <= ts(rc["time"]) and not old.get("consumedBy"):
+                old["dropped"] = True
         a = {"id": eid, "author": author, "keyId": e["keyId"]}
         if "expiresAt" in b: a["expiresAt"] = b["expiresAt"]
         eff["approvals"].append(a)
@@ -836,7 +848,7 @@ def fold(state, record, ctx) -> dict:
         sess["steers"] += 1
         x = sess["actor"]
         if b.get("release"): s["held"].pop(x, None)                    # its human releases it, explicitly
-        elif author not in (x, sess.get("guard")) and "guard" in sess and effective_mode(s, sess) == "guarded":
+        elif author not in (x, sess.get("guard")) and "guard" in sess and agent_guarded(s, x):
             s["held"][x] = sess["guard"]                               # an outside steer: held for its human
     return s
 

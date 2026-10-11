@@ -117,9 +117,8 @@ export interface Contents {
 }
 export type KindName = keyof Bodies;
 /** How a session's host treats input from someone other than the session's own actor (P-15, R-24):
- *  auto: like its own input · guarded: the harness's stricter mode for that turn, and the agent is held (P-15) ·
- *  suggest: shown to the agent's human, acted on only once they re-issue it (also holds). */
-export type SteerMode = "auto" | "guarded" | "suggest";
+ *  auto: like its own input · guarded: the harness's stricter mode, and an outside steer holds the agent (P-15). */
+export type SteerMode = "auto" | "guarded";
 /** Extension kinds: `<prefix>.<name>`, prefix [a-z][a-z0-9-]{0,31} not a core prefix, name [a-z0-9][a-z0-9._-]{0,63}.
  *  Bodies and contents are opaque objects to the core; `content.blobs` (BlobRef[]) is the generic blob position (G-01). */
 export type ExtensionKind = `${string}.${string}`;
@@ -237,7 +236,7 @@ export type ReplyFrame =
 // ───────────────────────── modules ─────────────────────────
 export interface Log {                                   // M1
   append(entry: Entry, content: Json | undefined): Promise<Receipt>;          // throws WireError
-  read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; limit?: number }, as: ActorId): AsyncIterable<ReadItem>;
+  read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; limit?: number; knownHeads?: Receipt[] }, as: ActorId): AsyncIterable<ReadItem>;
 }
 export interface Policy {                                // M2 — five pure functions (R-11)
   decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision;
@@ -268,13 +267,16 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order
   subscribe(space: SpaceId, as: ActorId): AsyncIterable<ReadItem>;  // records and signals (T-05) for this actor
+  signal(space: SpaceId, from: ActorId, body: Json): Promise<void>;  // T-05: ephemeral, never authority
+  blobPut(bytes: Uint8Array, as: ActorId): Promise<BlobRef>;        // T-03
+  blobGet(ref: BlobRef, space: SpaceId, as: ActorId): Promise<Uint8Array>;   // T-03, G-01: access via a referencing record
   stream(item: StreamItem): Promise<void>;                          // T-07: by the session's actor's host
   watch(space: SpaceId, session: EntryId, as: ActorId): AsyncIterable<StreamItem>;   // T-07: only what sessionAccess grants `as`
 }
 /** The client an actor is built with: the sequencer calls plus the transport, authenticated as that actor. */
 export interface Client {
   append(entry: Entry, content?: Json): Promise<Receipt>;              // outbox + R-06 retry are the client's job (R-07)
-  read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean }): AsyncIterable<ReadItem>;
+  read(space: SpaceId, after: Seq, opts?: { follow?: boolean; state?: boolean; limit?: number; knownHeads?: Receipt[] }): AsyncIterable<ReadItem>;
   signal(space: SpaceId, body: Json): Promise<void>;                    // via the transport (T-05)
   blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
   blobGet(ref: BlobRef, space: SpaceId): Promise<Uint8Array>;          // via the transport (G-01: access via a referencing record); verify the hash

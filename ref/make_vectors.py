@@ -12,7 +12,7 @@ O, M, P, X, G, Z, BOT, OP = "@o:a.example", "@m:a.example", "@p:b.example", "@x:
 
 def policy(**kw):
     p = {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any", "approvals": [],
-         "separateApprover": False, "budget": None, "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded", "suggest"]},
+         "separateApprover": False, "budget": None, "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded"]},
          "servers": {"deny": []}}
     p.update(kw); return p
 
@@ -752,7 +752,7 @@ add(v.done())
 # ── round-8/9 vectors: live sessions, steering and taint ──
 ALL = {"watch": True, "read": True, "steer": True}
 NONE = {"watch": False, "read": False, "steer": False}
-MODES = ["auto", "guarded", "suggest"]
+MODES = ["auto", "guarded"]
 def sess(w, r, st, modes=MODES): return {"watch": w, "read": r, "steer": st, "modes": list(modes)}
 BOT2 = "@bot2:b.example"
 
@@ -806,12 +806,12 @@ add(v.done())
 OP2 = "@op2:b.example"
 AG2 = dict(AG, operator=OP2)
 
-v = V("guard-takes-the-wheel", ["P-15"], "auto and suggest add no hold; an agent can't release itself; humans are never held")
+v = V("guard-takes-the-wheel", ["P-15"], "auto adds no hold; one guarded session guards the whole agent; an agent can't release itself; humans are never held")
 agents(v, policy(sessions=sess("member", "member", "member")))
 v.step(E("s", "session.open", BOT, {"steerMode": "auto"}), "allow").step(E("i", "session.input", M, {"session": "s"}), "allow")
 v.step(prop("p1", author=BOT), "allow", check={"effects.p1.phase": "ready"})
-v.step(E("g", "session.open", BOT, {"steerMode": "suggest"}), "allow").step(E("i2", "session.input", M, {"session": "g"}), "allow")
-v.step(prop("p2", author=BOT), "allow", check={"effects.p2.phase": "ready"}, note="suggest doesn't hold: the input only reaches the agent if its human re-issues it")
+v.step(E("g", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("i2", "session.input", M, {"session": "s"}), "allow", check={"held": {BOT: OP}})
+v.step(prop("p2", author=BOT), "allow", check={"effects.p2.guards": [OP]}, note="steering its auto side-session holds it once any of its sessions is guarded")
 v.step(E("i3", "session.input", BOT, {"session": "g"}), "allow")
 v.step(E("i3r", "session.input", BOT, {"session": "g", "release": True}), "denied", note="an agent can't release itself")
 v.step(E("h", "session.open", M, {"steerMode": "guarded"}), "allow").step(E("i5", "session.input", P, {"session": "h"}), "allow")
@@ -910,8 +910,8 @@ v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
 v.step(E("ps", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["auto"]))}), "allow")
 v.access(O, "s", NONE).step(E("in", "session.input", O, {"session": "s"}), "denied", note="guarded can't become auto: the session is dead")
 v.step(prop("p", author=BOT), "allow", check={"effects.p.phase": "ready"}, note="no steer reached it")
-v.step(E("ps2", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["auto", "suggest"]))}), "allow")
-v.step(E("in2", "session.input", O, {"session": "s"}), "allow", check={"held": {}}, note="now effectively suggest: live, and suggest doesn't hold")
+v.step(E("ps2", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["auto", "guarded"]))}), "allow")
+v.step(E("in2", "session.input", O, {"session": "s"}), "allow", check={"held": {BOT: OP}}, note="guarded again: live, and the steer holds")
 add(v.done())
 
 v = V("guard-rights-need-a-role", ["P-15", "P-02"], "a guard who lost its role loses its rights on its agent's sessions; owners may then release the agent")
@@ -919,7 +919,8 @@ agents(v, policy(sessions=sess("owner", "owner", "owner")))
 v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("in", "session.input", O, {"session": "s"}), "allow", check={"held": {BOT: OP}})
 v.access(OP, "s", ALL).access(M, "s", NONE)
 v.step(ms("ban", O, OP, "none"), "allow")
-v.access(OP, "s", NONE).step(E("q", "session.input", OP, {"session": "s"}), "denied", note="banned guard can't steer")
+v.step(E("s2", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.access(OP, "s", NONE).access(OP, "s2", NONE).step(E("q", "session.input", OP, {"session": "s2"}), "denied", note="banned guard can't watch or steer even its agent's live auto session")
 v.step(E("r0", "session.input", M, {"session": "s", "release": True}), "denied", note="members can't release")
 v.step(E("r1", "session.input", O, {"session": "s", "release": True}), "allow", check={"held": {}}, note="the guard is gone: an owner recovers")
 add(v.done())
@@ -929,6 +930,26 @@ agents(v, policy(sessions=sess("member", "member", "member")))
 v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("t", "task", BOT, {"to": [BOT2]}), "allow")
 v.step(E("in", "session.input", M, {"session": "s"}), "allow")
 v.step(E("tc", "task.cancel", BOT, {"task": "t"}), "allow")
+add(v.done())
+
+v = V("expired-approvals-crowd-no-one", ["P-08"], "an already-expired approval is refused; expired ones don't count toward the cap and are dropped when their author approves again")
+team(v, policy(approvals=[{"action": "*", "approvers": ["owner", "member"]}]))
+v.step(prop("p"), "allow")
+v.step(appr("a0", "p", author=M, expires="2000-01-01T00:00:00Z"), "denied", note="already expired")
+v.step(appr("a1", "p", author=M, expires="2026-10-10T12:00:20Z"), "allow")
+v.step(appr("a2", "p", author=M), "allow", at=30, check={"effects.p.approvals.0.dropped": True}, note="a1 expired: M may approve again, and a1 is dropped")
+add(v.done())
+
+v = V("owners-stand-in-for-a-departed-guard", ["P-15"], "once a guard is gone, owners can release its agent and approve or cancel its held proposals; a guarded session without its guard is dead")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("in", "session.input", M, {"session": "s"}), "allow")
+v.step(prop("p", author=BOT), "allow", check={"effects.p.guards": [OP]})
+v.step(appr("a0", "p", author=O), "denied", note="the guard is still here")
+v.step(ms("gone", O, OP, "none"), "allow")
+v.access(M, "s", NONE).step(E("in2", "session.input", M, {"session": "s"}), "denied", note="guarded without its guard: dead")
+v.step(appr("a1", "p", author=O), "allow", check={"effects.p.phase": "ready"}, note="an owner stands in")
+v.step(claim("c", "p"), "allow")
+v.step(E("r", "session.input", O, {"session": "s", "release": True}), "allow", check={"held": {}})
 add(v.done())
 
 # ── R-01 id derivation ──

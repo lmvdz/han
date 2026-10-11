@@ -1,6 +1,6 @@
 # HAN v1 — coverage of v0.4
 
-Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–10): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
+Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–12): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
 v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18 and R-24, P-01…P-13 and P-15, X-01…X-07, X-09, X-10, T-01…T-07, G-01…G-05 (the generic binding, §8.3).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
@@ -21,7 +21,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | INV-11 | no global order; ordering only per stream | §7.2: total order per space only | by construction |
 | INV-12 | missing capability → explicit failure | R-08 (version, durability). **Weakened:** v0.4's per-provider capability negotiation (`ProviderCapabilities`, `STALE_CAPABILITY`) is gone from the protocol, because providers are executor-private. An executor that lacks a capability a plan needs reports `{result: "failed", started: "no"}` with evidence, which is an explicit failure | wire "no silent downgrade" |
 
-## Wire methods (26 → 3 sequencer calls, plus 4 transport operations in the generic binding)
+## Wire methods (26 → 3 sequencer calls, plus the transport binding's 7 operations)
 
 | v0.4 method | v1 | Status |
 |---|---|---|
