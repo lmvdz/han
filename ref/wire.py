@@ -2,7 +2,7 @@
 
 Covers: exact header and content validation (R-09, §5), ids and signatures (§2), receipts and chains (R-02),
 server key validity windows, a reference home (the §4.1 append pipeline, reads with read rights, signals on follow
-streams R-22, first-contact notices R-20, head gossip R-15, per-space blob supply R-13/R-21), a verifying mirror (R-14),
+streams G-04, first-contact notices G-03, head gossip R-15, per-space blob supply G-01), a verifying mirror (R-14),
 and wrong-home proofs (R-02: equivocation, and receipts signed by a server that wasn't the home at that seq).
 
 Preimages (architecture.md §2, all UTF-8):
@@ -76,6 +76,9 @@ CONTENT = {   # kind → {field: (validator, required)};  None = the kind has no
     "effect.resolve": {"evidence": (_blobref, True)},
     "checkpoint": {"blobs": (_blobs, True)},
     "redact": {"reason": (_str(1024), False)},
+    "session.open": {"title": (_str(256), False)},
+    "session.close": None,
+    "session.input": {"text": (_str(32768), True), "blobs": (_blobs, False)},
 }
 
 def validate_content(entry: dict, content) -> str | None:
@@ -167,7 +170,7 @@ def wrong_home_proof(records: list[dict], r: dict, server_keys: dict) -> bool:
     """A valid receipt at seq k signed by a server that wasn't the home at k (given verified records before k)."""
     return verify_receipt(r, server_keys) and home_at(records, r["seq"]) not in (None, r["home"])
 
-# ── blob references (R-13): every BlobRef position, per kind; `blobs` is generic for every kind ──
+# ── blob references (G-01): every BlobRef position, per kind; `blobs` is generic for every kind ──
 BLOB_PATHS = {"effect.propose": [("plan", "argsBlob")], "effect.outcome": [("evidence",)], "effect.resolve": [("evidence",)]}
 
 def blob_refs(kind: str, content) -> list[dict]:
@@ -186,21 +189,21 @@ def blob_refs(kind: str, content) -> list[dict]:
 
 # ── a reference home ──
 class Home:
-    """The §4.1 append pipeline plus the server behaviours R-13, R-15, R-20, R-21, R-22."""
+    """The §4.1 append pipeline plus the server behaviours G-01, R-15, G-03, G-02, G-04."""
     def __init__(self, server: str, key: Key, key_id="h1", durability="local", clock=None, network=None, server_keys=None):
         self.server, self.key, self.key_id, self.durability = server, key, key_id, durability
         self.server_keys = server_keys or {}
-        self.parts = {}           # (hash, uploader) -> bytearray of that uploader's own bytes (R-21)
+        self.parts = {}           # (hash, uploader) -> bytearray of that uploader's own bytes (G-01)
         self.spaces = {}          # space -> {"records": [...], "state": SpaceState}
         self.clock = clock or (lambda: "2026-10-10T12:00:00Z")
         self.moved = {}           # space -> new home
         self.network = network if network is not None else {}
         self.network[server] = self
         self.followers = {}       # space -> {actor: [ReadItem]}
-        self.inbox = {}           # actor -> [notices] — delivered only to that actor's own sessions (R-20)
+        self.inbox = {}           # actor -> [notices] — delivered only to that actor's own sessions (G-03)
         self.blobs = {}           # hash -> bytes
         self.uploads = {}         # hash -> set of actors who uploaded it here
-        self.supplied = set()     # (space, hash): bytes this server may serve for that space (R-13)
+        self.supplied = set()     # (space, hash): bytes this server may serve for that space (G-01)
 
     def append(self, entry: dict, content, profiles: dict, skip_policy=False):
         sp = entry.get("space")
@@ -249,7 +252,7 @@ class Home:
         if not S: S = self.spaces[sp] = {"records": [], "state": None}
         S["records"].append(rec); S["state"] = new_state
         if entry["kind"] == "space.move": self.moved[sp] = entry["body"]["to"]
-        for ref in blob_refs(entry["kind"], content):                       # R-13: the author supplied these bytes
+        for ref in blob_refs(entry["kind"], content):                       # G-01: the author supplied these bytes
             if entry["author"] in self.uploads.get(ref["hash"], ()): self.supplied.add((sp, ref["hash"]))
         if entry["kind"] == "redact":
             for old in S["records"]:
@@ -266,7 +269,7 @@ class Home:
         if home_at(records, records[-1]["receipt"]["seq"] + 1) == self.server: self.moved.pop(space, None)
 
     def _notify(self, entry, space, seq, state):
-        """R-20: tell the server of every actor given a role, or named in `to` while holding a role."""
+        """G-03: tell the server of every actor given a role, or named in `to` while holding a role."""
         b = entry["body"]
         named = [b["actor"]] if entry["kind"] == "member.set" and b["role"] in P.READ_ROLES else []
         if isinstance(b.get("to"), list): named += [a for a in b["to"] if state["roles"].get(a) in P.READ_ROLES]
@@ -295,7 +298,7 @@ class Home:
         return "ok", q
 
     def signal(self, space: str, actor: str, body: dict, relayed_by: str = None):
-        """R-22; on a profile space only server notices are accepted, and they reach only the actor's own inbox (R-20)."""
+        """G-04; on a profile space only server notices are accepted, and they reach only the actor's own inbox (G-03)."""
         if space.startswith("profile:"):
             if not (actor.startswith("@:") and isinstance(body, dict) and body.get("type") == "notice"):
                 return "denied", "only server notices on profile spaces"
@@ -327,9 +330,9 @@ class Home:
             if S and wrong_home_proof(S["records"][:pr["seq"] - 1], pr, server_keys): proofs.append(("wrong-home", pr))
         return mine_out, proofs
 
-    # blobs (R-13, R-21)
+    # blobs (G-01, G-02)
     def blob_put_part(self, ref: dict, offset: int, data: bytes, as_: str):
-        """blobPut (R-21): completion counts only bytes received from this uploader, and they must hash-match."""
+        """blobPut (G-01): completion counts only bytes received from this uploader, and they must hash-match."""
         buf = self.parts.setdefault((ref["hash"], as_), bytearray())
         if offset != len(buf): return {"have": len(buf), "complete": False}
         buf.extend(data)
@@ -351,7 +354,7 @@ class Home:
         return "ok", self.blobs[ref["hash"]]
 
 def fetch_blob(ref, record, home: str, mirrors: list[str], network: dict, me: str):
-    """R-21: ask the author's server, then the home, then mirrors, as the server actor; verify the hash. What a server
+    """G-02: ask the author's server, then the home, then mirrors, as the server actor; verify the hash. What a server
     fetched for a space it may serve for that space."""
     space = record["entry"]["space"]
     for srv in blob_fetch_order(record, home, mirrors):

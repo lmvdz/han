@@ -19,6 +19,12 @@ ACTORS = [O, M, PR, X, G, BOT]
 BASE = datetime(2026, 10, 10, 12, 0, 0, tzinfo=timezone.utc)
 PHASES = {"awaiting-approval", "ready", "claimed", "unknown", "orphaned", "succeeded", "failed", "cancelled"}
 
+def _sessions(r):
+    L = ["guest", "member", "owner", "nobody"]
+    w = r.randrange(4)
+    return {"watch": L[w], "read": L[r.randrange(w, 4)], "steer": L[r.randrange(w, 4)],
+            "modes": r.sample(["auto", "guarded", "suggest"], r.randint(1, 3))}
+
 def H(x): return hashlib.sha256(x.encode()).hexdigest()
 
 def policy(r):
@@ -27,7 +33,8 @@ def policy(r):
             "approvals": r.choice([[], [{"action": "*", "approvers": ["owner"]}], [{"action": "pay", "approvers": ["owner", M]}]]),
             "separateApprover": r.random() < .3, "budget": r.choice([None, {"unit": "USD", "amount": r.randint(0, 200)}]),
             "maxDelegationDepth": r.randint(0, 4), "minDurability": "local", "launchWindow": r.choice([15, 30, 60]),
-            "extensionsMinRole": r.choice(["guest", "member", "owner"]), "servers": {"deny": []}}
+            "extensionsMinRole": r.choice(["guest", "member", "owner"]),
+            "sessions": _sessions(r), "servers": {"deny": []}}
 
 def profile(a, revoked=False):
     kind = "service" if a == X else "agent" if a == BOT else "human"
@@ -43,7 +50,7 @@ def random_entry(r, state, n):
     cost = {"unit": unit, "amount": r.randint(0, 120)}
     kind = r.choice(["member.set", "member.set", "message", "task", "task", "task.update", "task.cancel", "effect.propose",
                      "effect.propose", "effect.approve", "effect.claim", "effect.claim", "effect.cancel", "effect.outcome",
-                     "effect.outcome", "effect.resolve", "policy.set", "checkpoint", "redact", "space.move", "x.ext"])
+                     "effect.outcome", "effect.resolve", "policy.set", "checkpoint", "redact", "space.move", "x.ext", "session.open", "session.close", "session.input"])
     body = {
         "member.set": lambda: {"actor": r.choice(ACTORS), "role": r.choice(["owner", "member", "member", "guest", "banned", "none"])},
         "message": lambda: {"to": [r.choice(ACTORS)]},
@@ -53,7 +60,8 @@ def random_entry(r, state, n):
         "task.cancel": lambda: {"task": pick(tasks, H("nope"))},
         "effect.propose": lambda: dict({"executor": r.choice([X, X, M]), "action": r.choice(["pay", "push"]), "planDigest": H("plan"),
                                          "repeatable": r.random() < .3}, **({"cost": cost} if r.random() < .8 else {}),
-                                       **({"task": pick(tasks, H("nope"))} if r.random() < .4 else {})),
+                                       **({"task": pick(tasks, H("nope"))} if r.random() < .4 else {}),
+),
         "effect.approve": lambda: dict({"proposal": pick(effects, H("nope")), "planDigest": H("plan")},
                                        **({"expiresAt": r.choice([(BASE + timedelta(seconds=r.randint(0, 3000))).strftime("%Y-%m-%dT%H:%M:%SZ"),
                                                                   "2026-13-45T99:99:99Z", "2026-02-30T00:00:00Z"])} if r.random() < .3 else {})),
@@ -70,6 +78,9 @@ def random_entry(r, state, n):
         "redact": lambda: {"target": pick(ids, H("nope"))},
         "space.move": lambda: {"to": "b.example"},
         "x.ext": lambda: {"anything": r.randint(0, 9)},
+        "session.open": lambda: dict({"steerMode": r.choice(["auto", "guarded", "suggest"])}, **({"task": pick(tasks, H("nope"))} if r.random() < .3 else {})),
+        "session.close": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
+        "session.input": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
     }[kind]()
     author = r.choice(ACTORS + [O, O, X, X])
     return {"id": H(f"e{n}"), "v": 1, "space": S, "kind": kind, "author": author, "keyId": "k1", "body": body,

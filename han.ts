@@ -86,6 +86,9 @@ export interface Bodies {
   "effect.resolve": { proposal: EntryId; result: "succeeded" | "failed"; cost?: Budget };
   "checkpoint": { through: Seq };
   "redact": { target: EntryId };
+  "session.open": { steerMode: SteerMode; task?: EntryId };   // a live session by its author (P-15); the stream itself travels on the transport (T-07)
+  "session.close": { session: EntryId };
+  "session.input": { session: EntryId };                       // steering: input into someone's live session, accountable and sequenced
   "space.move": { to: ServerName; accept: { keyId: KeyId; sig: Sig } };   // sig = Ed25519(to's key, "han-accept-move-v1\n" ‖ space ‖ "\n" ‖ receiptHash(head))
 }
 
@@ -108,10 +111,17 @@ export interface Contents {
   "checkpoint": { blobs: BlobRef[] };
   "redact": { reason?: string };
   "space.move": null;
+  "session.open": { title?: string };
+  "session.close": null;
+  "session.input": { text: string; blobs?: BlobRef[] };
 }
 export type KindName = keyof Bodies;
+/** How a session's host treats input from someone other than the session's own actor (P-15, R-24):
+ *  auto: like its own input · guarded: the harness's stricter mode for that turn, and the agent is tainted (P-15) ·
+ *  suggest: shown to the agent's human, acted on only once they re-issue it (also taints). */
+export type SteerMode = "auto" | "guarded" | "suggest";
 /** Extension kinds: `<prefix>.<name>`, prefix [a-z][a-z0-9-]{0,31} not a core prefix, name [a-z0-9][a-z0-9._-]{0,63}.
- *  Bodies and contents are opaque objects to the core; `content.blobs` (BlobRef[]) is the generic blob position (R-13). */
+ *  Bodies and contents are opaque objects to the core; `content.blobs` (BlobRef[]) is the generic blob position (G-01). */
 export type ExtensionKind = `${string}.${string}`;
 export interface Plan { action: string; target: string; args?: Json; argsBlob?: BlobRef }   // target ≤ 1024 bytes; sha256(JCS(plan)) = planDigest
 // Content string limits (UTF-8 bytes): name 256 · text/ask 32768 · note 4096 · reason 1024; blobs/links ≤ 64 each.
@@ -129,8 +139,11 @@ export interface PolicyDoc {
   minDurability: Durability;                             // R-08
   launchWindow: number;                                  // seconds, 15–3600: abandon threshold (P-09) and executor deadline (X-04)
   extensionsMinRole: "guest" | "member" | "owner";       // lowest role that may append extension kinds (§5)
+  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[] };   // P-15: minimum roles (read, steer no wider than watch); allowed modes
   servers: { deny: ServerName[] };
 }
+
+export type SessionLevel = "owner" | "member" | "guest" | "nobody";
 
 export interface ProfileView {                          // fold of a profile space through `seq` (§4.3)
   actor: ActorId;
@@ -158,18 +171,21 @@ export interface SpaceState {
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number;
-                     parent?: EntryId; budget?: Budget; left?: Budget };
+                     parent?: EntryId; budget?: Budget; left?: Budget;
+                     guards?: ActorId[] };                  // taint carried by the task (P-15)
   };
   effects: {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
       expiresAt?: Time;                             // E5: no claim at or after this time
+      guards?: ActorId[];                           // humans who must each approve (P-15 taint), besides any approval rule
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId; dropped?: true }[];
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
         window: number;                             // the launchWindow in force when the claim was ordered (pinned for X-04, P-09)
         approval?: EntryId;                         // the approval this claim consumed (E3)
+        guardApprovals?: EntryId[];                 // the guards' approvals it consumed (P-15)
         reserved?: Budget; source?: ["task", EntryId] | ["space", null]; settled?: true;   // P-06 reservation
         outcome?: EffectResult; started?: Started;
       }[];
@@ -177,13 +193,16 @@ export interface SpaceState {
   };
   budgetLeft: { unit: string; amount: SignedInt } | null;   // budget − committed; negative only after a cut (P-06)
   entries: { [id: EntryId]: { author: ActorId; kind: KindName } };   // R-05 resolution, P-04 redact
+  sessions: { [id: EntryId]: { actor: ActorId; open: boolean; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId;
+                                guard?: ActorId } };            // an agent session's confirmed operator at open
+  taint: { [agent: ActorId]: ActorId[] };                       // P-15: humans who must approve what this agent does next
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
   };
 }
 
-// ───────────────────────── the wire: six calls ─────────────────────────
+// ───────────────────────── the wire: three calls ─────────────────────────
 export type ErrorCode = "denied" | "invalid" | "not_found" | "limit" | "unavailable" | "moved";
 export interface WireError { code: ErrorCode; message: string; retryAfterMs?: number; movedTo?: ServerName }
 
@@ -191,8 +210,9 @@ export interface Limits {
   maxFrameBytes: 1310720;      // 1.25 MiB of JSON text
   maxHeaderBytes: 16384; maxContentBytes: 65536;
   maxBlobBytes: 4294967296;
-  maxBlobPartBytes: 786432;    // generic binding's file transport (T-03): 768 KiB → 1,048,576 base64 chars, fits a frame
-  maxBlobRangeBytes: 786432;   // blobGet answers at most this many bytes per call
+  maxBlobPartBytes: 786432;    // generic binding only (§8.3): blobPut part, 768 KiB → 1,048,576 base64 chars, fits a frame
+  maxBlobRangeBytes: 786432;   // generic binding only: blobGet answers at most this many bytes per call
+  maxStreamItemBytes: 65536;   // T-07: one StreamItem; larger context goes in a blob
   maxFollows: 256;
 }
 export interface Challenge { challenge: string; server: ServerName; versions: number[]; time: Time }
@@ -208,7 +228,7 @@ export interface Calls {
            ok: { limits: Limits; durability: Durability; time: Time; knownHeads: Receipt[] } };
   append: { args: { entry: Entry; content?: Json }; ok: Receipt };
   read: { args: { space: SpaceId; after: Seq; follow?: boolean; state?: boolean; limit?: number /* 1–1000, default 1000 */; knownHeads?: Receipt[] /* ≤ 256 */ }; item: ReadItem };
-}   // the three sequencer calls (§3); signals, files and invites are the transport's (§8, T-01…T-06)
+}   // the three sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
 export type ReplyFrame =
@@ -220,10 +240,11 @@ export interface Log {                                   // M1
   append(entry: Entry, content: Json | undefined): Promise<Receipt>;          // throws WireError
   read(space: SpaceId, after: Seq, opts: { follow?: boolean; state?: boolean; limit?: number }, as: ActorId): AsyncIterable<ReadItem>;
 }
-export interface Policy {                                // M2 — four pure functions (R-11)
+export interface Policy {                                // M2 — five pure functions (R-11)
   decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision;
   fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState;
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
+  sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
   relevantActors(state: SpaceState | undefined, entry: Entry, time: Time): ActorId[];   // P-01
 }
 export interface Identity {                              // M3
@@ -237,10 +258,19 @@ export type VerifierStatus =
   | { state: "stopped"; through: Seq }
   | { state: "faulty"; through: Seq; proof: { kind: "equivocation" | "wrong-home" | "forbidden-accept" | "bad-signature" | "chain" | "bad-redaction" | "bad-move" | "future-time"; receipts: Receipt[]; record?: LogRecord } }
   | { state: "moved"; through: Seq; to: ServerName };
-/** M7: what HAN needs from a transport (T-01…T-06). The Matrix binding implements it with org.han.* room events. */
+/** T-07: one item of a live session's stream. Published only by the session's actor; never authority (a steer is a
+ *  session.input). `n` counts from 1 per session, so gaps are visible; `status` mirrors OSC 7501 program status. */
+export type StreamItem = { session: EntryId; n: number; time: Time } & (
+  | { type: "output"; text: string }                                         // what the session shows: watch
+  | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
+  | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only
+);
+/** M7: what HAN needs from a transport (T-01…T-07). The Matrix binding implements it with org.han.* room events. */
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order
   subscribe(space: SpaceId, as: ActorId): AsyncIterable<ReadItem>;  // records and signals (T-05) for this actor
+  stream(item: StreamItem): Promise<void>;                          // T-07: by the session's actor's host
+  watch(session: EntryId, as: ActorId): AsyncIterable<StreamItem>;  // T-07: only what sessionAccess grants `as`, re-checked per item
 }
 /** The client an actor is built with: the sequencer calls plus the transport, authenticated as that actor. */
 export interface Client {
@@ -249,8 +279,10 @@ export interface Client {
   signal(space: SpaceId, body: Json): Promise<void>;                    // via the transport (T-05)
   blobPut(bytes: Uint8Array): Promise<BlobRef>;                         // via the transport (T-03)
   blobGet(ref: BlobRef): Promise<Uint8Array>;                           // via the transport; the caller verifies the hash
+  stream(item: StreamItem): Promise<void>;                              // T-07, for the client's own sessions
+  watch(session: EntryId): AsyncIterable<StreamItem>;                   // T-07: data, never instruction (R-24)
 }
-/** M7 and M8 (and human apps) are actors: fed every record and signal of the spaces they follow (and the notices on their
+/** M5 and M6 (and human apps) are actors: fed every record and signal of the spaces they follow (and the notices on their
  *  own profile), they answer only through their Client. */
 export interface Actor {
   deliver(item: ReadItem): Promise<void>;

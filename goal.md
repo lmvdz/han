@@ -11,11 +11,12 @@ Conversations already have good open networks; Matrix is the first target. HAN d
 | bots that are just users | **accountable agents**: every agent has a human operator who vouches for it, and can withdraw that |
 | no notion of money | **budgets** reserved before an action and settled after it, delegated down task trees |
 | coarse power levels | **approvals bound to the exact plan**, with expiry and separation of duties |
+| a timeline of finished messages | **live sessions across silos**: watch, read and steer other people's and agents' work while it happens, with who-may-what set per space by its owners; every steer is signed, and a `guarded` session makes outside steers wait for its own human, through any relay |
 | complex state resolution | **pure, replayable policy**: any participant can re-check every decision, and a cheating sequencer leaves a portable proof |
 
 ## v1 is done when all three hold
 
-1. **Used daily.** The author runs their own agent work through HAN, in Matrix rooms, through a working sequencer and executor.
+1. **Used daily.** The author runs their own agent work through HAN, in Matrix rooms, through a working sequencer and executor, and a small team watches and steers each other's live agent sessions through it.
 2. **Airtight.** The safety core is consistent, including its failure paths. That means the effect protocol passes exhaustive bounded model checking against the reference Policy, and every rule has a conformance vector, a scenario, a model property, or a written implementation-test procedure ([ref/](ref/)).
 3. **Built by strangers.** Someone implements a conforming sequencer or executor from these documents alone, without asking the authors.
 

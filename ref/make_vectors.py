@@ -12,7 +12,7 @@ O, M, P, X, G, Z, BOT, OP = "@o:a.example", "@m:a.example", "@p:b.example", "@x:
 
 def policy(**kw):
     p = {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any", "approvals": [],
-         "separateApprover": False, "budget": None, "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member",
+         "separateApprover": False, "budget": None, "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded", "suggest"]},
          "servers": {"deny": []}}
     p.update(kw); return p
 
@@ -39,6 +39,8 @@ class V:
         self.v["steps"].append(st); return self
     def read(self, actor, seq, expect, space=S):
         self.v["steps"].append({"read": {"space": space, "actor": actor, "seq": seq}, "expect": expect}); return self
+    def access(self, actor, session, expect, space=S):
+        self.v["steps"].append({"sessionAccess": {"space": space, "actor": actor, "session": session}, "expect": expect}); return self
     def actors(self, entry, expect):
         self.v["steps"].append({"relevantActors": entry, "expect": expect}); return self
     def done(self):
@@ -98,7 +100,7 @@ def receipt(space, seq, label):
     return {"space": space, "seq": seq, "id": label, "prev": "0" * 64, "home": space.split(":")[1], "homeKey": "h1",
             "time": "2026-10-10T12:00:00Z", "durability": "local", "profiles": {}, "homeSig": "sig"}
 
-ID_FIELDS = ("proposal", "claim", "task", "parent", "target")
+ID_FIELDS = ("proposal", "claim", "task", "parent", "target", "session")
 
 def hexify(vec):
     """Replace symbolic entry labels by 64-hex ids everywhere; keep the mapping in vec['ids'] for readers."""
@@ -123,6 +125,7 @@ def hexify(vec):
     for st in vec.get("steps", []):
         if "entry" in st: fix_entry(st["entry"])
         if "relevantActors" in st: fix_entry(st["relevantActors"])
+        if "sessionAccess" in st: st["sessionAccess"]["session"] = h.get(st["sessionAccess"]["session"], st["sessionAccess"]["session"])
         if "check" in st:
             st["check"] = {".".join(h.get(seg, seg) for seg in k.split(".")): fix_val(v) for k, v in st["check"].items()}
     vec["ids"] = {l: h[l] for l in sorted(labels)}
@@ -751,6 +754,106 @@ v = V("repeatable-cancelled-started", ["P-09"], "a repeatable effect stopped par
 team(v)
 v.step(prop("p", repeatable=True), "allow").step(claim("c", "p"), "allow")
 v.step(outc("o", "c", "cancelled", "yes"), "allow", check={"effects.p.phase": "ready"})
+add(v.done())
+
+# ── round-8/9 vectors: live sessions, steering and taint ──
+ALL = {"watch": True, "read": True, "steer": True}
+NONE = {"watch": False, "read": False, "steer": False}
+MODES = ["auto", "guarded", "suggest"]
+def sess(w, r, st, modes=MODES): return {"watch": w, "read": r, "steer": st, "modes": list(modes)}
+BOT2 = "@bot2:b.example"
+
+v = V("session-rights", ["P-15"], "watch/read/steer follow policy.sessions; the actor has all three; a session whose actor lost its role is dead")
+team(v, policy(sessions=sess("guest", "member", "owner")))
+v.step(ms("g", O, G, "guest"), "allow")
+v.step(E("s", "session.open", M, {"steerMode": "auto"}), "allow")
+v.access(M, "s", ALL).access(O, "s", ALL).access(P, "s", {"watch": True, "read": True, "steer": False})
+v.access(G, "s", {"watch": True, "read": False, "steer": False}).access(Z, "s", NONE)
+v.step(E("i0", "session.input", P, {"session": "s"}), "denied", note="members may not steer here")
+v.step(E("i1", "session.input", O, {"session": "s"}), "allow", check={"sessions.s.steers": 1})
+v.step(ms("rm", O, M, "none"), "allow")
+v.access(O, "s", NONE).step(E("i2", "session.input", O, {"session": "s"}), "denied", note="its actor lost its role: dead")
+v.step(E("c0", "session.close", P, {"session": "s"}), "denied").step(E("c1", "session.close", O, {"session": "s"}), "allow")
+add(v.done())
+
+v = V("sessions-nobody", ["P-15"], "a right set to nobody is granted to no one but the session's actor")
+team(v, policy(sessions=sess("nobody", "nobody", "nobody")))
+v.step(E("s", "session.open", M, {"steerMode": "auto"}), "allow").access(O, "s", NONE).access(M, "s", ALL)
+add(v.done())
+
+v = V("session-policy-shape", ["P-15", "P-11"], "read and steer can't be wider than watch; modes is a non-empty set; only allowed modes open")
+team(v)
+v.step(E("p1", "policy.set", O, {"policy": policy(sessions=sess("member", "guest", "owner"))}), "invalid", note="read wider than watch")
+v.step(E("p2", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", []))}), "invalid", note="no modes")
+v.step(E("p3", "policy.set", O, {"policy": policy(sessions=sess("member", "member", "member", ["guarded"]))}), "allow")
+v.step(E("s1", "session.open", M, {"steerMode": "auto"}), "denied", note="owners require guarded")
+v.step(E("s2", "session.open", M, {"steerMode": "guarded"}), "allow")
+add(v.done())
+
+def agents(v, pol):
+    """team plus OP (human member) operating BOT and BOT2 (agents, members)."""
+    v.prof(BOT, AG).prof(BOT2, AG).prof(X, XS)
+    team(v, pol)
+    v.step(ms("op", O, OP, "member"), "allow").step(ms("b", O, BOT, "member"), "allow").step(ms("b2", O, BOT2, "member"), "allow")
+
+v = V("guarded-steer-taints", ["P-15", "P-07 E3", "R-24"], "an outside steer into a guarded agent session taints the agent: everything it proposes needs its operator, tag or no tag")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(prop("p0", author=BOT), "allow", check={"effects.p0.phase": "ready"}, note="untainted")
+v.step(E("in", "session.input", M, {"session": "s"}), "allow")
+v.step(prop("p", author=BOT), "allow", check={"effects.p.phase": "awaiting-approval", "effects.p.guards": [OP]}, note="no tag needed")
+v.step(claim("c0", "p"), "denied", note="the operator hasn't approved")
+v.step(appr("a0", "p", author=M), "denied", note="not the guard and no approval rule")
+v.step(appr("a1", "p", author=OP, expires="2026-10-10T12:00:25Z"), "allow", check={"effects.p.phase": "ready"})
+v.step(claim("c1", "p"), "denied", at=40, note="the guard's approval expired")
+v.step(appr("a2", "p", author=OP), "allow")
+v.step(claim("c2", "p"), "allow", check={"effects.p.phase": "claimed"})
+add(v.done())
+
+v = V("relays-carry-taint", ["P-15"], "a tainted agent can't launder a steer: steering another agent (even in auto mode) or creating a task passes the taint on")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("s2", "session.open", BOT2, {"steerMode": "auto"}), "allow")
+v.step(E("in", "session.input", M, {"session": "s"}), "allow")
+v.step(E("relay", "session.input", BOT, {"session": "s2"}), "allow")
+v.step(prop("q", author=BOT2), "allow", check={"effects.q.guards": [OP], "effects.q.phase": "awaiting-approval"}, note="auto session, still guarded")
+v.step(E("t", "task", BOT, {"to": [P]}), "allow", check={"tasks.t.guards": [OP]})
+v.step(prop("r", author=P, task="t"), "allow", check={"effects.r.guards": [OP]}, note="work under a tainted task")
+add(v.done())
+
+v = V("guard-takes-the-wheel", ["P-15"], "auto adds no taint; the operator's own steer clears it; the actor's own input never does; humans are never tainted")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "auto"}), "allow").step(E("i", "session.input", M, {"session": "s"}), "allow")
+v.step(prop("p1", author=BOT), "allow", check={"effects.p1.phase": "ready"})
+v.step(E("g", "session.open", BOT, {"steerMode": "suggest"}), "allow").step(E("i2", "session.input", M, {"session": "g"}), "allow")
+v.step(prop("p2", author=BOT), "allow", check={"effects.p2.guards": [OP]}, note="suggest taints like guarded")
+v.step(E("i3", "session.input", BOT, {"session": "g"}), "allow")
+v.step(prop("p3", author=BOT), "allow", check={"effects.p3.guards": [OP]}, note="re-issuing itself doesn't clear")
+v.step(E("i4", "session.input", OP, {"session": "g"}), "allow")
+v.step(prop("p4", author=BOT), "allow", check={"effects.p4.phase": "ready"}, note="its human re-issued: cleared")
+v.step(E("h", "session.open", M, {"steerMode": "guarded"}), "allow").step(E("i5", "session.input", P, {"session": "h"}), "allow")
+v.step(prop("p5", author=M), "allow", check={"effects.p5.phase": "ready"}, note="humans are their own guard")
+add(v.done())
+
+v = V("guards-are-checked", ["P-15", "P-04", "R-12", "P-07 E3"], "a guard's approval needs a role, a valid key and no expiry, like any approval; guards may refuse")
+agents(v, policy(sessions=sess("member", "member", "member")))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow").step(E("in", "session.input", M, {"session": "s"}), "allow")
+v.step(prop("p", author=BOT), "allow").step(appr("a1", "p", author=OP), "allow")
+v.step(claim("c0", "p"), "denied", profiles={OP: human({"k1": {"publicKey": "pk", "status": "revoked"}})}, note="guard's key revoked")
+v.step(ms("ban", O, OP, "none"), "allow")
+v.step(claim("c1", "p"), "denied", profiles={OP: human()}, note="guard lost its role")
+v.step(appr("a2", "p", author=OP), "denied", note="a guard with no role can't approve")
+v.step(prop("p2", author=BOT), "allow")
+v.step(ms("back", O, OP, "member"), "allow")
+v.step(E("x", "effect.cancel", OP, {"proposal": "p2"}), "allow", profiles={OP: human()}, check={"effects.p2.phase": "cancelled"}, note="a guard may refuse")
+add(v.done())
+
+v = V("guarded-needs-an-operator", ["P-15"], "an agent may open a guarded or suggest session only if its confirmed operator holds a role")
+v.prof(BOT, AG)
+team(v, policy(sessions=sess("member", "member", "member")))
+v.step(ms("b", O, BOT, "member"), "allow")
+v.step(E("s1", "session.open", BOT, {"steerMode": "guarded"}), "denied", note="OP isn't in the space")
+v.step(E("s2", "session.open", BOT, {"steerMode": "auto"}), "allow")
+v.step(E("t", "task", O, {"to": [M]}), "allow").step(E("s3", "session.open", BOT, {"steerMode": "auto", "task": "t"}), "denied", note="not its task")
 add(v.done())
 
 # ── R-01 id derivation ──

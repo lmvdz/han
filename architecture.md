@@ -1,6 +1,6 @@
 # HAN v1 — architecture
 
-Status: design draft, round 7. Companions: [goal.md](goal.md) (why), [han.ts](han.ts) (exact types; normative for shapes), [coverage.md](coverage.md) (fate of every v0.4 guarantee), [ref/](ref/) (executable reference, conformance vectors, fuzzer, model checker; run `python ref/run_all.py`).
+Status: design draft, round 9. Companions: [goal.md](goal.md) (why), [han.ts](han.ts) (exact types; normative for shapes), [coverage.md](coverage.md) (fate of every v0.4 guarantee), [ref/](ref/) (executable reference, conformance vectors, fuzzer, model checker; run `python ref/run_all.py`).
 Normative words MUST / MUST NOT / SHOULD / MAY follow BCP 14. Rules are `R-xx` (sequencer and verification), `P-xx` (Policy), `X-xx` (executor), `T-xx` (what HAN requires of a transport). §10 lists every rule with its check, or says plainly that none exists. Retired rule numbers are not reused.
 
 ---
@@ -33,9 +33,10 @@ HAN logs only what agent safety needs:
 | **Ask for work** | `task`, `task.update`, `task.cancel` |
 | **Touch the world** | `effect.propose`, `effect.approve`, `effect.claim`, `effect.outcome`, `effect.resolve`, `effect.cancel` |
 | **Govern** (who may do what) | `space.create`, `member.set`, `policy.set`, `key.add`, `key.revoke`, `redact`, `checkpoint`, `space.move` |
+| **Work live** (who may watch, read or steer whose session) | `session.open`, `session.input`, `session.close` |
 | **Annotate the record** | `message`: a remark that belongs *in* the authoritative log, e.g. a reason for an approval. Chat stays on the transport. |
 
-**18 kinds, three sequencer calls, one log per space.** Everything else is the transport's job (§8).
+**21 kinds, three sequencer calls, one log per space.** A live session's *stream* (output, context, status) is not in the log: it flows on the transport (T-07). The log holds only its authority: that it exists, who may watch, read and steer it, and every steer. Everything else is the transport's job (§8).
 
 ### 1.1 A worked example: a human hires an agent
 
@@ -142,14 +143,14 @@ The interface column lists the *whole* interface. The "hides" column is why the 
 | # | Module | Interface | Hides |
 |---|---|---|---|
 | M1 | **Log** (the sequencer) | `append(entry, content?) → Receipt`<br>`read(space, after, opts, as) → stream` | ordering, the hash chain, receipt signing and server keys, durability, dedupe, header and content validation, abuse limits, steady-clock time, profile pinning and freshness, redaction proofs, fan-out to the transport, moves |
-| M2 | **Policy** | four pure functions: `decide(state, entry, ctx)`, `fold(state, record, ctx)`, `canRead(state, reader, seq)`, `relevantActors(state, entry, time)` | roles, joining, invites, tasks, delegation, the budget ledger, the effect state machine, approvals, read rights, forks (all of §6) |
+| M2 | **Policy** | five pure functions: `decide(state, entry, ctx)`, `fold(state, record, ctx)`, `canRead(state, reader, seq)`, `relevantActors(state, entry, time)`, `sessionAccess(state, actor, session)` | roles, joining, invites, tasks, delegation, the budget ledger, the effect state machine, approvals, read rights, session rights and steering, forks (all of §6) |
 | M3 | **Identity** | `profile(actor, minSeq?) → ProfileView`<br>`verify(entry, view) → ok \| invalid` | profile spaces, key history, rotation and recovery, actor kinds, operator confirmation, caching and freshness, server key discovery and key windows |
 | M4 | **Verifier** | `verify(space) → VerifierStatus` | pulling records, checking every signature and receipt, Policy replay, profile and key retention, head gossip and misbehaviour proofs, move handover |
 | M5 | **Executor** (an actor) | `deliver(item)` | deciding what to claim, the claim/launch/expired journal and X-01…X-10, elapsed-time deadlines, plan checking, sandboxes, credentials, workspaces, native lookups, cancellation of running work, its outbox |
 | M6 | **Agent host** (an actor) | `deliver(item)` | models, prompts, memory, the agent framework, turning thoughts into entries, its outbox |
-| M7 | **Transport binding** | `publish(space, record)`<br>`subscribe(space, as) → stream of ReadItem` | everything T-01…T-06 require: carrying entries and receipts, invites and notices, signals, files, identity mapping |
+| M7 | **Transport binding** | `publish(space, record)`<br>`subscribe(space, as) → stream of ReadItem`<br>`stream(item)`<br>`watch(session, as) → stream of StreamItem` | everything T-01…T-07 require: carrying entries and receipts, invites and notices, signals, files, identity mapping, live session streams with per-right delivery |
 
-Policy is four functions, but its interface carries no state and has no side effects: everything it hides is *rules*. The executor and agent host are **actors**. Each is built with a `Client` (the three calls plus the transport) and fed every record and signal of the spaces it follows, as `ReadItem`s. It answers only through its client. That's the same interface a human app implements.
+Policy is five functions, but its interface carries no state and has no side effects: everything it hides is *rules*. The executor and agent host are **actors**. Each is built with a `Client` (the three calls plus the transport) and fed every record and signal of the spaces it follows, as `ReadItem`s. It answers only through its client. That's the same interface a human app implements.
 
 ### 4.1 M1 Log: the sequencer pipeline
 
@@ -171,7 +172,7 @@ On `append(entry, content)` the sequencer runs these steps. Steps 2–9 run in o
 
 ### 4.2 M2 Policy: pure functions
 
-**R-11 Determinism.** Policy's four functions depend only on their arguments. `ctx.time` is the receipt time, and `ctx.profiles` are the profile views at the seqs pinned in the receipt. Every conforming implementation MUST give identical results; [ref/policy.py](ref/policy.py) is the reference and [ref/vectors/](ref/vectors/) the tests. Wall clocks, outside reputation and rate limits are *not* inputs. Rate limits and block lists live in Log (step 3) and can only refuse.
+**R-11 Determinism.** Policy's five functions depend only on their arguments. `ctx.time` is the receipt time, and `ctx.profiles` are the profile views at the seqs pinned in the receipt. Every conforming implementation MUST give identical results; [ref/policy.py](ref/policy.py) is the reference and [ref/vectors/](ref/vectors/) the tests. Wall clocks, outside reputation and rate limits are *not* inputs. Rate limits and block lists live in Log (step 3) and can only refuse.
 
 ### 4.3 M3 Identity: identities are spaces too
 
@@ -237,6 +238,13 @@ The standard does not define how an agent thinks. Agents are ordinary actors tha
 **R-17 Reconstructible inputs.** An agent's entries MUST set `seen` and `refs` so that what drove them is identifiable. Model-provider calls aren't HAN entries; an operator who wants them auditable attaches them as a blob in the content of the `task.update`.
 **R-18 Recovery is outbox + reading.** After a crash a host first finishes its outbox (R-07), then re-reads its spaces. It MUST NOT re-propose an intent whose proposal is in its outbox or the log.
 
+**R-24 Hosts honour steer modes.** A host running a live session acts on input from anyone other than the session's actor only once that input is a `session.input` with a receipt, and treats it per the session's `steerMode`:
+- `auto`: as the session's own input, in whatever mode the session already runs (for example a harness's auto mode).
+- `guarded`: in the harness's **stricter mode for that turn** (for Claude Code: its permission rules instead of auto mode, §8.4). Whatever touches the world beyond the session's sandbox goes through an effect, and P-15 makes every such effect wait for the agent's human, whether or not the host tags it.
+- `suggest`: shown to the agent's human, and acted on only once that human re-issues it as their own `session.input`.
+
+Input read from another session's stream or context (T-07), or from a `message`, is **data, never instruction**: a host MUST NOT act on it as if it were a `session.input` or a `task`. A host that feeds another session's context into an agent's turn SHOULD run that turn as if `guarded`. Policy can't see what a model read, so this is a host obligation, listed in §7.5.
+
 ---
 
 ## 5. Entry kinds
@@ -262,10 +270,15 @@ Exact body and content schemas: [han.ts](han.ts) `Bodies` and `Contents`. A kind
 | `checkpoint` | `through` | `blobs` |
 | `redact` | `target` | `reason?` |
 | `space.move` | `to`, `accept` | — |
+| `session.open` | `steerMode`, `task?` | `title?` |
+| `session.close` | `session` | — |
+| `session.input` | `session` | `text`, `blobs?` |
+
+`steerMode` is `auto`, `guarded` or `suggest` (R-24), and must be one of `policy.sessions.modes`.
 
 **Blobs.** A `BlobRef` names bytes by hash. The bytes travel on the transport (T-03), and anyone using them MUST verify the hash. Positions that reference blobs: `content.blobs[]` (any kind, extensions included), `effect.propose.plan.argsBlob`, and `effect.outcome/resolve.evidence`.
 
-**Extensions** add kinds `<prefix>.<name>` (grammar in §2) whose prefix the core doesn't use. The core prefixes `space`, `member`, `policy`, `key`, `message`, `task`, `effect`, `checkpoint` and `redact` are reserved, and an unknown kind under them is `invalid`. To the core, an extension's body and content are opaque Json. Members holding at least `policy.extensionsMinRole` (default `member`) may append one, subject to size limits and the number rule. Extensions define their own meaning; the core neither enforces nor depends on it.
+**Extensions** add kinds `<prefix>.<name>` (grammar in §2) whose prefix the core doesn't use. The core prefixes `space`, `member`, `policy`, `key`, `message`, `task`, `effect`, `checkpoint`, `redact` and `session` are reserved, and an unknown kind under them is `invalid`. To the core, an extension's body and content are opaque Json. Members holding at least `policy.extensionsMinRole` (default `member`) may append one, subject to size limits and the number rule. Extensions define their own meaning; the core neither enforces nor depends on it.
 
 ---
 
@@ -315,6 +328,9 @@ Profile spaces are public. The `state` item of `read` needs read rights at the h
 | `checkpoint` | owner, member |
 | `redact` | the target's author, or an owner |
 | `policy.set`, `space.move` | owner |
+| `session.open` | any role holder, accountable (P-15) |
+| `session.input` | holders of the session's steer right (P-15) |
+| `session.close` | the session's actor, or an owner |
 | `key.add`, `key.revoke` | profile spaces only (§4.3) |
 | `space.create` | only at seq 1 |
 
@@ -399,6 +415,23 @@ All other pairs are `invalid`. `cost` is allowed only with `started: "yes"`.
 
 **P-13 Forks carry no authority.** A space with `forkOf {space, through}` starts from its own `space.create` alone: creator as owner, the new policy, and nothing carried over (no members, tasks, approvals, budget commitments or effects). The parent's records are history to read, never authority.
 
+### 6.6 Live sessions and steering
+
+The point of a space is to see and steer work outside your own silo while it happens, not after a PR. A **session** is one actor's live working context (a Claude Code run, an editor, a human at a terminal). Its stream travels on the transport (T-07); the log holds the authority over it.
+
+**P-15 Session rights and steering.**
+- **Open and close.** `session.open {steerMode, task?}` opens a session whose actor is the author: any role holder, accountable (P-03), at most 64 open per actor. `steerMode` must be in `policy.sessions.modes`. An agent may open a `guarded` or `suggest` session only if its confirmed operator holds a role here; that operator is recorded as the session's **guard**. A `task` must be one the author is assigned to (or the author is an owner). `session.close` ends it (its actor or an owner). A session is **live** while open and its actor holds a role.
+- **Rights.** `policy.sessions = {watch, read, steer, modes}`. The first three are each a minimum role, `guest`, `member`, `owner` or `nobody`, and `read` and `steer` may be no wider than `watch`. `sessionAccess(state, actor, session)` returns three booleans: on a live session its actor has all three; anyone else has a right if their role is at least its level and the level isn't `nobody`; a dead session grants nothing. **Watch** = the output and status stream; **read** = its full context (transcript, files, plan), also for agents, which is how one agent reads another's session; **steer** = append `session.input`. Owners set these per space; a network's defaults pre-fill them. Typical: team `{member, member, member}`, pair session `{guest, guest, guest}`, demo `{guest, owner, owner}`, locked-down `modes: [guarded]`.
+- **Steer.** `session.input {session}` needs the steer right on a live session, and an accountable author.
+- **Taint.** Each agent in a space has a **taint**: the set of humans who must approve what it does next. A `session.input` by author `A` into a session of agent `X` with guard `g` changes it:
+  - `A` = `X`: no change (an agent can't clear its own taint);
+  - `A` = `g`: cleared (its human takes the wheel back);
+  - otherwise: `X` gains `A`'s own taint (relays carry taint; humans have none), and, unless the session is `auto`, `g`.
+  A `task` by a tainted author carries the author's taint, plus its parent's. An `effect.propose` gets `guards` = its proposer's taint ∪ its task's guards, minus the proposer. Nothing is tagged by hand, so nothing can be left untagged: steering another agent, even in `auto` mode, or delegating a task passes the taint on.
+- **Guards approve.** An effect with `guards` starts `awaiting-approval`. Each guard may approve or cancel it whatever the approval rules say, while it holds a role. E3 additionally requires, for every guard, an unconsumed, unexpired approval by it signed with a key valid at claim (guards are pinned in `relevantActors`). The claim consumes them, a not-started outcome returns them, and approval rules still apply on top. A phase is `ready` only once the rule's and every guard's approvals are in hand.
+
+This is "my agent runs in auto mode, but when someone else steers it their turn is less permissive": the owner of the session picks `guarded`; the harness runs that turn in its stricter mode, and anything that reaches the world waits for its human, through any number of relays inside the space. Picking `auto` lets outside steers run as freely as the human's own. Taint is per space; what a tainted agent does in *other* spaces is a host obligation (§7.5).
+
 ---
 
 ## 7. Verification and trust
@@ -444,6 +477,10 @@ HAN v1 has **no forced takeover**. Any rule letting someone other than the home 
 | A server's retired key is stolen and used to back-date receipts | partly: verifiers keep the keys and receipts they have seen, and a `compromised` mark stops new trust; receipts recorded before the mark stay trusted |
 | Sequencer refuses or delays appends, or dies | not prevented; remedy is a move, or a fork (§7.4) |
 | Transport or sequencer reads plaintext | not prevented by HAN; use the transport's end-to-end encryption for content |
+| An agent host acts on text it read (another session's stream or context, a message) as instruction: prompt injection | not prevented by Policy, which can't see what a model read: R-24 obliges hosts to treat it as data and SHOULD run such turns guarded. Effects it then proposes are attributable to the agent and its operator. |
+| A tainted agent acts in another space, where it isn't tainted | not prevented: taint is per space. R-24 obliges the host not to carry an outside steer across spaces; the operator answers for it. |
+| A harness's "stricter mode" lets a risky local action through | not prevented: only effects are gated by HAN. Local actions within the session's sandbox are the harness's (§8.4). |
+| The transport delivers a stream to someone without the right | Matrix binding: per-right rooms with E2EE and encrypted media (§8.2), so the server can't widen access by accident; a malicious homeserver admin is out of scope, as for chat |
 
 HAN v1 runs no consensus.
 
@@ -461,6 +498,7 @@ HAN v1 runs no consensus.
 | **T-04 Invite** | Let owners bring members into the room; first contact is the transport's (e.g. Matrix invites). |
 | **T-05 Signal** | Carry ephemeral messages: presence, typing, streamed agent replies, faults, and the move handshake (§7.3). Signals never carry authority: anything that matters is an entry. |
 | **T-06 Room ↔ space** | Bind each room to at most one HAN space, so members can find its sequencer. |
+| **T-07 Session streams** | Carry each live session's `StreamItem`s (han.ts: output, status, context snapshots as blobs) to the actors whose `sessionAccess` grants watch, and context items only to those granted read. Re-check access per item, so a lost role or a closed session ends delivery at once. Streams carry no authority: a steer is a `session.input` (P-15), never a stream message. Status MAY be taken from the harness's terminal program-status reports (OSC 7501: idle, working, blocked, done, error) and is presence, never fact. |
 
 ### 8.2 Matrix binding
 
@@ -475,10 +513,41 @@ HAN v1 runs no consensus.
 | redaction (P-12) | a HAN `redact` entry. The sequencer then also redacts the Matrix event's content, and serves `redactedBy`. |
 | files (T-03) | Matrix authenticated media (`mxc://` URIs in `BlobRef.uri`), with HAN hash checks |
 | invites, typing, presence, chat (T-04, T-05) | native Matrix |
+| session streams (T-07) | two **end-to-end encrypted rooms per space**, created and administered by the sequencer's application-service user (power level 100; owners 50): a *watch room* and a *read room*, linked from the space room by state events `org.han.watch` and `org.han.read`. After every receipt the sequencer invites or kicks so that each room's membership equals the actors `sessionAccess` grants that right on any live session. Items are `org.han.stream` events whose content is a `StreamItem`; output and status go to the watch room, `context` items to the read room, each as a thread rooted at the session's first item. Context blobs are encrypted attachments (key in the event), so an `mxc://` URI alone reveals nothing. Removal stops new keys; what someone already received stays received. Live audio and screen share use MatrixRTC in the watch room. Per-session grants narrower than the space's are not supported in v1: rights are per space. |
 | HAN roles vs Matrix power levels | independent. HAN authority comes only from the HAN log. Rooms SHOULD keep Matrix membership consistent with HAN roles, but HAN never reads power levels. |
 | end-to-end encryption | supported for chat. `org.han.*` events MAY be encrypted, provided the sequencer's application-service user is a room member that can decrypt them. |
 
-The generic binding (one WebSocket carrying the three calls, §3) remains for non-Matrix use and testing; [ref/wire.py](ref/wire.py) implements it.
+### 8.3 The generic binding
+
+For non-Matrix use and testing, a server MAY offer the **generic binding**: one authenticated WebSocket carrying the three calls (§3) plus four transport operations: `signal(space, body)`, `follow(space, as) → stream of ReadItem`, `blobPut(ref, offset, bytes)` and `blobGet(ref, space)`. [ref/wire.py](ref/wire.py) implements it. Its rules realize T-01…T-05 and T-07:
+
+**G-01 Access follows references; supply follows authors.** A record *references* a blob if its unredacted content holds the `BlobRef` at:
+- `content.blobs[]`, for **every** kind, extensions included; or
+- `effect.propose.plan.argsBlob`; or
+- `effect.outcome.evidence` or `effect.resolve.evidence`.
+
+`blobGet(ref, space)` succeeds only if both of these hold:
+1. **Access:** a record in `space` that the caller may read (P-02) references `ref`.
+2. **Supply:** the server holds the bytes *for that space*. That is true when the referencing entry's author uploaded them to this server, or when the server fetched them for that space under G-02. An upload counts only if **every byte came from that uploader's own `blobPut` calls** and those bytes hash-match. A server MUST NOT report `complete` to an uploader just because the hash is already stored. Storage may be deduplicated by hash, but access never is. Knowing a hash, and mentioning it in a space you control, gets you nothing. That's why a hash proves bytes are equal but never permission, authorship or truth.
+
+Uploaders may read their own unreferenced blobs for 24 h. A server MUST keep a blob while any unredacted record it stores references it, and MAY delete it after.
+
+**G-02 Blob transfer.** A client uploads to its own server (`blobPut` as itself; the server may apply quotas). A server that needs a blob it lacks calls `blobGet` as `@:server` in the context of the referencing space. It asks the author's server first, then the home, then any mirror. G-01 is evaluated for the server actor (P-02 server reads). The receiver verifies the hash, moves on to the next server on a mismatch, and from then on holds the bytes for that space.
+
+**G-03 Notices (first contact).** After ordering a `member.set` that gives an actor on server `S` a role, or an entry whose `to` names an actor that holds a role, the home MUST send `signal(profile:<actor>, {type: "notice", space, seq})` to `S`. `S` delivers it **only to that actor's own authenticated sessions**, as signal items on the actor's follow of its own profile space, and never to the profile space's other readers. A notice is only a hint: `S` verifies it by reading the space as `@:S` (P-02 server reads), and drops notices it can't verify. This is how a new member, human or agent, learns that a space exists.
+
+**G-04 Who may signal.** Only actors who may read a space at its head (P-02) may `signal` it or `follow` it for signals. **Across servers:** a user's server relays the user's signal to the home over its own `@:server` connection. The home accepts a relayed `from` only for actors on that server. The home sends signals to other servers' follow streams, and each server fans them out to its local followers. **Profile spaces** are readable by anyone, but only the actor itself may follow its profile for signals, and the only signals they accept are G-03 notices from server actors. Servers rate-limit signals per actor and drop them under load.
+
+**G-05 Session streams.** `follow(session, as)` streams a session's `StreamItem`s (han.ts) to `as` only while `sessionAccess` grants it watch; items of type `context` only while it grants read. The server re-evaluates access at every item, so a lost role or a closed session ends the stream at once. Only the session's actor (via its host) may publish to the stream.
+
+### 8.4 Profile: Claude Code as a session (informative)
+
+How a harness maps onto P-15 and R-24, using Claude Code as the example. A *host* is a small process beside the harness, holding the agent's HAN key.
+- **Open.** On start, the host appends `session.open {steerMode}` as the agent and publishes `status` items from the harness's OSC 7501 program-status reports and its hooks, and `output` items from its transcript.
+- **Context.** On request by a reader, or periodically, it publishes a `context` item: the transcript and plan as a blob.
+- **Steer in.** A `session.input` with a receipt is delivered to the harness as a user turn. In `guarded` or `suggest` mode, an outside input's turn runs under the harness's permission rules instead of auto mode (Claude Code: permission mode `default`), so risky tool calls prompt; in `suggest` mode the text goes to the agent's human instead.
+- **World actions.** Pushes, deploys, payments and messages to outside systems go through an executor as effects (a `PreToolUse` hook turns such tool calls into `effect.propose` and waits for the outcome). P-15 then holds them for the guard while the agent is tainted. Edits inside the session's own workspace stay local.
+- **Read others.** An MCP tool lets the agent `watch` other sessions it has the read right on. Turns that used it run as if guarded (R-24).
 
 ---
 
@@ -487,13 +556,13 @@ The generic binding (one WebSocket carrying the three calls, §3) remains for no
 | Module | Interface | Replaces | Hidden concerns |
 |---|---|---|---|
 | Log (sequencer) | 2 calls | v0.4 CommandJournal (6), EventJournal (3), SubmissionBindingStore (4), WorkflowLedger, handlers, cursors | 13 |
-| Policy | 4 pure functions | AuthorizationService (5), AuthorityService (4), approval, budget and grant records | 10 |
+| Policy | 5 pure functions | AuthorizationService (5), AuthorityService (4), approval, budget and grant records | 10 |
 | Identity | 2 calls | IdentityDirectory (3), directory.resolve | 8 |
 | Verifier | 1 call | v0.4 had none: authority wasn't verifiable by others | 7 |
 | Executor (actor) | 1 call | ExecutionAdapter (7), WorkspaceProvider (10), CheckpointCoordinator executor side, ExecutionPermit | 12 |
 | Agent host (actor) | 1 call | AgentRuntimeAdapter (11) | 5 |
-| Transport binding | 2 calls | TransportAdapter, presence, live views, artifact transfer, collaboration (now the transport's) | 6 |
-| **Total** | **13** | ~85 port methods; 26 wire methods; 19 commands | |
+| Transport binding | 4 calls | TransportAdapter, presence, live views, artifact transfer, collaboration (now the transport's) | 7 |
+| **Total** | **16** | ~85 port methods; 26 wire methods; 19 commands | |
 
 ---
 
@@ -504,12 +573,13 @@ Run `python ref/run_all.py`. Results: [ref/RESULTS.md](ref/RESULTS.md).
 | Tool | What it does |
 |---|---|
 | `ref/policy.py` | executable reference of §6 and the R-09 body schemas |
-| `ref/vectors/` + `run_vectors.py` | 72 vectors, 615 steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
-| `ref/mutate_vectors.py` | 60 single-rule Policy mutations; the vectors must catch each one |
+| `ref/vectors/` + `run_vectors.py` | 80 vectors, 727 steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
+| `ref/mutate_vectors.py` | 82 single-rule Policy mutations; the vectors must catch each one |
 | `ref/fuzz_fold.py` | 2,000 random histories in populated rooms: `decide`/`fold` never fail on an allowed entry, stay pure, keep budgets in bounds, never change a final phase |
 | `ref/wire.py` + `run_wire.py` | the generic binding with real Ed25519: reference sequencer (the §4.1 pipeline) and verifier (R-14); 30 scenarios |
 | `ref/mutate_wire.py` | 24 single-rule mutations of the sequencer and verifier; the scenarios must catch each one |
 | `ref/model_check.py` | exhaustive bounded exploration driving the real `policy.py` in three scenarios (timing, drift, single); 10 mutations must each give a counterexample; a non-vacuity guard fails runs that never launch |
+| `ref/model_guard.py` | exhaustive bounded exploration of P-15 against the real `policy.py`: steers, relays, tasks, proposals, approvals, claims, retries, role removal, key revocation and approval-rule changes; an independent ghost tracks who was influenced; property GuardedClaimsNeedTheirHuman; 8 mutations must each give a counterexample; a non-vacuity guard |
 | `ref/check_consistency.py` | §5 = han.ts = ref schemas; every folded state conforms to han.ts `SpaceState` |
 
 | Rule | Checked by | |
@@ -541,6 +611,8 @@ Run `python ref/run_all.py`. Results: [ref/RESULTS.md](ref/RESULTS.md).
 | P-10 | vectors `outcome-rules`, `resolve-cost-rules`; model UnknownNeverSilentlyRetried | ✓ |
 | P-11 | vectors `checkpoint-move-policy`, `no-move-while-claimed`, `approval-rule-removed`, `budget-unit-locked-while-reserved`, `cant-deny-own-home` | ✓ |
 | P-12, P-13 | vectors `redact`, `no-redacting-live-plans`, `fork-fresh-authority`; mutations | ✓ |
+| P-15 | vectors `session-rights`, `sessions-nobody`, `session-policy-shape`, `guarded-steer-taints`, `relays-carry-taint`, `guard-takes-the-wheel`, `guards-are-checked`, `guarded-needs-an-operator`; 17 policy mutations; guard model (depth 8) GuardedClaimsNeedTheirHuman and its 8 mutations; the fuzzer opens, steers and closes sessions under random `policy.sessions` | ✓ |
+| R-24, T-07, G-05, §8.4 | **procedure:** steer a `guarded` Claude Code session from another member and check that a push becomes a proposal awaiting the agent's human; relay through a second agent and check the same; check that text in a watched stream never acts as input; remove a watcher's role and check delivery stops. Needs an implementation. | ✗ |
 | §4.3 identity rules | vectors `profile-space`, `keyid-single-use`, `operator-must-be-another-human`; mutations | ✓ |
 | X-01 | vector `E1-executor-instance` | ✓ |
 | X-02 … X-06, X-10 | model (timing, drift, single): AtMostOneLaunchPerClaim, NoLaunchWithoutReceipt, NoLaunchAfterAbandon, Honest*. The model's executor follows X-10 when its outcome is refused. Mutations. | ✓ |

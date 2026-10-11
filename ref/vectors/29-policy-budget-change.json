@@ -71,6 +71,16 @@
       "minDurability": "local",
       "launchWindow": 30,
       "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded",
+        "suggest"
+       ]
+      },
       "servers": {
        "deny": []
       }
@@ -198,6 +208,16 @@
       "minDurability": "local",
       "launchWindow": 30,
       "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded",
+        "suggest"
+       ]
+      },
       "servers": {
        "deny": []
       }

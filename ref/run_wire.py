@@ -30,7 +30,7 @@ def profiles(seq=1): return {a: view(a, seq) for a in KEYS}
 
 POLICY = {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any", "approvals": [],
           "separateApprover": False, "budget": None, "maxDelegationDepth": 4, "minDurability": "local", "launchWindow": 30,
-          "extensionsMinRole": "member", "servers": {"deny": []}}
+          "extensionsMinRole": "member", "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded", "suggest"]}, "servers": {"deny": []}}
 
 N = [0]
 def nonce():
@@ -226,7 +226,7 @@ def _():
     return (W.verify_hello(KEYS[M].pub, p, "CHALLENGE", "a.example") and not W.verify_hello(KEYS[M].pub, p, "CHALLENGE", "b.example")
             and not W.verify_hello(KEYS[O].pub, p, "CHALLENGE", "a.example")), "binds"
 
-@scenario("first contact across servers", "R-20, P-02", "adding a member delivers a notice to its server, which can then read the space as its server actor")
+@scenario("first contact across servers", "G-03, P-02", "adding a member delivers a notice to its server, which can then read the space as its server actor")
 def _():
     net = {}
     hc = W.Home("c.example", HOME_C, network=net); hd = W.Home("d.example", W.Key("server:d"), network=net)
@@ -238,7 +238,7 @@ def _():
     return (bool(got) and got[-1]["body"]["space"] == S and bool(gotx) and code == "ok" and len(items) == 4
             and stranger[1] == []), f"notice={got[-1] if got else None} read={code}/{len(items)}"
 
-@scenario("signals ride follow streams", "R-22, §3", "followers receive signals as ReadItems; strangers can neither follow nor signal")
+@scenario("signals ride follow streams", "G-04, §3", "followers receive signals as ReadItems; strangers can neither follow nor signal")
 def _():
     h = base_home()
     code, q = h.follow(S, O); denied = h.follow(S, Z)[0]
@@ -261,7 +261,7 @@ def _():
     return (code == "denied" and code2 == "ok" and 0 < len(items) < 5 and items3[0]["type"] == "state"
             and "entries" not in items3[0]["state"]), f"{code} {code2}/{len(items)}"
 
-@scenario("blob refs per kind and transfer", "R-13, R-21", "argsBlob in a plan is a reference; a server fetches as itself, skips a server with wrong bytes, and verifies the hash")
+@scenario("blob refs per kind and transfer", "G-01, G-02", "argsBlob in a plan is a reference; a server fetches as itself, skips a server with wrong bytes, and verifies the hash")
 def _():
     net = {}
     data = b"patch bytes"; ref = {"hash": hashlib.sha256(data).hexdigest(), "size": len(data), "type": "text/x-diff"}
@@ -271,7 +271,7 @@ def _():
     body = {"executor": X, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}
     e, c = entry("effect.propose", M, body, {"plan": plan}); code = h.append(e, c, profiles())[0]
     rec = h.spaces[S]["records"][-1]
-    h.blob_put(data, M)                                # the author uploads before posting (R-21)
+    h.blob_put(data, M)                                # the author uploads before posting (G-01)
     he = W.Home("e.example", W.Key("server:e"), network=net)
     he.spaces[S] = copy.deepcopy(h.spaces[S])          # e.example mirrors the space and holds the right bytes
     h.blobs[ref["hash"]] = b"WRONG"                    # the author's server (a.example, also the home) serves corrupted bytes
@@ -281,7 +281,7 @@ def _():
     refs = W.blob_refs("effect.propose", c)
     return (code == "ok" and refs == [ref] and who == "e.example" and got == data and outsider is None), f"{code} refs={len(refs)} from={who} outsider={outsider}"
 
-@scenario("blob theft by hash is refused", "R-13", "mentioning someone else's blob hash in your own space doesn't get you the bytes")
+@scenario("blob theft by hash is refused", "G-01", "mentioning someone else's blob hash in your own space doesn't get you the bytes")
 def _():
     h = base_home()
     secret = b"private design doc"; ref = {"hash": hashlib.sha256(secret).hexdigest(), "size": len(secret), "type": "text/plain"}
@@ -327,7 +327,7 @@ def _():
     m = mirror(); out = [m.ingest(r) for r in bad]
     return a == "invalid" and b == "invalid" and ok == "ok" and not out[-1][0], f"{a} {b} {ok} mirror={out[-1][1]}"
 
-@scenario("notices stay private", "R-20, R-22", "profile spaces can't be followed for signals; notices go only to the actor's inbox, and only for role holders")
+@scenario("notices stay private", "G-03, G-04", "profile spaces can't be followed for signals; notices go only to the actor's inbox, and only for role holders")
 def _():
     net = {}
     hd = W.Home("d.example", W.Key("server:d"), network=net)
@@ -369,7 +369,7 @@ def _():
     ok = h.append(e2, c2, profiles())[0]
     return (a, b, blocked, rescue, ok) == ("unavailable", "ok", "unavailable", "ok", "ok"), f"{a} {b} {blocked} {rescue} {ok}"
 
-@scenario("uploads complete only on the uploader's own bytes", "R-13, R-21", "claiming a known hash without sending its bytes gives no supply")
+@scenario("uploads complete only on the uploader's own bytes", "G-01", "claiming a known hash without sending its bytes gives no supply")
 def _():
     h = base_home()
     data = b"secret file"; ref = {"hash": hashlib.sha256(data).hexdigest(), "size": len(data), "type": "text/plain"}
