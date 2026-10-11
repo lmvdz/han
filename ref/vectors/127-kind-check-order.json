@@ -1,0 +1,760 @@
+{
+ "name": "kind-check-order",
+ "rules": [
+  "P-16"
+ ],
+ "description": "within a kind the checks run in the order of the P-16 table: references before state, state before authority only where the table says so",
+ "profiles": {
+  "@g:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@z:d.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "git.push",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": {
+       "unit": "USD-cent",
+       "amount": 100
+      },
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@g:a.example",
+     "role": "guest"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "e2aca1c808fd779e1adb7456b9d86513f42b4c17a29749f0a203cf21eeba1706",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "05d8338b32d9850bc57a1b96d33fb5c01fe22647ca242380ae15892fd4603dc2",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pr1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "ac8615dd7197fab13a31fb4d710047cc0009967d83120cdd658a84a81e6d4324",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.cancel",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "e2aca1c808fd779e1adb7456b9d86513f42b4c17a29749f0a203cf21eeba1706"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow",
+   "check": {
+    "effects.e2aca1c808fd779e1adb7456b9d86513f42b4c17a29749f0a203cf21eeba1706.phase": "cancelled"
+   }
+  },
+  {
+   "entry": {
+    "id": "ee7e850e319018a9b6c6da53031ad8e53b1e5199d7c91c8a30cc25f5c5cbb5f3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "e2aca1c808fd779e1adb7456b9d86513f42b4c17a29749f0a203cf21eeba1706",
+     "planDigest": "ee188ee1c319d86a5b2020e7b07be005fd25287c88c789e8a01b7692a676681f"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "invalid",
+   "note": "digest before phase"
+  },
+  {
+   "entry": {
+    "id": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "e2aca1c808fd779e1adb7456b9d86513f42b4c17a29749f0a203cf21eeba1706",
+     "planDigest": "05d8338b32d9850bc57a1b96d33fb5c01fe22647ca242380ae15892fd4603dc2"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "denied",
+   "note": "cancelled"
+  },
+  {
+   "entry": {
+    "id": "6e3372e8285f64dda7bc1af2954f3e40ee1c88e729d7910c3e876fde11b885d5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "b0ea16503c8022c4b23c69325b36ee35756d260b140f5c82da7241d7078df89e",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 40
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pr2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "6e3372e8285f64dda7bc1af2954f3e40ee1c88e729d7910c3e876fde11b885d5",
+     "planDigest": "b0ea16503c8022c4b23c69325b36ee35756d260b140f5c82da7241d7078df89e"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "6e3372e8285f64dda7bc1af2954f3e40ee1c88e729d7910c3e876fde11b885d5",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "07172cf28ea7ce28af5bbee599b73a7b264cd8eb39ad46e921b04b614e4cde8e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+     "result": "succeeded",
+     "started": "yes",
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 99
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "invalid",
+   "note": "the cost before the author"
+  },
+  {
+   "entry": {
+    "id": "de61df093586316959702cac3a3da7c8e485548c4e065aa3f7eff8e43582e1fb",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+     "result": "succeeded",
+     "started": "yes",
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "denied"
+  },
+  {
+   "entry": {
+    "id": "49bec279d1ca12113fd651754412e5d60e1196da187161263c13b69002b97b7c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+     "result": "succeeded",
+     "started": "yes"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow",
+   "check": {
+    "effects.6e3372e8285f64dda7bc1af2954f3e40ee1c88e729d7910c3e876fde11b885d5.phase": "succeeded"
+   }
+  },
+  {
+   "entry": {
+    "id": "13fa9bc4fccc979fa857452ffd9edeb47e4692e907d5e0d2899023dcbf926ff8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+     "result": "succeeded",
+     "started": "no"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "denied",
+   "note": "the claim is not open before the pair is judged"
+  },
+  {
+   "entry": {
+    "id": "c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "20ee4e74e91d37aefc6b0452741e14ffb435736ec1755b1a200456505d3d7a03",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pr3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a",
+     "planDigest": "20ee4e74e91d37aefc6b0452741e14ffb435736ec1755b1a200456505d3d7a03"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "30c75083be66962c95107d4e796d0140bedb9d0914eac451ce3548cf0245f343",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+     "result": "unknown",
+     "started": "yes"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow",
+   "check": {
+    "effects.c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a.phase": "unknown"
+   }
+  },
+  {
+   "entry": {
+    "id": "cc05e6dcadb12728c242423a3ce9ca6e6ce2b30c3d178f6dca53b5a8c1985fab",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.resolve",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a",
+     "result": "failed",
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 1
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-r0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "denied",
+   "note": "the author before the cost"
+  },
+  {
+   "entry": {
+    "id": "98a7b13f6218fe6e3f84ce6eda37943da85bcc3aeb39c803706f825498926ea5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.resolve",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a",
+     "result": "failed",
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 1
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-r1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "invalid"
+  },
+  {
+   "entry": {
+    "id": "df8e7979e7e40a8a0003ae6a1210b500a871c285df999d4026bdb7c07427ad01",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "5ad38304b535c2987dbd24657c1a11b884984ff600d9f389deb0d4e634fee792",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "invalid",
+   "note": "no such proposal, whoever asks"
+  },
+  {
+   "entry": {
+    "id": "3c7d0fdf46fd4ae79fa7d7d2509ace64bcafd33677324f79d6aa8d435bad392d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "6e3372e8285f64dda7bc1af2954f3e40ee1c88e729d7910c3e876fde11b885d5",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c8",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "denied"
+  },
+  {
+   "entry": {
+    "id": "76a63403c2798379d7460699fe761dd989ebd575899d3cda0eb4e3ef9bb3094e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "checkpoint",
+    "author": "@g:a.example",
+    "keyId": "k1",
+    "body": {
+     "through": 99
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ck0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "denied",
+   "note": "the role before the position"
+  },
+  {
+   "entry": {
+    "id": "48cbdb7db84f94b3a1d15f0e82a3c7daddedbccea21c9f5eff0e8027fcd1f1f1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "checkpoint",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "through": 99
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ck1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "invalid"
+  },
+  {
+   "entry": {
+    "id": "0800c8aaa3e1f19f4634543af1ee9e0b1d0525a647fe727d340186ff4c8b77eb",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "redact",
+    "author": "@z:d.example",
+    "keyId": "k1",
+    "body": {
+     "target": "5ad38304b535c2987dbd24657c1a11b884984ff600d9f389deb0d4e634fee792"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-rd",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "invalid",
+   "note": "the target exists before the author is judged"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a0": "ee7e850e319018a9b6c6da53031ad8e53b1e5199d7c91c8a30cc25f5c5cbb5f3",
+  "a1": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+  "a3": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
+  "c2": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+  "c3": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+  "c8": "3c7d0fdf46fd4ae79fa7d7d2509ace64bcafd33677324f79d6aa8d435bad392d",
+  "c9": "df8e7979e7e40a8a0003ae6a1210b500a871c285df999d4026bdb7c07427ad01",
+  "ck0": "76a63403c2798379d7460699fe761dd989ebd575899d3cda0eb4e3ef9bb3094e",
+  "ck1": "48cbdb7db84f94b3a1d15f0e82a3c7daddedbccea21c9f5eff0e8027fcd1f1f1",
+  "g": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "o0": "07172cf28ea7ce28af5bbee599b73a7b264cd8eb39ad46e921b04b614e4cde8e",
+  "o1": "de61df093586316959702cac3a3da7c8e485548c4e065aa3f7eff8e43582e1fb",
+  "o2": "49bec279d1ca12113fd651754412e5d60e1196da187161263c13b69002b97b7c",
+  "o3": "13fa9bc4fccc979fa857452ffd9edeb47e4692e907d5e0d2899023dcbf926ff8",
+  "o4": "30c75083be66962c95107d4e796d0140bedb9d0914eac451ce3548cf0245f343",
+  "pr1": "e2aca1c808fd779e1adb7456b9d86513f42b4c17a29749f0a203cf21eeba1706",
+  "pr2": "6e3372e8285f64dda7bc1af2954f3e40ee1c88e729d7910c3e876fde11b885d5",
+  "pr3": "c592be652fb76d89b9e8b5324b25ec12b260334ecd7ce5b8d0bc9eef9e57e36a",
+  "r0": "cc05e6dcadb12728c242423a3ce9ca6e6ce2b30c3d178f6dca53b5a8c1985fab",
+  "r1": "98a7b13f6218fe6e3f84ce6eda37943da85bcc3aeb39c803706f825498926ea5",
+  "rd": "0800c8aaa3e1f19f4634543af1ee9e0b1d0525a647fe727d340186ff4c8b77eb",
+  "x1": "ac8615dd7197fab13a31fb4d710047cc0009967d83120cdd658a84a81e6d4324"
+ }
+}

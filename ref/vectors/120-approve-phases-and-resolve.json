@@ -1,0 +1,445 @@
+{
+ "name": "approve-phases-and-resolve",
+ "rules": [
+  "P-08",
+  "P-10"
+ ],
+ "description": "approvals are accepted while awaiting, ready or claimed; resolve failed drops every unconsumed approval and re-arms",
+ "profiles": {
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "8867075a2468b1a82b691a375791bcf5ed7595dbdcaf0c2900fbb64a92d0b4c9",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pr",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "planDigest": "8867075a2468b1a82b691a375791bcf5ed7595dbdcaf0c2900fbb64a92d0b4c9"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow",
+   "check": {
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "ready"
+   }
+  },
+  {
+   "entry": {
+    "id": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "planDigest": "8867075a2468b1a82b691a375791bcf5ed7595dbdcaf0c2900fbb64a92d0b4c9"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow",
+   "check": {
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "claimed"
+   },
+   "note": "adds an approval while claimed"
+  },
+  {
+   "entry": {
+    "id": "db0b3f081804acbb30d4c40efca51f0f75284f23839c302dc40f2a91246f4c7d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+     "result": "unknown",
+     "started": "yes"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow",
+   "check": {
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "unknown"
+   }
+  },
+  {
+   "entry": {
+    "id": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "planDigest": "8867075a2468b1a82b691a375791bcf5ed7595dbdcaf0c2900fbb64a92d0b4c9"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "denied",
+   "note": "unknown"
+  },
+  {
+   "entry": {
+    "id": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.resolve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "result": "failed"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-r",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow",
+   "check": {
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "awaiting-approval",
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.approvals.1.dropped": true
+   },
+   "note": "a2 dropped, a1 consumed: nothing in hand"
+  },
+  {
+   "entry": {
+    "id": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "planDigest": "8867075a2468b1a82b691a375791bcf5ed7595dbdcaf0c2900fbb64a92d0b4c9"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow",
+   "check": {
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "ready"
+   }
+  },
+  {
+   "entry": {
+    "id": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "attempt": 2,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "49bec279d1ca12113fd651754412e5d60e1196da187161263c13b69002b97b7c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+     "result": "succeeded",
+     "started": "yes"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "succeeded"
+   }
+  },
+  {
+   "entry": {
+    "id": "c72608cc2beb1d1eb6c3d8bf4804201cd5a663ace817d72542b9f4e1ff25c666",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "planDigest": "8867075a2468b1a82b691a375791bcf5ed7595dbdcaf0c2900fbb64a92d0b4c9"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "denied",
+   "note": "final"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a1": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+  "a3": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
+  "a4": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",
+  "a5": "c72608cc2beb1d1eb6c3d8bf4804201cd5a663ace817d72542b9f4e1ff25c666",
+  "c": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+  "c2": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "o": "db0b3f081804acbb30d4c40efca51f0f75284f23839c302dc40f2a91246f4c7d",
+  "o2": "49bec279d1ca12113fd651754412e5d60e1196da187161263c13b69002b97b7c",
+  "pr": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+  "r": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf"
+ }
+}
