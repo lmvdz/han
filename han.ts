@@ -169,12 +169,12 @@ export interface SpaceState {
   roles: { [actor: ActorId]: Role };
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02)
   tasks: {
-    [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number;
+    [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number; seq: Seq;
                      parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
     [proposal: EntryId]: {
-      proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex;
+      proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
       expiresAt?: Time;                             // E5: no claim at or after this time
       guards?: ActorId[];                           // the proposer's guard if it was held when proposing (P-15). The executor's
@@ -195,6 +195,7 @@ export interface SpaceState {
   sessions: { [id: EntryId]: { actor: ActorId; open: boolean; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId;
                                 human: boolean; guard?: ActorId } };   // the guard is an agent's confirmed operator at open
   held: { [agent: ActorId]: ActorId };                          // P-15: agent → the human it waits for
+  cleared: { [agent: ActorId]: Seq };                           // P-15: seq of the guard's last release (instructions up to it are reviewed)
   guarded: { [agent: ActorId]: ActorId };                       // P-15: agent → its guard; the agent's own sticky choice
                                                                 // (guardedNow also counts owner-forced guarding, derived)
   profile?: {                                                          // profile spaces only (§4.3)

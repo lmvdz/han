@@ -5,15 +5,15 @@ Everything here is executable. `python ref/run_all.py` runs all of it (the timin
 | File | What it is |
 |---|---|
 | `policy.py` | Reference Policy: `decide`, `fold`, `can_read`, `relevant_actors`, `session_access`, closed body schemas (R-09). Pure Python, no dependencies. |
-| `vectors/*.json` | 101 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
+| `vectors/*.json` | 107 conformance vectors, including the §1.1 worked example and an RFC 8785 key-order vector. Expectations are hand-written in `make_vectors.py` from architecture.md. They are **not** computed by `policy.py`. |
 | `run_vectors.py` | Runs the vectors against `policy.py`, or any implementation exposing the same five functions. Also checks purity and determinism (R-11) on every step. |
-| `mutate_vectors.py` | Breaks one Policy rule at a time (108 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
+| `mutate_vectors.py` | Breaks one Policy rule at a time (112 mutations) and requires the vectors to fail. This shows the vectors test the rules rather than just the happy path. |
 | `wire.py` | Signed layer with real Ed25519 (`cryptography` package): ids, signatures, receipts, header **and content** validation, a reference **home** (the §4.1 append pipeline) and a verifying **mirror** (R-14), equivocation and wrong-home proofs, notices, signal rights, per-space blob supply and transfer. |
 | `run_wire.py` | 30 scenarios over `wire.py`, each with its expected result stated from the spec. |
 | `mutate_wire.py` | Breaks one wire-layer rule at a time (24 mutations) and requires the scenarios to fail. |
 | `fuzz_fold.py` | 2,000 random histories × 200 steps. Whenever `decide` allows an entry, `fold` must not raise and must stay pure. Budgets must stay within bounds, and final phases must never change. |
 | `model_check.py` | Exhaustive bounded state exploration that drives the **real** `policy.py`, in three scenarios. *Timing*: executor clock offsets, arbitrary network delay, sub-second arrival with whole-second receipts, bounded stall, and launchWindow shortened or lengthened mid-claim. *Drift*: the sequencer's clock 20% fast and the executor's 20% slow. *Single*: revocation, cancel, abandon, two attempts. 10 mutations must each produce a counterexample. A **non-vacuity guard** fails any run in which nothing is ever launched. |
-| `model_guard.py` | Exhaustive bounded exploration of P-15 (guarded steering) against the real `policy.py`, with a ghost derived from the invariant sentence. Two agents, five properties, 25 mutations each caught by a property; depth 5 in about 40 s. |
+| `model_guard.py` | Exhaustive bounded exploration of P-15 (guarded steering) against the real `policy.py`, with a ghost derived from the invariant sentence. Two agents, six properties (including ExactHolds: Policy holds exactly whom the invariant holds), 27 mutations each caught by a property at depth 4; depth 5 takes about 6 min, `--quick` runs depth 4. |
 | `check_consistency.py` | Checks that the §5 table, han.ts `Bodies`/`Contents`/`PolicyDoc` and the `policy.py` schemas agree field by field. Also checks that every SpaceState the reference fold produces conforms to han.ts `SpaceState`. |
 
 ## Vector format

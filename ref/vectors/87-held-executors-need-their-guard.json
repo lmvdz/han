@@ -272,8 +272,12 @@
    "time": "2026-10-10T12:00:08Z",
    "expect": "allow",
    "check": {
-    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.phase": "ready"
-   }
+    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.guards": [
+     "@op:b.example"
+    ],
+    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.phase": "awaiting-approval"
+   },
+   "note": "naming a guarded executor is an instruction, recorded on the effect"
   },
   {
    "entry": {
