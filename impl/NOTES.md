@@ -41,7 +41,7 @@ Each entry says where the spec is silent or ambiguous, what `impl/` does (always
 
 ## State at a past seq
 
-27. `read(space, after, {state: true, at: N})` returns the state after record `N` (folded from the chain with the profile views each receipt pinned) instead of the head state. It needs the read right at `N`, judged on the CURRENT state (P-02: a member who joined at seq 3 reads the state at seq 2; a server denied now reads nothing) (`denied` otherwise), `1 <= N <= head` and `state` set (`invalid` otherwise). The records returned are still those after `after`.
+27. `state {space, at: N}` (round 24; before, `read` with `state` and `at`) returns the state after record `N` (folded from the chain with the profile views each receipt pinned) instead of the head state. It needs the read right at `N`, judged on the CURRENT state (P-02: a member who joined at seq 3 reads the state at seq 2; a server denied now reads nothing) (`denied` otherwise), `1 <= N <= head` (`invalid` otherwise). `read` is entries only.
 
 ## Verification (R-14, R-15)
 

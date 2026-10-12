@@ -114,8 +114,11 @@ async def test_read_endpoint_needs_han_auth_and_read_rights(mx):
     alice, bob = await mx.person("alice"), await mx.person("bob")
     room, space = await open_space(mx, alice, invite=[bob])
     await say(bob, room, space, "hi")
-    items = await alice.client.read_http(space, 0, state=True)
-    assert items[0]["type"] == "state" and [i["record"]["receipt"]["seq"] for i in items[1:]] == [1, 2, 3]
+    items = await alice.client.read_http(space, 0)
+    assert [i["record"]["receipt"]["seq"] for i in items] == [1, 2, 3]
+    assert (await alice.client.state(space))["state"]["head"] == 3                         # GET state (H10)
+    with pytest.raises(WireError) as ex: await alice.client.state(space, at=1, effect="0" * 64)         # two selectors: invalid by presence
+    assert ex.value.code == "invalid"
     assert [i["record"]["receipt"]["seq"] for i in await alice.client.read_http(space, 2)] == [3]
     stranger = await mx.person("dave", start=False)
     with pytest.raises(WireError) as ex: await stranger.client.read_http(space, 0)

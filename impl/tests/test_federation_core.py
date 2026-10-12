@@ -39,7 +39,7 @@ async def test_human_on_b_joins_space_on_a_and_gets_a_notice(pair):
     b_at_a = await pair.client("bob", B, dial=A)                       # bob dials the home: hello with a remote profile
     rb = await say(b_at_a, "hello from b")
     assert rb["seq"] == 3 and rb["profiles"] == {bob: 1}
-    items = await b_at_a.read_all(SA, 0, state=True)
+    items = await b_at_a.read_all(SA, 0)
     assert [i["record"]["entry"]["author"] for i in items if i["type"] == "record"] == [alice, alice, bob]
     m = W.Mirror(pair.a.seq.server_keys, lambda x, n: pair.a.seq.profile(x, n))        # the chain verifies with b's keys for bob's profile
     assert all(ok for ok, _ in (m.ingest(i["record"]) for i in items if i["type"] == "record"))

@@ -280,7 +280,7 @@ def generated_entry(cfg, g, k, head):
 def run_vector(vec, cfg, url, timeout, verbose=False, clock=None):
     """Runs one vector; returns (failures, expectations, generated appends). `clock` is the run's view of the test clock {wall, steady}, shared by all vectors."""
     ctx = Ctx(cfg, url)
-    if clock is None: clock = {"wall": cfg.c["clock"], "steady": 0}
+    if clock is None: clock = {"wall": cfg.c["clock"], "steady": 0, "maxFrameBytes": cfg.c["limits"]["maxFrameBytes"]}
     conns, fails, n_exp, n_gen = {}, [], 0, 0
     ctl = []
     steps = vec["steps"]
@@ -319,7 +319,7 @@ def run_vector(vec, cfg, url, timeout, verbose=False, clock=None):
     try:
         for i, s in enumerate(steps):
             where = f"step {i}"
-            if "clock" in s:                                                   # G-11 `test.clock`, on the runner's own authenticated connection
+            if "clock" in s or "limits" in s:                                  # G-11 `test.clock` and `test.limits`, on the runner's own authenticated connection
                 n_exp += 1
                 if not ctl:
                     c0 = WS(url); c0.label = "ctl"; m = c0.recv(timeout)
@@ -330,14 +330,17 @@ def run_vector(vec, cfg, url, timeout, verbose=False, clock=None):
                     if not r or r[0] != "text" or "ok" not in parse(r[1].decode("utf-8")): raise Fail(f"ctl: set-up hello failed: {r!r:.100}")
                     ctl.append(c0); conns["ctl"] = c0
                 c0 = ctl[0]
-                c0.send_text(json.dumps({"id": 2, "call": "test.clock", "args": s["clock"]}, separators=(",", ":")))
+                name = "test.clock" if "clock" in s else "test.limits"
+                a_ = s["clock"] if "clock" in s else s["limits"]
+                c0.send_text(json.dumps({"id": 2, "call": name, "args": a_}, separators=(",", ":")))
                 m = c0.recv(timeout)
-                want = {"wall": s["clock"].get("wall", clock["wall"]), "steady": clock["steady"] + s["clock"].get("steadyAdvance", 0)}
-                if m is None or m[0] != "text": fails.append(f"{where}: no reply to test.clock {json.dumps(s['clock'])}"); continue
+                if name == "test.clock": want = {"wall": a_.get("wall", clock["wall"]), "steady": clock["steady"] + a_.get("steadyAdvance", 0)}
+                else: want = {"maxFrameBytes": a_.get("maxFrameBytes", clock["maxFrameBytes"])}
+                if m is None or m[0] != "text": fails.append(f"{where}: no reply to {name} {json.dumps(a_)}"); continue
                 try: f = mask_actual(parse(m[1].decode("utf-8")))
-                except Exception as ex: fails.append(f"{where}: test.clock reply is not I-JSON ({ex})"); continue
+                except Exception as ex: fails.append(f"{where}: {name} reply is not I-JSON ({ex})"); continue
                 err = match({"id": 2, "ok": want}, f, "$", ctx)
-                if err: fails.append(f"{where}: test.clock {json.dumps(s['clock'])}: {err} (the server does not support the test clock?)")
+                if err: fails.append(f"{where}: {name} {json.dumps(a_)}: {err} (the server does not support the test control calls?)")
                 else: clock.update(want)
                 continue
             if "generate" in s:                                                # a long run of appends the runner signs itself; each reply is checked, none counts as an expectation
@@ -391,7 +394,7 @@ def run_vector(vec, cfg, url, timeout, verbose=False, clock=None):
                 text = m[1].decode("utf-8", "replace")
                 try: f = parse(text)
                 except Exception as ex: fails.append(f"{where} ({s['conn']}): server frame is not I-JSON ({ex}): {text[:120]}"); continue
-                if len(text.encode("utf-8")) > cfg.c["limits"]["maxFrameBytes"]: fails.append(f"{where}: server frame over maxFrameBytes"); continue
+                if len(text.encode("utf-8")) > clock["maxFrameBytes"]: fails.append(f"{where}: server frame over maxFrameBytes"); continue
                 key = (s["conn"], f.get("id") if isinstance(f, dict) else None)
                 err = match(s["expect"], mask_actual(f), "$", ctx, key)
                 if err: fails.append(f"{where} ({s['conn']}): {err} | frame: {json.dumps(f, ensure_ascii=False, separators=(',', ':'))[:260]}")
@@ -419,7 +422,7 @@ def run_vector(vec, cfg, url, timeout, verbose=False, clock=None):
         fails.append(f"connection error: {ex}")
     finally:
         for c in conns.values(): c.close()
-    return fails, sum(any(k in st for k in ("expect", "expect_close", "expect_silence", "http_get", "clock")) for st in steps), n_gen      # every expectation of the vector, whether or not the run got that far
+    return fails, sum(any(k in st for k in ("expect", "expect_close", "expect_silence", "http_get", "clock", "limits")) for st in steps), n_gen      # every expectation of the vector, whether or not the run got that far
 
 def load_vectors(only):
     idx = json.load(open(os.path.join(VEC, "index.json"), encoding="utf-8"))
@@ -471,7 +474,7 @@ def check_files(cfg):
     idx = json.load(open(os.path.join(VEC, "index.json"), encoding="utf-8"))
     pubs = {a["actor"]: a["publicKey"] for a in cfg.c["actors"]}
     skeys = {cfg.server: {cfg.server_key["keyId"]: cfg.server_key}}
-    known = {"conn", "send", "send_raw", "send_binary", "expect", "expect_close", "expect_silence", "http_get", "expect_status", "expect_type", "expect_json", "clock", "generate"}
+    known = {"conn", "send", "send_raw", "send_binary", "expect", "expect_close", "expect_silence", "http_get", "expect_status", "expect_type", "expect_json", "clock", "limits", "generate"}
     sent = {}
     for fn in idx["files"]:
         d = json.load(open(os.path.join(VEC, fn), encoding="utf-8"))
@@ -481,8 +484,9 @@ def check_files(cfg):
             for i, s in enumerate(v["steps"]):
                 n_steps += 1
                 if not set(s) <= known: problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: unknown members {sorted(set(s) - known)}")
-                if "conn" not in s and "http_get" not in s and "clock" not in s: problems.append(f"{fn} step {i}: no conn")
+                if "conn" not in s and "http_get" not in s and "clock" not in s and "limits" not in s: problems.append(f"{fn} step {i}: no conn")
                 if "generate" in s and not {"count", "head", "firstId", "space", "kind", "author", "body", "nonce"} <= set(s["generate"]): problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: generate lacks members")
+                if "limits" in s and not (isinstance(s["limits"], dict) and set(s["limits"]) <= {"maxFrameBytes"}): problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: limits takes maxFrameBytes only")
                 if "clock" in s and not (isinstance(s["clock"], dict) and set(s["clock"]) <= {"wall", "steadyAdvance"}): problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: clock takes wall and steadyAdvance only")
                 f = s.get("send") or s.get("expect")
                 if "vectors" in d: continue
@@ -528,7 +532,7 @@ def main():
     if not url: ap.error("give --url, --launch or --check")
     timeout = a.timeout or cfg.d["expectTimeoutMs"] / 1000
     results, total_exp, ok_exp = [], 0, 0
-    clock = {"wall": cfg.c["clock"], "steady": 0}
+    clock = {"wall": cfg.c["clock"], "steady": 0, "maxFrameBytes": cfg.c["limits"]["maxFrameBytes"]}
     try:
         for fn, v in load_vectors(a.only):
             try: fails, n, gen = run_vector(v, cfg, url, timeout, a.verbose, clock)

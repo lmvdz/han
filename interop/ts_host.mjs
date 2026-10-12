@@ -4,7 +4,8 @@
 //
 // Test mode (architecture.md G-11), with --freeze: the clock starts there and moves only by the control call
 //   test.clock {wall?, steadyAdvance?}   -> ok {wall, steady}
-// which this host adds in process; the stock server does not have it (outside test mode an unknown call is `invalid`).
+//   test.limits {maxFrameBytes?}           -> ok {maxFrameBytes}   (lowers the frame limit that hello reports and state pages are cut to; seq.opts.maxFrameBytes)
+// which this host adds in process; the stock server has neither (outside test mode an unknown call is `invalid`).
 import fs from "node:fs";
 import { Sequencer } from "../cleanroom-ts/dist/seq.js";
 
@@ -33,6 +34,15 @@ if (freeze) {
   seq.onFrame = (conn, text) => {
     let f;
     try { f = JSON.parse(text); } catch { return onFrame(conn, text); }
+    if (f && typeof f === "object" && !Array.isArray(f) && f.call === "test.limits" && Object.keys(f).length === 3 && Number.isSafeInteger(f.id) && f.id >= 1 && f.args && typeof f.args === "object" && !Array.isArray(f.args)) {
+      if (!conn.who) return conn.send({ id: f.id, error: { code: "denied", message: "hello first" } });
+      const bad = (message) => conn.send({ id: f.id, error: { code: "invalid", message } });
+      if (Object.keys(f.args).some((k) => k !== "maxFrameBytes")) return bad("unknown args for test.limits");
+      const n = "maxFrameBytes" in f.args ? f.args.maxFrameBytes : (seq.opts.maxFrameBytes ?? 1310720);
+      if (!Number.isSafeInteger(n) || n < 1024 || n > 1310720) return bad("maxFrameBytes is an integer from 1024 to 1310720");
+      seq.opts.maxFrameBytes = n;       // the sequencer must report and honour it (hello limits, state pages); the receive limit of the socket stays
+      return conn.send({ id: f.id, ok: { maxFrameBytes: n } });
+    }
     if (!f || typeof f !== "object" || Array.isArray(f) || f.call !== "test.clock"
         || Object.keys(f).length !== 3 || !Number.isSafeInteger(f.id) || f.id < 1 || !f.args || typeof f.args !== "object" || Array.isArray(f.args)) return onFrame(conn, text);
     const bad = (message) => conn.send({ id: f.id, error: { code: "invalid", message } });

@@ -41,7 +41,7 @@ async def records(c, kind=None, author=None):
     return [r for r in out if (kind is None or r["entry"]["kind"] == kind) and (author is None or r["entry"]["author"] == author)]
 
 async def state(c):
-    return (await c.read_all(S, 10**9, state=True))[0]["state"]
+    return (await c.read_state(S))
 
 async def session_id(host):
     await until(lambda: host.session and host.state and host.session in host.state["sessions"])

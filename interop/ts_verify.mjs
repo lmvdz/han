@@ -18,7 +18,7 @@ try {
   let keyList = null;
   if (WK) { const doc = await (await fetch(WK)).json(); keyList = doc.keys; out.keysFrom = "wellknown"; out.wellknownKeys = keyList.length; }
   const c = await HanClient.connect(URL_, SERVER, `@${ACTOR}:${SERVER}`, importKey(j.keyId, j.public, j.private));
-  const st = (await c.read(SPACE, 0, { state: true }))[0].state; out.head = st.head;
+  const st = (await c.state(SPACE)).state; out.head = st.head;
   const recs = [];
   const s = c.stream("read", { space: SPACE, after: 0, follow: true }, (i) => { if (i.type === "record") recs.push(i.record); });
   const t = Date.now(); while (recs.length < st.head && Date.now() - t < 15000) await sleep(50);

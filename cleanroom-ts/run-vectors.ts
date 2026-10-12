@@ -1,7 +1,7 @@
 // Vector runner, following ref/README.md "Vector format".
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { decide, fold, canRead, relevantActors, sessionAccess } from "./policy.js";
+import { decide, fold, canRead, relevantActors, sessionAccess, guardStatus } from "./policy.js";
 import { jcs, entryId } from "./wire.js";
 
 const dir = process.argv[2] ?? "H:/HAN/v1/ref/vectors";
@@ -96,6 +96,11 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).sort()) {
         const q = st.sessionAccess;
         const got = sessionAccess(clone(states[q.space]), q.actor, q.session);
         if (!same(got, st.expect)) return bad(`sessionAccess: expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(got)}`);
+        pass++;
+      } else if (st.guardStatus) {
+        const q = st.guardStatus;
+        const got = guardStatus(clone(states[q.space]), { time: lastTime, profiles: clone(profiles) } as any, q.actor);
+        if (!same(got, st.expect)) return bad(`guardStatus: expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(got)}`);
         pass++;
       } else bad("unknown step form");
     } catch (e: any) {

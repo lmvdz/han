@@ -12,24 +12,23 @@ async def set_policy(c, **kw):
     await c.append(*c.make_entry("policy.set", S, {"policy": default_policy(**kw)}))
 
 async def test_mode_comes_from_the_state_at_the_steer_not_the_head(env):
-    """R-24, CE3: owners force `guarded`, carol steers the bot's auto session (the bot is held), owners allow `auto` again and the
-    guard releases, and only then does the host run. At the head nothing is guarded or held, but the steer was outside input to a
-    guarded agent: the turn must run strict."""
+    """R-24, CE3, H8: the agent chose guarding (a `guarded` session), carol steers it (outside input: it is held), the guard releases and
+    unguards, and only then does the host run. At the head nothing is guarded or held, but at the steer's seq `guardStatus` names a guard
+    and the instruction was outside input: the turn must run strict."""
     cl, botc = await world(env)
-    host, task = start_host(env, botc, "auto")
+    host, task = start_host(env, botc, "guarded")
     sid = await session_id(host)
     task.cancel(); host.stop(); await botc.close()                                  # the host is down while it all happens
     a = cl["alice"]
-    await set_policy(a, sessions=sessions(["guarded"]))
     r = await steer(cl["carol"], sid, "push release")
     assert (await state(a))["held"] == {BOT: ALICE}
-    await set_policy(a, sessions=sessions(["auto", "guarded"]))
     head = (await state(a))["head"]
-    await a.append(*a.make_entry("agent.release", S, {"agent": BOT}, seen=head))
+    await a.append(*a.make_entry("agent.release", S, {"agent": BOT, "unguard": True}, seen=head))
     st = await state(a)
-    assert st["held"] == {} and P.guarded_now(st, BOT) is None                      # the head state alone would say auto
-    past = (await a.read_all(S, 0, state=True, at=r["seq"]))[0]["state"]
+    assert st["held"] == {} and st["guarded"] == {} and P.guard_status(st, {"profiles": {}}, BOT) == {"held": False, "forced": False}      # the head alone would say auto
+    past = await a.read_state(S, at=r["seq"])
     assert past["held"] == {BOT: ALICE} and past["head"] == r["seq"]
+    assert P.guard_status(past, {"profiles": {}}, BOT) == {"guard": ALICE, "held": True, "forced": False}
     agent = ScriptedAgent()
     botc2 = await env.client("bot")
     host2, task2 = start_host(env, botc2, "auto", agent)

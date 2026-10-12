@@ -108,7 +108,7 @@ async def test_e5_policy_before_clock_behind(env):
     assert verdict(env.seq, *pending_no) == "denied"
     assert verdict(env.seq, *pending_ok) == "unavailable"
 
-# ── E6: the effective mode from the state at the input's seq; `held` and `guardedNow` from the head ──
+# ── E6: `guardStatus` on the state at the input's seq; `held` from the head ──
 class GatedAgent(ScriptedAgent):
     """The first turn waits for `gate`, so inputs queue up behind it."""
     def __init__(self): super().__init__(); self.gate = asyncio.Event(); self.first = True
@@ -129,7 +129,7 @@ async def test_e6_input_queued_before_a_hold_runs_strict_after_it(env):
     queued = await steer(cl["alice"], sid, "second")
     hold = await steer(cl["carol"], sid, "push release")
     assert hold["seq"] > queued["seq"] and (await state(cl["alice"]))["held"] == {BOT: ALICE}
-    at = await host._state_at(queued["seq"])
+    at, _ = await host._state_at(queued["seq"], queued["profiles"])
     assert BOT not in at["held"]                                     # at the input's seq the agent was not held
     agent.gate.set()
     await until(lambda: len(agent.calls) >= 3)
@@ -145,20 +145,22 @@ async def _big_space(env, tasks=5, effects=3):
     return a, pids
 
 async def test_e8_state_in_pages_with_cursor(env, monkeypatch):
-    """E8: with maxStateItems = 2, `read {state}` answers the first two effects and tasks and `next`; `read {state, cursor}` gives the
-    rest, pinned at the seq of the first page; `limit` is never the answer; the merged pages are the whole state."""
+    """E8, H3: with maxStateItems = 2, `state` answers the first two items of each paged map and `next`; `state {cursor}` gives the rest,
+    pinned at the head of the first page; every item is on exactly one page; the merged pages are the whole state."""
     monkeypatch.setitem(LIMITS, "maxStateItems", 2)
     a, pids = await _big_space(env)
-    first = [i for i in await a.read_all(S, 2 ** 31, state=True, limit=1) if i["type"] == "state"]
-    assert len(first) == 1 and set(first[0]) == {"type", "state", "next"}
-    st = first[0]["state"]
-    assert len(st["effects"]) == 2 and len(st["tasks"]) == 2 and list(st["effects"]) == pids[:2] and first[0]["next"] == f"{st['head']}.2.2.0.2"
+    first = await a.state(S)
+    assert set(first) == {"state", "next"}
+    st = first["state"]
+    assert len(st["effects"]) == 2 and len(st["tasks"]) == 2 and list(st["effects"]) == pids[:2]
+    assert first["next"].split(".")[0] == str(st["head"]) and len(first["next"].split(".")) == 1 + len(W.PAGED)
     await say(a, "the head moves between pages")
-    page2 = (await a.read_all(S, 0, state=True, cursor=first[0]["next"]))
-    assert len(page2) == 1 and page2[0]["type"] == "state" and page2[0]["state"]["head"] == st["head"]       # pinned at the first page's seq
-    assert list(page2[0]["state"]["effects"]) == pids[2:] and len(page2[0]["state"]["tasks"]) == 2 and page2[0]["next"] == f"{st['head']}.3.4.0.2"
-    page3 = await a.read_all(S, 0, state=True, cursor=page2[0]["next"])
-    assert "next" not in page3[0] and len(page3[0]["state"]["tasks"]) == 1 and page3[0]["state"]["effects"] == {}
+    page2 = await a.state(S, cursor=first["next"])
+    assert page2["state"]["head"] == st["head"]                                              # pinned at the first page's head
+    assert list(page2["state"]["effects"]) == pids[2:] and len(page2["state"]["tasks"]) == 2
+    assert not set(page2["state"]["tasks"]) & set(st["tasks"])                               # each item on one page only
+    page3 = await a.state(S, cursor=page2["next"])
+    assert "next" not in page3 and len(page3["state"]["tasks"]) == 1 and page3["state"]["effects"] == {}
     whole = await a.read_state(S, at=st["head"])
     assert list(whole["effects"]) == pids and len(whole["tasks"]) == 5 and whole["head"] == st["head"]
     assert [p["state"]["head"] async for p in a.state_pages(S)] == [st["head"] + 1] * 3          # the head page and its two cursor pages
@@ -166,26 +168,32 @@ async def test_e8_state_in_pages_with_cursor(env, monkeypatch):
     assert list(now["effects"]) == pids and len(now["tasks"]) == 5 and "next" not in now
 
 async def test_e8_one_effect_and_argument_errors(env, monkeypatch):
-    """E8: `read {state, effect}` is that effect plus policy, roles, sessions, held and guarded; bad combinations are `invalid`."""
+    """H3, H10: `state {effect}` is `{space, head, home, policy, effects: {id}}`, never cut, no `next`; bad selectors are `invalid`."""
     monkeypatch.setitem(LIMITS, "maxStateItems", 2)
     a, pids = await _big_space(env)
-    st = await a.read_state(S, effect=pids[2])
-    assert list(st["effects"]) == [pids[2]] and set(st) == {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"}
+    reply = await a.state(S, effect=pids[2])
+    st = reply["state"]
+    assert list(st["effects"]) == [pids[2]] and set(st) == {"space", "head", "home", "policy", "effects"} and "next" not in reply
     with pytest.raises(WireError) as ex: await a.read_state(S, effect="0" * 64)
     assert ex.value.code == "not_found"
-    head = st["head"]
-    for kw in ({"effect": pids[0]}, {"cursor": f"{head}.0.0.0.0"}, {"state": True, "effect": pids[0], "cursor": f"{head}.0.0.0.0"}, {"state": True, "cursor": "banana"},
-               {"state": True, "cursor": f"{head + 1}.0.0.0.0"}, {"state": True, "cursor": "0.0.0.0.0"}, {"state": True, "cursor": f"{head}.0.0.0.0", "at": 1},
-               {"state": True, "effect": pids[0], "follow": True}):
-        with pytest.raises(WireError) as ex: await a.read_all(S, 0, **kw)
-        assert ex.value.code == "invalid", kw
+    head, zero = st["head"], ".".join(["0"] * len(W.PAGED))
+    ok = f"{head}.{zero}"
+    for sel in ({"cursor": "banana"}, {"cursor": f"{head + 1}.{zero}"}, {"cursor": f"0.{zero}"}, {"cursor": f"{head}.{zero}.0"}, {"cursor": f"{head}.00.{zero[2:]}"},
+                {"cursor": f"{head}.99.{zero[2:]}"}, {"at": 0}, {"at": head + 1}, {"at": True}, {"at": "1"}, {"effect": 5}, {"cursor": 7},
+                {"effect": pids[0], "cursor": ok}, {"at": 1, "cursor": ok}, {"at": 1, "effect": pids[0]}, {"at": None, "effect": None}):
+        with pytest.raises(WireError) as ex: await a.state(S, **sel)
+        assert ex.value.code == "invalid", sel
+    assert "state" in await a.state(S, cursor=ok)
+    for extra in ({"after": 0}, {"follow": True}, {"limit": 1}, {"knownHeads": []}, {"state": True}):          # `state` takes no `read` argument
+        with pytest.raises(WireError) as ex: await a._request("state", {"space": S, **extra})
+        assert ex.value.code == "invalid", extra
 
 async def test_e8_state_never_answers_limit_and_hello_names_the_page_size(env):
     env.actor("alice"); a = await env.client("alice")
     await mkspace(a)
     assert a.hello_info["limits"]["maxStateItems"] == 1000 == LIMITS["maxStateItems"]
-    items = await a.read_all(S, 0, state=True, limit=1)                         # a state and one record: no `limit` error
-    assert [i["type"] for i in items] == ["state", "record"]
+    assert (await a.state(S))["state"]["head"] == 1                              # no `limit` to get wrong
+    assert [i["type"] for i in await a.read_all(S, 0, limit=1)] == ["record"]      # `read` is entries only
 
 async def test_e8_executor_runs_effects_beyond_the_first_page(env, execs, monkeypatch):
     """E8: the executor pages through the state: with one effect per page, all three ready effects are still claimed and run."""
@@ -200,7 +208,7 @@ async def test_e8_executor_runs_effects_beyond_the_first_page(env, execs, monkey
     assert len(ex.launched) == 3
 
 async def test_e8_executor_reads_one_effect_with_effect_cursor(env, execs, monkeypatch):
-    """E8, X-10: when an outcome is refused the executor reads just that effect (`read {state, effect}`), not the whole state."""
+    """E8, X-10: when an outcome is refused the executor reads just that effect (`state {effect}`), not the whole state."""
     calls = []
     real = Client.read_state
     async def spy(self, space, at=None, effect=None):
@@ -232,7 +240,9 @@ async def test_e2_session_less_agent_is_held_by_a_task_when_forced(env):
     e, c = cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})
     await cl["carol"].append(e, c)
     st = await state(cl["alice"])
-    assert st["held"] == {BOT: ALICE} and P.guarded_now(st, BOT) is None and st["guarded"] == {}       # held at the instruction, not guarded by a choice
+    prof = (await cl["alice"].read_state("profile:" + BOT))["profile"]
+    assert st["held"] == {BOT: ALICE} and st["guarded"] == {}                                    # held at the instruction, not guarded by a choice
+    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "held": True, "forced": True}       # H8: the operator of the pinned profile
 
 async def test_e2_unforced_session_less_agent_is_not_held_by_a_task(env):
     cl, botc = await world(env)
@@ -247,7 +257,7 @@ async def test_e2_host_runs_a_forced_agents_task_strict(env):
     await session_id(host)
     await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"}))
     await until(lambda: agent.calls)
-    assert [m for _, m in agent.calls] == ["strict"] and host.held and host.guarded_now is None
+    assert [m for _, m in agent.calls] == ["strict"] and host.held and host.guarded_now == ALICE
     assert not [r for r in await records(cl["alice"], author=BOT) if r["entry"]["kind"] == "agent.release" or {"release", "unguard"} & set(r["entry"]["body"])]       # the host never lets go
     task.cancel()
 

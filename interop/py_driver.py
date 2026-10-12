@@ -134,8 +134,8 @@ async def scenario():
     await op("read", ["message"], read)
     async def rstate():
         c = await login("alice")
-        items = await c.read_all(SPACE, 0, state=True); st = items[0]
-        ok(st["type"] == "state", "first item is state"); ok(st["state"]["head"] == heads[SPACE], "state head")
+        st = await c.state(SPACE)          # H10 (a): the state is its own call, one page {state, next?}
+        ok("state" in st, "a state page"); ok(st["state"]["head"] == heads[SPACE], "state head")
         ok(st["state"]["roles"].get(actor_id("bob")) == "member", "bob is a member in roles")
         return {"stateKeys": sorted(st["state"])}
     await op("read.state", ["message"], rstate)
@@ -167,7 +167,7 @@ async def scenario():
     await op("propose", ["member.set"], propose)
     async def approve():
         await send("approve")
-        c = await login("alice"); st = (await c.read_all(SPACE, 0, state=True))[0]["state"]
+        c = await login("alice"); st = await c.read_state(SPACE)
         ph = st["effects"].get(ids["propose"], {}).get("phase")
         ok(ph == "ready", "effect phase ready after approval, got " + str(ph))
     await op("approve", ["propose"], approve)
@@ -235,7 +235,7 @@ async def exec_setup():
     c = await login("alice"); t = time.time(); st = None
     mark("exec:wait")
     while time.time() - t < 60:
-        st = (await c.read_all(SC["space"], 0, state=True))[0]["state"]
+        st = await c.read_state(SC["space"])
         if st["effects"].get(ids["propose"], {}).get("phase") in ("succeeded", "failed"): break
         await asyncio.sleep(0.5)
     eff = st["effects"].get(ids["propose"], {})
@@ -249,7 +249,7 @@ async def main():
         if A.mode == "exec": out = await exec_setup()
         else:
             await scenario(); out = {"ops": results}
-            try: out["finalState"] = (await (await login("alice")).read_all(SPACE, 0, state=True))[0]["state"]
+            try: out["finalState"] = await (await login("alice")).read_state(SPACE)
             except Exception as e: out["finalStateError"] = str(e)
     except Exception as e:
         out = {"fatal": "".join(traceback.format_exception(e))[-3000:], "ops": results}

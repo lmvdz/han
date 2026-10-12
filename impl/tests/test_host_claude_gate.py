@@ -20,9 +20,22 @@ def test_file_tools_only_inside_the_workspace(ws):
     outside = [("Read", {"file_path": os.path.join(os.path.dirname(ws), "secret.txt")}), ("Write", {"file_path": "../x.txt"}),
                ("Edit", {"file_path": "C:\\Windows\\win.ini"}), ("Glob", {"pattern": "../*"}), ("Glob", {"pattern": "/etc/*"}),
                ("Grep", {"pattern": "x", "path": ".."})]
+    assert kinds(g, "auto", *inside) == ["allow"] * len(inside)
+    assert kinds(g, "strict", *inside) == ["allow", "deny", "deny", "allow", "allow"]      # H11: Write and Edit are refused in a strict turn
     for mode in ("auto", "strict"):
-        assert kinds(g, mode, *inside) == ["allow"] * len(inside)
         assert kinds(g, mode, *outside) == ["deny"] * len(outside)
+
+def test_strict_turns_refuse_write_edit_and_notebookedit_but_read_on_h11(ws):
+    """H11: while guarded (outside input) or held, Write, Edit and NotebookEdit are refused like Bash writes and the model is pointed at a
+    proposal; reads stay; auto mode is unchanged."""
+    g = Gate(ws)
+    writes = [("Write", {"file_path": "a.txt", "content": "x"}), ("Edit", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
+              ("NotebookEdit", {"notebook_path": "n.ipynb", "new_source": "x"})]
+    assert kinds(g, "auto", *writes) == ["allow"] * 3
+    assert kinds(g, "strict", *writes) == ["deny"] * 3
+    for tool, inp in writes: assert "strict turn" in g.decide(tool, inp, "strict").message and "propose" in g.decide(tool, inp, "strict").message
+    assert kinds(g, "strict", ("Read", {"file_path": "a.txt"}), ("Glob", {"pattern": "*.py"}), ("Grep", {"pattern": "x"})) == ["allow"] * 3
+    assert g.decide("mcp__han__deploy", {"target": "t.txt", "content": "x"}, "strict").kind == "world"          # the way a change leaves a strict turn
 
 def test_web_tools_and_declared_tools_are_world_actions(ws):
     g = Gate(ws)
@@ -237,3 +250,8 @@ async def test_pre_tool_use_hook_denies_what_strict_mode_forbids(ws):
     agent, made = hooked_agent(ws, [("Bash", {"command": "rm a.txt"}, False)])
     await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
     assert "strict turn" in made[0].answers[0]["hookSpecificOutput"]["permissionDecisionReason"]
+async def test_pre_tool_use_hook_denies_in_cwd_writes_in_a_strict_turn_h11(ws):
+    agent, made = hooked_agent(ws, [("Write", {"file_path": "notes.txt", "content": "x"}, False), ("Edit", {"file_path": "notes.txt"}, False)])
+    await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
+    assert all(a["hookSpecificOutput"]["permissionDecision"] == "deny" and "strict turn" in a["hookSpecificOutput"]["permissionDecisionReason"] for a in made[0].answers[:2])
+    assert agent.trace == [("Write", "deny"), ("Edit", "deny")]

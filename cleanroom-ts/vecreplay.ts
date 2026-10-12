@@ -9,6 +9,7 @@ import { Sequencer } from "./seq.js";
 import { HanClient, WireFault } from "./client.js";
 import { acceptMessage, KeyPair, makeEntry, newKey, receiptHash, signBytes, timeString } from "./keys.js";
 import { jcs, sha256 } from "./wire.js";
+import { guardStatus } from "./policy.js";
 
 type A = any;
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -172,6 +173,13 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
           watch = !failed; if (watch) await s.cancel();
         }
         if (watch !== st.expect.watch) res.fail.push(`${f}#${i}: watch right of ${q.actor} expected ${st.expect.watch}, live server ${watch}`); else res.pass++;
+      } else if (st.guardStatus) {
+        // not observable on the wire: the pure function over the live server's folded state and the profiles in force at this step
+        res.steps++;
+        const q = st.guardStatus, s = seq.stateOf(q.space);
+        const ctxProfiles: A = {}; for (const a of Object.keys(profiles)) ctxProfiles[a] = viewOf(a);
+        const got = s ? guardStatus(clone(s), { time: timeString(clock.ms), profiles: ctxProfiles } as A, q.actor) : undefined;
+        if (jcs(got ?? null) !== jcs(st.expect)) res.fail.push(`${f}#${i}: guardStatus(${q.actor}) expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(got)}`); else res.pass++;
       }
       // relevantActors steps are a pure Policy function, not observable on the wire
     }

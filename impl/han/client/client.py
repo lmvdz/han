@@ -168,12 +168,14 @@ class Client(StateReads):
                 return receipt
 
     # ── reading ──
-    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None, cursor=None, effect=None):
-        """ReadItems after `after`. `state=True, at=N`: the StateView after record N (needs read rights at N). With `follow`
-        a backlog cut by `limit` is re-read from the last seq seen, so a follower never skips a record; a lost
-        connection ends the stream with an error, as before."""
-        args = {"space": space, "after": after} | {k: v for k, v in (("follow", follow or None), ("state", state or None), ("limit", limit),
-                                                                       ("knownHeads", known_heads), ("at", at), ("cursor", cursor), ("effect", effect)) if v is not None}
+    async def state(self, space, **sel) -> dict:
+        """The call `state`: one page `{state, next?}`. `sel` is at most one of `at`, `cursor`, `effect`, sent by presence."""
+        return await self._request("state", {"space": space} | sel)
+
+    async def read(self, space, after=0, follow=False, limit=None, known_heads=None):
+        """ReadItems (entries only) after `after`. With `follow` a backlog cut by `limit` is re-read from the last seq seen, so a
+        follower never skips a record; a lost connection ends the stream with an error, as before."""
+        args = {"space": space, "after": after} | {k: v for k, v in (("follow", follow or None), ("limit", limit), ("knownHeads", known_heads)) if v is not None}
         last, got = after, 0
         async for it in self._stream("read", args):
             if it["type"] == "record":

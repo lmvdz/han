@@ -6,9 +6,9 @@ from test_round21_wire import Raw, two, code
 from han.client import default_policy
 from han.core import P, W, LIMITS, WireError
 
-def _size(item):
-    """The frame a state item travels in: `{id, item}`, as JCS bytes."""
-    return len(P.jcs({"id": 10 ** 15, "item": item}))
+def _size(reply):
+    """The frame a `state` reply travels in: `{id, ok}` with a 16-digit id, as JCS bytes (§3)."""
+    return len(P.jcs({"id": 10 ** 15, "ok": reply}))
 from fixtures_exec import team, propose, approve, file_plan
 from fixtures_host import world, state, session_id, start_host, steer, until, ALICE, CAROL, BOT, EXEC
 from han.host import ScriptedAgent
@@ -75,12 +75,14 @@ async def test_f3_many_closed_sessions_and_reapprovals_page_within_maxframebytes
     monkeypatch.setitem(LIMITS, "maxFrameBytes", 9000)
     pages = [p async for p in a.state_pages(S)]
     assert len(pages) > 1 and all(_size(p) <= 9000 for p in pages)
-    assert all(p["state"]["policy"] == whole["policy"] and p["state"]["roles"] == whole["roles"] for p in pages)       # repeated on every page
+    assert all(p["state"]["policy"] == whole["policy"] and p["state"]["head"] == whole["head"] for p in pages)       # scalars and policy repeat on every page
+    assert sum(len(p["state"]["effects"]) for p in pages) == 30 and all(set(p["state"]) >= set(W.PAGED[:-1]) for p in pages)       # every map on every page, each item once
     merged = await a.read_state(S)
     assert merged == whole
 
-async def test_f3_state_with_many_live_sessions_pages_by_bytes_and_effect_read_stays_bounded(env, monkeypatch):
-    """F3(c): many live sessions are cut into pages like effects and `roleHistory`, and `read {state, effect}` is cut to fit too."""
+async def test_f3_state_with_many_live_sessions_pages_by_bytes_and_effect_read_is_whole(env, monkeypatch):
+    """F3(c), H3: many live sessions are cut into pages by bytes like every other map; `state {effect}` is the one effect and the repeated
+    members, never cut, without `next`."""
     cl, botc = await world(env)
     a = cl["alice"]
     for i in range(40): await botc.append(*botc.make_entry("session.open", S, {"steerMode": "auto"}, {"title": f"s{i}"}))
@@ -90,44 +92,42 @@ async def test_f3_state_with_many_live_sessions_pages_by_bytes_and_effect_read_s
     assert len(whole["sessions"]) == 40
     monkeypatch.setitem(LIMITS, "maxFrameBytes", 6000)
     pages = [p async for p in a.state_pages(S)]
-    assert len(pages) > 1 and all(_size(p) < 6000 for p in pages) and sum(len(p["state"]["sessions"]) for p in pages) == 40
+    assert len(pages) > 1 and all(_size(p) <= 6000 for p in pages) and sum(len(p["state"]["sessions"]) for p in pages) == 40
     assert await a.read_state(S) == whole
-    one = (await a.read_all(S, 2 ** 31, state=True, limit=1, effect=pid))
-    assert len(one) == 1 and _size(one[0]) < 6000 and list(one[0]["state"]["effects"]) == [pid]
-    assert set(one[0]["state"]) == {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"}
-    assert 0 < len(one[0]["state"]["sessions"]) < 40 and "next" in one[0]                  # sessions are cut to fit; `next` continues them alone
-    rest = (await a.read_all(S, 0, state=True, cursor=one[0]["next"]))[0]
-    assert rest["state"]["effects"] == {} and len(one[0]["state"]["sessions"]) + len(rest["state"]["sessions"]) <= 40
-    full = await a.read_state(S, effect=pid)                                                # the client follows `next`
-    assert list(full["sessions"]) == list(whole["sessions"]) and list(full["effects"]) == [pid]
+    one = await a.state(S, effect=pid)
+    assert _size(one) <= 6000 and "next" not in one and list(one["state"]["effects"]) == [pid]
+    assert set(one["state"]) == {"space", "head", "home", "policy", "effects"}
 
-async def test_f3_a_page_makes_progress_with_one_item_and_a_state_that_cannot_fit_is_unavailable(env, monkeypatch):
+async def test_f3_a_page_makes_progress_with_one_item_and_an_impossible_page_is_an_assertion(env, monkeypatch):
     a = await team(env)
     for i in range(3): await propose(a, file_plan(f"out/{i}.txt", str(i)), f"@exec:{env.server}")
     whole = await a.read_state(S)
     jl = lambda v: len(P.jcs(v))
     base = {k: v for k, v in whole.items() if k not in W.PAGED}
+    base |= {p: {} for p in W.PAGED if p in whole}
     biggest = max(jl(k) + jl(v) + 2 for k, v in whole["effects"].items())
-    monkeypatch.setitem(LIMITS, "maxFrameBytes", jl({"type": "state", "state": base}) + biggest + W.FRAME_RESERVE + 120)
+    monkeypatch.setitem(LIMITS, "maxFrameBytes", jl({"id": 10 ** 15, "ok": {"state": base}}) + biggest + W.FRAME_RESERVE + 120)
     pages = [p async for p in a.state_pages(S)]
     assert len(pages) >= 3 and sum(len(p["state"]["effects"]) for p in pages) == 3 and all(_size(p) <= LIMITS["maxFrameBytes"] for p in pages)
     assert await a.read_state(S) == whole
-    monkeypatch.setitem(LIMITS, "maxFrameBytes", jl({"type": "state", "state": base}) - 50)             # the repeated members alone do not fit
-    with pytest.raises(WireError) as ex: await a.read_all(S, 0, state=True)
-    assert ex.value.code == "unavailable"
+    monkeypatch.setitem(LIMITS, "maxFrameBytes", jl({"id": 10 ** 15, "ok": {"state": base}}) - 50)       # the repeated members alone do not fit
+    with pytest.raises(AssertionError): env.seq.state(f"@alice:{env.server}", S, {})                    # impossible by construction: asserted, never `unavailable`
 
 # ── F4: read combinations, notices, integers ──
-async def test_f4_effect_or_cursor_with_at_follow_or_each_other_is_invalid(env):
+async def test_f4_selectors_exclude_each_other_by_presence(env):
+    """F4, H10: at most one of `at`, `cursor`, `effect`; two or more is `invalid` whatever the values (null included); each alone is fine."""
     a = await team(env)
     pid, _ = await propose(a, file_plan(), f"@exec:{env.server}")
     head = (await a.read_state(S))["head"]
-    cur = f"{head}.0.0.0.0"
-    for kw in ({"effect": pid, "at": 1}, {"effect": pid, "follow": True}, {"effect": pid, "cursor": cur}, {"cursor": cur, "at": 1},
-               {"cursor": cur, "follow": True}):
-        with pytest.raises(WireError) as ex: await a.read_all(S, 0, state=True, **kw)
-        assert ex.value.code == "invalid", kw
-    assert (await a.read_all(S, 0, state=True, effect=pid))[0]["state"]["effects"].keys() == {pid}          # each alone is fine
-    assert (await a.read_all(S, 0, state=True, cursor=cur))[0]["type"] == "state"
+    cur = f"{head}." + ".".join(["0"] * len(W.PAGED))
+    for sel in ({"effect": pid, "at": 1}, {"effect": pid, "cursor": cur}, {"cursor": cur, "at": 1}, {"effect": None, "cursor": None}, {"at": 1, "cursor": cur, "effect": pid}):
+        with pytest.raises(WireError) as ex: await a.state(S, **sel)
+        assert ex.value.code == "invalid", sel
+    assert (await a.state(S, effect=pid))["state"]["effects"].keys() == {pid}          # each alone is fine
+    assert "state" in await a.state(S, cursor=cur) and (await a.state(S, at=1))["state"]["head"] == 1
+    for call in ({"effect": pid, "follow": True}, {"cursor": cur, "follow": True}, {"state": True}):           # `read` takes none of them
+        with pytest.raises(WireError) as ex: await a._request("read", {"space": S, "after": 0, **call})
+        assert ex.value.code == "invalid", call
 
 async def test_f4_notice_for_an_actor_without_a_live_subscription_is_dropped(env):
     """F4, G-03: a notice is a signal. Nothing is kept for an actor that is not subscribed to its profile, nothing is replayed on a later

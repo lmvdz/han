@@ -44,7 +44,7 @@ Column = client implementation -> server implementation. The verifier row uses t
 | ts->ts | 25 | 25 | 25 |
 | py->py | 25 | 25 | 25 |
 
-Supplementary cells with the TS sequencer's own server key id `srv1` (the TS verifier hard-codes it, root cause 8):
+Supplementary cells with the TS sequencer's own server key id `srv1`, not the `h1` of the Python server (they exposed a TS verifier that looked for `srv1` only, root cause 6, resolved in round 21 as C21; they now show that a verifier follows the published keys of either server):
 
 | cell | verifier on s1 | verifier on profile:@alice |
 |---|---|---|
@@ -135,9 +135,9 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 
 ```json
 {"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"B_uj_HWlN2zflP2frMuDqaGBT-r6oXzaIWE1MxHs3V8\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T02:25:26Z\"}"}
-{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"gbdHO-_87M2e3ofxAGV6-dtO36yJLKOm8zOzAiXJ5EWLlSPO3rIaqs8OuvJHd-INbMHNlY8nBWmt8IacYb3fAw\", \"version\": 1}}"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T02:25:26Z\",\"knownHeads\":[]}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"1VKB62omUsUndVI0akFxvxfRGjJm_mltAO320Gfk0XA\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T05:46:25Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"lXjwZeMu80gctmPXh7oVW16eufRymnuP2Ws_F_9nGEQOKheBzX5Ibc1MOs9AM1I4az0jnIIWSKaQv_dSpnQBBQ\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T05:46:25Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
@@ -165,18 +165,17 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T02:26:24Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T05:47:23Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
 > {"id": 3, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 ```
 
-TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the TS verifier then looks for the entry signer `@:a.localhost` under key id `srv1` only (`verify.ts` viewOf) and reports `seq 1: entry signature does not verify against the pinned key`:
+TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the entry signer `@:a.localhost` signed under `h1`, not `srv1` (in round 21 the TS verifier looked under `srv1` only and reported `seq 1: entry signature does not verify against the pinned key`, C21; it now uses the server's published keys, so the row passes):
 
 ```
-< {"id": 2, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "xVEx724wJw0mdszBb1F0fAFK0jF7XzeRH1XG4283NdKqEsKH_GCfg70jGTAxFeSEP9JVy42xF-6aqJ46UHuoAw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "xVEx724wJw0mdszBb1F0fAFK0jF7XzeRH1XG4283NdKqEsKH_GCfg70jGTAxFeSEP9JVy42xF-6aqJ46UHuoAw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "vtPcY-cfmtT8_WA_AhVIvFoAAceFujk5Kc4C_9Q-kshgv6ZCzQjOT4oxpsXkSyq4VXMSnrLc_SpypLNlP-L6CA"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked
@@ -192,7 +191,7 @@ Headline: **every normal operation interoperates** (22 client operations plus ve
 | 3 | Python lacks "uploaders may read their own unreferenced blobs for 24 h" | 3 (P37, P38, P39 py) | W-29 | Python (G-01 last paragraph is explicit) |
 | 4 | Python base64url decoding is lenient (padding, non-canonical last character) | 2 (P34, P28b py) | W-17, W-27 | Python on padding (text: "base64url without padding"); canonical form: text silent |
 | 5 | Executor started before the space exists: `read` answers `not_found`; TS executor swallows it and never retries | 2 (exec-ts early, ts->py, [ts->ts]) | **new W-48** | neither (text silent); the Python executor retries and works |
-| 6 | TS verifier hard-codes the server key id `srv1` for `@:S`; cannot verify a server-actor entry signed under any other key id | 2 (profile verification ts->py, [ts->ts]) | W-10 | TS verifier (text: keys of `@:S` are the server's published keys) |
+| 6 | (round 21, resolved as C21) TS verifier hard-coded the server key id `srv1` for `@:S`; could not verify a server-actor entry signed under any other key id | 2 (profile verification ts->py, [ts->ts]) | W-10 | TS verifier (text: keys of `@:S` are the server's published keys) |
 | 7 | WebSocket path: TS server only upgrades `/han`; Python accepts any path, its README and well-known publish a path-less URL | 2 (P51 ts; py->ts `hello` PASS*; without the workaround all 25 py->ts operations are blocked) | W-07 | Python docs/well-known (text: `wss://<server>/han`) |
 | 8 | `blobPut` failure model: Python never errors, it answers `{have, complete:false}` for a gap and for a hash mismatch | 2 (P32, P33 py) | W-27 | text silent (han.ts: `have` = bytes held so far) |
 | 9 | Python `hello` result omits `limits.maxClockSkewSeconds` | 1 (P50 py) | **new W-49** | Python (han.ts `Limits` lists nine members) |
@@ -232,7 +231,7 @@ Proposed wording (§3, `read` row, after "A reader who may read no seq gets `not
 
 ### Root cause 6 (W-10): which keys sign `@:S`
 
-Frames (3.4): `profile:@alice:a.localhost` seq 1 is authored by `@:a.localhost` with `keyId` `h1`, receipt `homeKey` `h1`, `profiles` `{"@:a.localhost":0}`; `verify.ts` looks only for key id `srv1`. With the TS sequencer's own key id `srv1` the same verifier passes on both servers (supplementary table), and so does the Python verifier everywhere. This run therefore also shows that the two servers pin the same `receipt.profiles` for profile creation (`{"@:S":0}`) and that W-09 (b),(c) are consistent, because the TS verifier replayed Python's profile receipts.
+Frames (3.4): `profile:@alice:a.localhost` seq 1 is authored by `@:a.localhost` with `keyId` `h1`, receipt `homeKey` `h1`, `profiles` `{"@:a.localhost":0}`; `verify.ts` looked only for key id `srv1` (fixed in round 21, C21). With the TS sequencer's own key id `srv1` the same verifier passes on both servers (supplementary table), and so does the Python verifier everywhere. This run therefore also shows that the two servers pin the same `receipt.profiles` for profile creation (`{"@:S":0}`) and that W-09 (b),(c) are consistent, because the TS verifier replayed Python's profile receipts.
 Proposed wording (§4.3, "Server actor"):
 > The keys of `@:S` in the synthetic ProfileView are exactly the keys listed in S's `/.well-known/han` whose window `[from, until)` contains the receipt time, each with status `valid` and its listed `keyId`; a KeyId for a server key is any string matching the KeyId grammar. A verifier MUST NOT assume a particular KeyId for a server key. The key that signs a receipt (`homeKey`) and the key that signs an entry authored by `@:S` are chosen independently from that set.
 
@@ -281,6 +280,7 @@ W-01 and W-02: hello proofs interoperate in all four pairs with the transport on
 - `golden/`: one JSON per operation (`hello`, `space.create`, `member.set`, `message`, `read`, `read.state`, `follow`, `subscribe`, `signal`, `propose`, `approve`, `blobPut`, `blobGet`, `blobPut.multipart`, `blobGet.multipart`, `session.open`, `session.input`, `stream_watch`, `session.close`, `task`, `redact`) plus `probes.json` (error-path vectors both servers agree on) and `index.json`. Frames are what crossed the tap, keys and clocks fixed, request ids renumbered per connection, hello challenge/proof masked, long blob data summarised by length and hash. Every operation except `hello` is answered byte for byte the same by both servers for both clients (`pythonServerAndTsServerAgree: true`); `hello` differs only in `limits.maxClockSkewSeconds` (root cause 9).
 - Limits of this measurement: one Python implementation and one TS implementation; the Python server and Python client share `ref/wire.py` and `ref/policy.py`, so "Python agrees with itself" says nothing about the spec; both sides had been tuned against the same vectors; probes encode my reading of the text (the `expect` column), and where a probe says "unspecified" no failure is counted.
 
+
 ## 6. Closure of round 21
 
 Appended by hand after round 21 and extended in round 22 (`report.py` regenerates sections 1 to 5 only; copy this section back after a re-run: it is the only part of the file that is not generated). It answers section 4: **the decisions of round 21 resolved all 22 failures** counted there, each with the decision that settles it (`DECISIONS-r21.md`), the place in architecture.md that now says it, and what shows it. The one extra difference, W-51 (the StateView `settled` member of a claim without a reservation), is settled by D14 (`settled` is on every claim, `false` until settled; §6.1, han.ts, `ref/policy.py`).
@@ -321,6 +321,7 @@ Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` 
 | wire vectors, round 22 after the G-07 (1a) fix in impl/han/seq/server.py | 99/99 vectors, 1344/1344 expectations | 99/99 vectors, 1344/1344 expectations |
 | wire vectors, round 23 before the transcripts were re-recorded | 97/107 vectors, 347/420 expectations | 97/107 vectors, 347/420 expectations |
 | wire vectors, round 23 | 107/107 vectors, 420/420 expectations | 107/107 vectors, 420/420 expectations |
+| wire vectors, round 24 | 111/111 vectors, 432/432 expectations | 111/111 vectors, 432/432 expectations |
 
 ### 6.1 What the round-22 refresh changed and found
 
@@ -342,3 +343,7 @@ Still unexercised by any wire vector (test mode is one server with a frozen cloc
 ### 6.2 Round 23
 
 The expectations are now counted per vector family (the 1,001-task paging setup is generated by the runner and not counted), so the round-23 totals are not comparable with the 1,344 of round 22. Before the golden transcripts were re-recorded, both servers failed the same 10 operation files (06, 10, 11, 13, 15, 16, 17, 19, 20, 21): they had been recorded under the round-22 P-01, before F1 pinned the instruction targets and removed `agents`, and the chain broke after `10-propose`. `interop/run.py` was re-run on the round-23 servers (every cell passed, executors 8/8), `report.py` re-recorded `golden/` (it now keeps this hand-written section 6), `make_wire_vectors.py` regenerated the operation files without the round-22 pinning shim, and both servers then passed every vector.
+
+### 6.3 Round 24
+
+`read` is split into `read` (entries) and `state` (pages of the StateView, every per-actor map paged). `interop/run.py` was re-run on the round-24 servers after `py_driver.py` moved to the `state` call: 25/25 in all four directions, executors 8/8. `report.py` re-recorded `golden/` with native `state` frames, so the 432 expectations are not comparable with the 469 counted before the re-recording (the old transcripts carried the state as a stream of records). Two vectors were wrong, not the servers: H10a was built on a space the oracle never held (it pinned `not_found`), and T2 expected a fraction inside `test.limits` to be answered on its own id, against G-07 (1); both are fixed. A new differential fuzz (`ref/fuzz_diff.py`, 2,000 random histories, the whole state compared after every allowed step) found three readings on which ref and the TS clean-room differed; the spec now states each (§6.4 cancel sets `cancelRequested`; a session may not name a closed task; D14 settles an unreserved claim) and the vector `differential-fuzz-pins` holds them.

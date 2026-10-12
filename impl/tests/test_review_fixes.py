@@ -36,22 +36,22 @@ async def test_context_blob_must_come_from_the_sessions_actor(env):
     with pytest.raises(WireError): await cl["carol"].blob_get(ref2, S)
 
 async def test_read_state_at_a_past_seq(env):
-    """§3 (CE3): read(state, at=N) returns the state after record N; it needs read rights at N, and N must exist."""
+    """§3 (CE3): state {at: N} returns the state after record N; it needs read rights at N, and N must exist."""
     env.actor("alice"); bob = env.actor("bob"); env.actor("eve")
     a, b, e = await env.client("alice"), await env.client("bob"), await env.client("eve")
     await mkspace(a); await member(a, bob); await say(a, "x"); await member(a, bob, "none"); await say(a, "y")
-    past = (await a.read_all(S, 5, state=True, at=2))[0]
-    assert past["type"] == "state" and past["state"]["head"] == 2 and past["state"]["roles"].get(bob) == "member"
-    now = (await a.read_all(S, 5, state=True))[0]["state"]
+    past = (await a.state(S, at=2))
+    assert past["state"]["head"] == 2 and "next" not in past and past["state"]["roles"].get(bob) == "member"
+    now = (await a.state(S))["state"]
     assert now["head"] == 5 and bob not in now["roles"] or now["roles"].get(bob) == "none"
-    assert (await b.read_all(S, 5, state=True, at=3))[0]["state"]["head"] == 3        # bob held a role at 3
+    assert (await b.state(S, at=3))["state"]["head"] == 3        # bob held a role at 3
     for who, at in ((b, 5), (e, 2)):                                                   # no longer / never a reader
-        with pytest.raises(WireError) as ex: await who.read_all(S, 5, state=True, at=at)
+        with pytest.raises(WireError) as ex: await who.state(S, at=at)
         assert ex.value.code in ("denied", "not_found")
     for at in (6, 0):
-        with pytest.raises(WireError) as ex: await a.read_all(S, 5, state=True, at=at)
+        with pytest.raises(WireError) as ex: await a.state(S, at=at)
         assert ex.value.code == "invalid"
-    with pytest.raises(WireError) as ex: await a.read_all(S, 0, at=2)                  # `at` without `state`
+    with pytest.raises(WireError) as ex: await a._request("read", {"space": S, "after": 0, "at": 2})      # `at` is not an argument of `read` (H10)
     assert ex.value.code == "invalid"
 
 async def test_follow_with_limit_rereads_the_gap(env):

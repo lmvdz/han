@@ -206,12 +206,17 @@ class Federation:
         if not self.chains.records(sp): raise WireError("unavailable", f"no profile for {actor}")
         self.fetched[actor] = t0
 
-    def read_profile(self, space: str, after: int, state: bool, limit: int) -> list:
+    def read_profile(self, space: str, after: int, limit: int) -> list:
         """`read` of another server's profile space, answered from the verified copy (profile spaces are world-readable)."""
         S = self.chains.mirror.spaces.get(space)
         if not S or not S["records"]: raise WireError("not_found", "no such space")
-        items = [{"type": "state", "state": {k: v for k, v in S["state"].items() if k != "entries"}}] if state else []
-        return items + [{"type": "record", "record": r} for r in S["records"][after:]][:limit]
+        return [{"type": "record", "record": r} for r in S["records"][after:]][:limit]
+
+    def profile_state(self, space: str) -> dict:
+        """The state of another server's profile space, from the verified copy (`state`)."""
+        S = self.chains.mirror.spaces.get(space)
+        if not S or not S["records"]: raise WireError("not_found", "no such space")
+        return S["state"]
 
     # ── what the server layer asks before it calls the Sequencer ──
     async def prepare_hello(self, who, key_id):
@@ -293,10 +298,8 @@ class Federation:
         if not (isinstance(body, dict) and set(body) == {"type", "space", "seq"} and body["type"] == "notice" and P._space(body["space"])
                 and P._int(body["seq"]) and who[2:] == P.server_of(body["space"]) and P.server_of(actor) == self.seq.server):
             raise WireError("denied", "not a notice this server can use")
-        async def look(c):
-            return [i async for i in c.read(body["space"], 0, state=True, limit=1) if i["type"] == "state"]
-        try: st = (await self._remote(who[2:], "notice check", look))[0]["state"]
-        except (IndexError, WireError): raise WireError("denied", "notice cannot be verified")
+        try: st = await self._remote(who[2:], "notice check", lambda c: c.read_state(body["space"]))
+        except WireError: raise WireError("denied", "notice cannot be verified")
         if st["roles"].get(actor) not in P.READ_ROLES or st["head"] < body["seq"]: raise WireError("denied", "notice cannot be verified")
 
     # ── G-04 signal relay ──
@@ -330,14 +333,14 @@ class Federation:
             raise WireError("denied", "blob not available")
         async def look(c):
             items, after = [], 0
+            state = await c.read_state(space)
             while True:
-                page = [i async for i in c.read(space, after, state=(after == 0))]
+                page = [i async for i in c.read(space, after)]
                 items += page
                 recs = [i for i in page if i["type"] == "record"]
-                if len(recs) < 1000: return items
+                if len(recs) < 1000: return state, items
                 after = recs[-1]["record"]["receipt"]["seq"]
-        items = await self._remote(P.server_of(space), "blob check", look)
-        state = next((i["state"] for i in items if i["type"] == "state"), None)
+        state, items = await self._remote(P.server_of(space), "blob check", look)
         recs = [i["record"] for i in items if i["type"] == "record"]
         refs = [r for r in recs if state and not r.get("redacted") and P.can_read(state, who, r["receipt"]["seq"])
                 and any(b["hash"] == ref["hash"] for b in W.blob_refs(r["entry"]["kind"], r["content"]))]

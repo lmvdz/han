@@ -272,7 +272,7 @@ def main():
     w("| direction | passed (incl. workaround) | passed without workaround | total |"); w("|---|---|---|---|")
     for c in cols: w(f"| {c} | {tot[c][0]} | {tot[c][1]} | {tot[c][2]} |")
     w("")
-    w("Supplementary cells with the TS sequencer's own server key id `srv1` (the TS verifier hard-codes it, root cause 8):" + chr(10))
+    w("Supplementary cells with the TS sequencer's own server key id `srv1`, not the `h1` of the Python server (they exposed a TS verifier that looked for `srv1` only, root cause 6, resolved in round 21 as C21; they now show that a verifier follows the published keys of either server):" + chr(10))
     w("| cell | verifier on s1 | verifier on profile:@alice |"); w("|---|---|---|")
     for cell in ("ts-py-live-srv1", "ts-ts-live-srv1", "py-ts-live-srv1"):
         v = jload(os.path.join(RUNS, cell, "verify.json"), {})
@@ -350,7 +350,7 @@ def main():
         w(f"{'>' if f['dir'] == 'c2s' else '<'} {json.dumps(f['frame'], ensure_ascii=False)[:300]}")
     w("```" + NL)
     sg2, ao4 = segments(tap(CELLS_LIVE["ts->py"]))
-    w("TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the TS verifier then looks for the entry signer `@:a.localhost` under key id `srv1` only (`verify.ts` viewOf) and reports `seq 1: entry signature does not verify against the pinned key`:" + NL)
+    w("TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the entry signer `@:a.localhost` signed under `h1`, not `srv1` (in round 21 the TS verifier looked under `srv1` only and reported `seq 1: entry signature does not verify against the pinned key`, C21; it now uses the server's published keys, so the row passes):" + NL)
     w("```")
     for f in frames_of(sg2.get("verifier:profile", []), ao4):
         fr = f.get("frame", {})

@@ -15,9 +15,9 @@ async def test_state_at_a_seq_before_one_joined_is_readable_by_a_current_member(
     a, c, e = await env.client("alice"), await env.client("carol"), await env.client("eve")
     await mkspace(a); await say(a, "before carol")
     await member(a, carol)                                                    # seq 3
-    past = (await c.read_all(S, 5, state=True, at=2))[0]["state"]
+    past = (await c.state(S, at=2))["state"]
     assert past["head"] == 2 and carol not in past["roles"]
-    with pytest.raises(WireError) as ex: await e.read_all(S, 5, state=True, at=2)
+    with pytest.raises(WireError) as ex: await e.state(S, at=2)
     assert ex.value.code in ("denied", "not_found")
 
 async def test_denied_server_reads_nothing_not_even_the_past(pair):
@@ -26,10 +26,9 @@ async def test_denied_server_reads_nothing_not_even_the_past(pair):
     a = await pair.client("alice", A)
     await mkspace(a); await member(a, bob); await say(a, "while b was welcome")
     seq, srv = pair.a.seq, "@:" + B
-    items, _ = seq.read(srv, SA, 0, state=True, at=2)                         # b's server: bob holds a role, so it reads the state at 2
-    assert items[0]["state"]["head"] == 2
+    assert seq.state(srv, SA, {"at": 2})["state"]["head"] == 2             # b's server: bob holds a role, so it reads the state at 2
     await a.append(*a.make_entry("policy.set", SA, {"policy": default_policy(servers={"deny": [B]})}))
-    with pytest.raises(WireError) as ex: seq.read(srv, SA, 0, state=True, at=2)
+    with pytest.raises(WireError) as ex: seq.state(srv, SA, {"at": 2})
     assert ex.value.code in ("denied", "not_found")
     with pytest.raises(WireError) as ex: seq.read(srv, SA, 0)
     assert ex.value.code in ("denied", "not_found")

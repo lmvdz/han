@@ -21,14 +21,17 @@ async def test_scenario_chain_verifies(env):
     assert all(W.verify_receipt(r["receipt"], env.seq.server_keys) for r in recs)
 
 async def test_read_options(env):
-    """§3 read: `after`, `limit`, `state` (first item), `knownHeads` (heads item before records); unknown space is not_found."""
+    """§3 read: `after`, `limit`, `knownHeads` (heads item before records); entries only (the state is the call `state`); unknown space is not_found."""
     env.actor("alice"); a = await env.client("alice")
     await mkspace(a)
     for i in range(5): await say(a, f"m{i}")
-    items = await a.read_all(S, 2, limit=2, state=True, known_heads=[{"space": S}])
-    assert [i["type"] for i in items] == ["state", "heads", "record", "record"]
-    assert [i["record"]["receipt"]["seq"] for i in items[2:]] == [3, 4]
-    assert "entries" not in items[0]["state"] and items[1]["heads"][0]["seq"] == 6
+    items = await a.read_all(S, 2, limit=2, known_heads=[{"space": S}])
+    assert [i["type"] for i in items] == ["heads", "record", "record"]
+    assert [i["record"]["receipt"]["seq"] for i in items[1:]] == [3, 4] and items[0]["heads"][0]["seq"] == 6
+    assert "entries" not in (await a.state(S))["state"]
+    for args in ({"state": True}, {"at": 1}, {"cursor": "1"}, {"effect": "x"}):             # H10: `read` is entries only
+        with pytest.raises(WireError) as ex: await a._request("read", {"space": S, "after": 0, **args})
+        assert ex.value.code == "invalid"
     with pytest.raises(WireError) as ex: await a.read_all("zz:a.localhost", 0)
     assert ex.value.code == "not_found"
 
@@ -69,9 +72,9 @@ async def test_state_and_former_member(env):
     await member(a, bob, "none")
     items = await b.read_all(S, 0)
     assert 0 < len(items) < 4
-    with pytest.raises(WireError) as ex: await b.read_all(S, 0, state=True)
+    with pytest.raises(WireError) as ex: await b.state(S)
     assert ex.value.code == "denied"
-    assert (await a.read_all(S, 0, state=True))[0]["type"] == "state"
+    assert (await a.state(S))["state"]["head"] == 4
 
 async def test_outsider_gets_not_found(env):
     """§3 read: a reader who may read no seq gets not_found, the same as for a missing space."""

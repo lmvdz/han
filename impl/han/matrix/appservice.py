@@ -53,7 +53,7 @@ class AppService:
         app = web.Application(client_max_size=LIMITS["maxFrameBytes"])
         app.add_routes([web.put("/_matrix/app/v1/transactions/{txn}", self._txn),
                         web.get("/_matrix/app/v1/users/{user}", self._ok), web.get("/_matrix/app/v1/rooms/{alias}", self._not_found),
-                        web.get("/_han/v1/challenge", self._challenge), web.get("/_han/v1/read", self._read),
+                        web.get("/_han/v1/challenge", self._challenge), web.get("/_han/v1/read", self._read), web.get("/_han/v1/state", self._state),
                         web.post("/_han/v1/entry", self._put_entry), web.put("/_han/v1/blob", self._blob_put), web.get("/_han/v1/blob", self._blob_get)])
         self._runner = web.AppRunner(app, access_log=None); await self._runner.setup()
         site = web.TCPSite(self._runner, host, port); await site.start()
@@ -262,9 +262,20 @@ class AppService:
             def num(k, default=None):
                 try: return int(p[k]) if k in p else default
                 except ValueError: raise WireError("invalid", f"{k} must be an integer")
-            items, _ = self.seq.read(who, p.get("space"), num("after", 0), False, p.get("state") == "true", num("limit"), None, num("at"),
-                                     p.get("cursor"), p.get("effect"))
+            items, _ = self.seq.read(who, p.get("space"), num("after", 0), False, num("limit"), None)
             return web.Response(text=json.dumps({"items": items}, separators=(",", ":"), ensure_ascii=False), content_type="application/json")
+        except WireError as ex: return self._fail(ex)
+
+    async def _state(self, request: web.Request):
+        """`GET /_han/v1/state?space=&[at=|cursor=|effect=]` -> the `StateReply` `{state, next?}` of the call `state` (§3). Selectors count by presence."""
+        try:
+            who = self._authenticate(request)
+            p = request.query
+            sel = {k: p[k] for k in ("at", "cursor", "effect") if k in p}
+            if "at" in sel:
+                try: sel["at"] = int(sel["at"])
+                except ValueError: raise WireError("invalid", "at must be an integer")
+            return web.Response(text=json.dumps(self.seq.state(who, p.get("space"), sel), separators=(",", ":"), ensure_ascii=False), content_type="application/json")
         except WireError as ex: return self._fail(ex)
 
     def _fail(self, ex: WireError):

@@ -2,7 +2,7 @@
 
 What drives a turn: a `session.input` with a receipt into the agent's own session, or a `task` naming it. Nothing else does:
 messages, task.updates, outcomes, other sessions' streams and signals are data (R-24), collected and handed to the next turn
-labelled as data. Which mode a turn runs in is decided from the state alone (`_mode_for`). What the agent decides becomes
+labelled as data. Which mode a turn runs in is decided from the state alone (`_mode_for`, by `guard_status`). What the agent decides becomes
 journaled intents (journal.py) and only then entries: the host never acts in the world, a World action is an `effect.propose`
 naming the configured executor."""
 from __future__ import annotations
@@ -29,6 +29,7 @@ class Host:
         self.j = Journal(state_path)
         self.crash = crash                                    # test hook: crash(point, intent key) may raise HostCrash
         self.state: dict | None = None
+        self.profile: dict | None = None                      # this agent's current ProfileView (guard_status wants it in ctx.profiles)
         self.session: str | None = None
         self.data: list[tuple[str, str, str | None]] = []     # (source, text, record id): data, never instruction
         self.refused: list[str] = []                          # things the agent asked for that the host did not do
@@ -42,37 +43,44 @@ class Host:
     # ── what the state says ──
     @property
     def held(self) -> bool: return bool(self.state) and self.me in self.state["held"]
+    def _status(self, state: dict, profile: dict | None, time: str = "") -> dict:
+        """P-15, the one guard function, for this agent: `{guard?, held, forced}`. The host derives nothing else from the state (R-24)."""
+        return P.guard_status(state, {"time": time, "profiles": {self.me: profile} if profile else {}}, self.me)
+
     @property
-    def guarded_now(self) -> str | None: return P.guarded_now(self.state, self.me) if self.state else None
+    def guarded_now(self) -> str | None: return self._status(self.state, self.profile).get("guard") if self.state else None
 
     def _guarded_session(self) -> bool:
-        sess = ((self.state or {}).get("sessions") or {}).get(self.session)
-        return self.steer_mode == "guarded" or bool(sess and P.effective_mode(self.state, sess) == "guarded")
+        return self.steer_mode == "guarded" or self.guarded_now is not None
 
     def _crash(self, point, key=None):
         if self.crash: self.crash(point, key)
 
     async def _refresh(self):
         self.state = await self.client.read_state(self.space)
+        try: self.profile = (await self.client.read_state("profile:" + self.me))["profile"]
+        except WireError: pass                                   # keep the last one
 
-    async def _state_at(self, seq: int) -> dict | None:
-        """The state after record `seq` (R-24: the mode is read from the state at the input's receipt, not the head)."""
-        try: return await self.client.read_state(self.space, at=seq)
+    async def _state_at(self, seq: int, pins: dict | None = None) -> tuple[dict, dict | None] | None:
+        """R-24: the state after record `seq` and this agent's profile as that record's receipt pinned it (`pins` = receipt.profiles), or None
+        when either cannot be read (the turn is then strict)."""
+        try:
+            at = await self.client.read_state(self.space, at=seq)
+            n = (pins or {}).get(self.me)
+            prof = (await self.client.read_state("profile:" + self.me, at=n))["profile"] if n else self.profile
+            return at, prof
         except WireError: return None
 
     def _my_sessions(self) -> list[str]:
         return [i for i, s in self.state["sessions"].items() if s["actor"] == self.me]
 
-    def _mode_for(self, author: str, sess_id: str | None, from_sessions: bool, at: dict | None = None) -> str:
-        """R-24: `strict` while held (every turn); while guarded for any instruction by someone other than the guard; in a session whose
-        effective mode is `guarded` for outside input; and when the turn carries another session's stream or context as data. The
-        session's effective mode comes from the state at the input's seq (`at`); `held` and `guardedNow` come from the head."""
-        head, me = self.state, self.me
-        g = P.guarded_now(head, me)
-        if me in head["held"]: return "strict"
-        at = at or head
-        sess = at["sessions"].get(sess_id) if sess_id else None
-        if sess and author not in (me, sess.get("guard")) and P.effective_mode(at, sess) == "guarded": return "strict"
+    def _mode_for(self, author: str, from_sessions: bool, at: dict, profile: dict | None) -> str:
+        """R-24: `strict` while held (every turn, judged at the head); for an outside instruction, one by someone other than the agent and its
+        guard, when `guardStatus` on the state at the instruction's seq (with the profile its receipt pinned) names a guard; and when the turn
+        carries another session's stream or context as data."""
+        me = self.me
+        if me in self.state["held"]: return "strict"
+        g = self._status(at, profile).get("guard")
         if g and author not in (me, g): return "strict"
         if from_sessions: return "strict"              # SHOULD for any agent, MUST when guarded (R-24)
         return "auto"
@@ -118,9 +126,9 @@ class Host:
         text = content.get("text") or content.get("ask")
         if who != self.me:
             if e["kind"] == "session.input" and b["session"] in self._my_sessions():
-                return await self._turn(TurnInput("steer", who, text or "", eid, seq, b["session"]))
+                return await self._turn(TurnInput("steer", who, text or "", eid, seq, b["session"]), rcpt["profiles"])
             if e["kind"] == "task" and self.me in b["to"] and self.state["tasks"].get(eid, {}).get("open"):
-                return await self._turn(TurnInput("task", who, text or "", eid, seq, self.session, task=eid))
+                return await self._turn(TurnInput("task", who, text or "", eid, seq, self.session, task=eid), rcpt["profiles"])
             if text:
                 self._data("record", f"{e['kind']} by {who}: {text}", eid)      # a message, a task.update, an outcome: data
         self.j.commit_turn(seq, [])
@@ -143,10 +151,10 @@ class Host:
         self._watchers.append(asyncio.create_task(pump()))
 
     # ── a turn ──
-    async def _turn(self, inp: TurnInput):
+    async def _turn(self, inp: TurnInput, pins: dict | None = None):
         from_sessions = any(s == "session" for s, _, _ in self.data)
-        at = await self._state_at(inp.seq)
-        mode = self._mode_for(inp.author, inp.session, from_sessions, at) if at else "strict"      # no state at the receipt: be strict
+        at = await self._state_at(inp.seq, pins)
+        mode = self._mode_for(inp.author, from_sessions, *at) if at else "strict"      # no state at the receipt: be strict
         data, self.data = self.data, []
         inp.data = [t for _, t, _ in data]
         refs = [inp.trigger] + [r for _, _, r in data if r][-(MAX_REFS - 1):]

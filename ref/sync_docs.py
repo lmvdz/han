@@ -6,7 +6,7 @@ The docs mark each derived value as `<!--s:key-->value<!--/s-->`. This script co
   - interop/RESULTS.md       the cross-implementation run and its closure section (recorded runs of the wire vectors);
   - ref/logs/*               the newest complete log of each model (guard model: depth, transitions; timing model: the round it last ran on, its counts);
   - ref/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
-  - HISTORY.md               the round number and the scores;
+  - interop/DECISIONS-rNN.md the round being built (the newest such file, H9); HISTORY.md the scores of the rounds already graded;
   - the sources of impl/     three claims that used to be written by hand (the PreToolUse gate, the advisory status, a Matrix test of §8.2)
 and rewrites the marked values in architecture.md, README.md, coverage.md, ref/README.md and ref/wire-vectors/README.md.
   python ref/sync_docs.py             rewrite the docs
@@ -52,7 +52,7 @@ def facts_exist(F):
     F["wv_generated"] = f"{sum(f[5] for f in fam):,}"
     F["wv_families"] = "; ".join(f"{f[2]} {f[0]}: {f[3]:,} expectations" + (f" (and {f[5]:,} generated appends the runner checks, not counted)" if f[5] else "") for f in fam)
     F["wv_family_ops"], F["wv_family_ops_exp"] = next((f[1], f[3]) for f in fam if f[0].startswith("operations"))
-    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes")):
+    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes"), ("r24", "round-24 probes")):
         row = next((f for f in fam if f[0] == name), None)
         F[f"wv_{key}_vec"], F[f"wv_{key}_exp"] = (row[2], row[3]) if row else (0, 0)
     return {t[1] for t in tests}, {n.split("::", 1)[1] for n, _ in wires}
@@ -124,8 +124,13 @@ def facts_interop(F):
     for who, s_ in (("Python", py), ("TS", ts)):
         if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s_): raise Underivable(f"interop/RESULTS.md: cannot read the round {latest} {who} run {s_!r}")
         a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", s_)
-        if int(a[2]) != F["wv_n"]: raise Underivable(f"interop/RESULTS.md records {a[2]} wire vectors for the latest run (round {latest}, {who}), list_tests.py finds {F['wv_n']}: record a new run")
-        if int(a[4]) != F["wv_exp"]: raise Underivable(f"interop/RESULTS.md records {a[4]} expectations for the latest run (round {latest}, {who}), the vector files hold {F['wv_exp']}: record a new run")
+        if int(a[2]) > F["wv_n"] or int(a[4]) > F["wv_exp"]: raise Underivable(f"interop/RESULTS.md records more wire vectors or expectations for round {latest} ({who}: {s_}) than the vector files hold ({F['wv_n']}, {F['wv_exp']})")
+    a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", py)
+    F["wv_latest_note"] = ("These are the vectors of the current files." if (int(a[2]), int(a[4])) == (F["wv_n"], F["wv_exp"]) else
+                           f"The vector files have changed since: {F['wv_n']} vectors and {F['wv_exp']} expectations now, {a[2]} and {a[4]} when that run was recorded (round {latest}). Vectors that read the state were rewritten for the call `state` and others were added in round {F['round']}; none of that has been run against either server yet, so a server that does not implement the rules they pin fails them.")
+    m = re.search(r"^### 6\.1 What the round-(\d+) refresh", text, re.M)
+    if not m: raise Underivable("interop/RESULTS.md: section 6.1 'What the round-NN refresh changed and found' is missing; the round of the last matrix run cannot be derived")
+    F["interop_round"] = int(m[1])
     b = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_py"])
     F["wv_r22_py_fails"] = int(b[2]) - int(b[1])
     for who, s_ in (("py", py), ("ts", ts)):
@@ -138,7 +143,9 @@ def facts_history(F):
     for r in table_rows(read("HISTORY.md")):
         if len(r) >= 3 and r[0].isdigit(): rounds[int(r[0])] = r[1]
     if not rounds: raise Underivable("HISTORY.md: no round rows")
-    F["round"] = max(rounds)
+    decided = [int(m[1]) for f in glob.glob(os.path.join(ROOT, "interop", "DECISIONS-r*.md")) if (m := re.fullmatch(r"DECISIONS-r(\d+)\.md", os.path.basename(f)))]
+    if not decided: raise Underivable("interop/: no DECISIONS-rNN.md; the round being built cannot be derived")
+    F["round"] = max(decided + [max(rounds)])      # the round being built: the newest decisions file (HISTORY.md only lists graded rounds)
     sc = {n: float(c) for n, c in rounds.items() if re.fullmatch(r"\d+(\.\d+)?", c)}
     pend = sorted(n for n, c in rounds.items() if "pending" in c)
     early = [sc[n] for n in range(1, 7) if n in sc]
@@ -223,14 +230,14 @@ def facts_claims(F, test_names):
 def check_vector_names(arch, vector_ids):
     """The wire-vector names the G-07…G-11 row of §10 cites must exist."""
     row = next((l for l in arch.splitlines() if l.startswith("| G-07 … G-11")), "")
-    cited = set(re.findall(r"\b([PD]\d+[a-z]?)\b", row.split("**Results", 1)[0]))
+    cited = set(re.findall(r"\b([PD]\d+[a-z]?)\b", row.split("**Recorded runs", 1)[0]))
     missing = sorted(c for c in cited if c not in vector_ids)
     if missing: raise Underivable(f"architecture.md §10 cites wire vectors that do not exist: {', '.join(missing)}")
 
 def derive():
     F = {}
     names, vector_ids = facts_exist(F)
-    facts_results(F); facts_interop(F); facts_history(F); facts_models(F); facts_claims(F, names)
+    facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names)
     check_vector_names(read("architecture.md"), vector_ids)
     return F
 

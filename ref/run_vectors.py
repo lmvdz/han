@@ -9,6 +9,7 @@ Vector format (language-neutral; see README.md):
         `check` paths are dotted (keys may themselves contain dots, e.g. actor ids) and read the entry's space state.
     {read: {space, actor, seq}, expect: bool}             can_read
     {relevantActors: entry, expect: [actor]}              relevant_actors(state[entry.space], entry)
+    {guardStatus: {space, actor}, expect: {guard?, held, forced}}   guard_status(state[space], ctx, actor), ctx = the profiles in force
 Every decide/fold is also checked for purity (inputs unchanged) and determinism (two runs agree).
 """
 import copy, glob, hashlib, json, os, sys
@@ -54,6 +55,11 @@ def run_vector(vec):
             q = st["sessionAccess"]
             got = P.session_access(states[q["space"]], q["actor"], q["session"])
             if got != st["expect"]: fails.append(f"step {n} sessionAccess {q['actor']}: expected {st['expect']} got {got}")
+            continue
+        if "guardStatus" in st:
+            q = st["guardStatus"]
+            got = P.guard_status(states[q["space"]], {"time": "2026-10-10T12:00:00Z", "profiles": copy.deepcopy(profiles)}, q["actor"])
+            if got != st["expect"]: fails.append(f"step {n} guardStatus {q['actor']}: expected {st['expect']} got {got}")
             continue
         if "relevantActors" in st:
             e = st["relevantActors"]

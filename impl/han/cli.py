@@ -149,20 +149,22 @@ async def cmd_read(c, a):
         for rec in await records(c, a.space, a.after): await show(rec)
 
 async def agent_lines(c, st):
-    """F1: per agent, from the current state, `guarded` (by its own choice or its sessions' modes: `guardedNow`) or `forced` (the space forces
-    guarding, so an instruction to a non-human is held for the operator in the profile pinned then; the profile read here is the current one)."""
+    """F1, H8: per agent, `P.guard_status` (the one guard function) on the current state: `guarded` with its guard, or `forced` (the space forces
+    guarding, so an instruction to a non-human is held for the operator in the profile pinned then; the profile read here is the current one, which
+    `guardStatus` needs only in a forcing space)."""
     named = set(st["guarded"]) | set(st["held"]) | {s["actor"] for s in st["sessions"].values()}
     named |= {x for t in st["tasks"].values() for x in t["to"]} | {e["executor"] for e in st["effects"].values()}
-    forced, lines = bool(st["policy"]["sessions"].get("forceGuarded")), []
+    forcing, lines = bool(st["policy"]["sessions"].get("forceGuarded")), []
     for x in sorted(named):
-        g = P.guarded_now(st, x)
-        if g: lines.append(f"  {x}  guarded (guard {g})" + ("  held" if x in st["held"] else ""))
-        elif forced and not x.startswith("@:"):
+        prof = None
+        if forcing and not x.startswith("@:"):
             try: prof = (await c.read_state("profile:" + x))["profile"]
             except WireError: continue
-            if prof["actorKind"] != "human":
-                lines.append(f"  {x}  forced (operator {prof.get('operator')}{'' if prof.get('operatorConfirmed') else ', unconfirmed: instructions are denied'})"
-                             + ("  held" if x in st["held"] else ""))
+        gs = P.guard_status(st, {"time": "", "profiles": {x: prof} if prof else {}}, x)
+        held = "  held" if gs["held"] else ""
+        if gs["forced"]:
+            lines.append(f"  {x}  forced (operator {prof.get('operator')}{'' if prof.get('operatorConfirmed') else ', unconfirmed: instructions are denied'})" + held)
+        elif gs.get("guard"): lines.append(f"  {x}  guarded (guard {gs['guard']})" + held)
     if lines: out("agents:"); [out(l) for l in lines]
 
 async def cmd_status(c, a):
