@@ -81,7 +81,7 @@ async def test_only_the_sessions_actor_publishes_in_order(env):
     assert ex.value.code == "not_found"
 
 async def test_watch_needs_the_right_and_a_live_session(env):
-    """G-05, P-15: watch is denied without the watch right; after session.close the actor can't publish."""
+    """G-05, P-15: watch is denied without the watch right; after session.close (the session has left the state) the actor can't publish."""
     ids, cl, sid = await setup(env, {"watch": "owner", "read": "owner", "steer": "owner", "modes": ["auto"]})
     with pytest.raises(WireError) as ex:
         async for _ in cl["carol"].watch(S, sid): pass
@@ -89,7 +89,7 @@ async def test_watch_needs_the_right_and_a_live_session(env):
     await cl["bob"].stream(item(sid, 1))
     await cl["bob"].append(*cl["bob"].make_entry("session.close", S, {"session": sid}))
     with pytest.raises(WireError) as ex: await cl["bob"].stream(item(sid, 2))
-    assert ex.value.code == "denied"
+    assert ex.value.code == "not_found"                 # F3(b): a closed session has left the state
 
 async def test_stream_counter_survives_restart(env):
     """G-05: n continues after a server restart (stream items are persisted)."""

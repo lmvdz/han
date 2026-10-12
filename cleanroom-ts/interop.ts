@@ -343,7 +343,7 @@ async function protocol() {
       await sleep(150); ok(bobGot.length === 3, "nothing published after the removal reaches the removed watcher");
       ok(await code(bob.client.stream("watch", { space: S2, session: open.id }, () => {}).done) === "denied", "a new watch is denied");
       await send(ada, S2, "session.close", { session: open.id });
-      ok(await code(ada.client.call("stream", { item: itm(5) })) === "denied", "closed session: no more items");
+      ok(await code(ada.client.call("stream", { item: itm(5) })) === "not_found", "closed session has left the state: no such session");
       await wb.cancel().catch(() => {}); await wn.cancel();
     });
     await scenario("limits: abuse limit answers `limit` with retryAfterMs", async () => {
@@ -675,27 +675,28 @@ async function round22() {
     for (const p of [ann, bob, bot]) await send(ada, SP, "member.set", { actor: p.id, role: "member" });
     const st = async () => (await ada.client.read(SP, 0, { state: true }))[0].state;
     let sess = "";
-    await scenario("P-15: only the guard unguards (release + unguard); closing never does; re-close is denied", async () => {
+    await scenario("P-15: only the guard unguards (agent.release + unguard); closing never does; a closed session is no session", async () => {
       sess = (await send(bot, SP, "session.open", { steerMode: "guarded" })).id;
       ok((await st()).guarded[bot.id] === ann.id, "guarded[bot] = operator");
       await send(bot, SP, "session.close", { session: sess });
       ok((await st()).guarded[bot.id] === ann.id, "closing does not unguard");
-      ok(await code(send(bot, SP, "session.close", { session: sess })) === "denied", "re-close is denied");
-      ok(await code(send(bot, SP, "session.input", { session: sess, release: true, unguard: true }, { text: "x" })) === "denied", "the agent cannot unguard itself");
-      ok(await code(send(ada, SP, "session.input", { session: sess, release: true, unguard: true }, { text: "x" })) === "denied", "an owner is not the guard");
-      ok(await code(send(ann, SP, "session.input", { session: sess, unguard: true }, { text: "x" })) === "invalid", "unguard needs release");
-      const r = await send(ann, SP, "session.input", { session: sess, release: true, unguard: true }, { text: "unguard" });
-      ok(r.seq > 0 && (await st()).guarded[bot.id] === undefined, "the guard unguards, even a closed session");
+      ok(await code(send(bot, SP, "session.close", { session: sess })) === "invalid", "a closed session has left the state: re-close is invalid");
+      ok(await code(send(bot, SP, "agent.release", { agent: bot.id, unguard: true })) === "denied", "the agent cannot unguard itself");
+      ok(await code(send(ada, SP, "agent.release", { agent: bot.id, unguard: true })) === "denied", "an owner is not the guard");
+      ok(await code(send(ann, SP, "agent.release", { agent: bot.id, unguard: false } as A)) === "invalid", "unguard is true or absent");
+      ok(await code(send(ann, SP, "session.input", { session: sess, release: true } as A, { text: "x" })) === "invalid", "session.input carries no release flag");
+      const r = await send(ann, SP, "agent.release", { agent: bot.id, unguard: true });
+      ok(r.seq > 0 && (await st()).guarded[bot.id] === undefined, "the guard unguards, no session needed");
     });
-    await scenario("P-15: forceGuarded guards every agent with a confirmed operator, session or not", async () => {
+    await scenario("P-15: forceGuarded guards every non-human target of an instruction, from the profile pinned for it", async () => {
       ok(await guarded(false), "off by default");
       const pol = { ...POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"], forceGuarded: true } }) };
       await send(ada, SP, "policy.set", { policy: pol });
-      ok(Object.keys((await st()).agents).includes(bot.id) && (await st()).agents[bot.id] === ann.id, "agents[bot] = operator");
+      ok(!("agents" in await st()), "no agents map");
       const s2 = (await send(bot, SP, "session.open", { steerMode: "auto" })).id;
       await send(bob, SP, "session.input", { session: s2 }, { text: "hello" });
       ok((await st()).held[bot.id] === ann.id, "an outside steer holds the forced agent");
-      await send(ann, SP, "session.input", { session: s2, release: true }, { text: "r" }, (await st()).head);
+      await send(ann, SP, "agent.release", { agent: bot.id }, undefined, (await st()).head);
       ok((await st()).held[bot.id] === undefined, "released");
       async function guarded(_x: boolean) { return (await st()).guarded[bot.id] === undefined; }
     });
@@ -711,7 +712,7 @@ async function round22() {
       const ef = (await send(bob, SP, "effect.propose", { action: "file.write", planDigest: digestOf(planOf("file.write", "a.txt")), executor: bob.id } as A, { plan: planOf("file.write", "a.txt") }).catch((e) => e)) as A;
       if (ef.id) {
         const one = await ada.client.read(SP, 0, { state: true, effect: ef.id });
-        ok(one.length === 1 && Object.keys(one[0].state.effects).length === 1 && one[0].state.tasks === undefined && "agents" in one[0].state, "one effect + members");
+        ok(one.length === 1 && Object.keys(one[0].state.effects).length === 1 && one[0].state.tasks === undefined && "sessions" in one[0].state && !("agents" in one[0].state), "one effect + members");
         ok(await code(ada.client.read(SP, 0, { state: true, effect: "0".repeat(64) })) === "not_found", "unknown effect");
       }
     });

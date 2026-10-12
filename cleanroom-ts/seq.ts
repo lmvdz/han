@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { Limits, LogRecord, PolicyCtx, ProfileView, Receipt, SpaceState } from "./han.js";
 import {
   isActorId, isHex, isInt, isKeyId, isNonce, isServerName, isSig, isCanonB64u, isSpaceId, isTime, isProfileSpace, profileActorOf, serverOf, spaceServer,
-  jcs, sha256, entryId, parseStrict, validateContent, validBlobRef, utf8len, JsonError, isKind,
+  jcs, sha256, entryId, parseStrict, validateContent, validBlobRef, utf8len, JsonError, isKind, jsonInts,
 } from "./wire.js";
 import { badBody, canRead, claimPinPlan, decide, fold, profileViewOf, relevantActors, sessionAccess } from "./policy.js";
 import { acceptMessage, b64u, helloMessage, homeSigMessage, importKey, KeyPair, newKey, exportPrivate, receiptHash, signBytes, timeString, unb64u, verifyBytes, sigMessage, parseTimeMs } from "./keys.js";
@@ -568,30 +568,33 @@ export class Sequencer {
       let any = false;
       for (let s = 1; s <= st.head && !any; s++) if (canRead(st, who, s)) any = true;
       if (!any) throw err("not_found", "no such space");
+      // F4, G-09: `cursor` and `effect` need state:true and exclude `at`, `follow` and each other, whatever the values; judged before either is looked at
       if ((a.cursor !== undefined || a.effect !== undefined) && a.state !== true) throw err("invalid", "`cursor` and `effect` need state:true");
-      if (a.cursor !== undefined && (a.at !== undefined || a.effect !== undefined)) throw err("invalid", "`cursor` excludes `at` and `effect`");
-      if (a.effect !== undefined && (!isHex(a.effect) || a.at !== undefined)) throw err("invalid", "`effect` must be an effect id and excludes `at`");
+      if ((a.cursor !== undefined || a.effect !== undefined) && (a.at !== undefined || a.follow !== undefined)) throw err("invalid", "`cursor` and `effect` exclude `at` and `follow`");
+      if (a.cursor !== undefined && a.effect !== undefined) throw err("invalid", "`cursor` excludes `effect`");
+      if (a.effect !== undefined && !isHex(a.effect)) throw err("invalid", "`effect` must be an effect id");
       if (a.cursor !== undefined && typeof a.cursor !== "string") throw err("invalid", "cursor");
       if (a.at !== undefined && (!a.state || !isInt(a.at) || a.at < 1 || a.at > st.head)) throw err("invalid", "`at` needs state:true and a seq in 1…head");
       const items: A[] = [];
       if (a.state && (a.cursor !== undefined || a.effect !== undefined)) {
-        // one state item as the only item: a later page of effects and tasks, or one effect with the members a host needs
-        let page = 0, head = st.head;
+        // one state item as the only item: a later page of the four cut maps, or one effect with the members a host needs
+        let head = st.head, cur: A | undefined;
         if (a.cursor !== undefined) {
-          let c: A;
-          try { c = JSON.parse(Buffer.from(a.cursor, "base64url").toString("utf8")); } catch { throw err("invalid", "malformed cursor"); }
-          if (typeof c !== "object" || c === null || !isInt(c.h) || !isInt(c.p) || c.h < 1 || c.h > st.head || c.p < 1 || Buffer.from(JSON.stringify({ h: c.h, p: c.p })).toString("base64url") !== a.cursor) throw err("invalid", "malformed cursor");
-          head = c.h; page = c.p;
+          try { cur = JSON.parse(Buffer.from(a.cursor, "base64url").toString("utf8")); } catch { throw err("invalid", "malformed cursor"); }
+          const okc = typeof cur === "object" && cur !== null && isInt(cur.h) && cur.h >= 1 && cur.h <= st.head &&
+            (cur.x === undefined ? ["e", "t", "s", "r"].every((k) => isInt(cur![k])) && Object.keys(cur).length === 5 : isHex(cur.x) && isInt(cur.s) && Object.keys(cur).length === 3);
+          if (!okc || Buffer.from(JSON.stringify(cur)).toString("base64url") !== a.cursor) throw err("invalid", "malformed cursor");
+          head = cur!.h;
         }
         if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + (a.cursor === undefined ? "the head" : "the cursor's head"));
         const full = (head === st.head ? st : this.stateAt(sp, head)) as A;
         if (a.effect !== undefined) {
           if (!(a.effect in full.effects)) throw err("not_found", "no such effect");
-          const v: A = {};
-          for (const k of ["space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents"]) v[k] = full[k];
-          v.effects = { [a.effect]: full.effects[a.effect] };
-          conn.send({ id, item: { type: "state", state: withSettled(v) } });
-        } else conn.send({ id, item: this.statePage(full, page) });
+          conn.send({ id, item: this.effectPage(id, full, a.effect, 0, true) });
+        } else if (cur!.x !== undefined) {
+          if (!(cur!.x in full.effects)) throw err("invalid", "malformed cursor");
+          conn.send({ id, item: this.effectPage(id, full, cur!.x, cur!.s, false) });
+        } else conn.send({ id, item: this.statePage(id, full, { e: cur!.e, t: cur!.t, s: cur!.s, r: cur!.r }) });
         conn.send({ id, end: true });
         return;
       }
@@ -599,7 +602,7 @@ export class Sequencer {
         const at = a.at ?? st.head;       // with `at`: the StateView after record `at`, readable by whoever may read seq `at` (P-02)
         if (!canRead(st, who, at)) throw err("denied", "state needs read rights at " + (a.at === undefined ? "the head" : "`at`"));
         const { entries, ...view } = (at === st.head ? st : this.stateAt(sp, at)) as A;
-        items.push(this.statePage(view, 0));
+        items.push(this.statePage(id, view, { e: 0, t: 0, s: 0, r: 0 }));
       }
       const heads = this.headsFor(who, a.knownHeads);
       if (a.knownHeads !== undefined) items.push({ type: "heads", heads });
@@ -617,19 +620,59 @@ export class Sequencer {
       this.addSub(conn, id, sp.id, who, false);       // G-09: `read` with `follow` never carries signals
     } catch (e) { conn.send({ id, error: this.toWire(e) }); }
   }
-  /** One page of a StateView: `effects` and `tasks` hold at most maxStateItems each (seq order); `next` is a cursor while more remain. */
-  private statePage(view: A, page: number): A {
+  /** One page of a StateView (§3, F3 c): `effects`, `tasks`, `sessions` and `roleHistory` are cut (each in its own order, from the offsets in `off`) to at most
+   *  maxStateItems entries each, and so that the frame `{id, item}` fits maxFrameBytes; the maps are filled in that order, so a page is full of effects before it
+   *  takes a task. `next` is a cursor while anything remains; every other member is repeated on every page. */
+  private statePage(id: number, view: A, off: { e: number; t: number; s: number; r: number }): A {
     const n = this.opts.maxStateItems ?? LIMITS.maxStateItems;
-    const v = withSettled(view);
-    delete v.entries;
-    let more = false;
-    for (const k of ["effects", "tasks"]) {
-      const ents = Object.entries(v[k] ?? {});
-      if (ents.length > (page + 1) * n) more = true;
-      v[k] = Object.fromEntries(ents.slice(page * n, (page + 1) * n));
+    const full = withSettled(view);
+    delete full.entries;
+    const maps: [string, number][] = [["effects", off.e], ["tasks", off.t], ["sessions", off.s], ["roleHistory", off.r]];
+    const v: A = { ...full };
+    for (const [k] of maps) v[k] = {};
+    const item: A = { type: "state", state: v, next: "x".repeat(CURSOR_ROOM) };
+    let room = LIMITS.maxFrameBytes - Buffer.byteLength(JSON.stringify({ id, item }));
+    if (room < 0) throw err("unavailable", "the members repeated on every page do not fit one frame");
+    const taken: number[] = [];
+    let progressed = false, more = false;
+    for (const [k, from] of maps) {
+      const ents = Object.entries(full[k] ?? {}) as [string, unknown][];
+      let c = 0;
+      for (let q = from; q < ents.length && c < n; q++) {
+        const cost = Buffer.byteLength(JSON.stringify(ents[q][0])) + Buffer.byteLength(JSON.stringify(ents[q][1])) + 2;
+        if (cost > room) break;
+        room -= cost; v[k][ents[q][0]] = ents[q][1]; c++;
+      }
+      taken.push(c); if (c > 0) progressed = true;
+      if (from + c < ents.length) more = true;
     }
-    const item: A = { type: "state", state: v };
-    if (more) item.next = Buffer.from(JSON.stringify({ h: v.head, p: page + 1 })).toString("base64url");
+    if (more && !progressed) throw err("unavailable", "an entry of the state does not fit one frame by itself");
+    if (!more) delete item.next;
+    else item.next = Buffer.from(JSON.stringify({ h: v.head, e: off.e + taken[0], t: off.t + taken[1], s: off.s + taken[2], r: off.r + taken[3] })).toString("base64url");
+    return item;
+  }
+  /** The answer to `read {state, effect}` (EffectStateView): the one effect is never cut (else `unavailable`); `sessions` are cut to fit, `next` is a cursor for the rest of them alone
+   *  (a later page repeats the other members and holds no effect). */
+  private effectPage(id: number, full: A, effect: string, from: number, first: boolean): A {
+    const v: A = {};
+    for (const k of ["space", "head", "home", "policy", "roles", "held", "guarded"]) v[k] = full[k];
+    v.effects = first ? { [effect]: full.effects[effect] } : {};
+    v.sessions = {};
+    const view = withSettled(v);
+    const item: A = { type: "state", state: view, next: "x".repeat(CURSOR_ROOM) };
+    let room = LIMITS.maxFrameBytes - Buffer.byteLength(JSON.stringify({ id, item }));
+    if (room < 0) throw err("unavailable", "the effect and the members repeated on every page do not fit one frame");
+    const n = this.opts.maxStateItems ?? LIMITS.maxStateItems;
+    const ents = Object.entries(full.sessions ?? {}) as [string, unknown][];
+    let c = 0;
+    for (let q = from; q < ents.length && c < n; q++) {
+      const cost = Buffer.byteLength(JSON.stringify(ents[q][0])) + Buffer.byteLength(JSON.stringify(ents[q][1])) + 2;
+      if (cost > room) break;
+      room -= cost; view.sessions[ents[q][0]] = ents[q][1]; c++;
+    }
+    if (from + c < ents.length && c === 0) throw err("unavailable", "a session does not fit one frame by itself");
+    if (from + c >= ents.length) delete item.next;
+    else item.next = Buffer.from(JSON.stringify({ h: v.head, x: effect, s: from + c })).toString("base64url");
     return item;
   }
   /** the SpaceState after record `at`, by replay */
@@ -747,6 +790,7 @@ export class Sequencer {
       if (serverOf(a.from) !== serverOf(conn.who!)) throw err("denied", "a server may relay signals only from its own actors");
       who = a.from;
     }
+    if (!jsonInts(a.body)) throw err("invalid", "signal body: Json numbers are integers in [0, 2^53)");
     try { if (utf8len(jcs(a.body)) > 65536) throw err("invalid", "signal body over 64 KiB"); } catch (e) { if (e instanceof HanError) throw e; throw err("invalid", "signal body is not canonicalizable"); }
     const sp = this.spaces.get(a.space);
     if (!sp?.state && spaceServer(a.space) !== this.server) throw err("moved", "this server does not host the space", { movedTo: spaceServer(a.space) });
@@ -951,6 +995,7 @@ function withSettled(view: A): A {
   for (const ef of Object.values(v.effects ?? {}) as A[]) for (const c of ef.claims ?? []) c.settled = c.settled === true;
   return v;
 }
+const CURSOR_ROOM = 160;   // a cursor is far shorter than this; the byte budget of a page reserves it
 const sha256Bytes = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 void parseTimeMs; void isServerName; void JsonError;
 

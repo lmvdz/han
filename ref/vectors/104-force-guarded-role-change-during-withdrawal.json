@@ -1,14 +1,24 @@
 {
- "name": "agents-entry-follows-the-role",
+ "name": "force-guarded-role-change-during-withdrawal",
  "rules": [
   "P-15",
   "P-03"
  ],
- "description": "agents[X] is folded from the profile pinned at member.set and cleared when X's role goes or its operator isn't confirmed",
+ "description": "CX3: owners moving an agent to another role while its operator withdrew doesn't lose the forcing: nothing is snapshotted",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
    "operator": "@op:b.example",
+   "operatorConfirmed": true,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
    "operatorConfirmed": true,
    "keys": {
     "k1": {
@@ -56,16 +66,6 @@
      "status": "valid"
     }
    }
-  },
-  "@x:c.example": {
-   "actorKind": "service",
-   "operatorConfirmed": false,
-   "keys": {
-    "k1": {
-     "publicKey": "pk",
-     "status": "valid"
-    }
-   }
   }
  },
  "steps": [
@@ -82,7 +82,7 @@
       "visibility": "members",
       "join": "invite",
       "membersMayInvite": false,
-      "allowAgents": "any",
+      "allowAgents": "with-operator",
       "approvals": [],
       "separateApprover": false,
       "budget": null,
@@ -217,36 +217,7 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:06Z",
-   "expect": "allow",
-   "check": {
-    "agents": {
-     "@bot:b.example": "@op:b.example"
-    }
-   }
-  },
-  {
-   "entry": {
-    "id": "1d1cf91a4418f10b74e74f5053f5acc6a402a94036950b68ad36f66e2e95f6b8",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "member.set",
-    "author": "@o:a.example",
-    "keyId": "k1",
-    "body": {
-     "actor": "@bot:b.example",
-     "role": "none"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-rm",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:07Z",
-   "expect": "allow",
-   "check": {
-    "agents": {}
-   }
+   "expect": "allow"
   },
   {
    "entry": {
@@ -258,7 +229,7 @@
     "keyId": "k1",
     "body": {
      "actor": "@bot:b.example",
-     "role": "member"
+     "role": "guest"
     },
     "contentHash": "",
     "refs": [],
@@ -266,11 +237,8 @@
     "nonce": "n-b2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:08Z",
+   "time": "2026-10-10T12:00:07Z",
    "expect": "allow",
-   "check": {
-    "agents": {}
-   },
    "profiles": {
     "@bot:b.example": {
      "actorKind": "agent",
@@ -284,33 +252,25 @@
      }
     }
    },
-   "note": "operator not confirmed in the pinned profile"
+   "note": "operator withdrew"
   },
   {
    "entry": {
-    "id": "5855d651c2f473475ca7f1c309c3e81fa296c67dba8ebfe8287ff07311b28c9c",
+    "id": "e718e4bc2f6e6028c2f476be7f7ec223e93e2a13c3e990f7adcc565bb38496eb",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "member.set",
-    "author": "@o:a.example",
+    "kind": "message",
+    "author": "@m:a.example",
     "keyId": "k1",
-    "body": {
-     "actor": "@bot:b.example",
-     "role": "guest"
-    },
+    "body": {},
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-b3",
+    "nonce": "n-w",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:09Z",
+   "time": "2026-10-10T12:00:08Z",
    "expect": "allow",
-   "check": {
-    "agents": {
-     "@bot:b.example": "@op:b.example"
-    }
-   },
    "profiles": {
     "@bot:b.example": {
      "actorKind": "agent",
@@ -324,11 +284,38 @@
      }
     }
    },
-   "note": "a role change refreshes it from the pinned profile"
+   "note": "operator confirms again"
   },
   {
    "entry": {
-    "id": "c094aec867b8785b8395d6cb14da45ad455f517590e4eb79a6ace5379f69b91e",
+    "id": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@bot:b.example"
+     ]
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@bot:b.example": "@op:b.example"
+    }
+   }
+  },
+  {
+   "entry": {
+    "id": "5855d651c2f473475ca7f1c309c3e81fa296c67dba8ebfe8287ff07311b28c9c",
     "v": 1,
     "space": "s1:a.example",
     "kind": "member.set",
@@ -336,19 +323,75 @@
     "keyId": "k1",
     "body": {
      "actor": "@bot:b.example",
-     "role": "banned"
+     "role": "member"
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-b4",
+    "nonce": "n-b3",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:10Z",
    "expect": "allow",
    "check": {
-    "agents": {}
+    "held": {
+     "@bot:b.example": "@op:b.example"
+    }
+   },
+   "note": "back to member: the hold stands"
+  },
+  {
+   "entry": {
+    "id": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow",
+   "check": {
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "awaiting-approval",
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.guards": [
+     "@op:b.example"
+    ]
    }
+  },
+  {
+   "entry": {
+    "id": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "denied",
+   "note": "CX3 escaped here in round 22"
   }
  ],
  "ids": {
@@ -356,11 +399,13 @@
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
   "b3": "5855d651c2f473475ca7f1c309c3e81fa296c67dba8ebfe8287ff07311b28c9c",
-  "b4": "c094aec867b8785b8395d6cb14da45ad455f517590e4eb79a6ace5379f69b91e",
+  "c0": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
-  "rm": "1d1cf91a4418f10b74e74f5053f5acc6a402a94036950b68ad36f66e2e95f6b8"
+  "p": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+  "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+  "w": "e718e4bc2f6e6028c2f476be7f7ec223e93e2a13c3e990f7adcc565bb38496eb"
  }
 }

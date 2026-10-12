@@ -4,7 +4,7 @@
   "P-08",
   "P-10"
  ],
- "description": "approvals are accepted while awaiting, ready or claimed; resolve failed drops every unconsumed approval and re-arms",
+ "description": "approvals are accepted while awaiting, ready or claimed; resolve failed removes every approval, re-arms and leaves none in hand",
  "profiles": {
   "@m:a.example": {
    "actorKind": "human",
@@ -326,9 +326,9 @@
    "expect": "allow",
    "check": {
     "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "awaiting-approval",
-    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.approvals.1.dropped": true
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.approvals": []
    },
-   "note": "a2 dropped, a1 consumed: nothing in hand"
+   "note": "a2 removed, a1 consumed by the now settled claim: nothing in hand"
   },
   {
    "entry": {

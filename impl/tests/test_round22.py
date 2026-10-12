@@ -152,11 +152,11 @@ async def test_e8_state_in_pages_with_cursor(env, monkeypatch):
     first = [i for i in await a.read_all(S, 2 ** 31, state=True, limit=1) if i["type"] == "state"]
     assert len(first) == 1 and set(first[0]) == {"type", "state", "next"}
     st = first[0]["state"]
-    assert len(st["effects"]) == 2 and len(st["tasks"]) == 2 and list(st["effects"]) == pids[:2] and first[0]["next"] == f"{st['head']}.2.2"
+    assert len(st["effects"]) == 2 and len(st["tasks"]) == 2 and list(st["effects"]) == pids[:2] and first[0]["next"] == f"{st['head']}.2.2.0.2"
     await say(a, "the head moves between pages")
     page2 = (await a.read_all(S, 0, state=True, cursor=first[0]["next"]))
     assert len(page2) == 1 and page2[0]["type"] == "state" and page2[0]["state"]["head"] == st["head"]       # pinned at the first page's seq
-    assert list(page2[0]["state"]["effects"]) == pids[2:] and len(page2[0]["state"]["tasks"]) == 2 and page2[0]["next"] == f"{st['head']}.4.4"
+    assert list(page2[0]["state"]["effects"]) == pids[2:] and len(page2[0]["state"]["tasks"]) == 2 and page2[0]["next"] == f"{st['head']}.3.4.0.2"
     page3 = await a.read_all(S, 0, state=True, cursor=page2[0]["next"])
     assert "next" not in page3[0] and len(page3[0]["state"]["tasks"]) == 1 and page3[0]["state"]["effects"] == {}
     whole = await a.read_state(S, at=st["head"])
@@ -166,16 +166,16 @@ async def test_e8_state_in_pages_with_cursor(env, monkeypatch):
     assert list(now["effects"]) == pids and len(now["tasks"]) == 5 and "next" not in now
 
 async def test_e8_one_effect_and_argument_errors(env, monkeypatch):
-    """E8: `read {state, effect}` is that effect plus policy, roles, sessions, held, guarded and agents; bad combinations are `invalid`."""
+    """E8: `read {state, effect}` is that effect plus policy, roles, sessions, held and guarded; bad combinations are `invalid`."""
     monkeypatch.setitem(LIMITS, "maxStateItems", 2)
     a, pids = await _big_space(env)
     st = await a.read_state(S, effect=pids[2])
-    assert list(st["effects"]) == [pids[2]] and set(st) == {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents", "effects"}
+    assert list(st["effects"]) == [pids[2]] and set(st) == {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"}
     with pytest.raises(WireError) as ex: await a.read_state(S, effect="0" * 64)
     assert ex.value.code == "not_found"
     head = st["head"]
-    for kw in ({"effect": pids[0]}, {"cursor": f"{head}.0.0"}, {"state": True, "effect": pids[0], "cursor": f"{head}.0.0"}, {"state": True, "cursor": "banana"},
-               {"state": True, "cursor": f"{head + 1}.0.0"}, {"state": True, "cursor": "0.0.0"}, {"state": True, "cursor": f"{head}.0.0", "at": 1},
+    for kw in ({"effect": pids[0]}, {"cursor": f"{head}.0.0.0.0"}, {"state": True, "effect": pids[0], "cursor": f"{head}.0.0.0.0"}, {"state": True, "cursor": "banana"},
+               {"state": True, "cursor": f"{head + 1}.0.0.0.0"}, {"state": True, "cursor": "0.0.0.0.0"}, {"state": True, "cursor": f"{head}.0.0.0.0", "at": 1},
                {"state": True, "effect": pids[0], "follow": True}):
         with pytest.raises(WireError) as ex: await a.read_all(S, 0, **kw)
         assert ex.value.code == "invalid", kw
@@ -224,14 +224,15 @@ async def test_e8_executor_reads_one_effect_with_effect_cursor(env, execs, monke
 
 # ── E1/E2: only the operator loosens; owners can force guarding per agent ──
 async def test_e2_session_less_agent_is_held_by_a_task_when_forced(env):
-    """E2: with `forceGuarded` an agent with a confirmed operator is guarded (by that operator) whether or not it has a session: a member's
-    task naming it holds it for the operator. (Without the flag the same task holds nothing.)"""
+    """E2, F1: with `forceGuarded` an agent with a confirmed operator is guarded (by that operator, decided per instruction) whether or not it
+    has a session: a member's task naming it holds it for the operator. (Without the flag the same task holds nothing.)"""
     cl, botc = await world(env, force=True)
-    assert (await state(cl["alice"]))["agents"] == {BOT: ALICE} and (await state(cl["alice"]))["sessions"] == {}
+    st0 = await state(cl["alice"])
+    assert "agents" not in st0 and st0["sessions"] == {} and st0["guarded"] == {} and st0["held"] == {}          # F1: nothing is recorded ahead of an instruction
     e, c = cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})
     await cl["carol"].append(e, c)
     st = await state(cl["alice"])
-    assert st["held"] == {BOT: ALICE} and P.guarded_now(st, BOT) == ALICE and st["guarded"] == {}       # held through the policy, not through a choice
+    assert st["held"] == {BOT: ALICE} and P.guarded_now(st, BOT) is None and st["guarded"] == {}       # held at the instruction, not guarded by a choice
 
 async def test_e2_unforced_session_less_agent_is_not_held_by_a_task(env):
     cl, botc = await world(env)
@@ -239,15 +240,15 @@ async def test_e2_unforced_session_less_agent_is_not_held_by_a_task(env):
     assert (await state(cl["alice"]))["held"] == {}
 
 async def test_e2_host_runs_a_forced_agents_task_strict(env):
-    """E2, R-24: the host reads `guardedNow` from the head, so a forced agent in an `auto` session runs an outside task strict."""
+    """E2, F1, R-24: the instruction held the forced agent (the operator pinned for that entry), so the host runs it strict."""
     cl, botc = await world(env, force=True)
     agent = ScriptedAgent()
     host, task = start_host(env, botc, "auto", agent)
     await session_id(host)
     await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"}))
     await until(lambda: agent.calls)
-    assert [m for _, m in agent.calls] == ["strict"] and host.guarded_now == ALICE
-    assert not [r for r in await records(cl["alice"], author=BOT) if {"release", "unguard"} & set(r["entry"]["body"])]       # the host never lets go
+    assert [m for _, m in agent.calls] == ["strict"] and host.held and host.guarded_now is None
+    assert not [r for r in await records(cl["alice"], author=BOT) if r["entry"]["kind"] == "agent.release" or {"release", "unguard"} & set(r["entry"]["body"])]       # the host never lets go
     task.cancel()
 
 # ── E11 ──

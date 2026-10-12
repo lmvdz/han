@@ -72,12 +72,12 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).sort()) {
           states[entry.space] = s1;
           for (const [p, want] of Object.entries(st.check ?? {})) {
             const r = resolve(s1, p);
-            const have = r.found ? r.value : null;
+            const have = r.found ? r.value : "<missing>";
             if (!same(have, want)) return bad(`check ${p}: want ${JSON.stringify(want)} have ${JSON.stringify(r.value)}`);
           }
         } else if (st.check) {
           for (const [p, want] of Object.entries(st.check)) {
-            const r = resolve(prev, p); if (!same(r.found ? r.value : null, want)) return bad(`check (after refusal) ${p}`);
+            const r = resolve(prev, p); if (!same(r.found ? r.value : "<missing>", want)) return bad(`check (after refusal) ${p}`);
           }
         }
         pass++;

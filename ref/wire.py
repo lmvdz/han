@@ -13,15 +13,20 @@ Preimages (architecture.md §2, all UTF-8):
   helloProof  = Ed25519(actor key,   "han-hello-v1\\n" + challenge + "\\n" + dialed server name)
 """
 from __future__ import annotations
-import base64, datetime, hashlib, re
+import base64, datetime, hashlib, json, re
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 import policy as P
 
-CURSOR = re.compile(r"(\d+)\.(\d+)\.(\d+)", re.ASCII)
-EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents")   # §3: what `read {state, effect}` adds to the one effect
-MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: effects and tasks per page of a state read (E8)
+CURSOR = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)\.(\d+)", re.ASCII)      # head.effects.tasks.sessions.roleHistory: where the next page of each paged map starts
+EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded")   # §3: what `read {state, effect}` adds to the one effect
+PAGED = ("effects", "tasks", "sessions", "roleHistory")    # §3 (F3 c): the members of a state page that are cut, in cursor order; everything else is repeated on every page
+MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: items of each paged map per page of a state read (E8)
+MAX_FRAME_BYTES = 1310720  # han.ts Limits.maxFrameBytes
+FRAME_RESERVE = 128        # bytes kept for the `{"id": <16 digits>, "item": …}` wrapper and the `next` cursor around a state item
+MAX_INT = 2 ** 53 - 1      # G-07 (1a): an integer outside [-MAX_INT, MAX_INT] anywhere in a frame
+CALLS = ("hello", "append", "read", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel")     # the 3 + 8 calls of §3 and §8.3
 MAX_CLOCK_SKEW = 60        # han.ts Limits.maxClockSkewSeconds: the one future-time tolerance (R-03a)
 
 def secs(t: str) -> int:
@@ -106,6 +111,7 @@ CONTENT = {   # kind → {field: (validator, required)};  None = the kind has no
     "redact": {"reason": (_str(1024), False)},
     "session.open": {"title": (_str(256), False)},
     "session.close": None,
+    "agent.release": None,
     "session.input": {"text": (_str(32768), True), "blobs": (_blobs, False)},
 }
 
@@ -215,6 +221,46 @@ def blob_refs(kind: str, content) -> list[dict]:
         out.extend(x for x in cur if isinstance(x, dict) and "hash" in x)
     return out
 
+# ── frames (G-07): what a server does with a text message before any call runs ──
+class _NotIJson(ValueError): pass
+def _pairs(pairs):
+    d = {}
+    for k, v in pairs:
+        if k in d: raise _NotIJson("duplicate key")
+        d[k] = v
+    return d
+def _bad(_): raise _NotIJson("fraction or exponent")
+
+def has_big_int(v) -> bool:
+    """G-07 (1a): an integer outside [-(2^53-1), 2^53-1] anywhere in the value (a bool is not a number)."""
+    if isinstance(v, bool): return False
+    if isinstance(v, int): return abs(v) > MAX_INT
+    if isinstance(v, dict): return any(has_big_int(x) for x in v.values())
+    if isinstance(v, list): return any(has_big_int(x) for x in v)
+    return False
+
+def frame_verdict(text: str, test_mode: bool = False):
+    """G-07 cases (1), (1a), (2) for one text message. None: it is a request frame, go on to authentication and args. Else (id, closes):
+    the id of the `invalid` error to send and whether the connection is closed after it. `test.clock` is a call only in test mode (G-11)."""
+    try:
+        v = json.loads(text, object_pairs_hook=_pairs, parse_float=_bad, parse_constant=_bad)
+    except (ValueError, RecursionError):
+        return 0, True
+    if not isinstance(v, dict): return 0, True                                  # (1) an array, a scalar, null
+    rid = v.get("id")
+    usable = isinstance(rid, int) and not isinstance(rid, bool) and 1 <= rid <= MAX_INT
+    if has_big_int(v): return (rid, False) if usable else (0, True)             # (1a)
+    calls = CALLS + (("test.clock",) if test_mode else ())
+    if set(v) != {"id", "call", "args"} or not usable or v["call"] not in calls or not isinstance(v["args"], dict):          # (2)
+        return (rid if usable else 0), False
+    return None
+
+class Inbox(dict):
+    """actor -> the notices of that actor's live subscription to its own profile (G-03). Notices are signals and are never replayed (F4, G-09):
+    `setdefault`, which `Home.signal` uses, never creates an entry, so a notice for an actor that is not subscribed goes to a list nobody keeps.
+    An implementation may supply its own inbox with the same `setdefault` contract (impl/han/seq/sequencer.py does)."""
+    def setdefault(self, actor, default=None): return self[actor] if actor in self else ([] if default is None else default)
+
 # ── a reference home ──
 class Home:
     """The §4.1 append pipeline plus the server behaviours G-01, R-15, G-03, G-02, G-04."""
@@ -222,6 +268,7 @@ class Home:
         self.server, self.key, self.key_id, self.durability = server, key, key_id, durability
         self.limiter = limiter    # §4.1 step 6: a callable (author) -> retryAfterMs, 0 when under the limit; None switches rate limits off
         self.max_state_items = MAX_STATE_ITEMS
+        self.max_frame_bytes = MAX_FRAME_BYTES      # §3: a state item, as a frame, fits this (tests lower it)
         self.steady = steady      # R-16: a callable returning steady-clock seconds; None switches the elapsed-time check off
         self.run_start = steady() if steady else 0       # claims ordered before this run count from here (restart, failover)
         self.claim_steady = {}    # claim id -> steady reading when this run ordered it
@@ -234,7 +281,7 @@ class Home:
         self.network = network if network is not None else {}
         self.network[server] = self
         self.followers = {}       # space -> {actor: [ReadItem]}
-        self.inbox = {}           # actor -> [notices] — delivered only to that actor's own sessions (G-03)
+        self.inbox = Inbox()      # actor -> [notices] — one list per actor that follows its own profile right now; a notice for anyone else is dropped, never replayed (G-03, G-09)
         self.blobs = {}           # hash -> bytes
         self.uploads = {}         # hash -> set of actors who uploaded it here
         self.supplied = set()     # (space, hash): bytes this server may serve for that space (G-01)
@@ -277,7 +324,7 @@ class Home:
             retry = self.limiter(entry["author"])
             if retry: return "limit", {"reason": "rate limit", "retryAfterMs": retry}
         if wait > 0 and not skip_policy: return "unavailable", {"reason": "abandon before the launch window closed (R-16)", "retryAfterMs": int(wait * 1000)}     # 7
-        if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", "clock behind the chain; wait (R-03a)"
+        if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", {"reason": "clock behind the chain; wait (R-03a)", "retryAfterMs": (secs(S["records"][-1]["receipt"]["time"]) - secs(now) + 1) * 1000}
         pol = state["policy"] if state else entry["body"].get("policy", {})
         rescue = entry["kind"] in ("policy.set", "space.move")             # R-08: these can always be ordered
         if pol.get("minDurability") == "replicated" and self.durability != "replicated" and not rescue:
@@ -373,22 +420,24 @@ class Home:
             st = P.fold(st, {"entry": e, "content": None, "receipt": rec["receipt"]}, {"time": rec["receipt"]["time"], "profiles": pin})
         return st
 
-    def read(self, space, after, as_, state=False, at=None, limit=1000, cursor=None, effect=None):
+    def read(self, space, after, as_, state=False, at=None, limit=1000, cursor=None, effect=None, follow=False):
         """§3 read. `at` (with `state`) gives the state after record `at`, and needs read rights at `at` (P-02), not at the head.
-        The state item is paged (E8): `effects` and `tasks` beyond `max_state_items` are left for `read {state, cursor}`; `limit`
-        never applies to it. `cursor` and `effect` (both need `state`) answer the state item alone."""
+        The state item is paged (E8, F3 c): `effects`, `tasks`, `sessions` and `roleHistory` are cut so that at most `max_state_items`
+        of each, and the item as a frame at most `max_frame_bytes`, are sent; the rest is left for `read {state, cursor}`. `limit`
+        never applies to it. `cursor` and `effect` (both need `state`, and exclude `at`, `follow` and each other) answer the state item alone."""
         S = self.spaces.get(space)
         if not S: return "not_found", None
         st = S["state"]
         if not (isinstance(limit, int) and 1 <= limit <= 1000): return "invalid", "limit"
         if at is not None and (not state or not isinstance(at, int) or not 1 <= at <= st["head"]): return "invalid", "at needs state and 1 <= at <= head"
         if (cursor is not None or effect is not None) and not state: return "invalid", "cursor and effect need state"
-        if cursor is not None and (effect is not None or at is not None): return "invalid", "cursor excludes effect and at"
-        offs = (0, 0)
+        if (cursor is not None or effect is not None) and (at is not None or follow or (cursor is not None and effect is not None)):      # F4
+            return "invalid", "cursor and effect exclude at, follow and each other"
+        offs = dict.fromkeys(PAGED, 0)
         if cursor is not None:
             m = CURSOR.fullmatch(cursor) if isinstance(cursor, str) else None
             if not m or not 1 <= int(m[1]) <= st["head"]: return "invalid", "cursor"
-            at, offs = int(m[1]), (int(m[2]), int(m[3]))
+            at, offs = int(m[1]), dict(zip(PAGED, map(int, m.groups()[1:])))
         items = []
         if state:
             where = st["head"] if at is None else at
@@ -397,23 +446,51 @@ class Home:
             if view is None: return "unavailable", "no stored profile pins for this seq"
             view = {k: v for k, v in view.items() if k != "entries"}
             if effect is not None:
-                if not (isinstance(effect, str) and effect in view["effects"]): return "not_found", "no such effect"
-                one = {k: view[k] for k in EFFECT_VIEW if k in view}
-                return "ok", [{"type": "state", "state": dict(one, effects={effect: view["effects"][effect]})}]
-            n, (oe, ot) = self.max_state_items, offs
-            es, ts_ = list(view["effects"].items()), list(view["tasks"].items())
-            page = dict(view, effects=dict(es[oe:oe + n]), tasks=dict(ts_[ot:ot + n]))
+                if not (isinstance(effect, str) and effect in view.get("effects", {})): return "not_found" if isinstance(effect, str) else "invalid", "no such effect"
+                one = {k: view[k] for k in EFFECT_VIEW if k in view and k not in ("effects", "sessions")}
+                base = dict(one, effects={effect: view["effects"][effect]})
+                keys = ("sessions",) if "sessions" in view else ()
+                offs = {"effects": len(view["effects"]), "tasks": len(view["tasks"]), "sessions": 0, "roleHistory": len(view["roleHistory"])}     # the cursor of the rest continues past everything else
+            else:
+                base, keys = {k: v for k, v in view.items() if k not in PAGED}, PAGED
+            got = self._page(view, base, keys, offs)
+            if got is None: return "unavailable", "the state does not fit maxFrameBytes even without its paged members"
+            page, offs, more = got
             item = {"type": "state", "state": page}
-            if len(es) > oe + n or len(ts_) > ot + n: item["next"] = f"{where}.{oe + n}.{ot + n}"
-            if cursor is not None: return "ok", [item]
+            if more: item["next"] = f"{where}." + ".".join(str(offs[k]) for k in PAGED)
+            if cursor is not None or effect is not None: return "ok", [item]
             items.append(item)
         items += [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])][:limit]
         return "ok", items
 
-    def read_follow(self, space, after, as_, limit=1000):
+    def _page(self, view, base, keys, offs):
+        """F3 (c): `base` plus the next items of the maps `keys`, taken one map at a time in turn while the item as a frame stays within
+        `max_frame_bytes` and each map within `max_state_items`. Returns (page, offsets after it, more remain), or None if `base` alone
+        does not fit or nothing at all could be added although items remain."""
+        size = lambda v: len(P.jcs(v))
+        keys = [k for k in keys if k in view]
+        page = dict(base, **{k: {} for k in keys})
+        used, cap = size({"type": "state", "state": page}), self.max_frame_bytes - FRAME_RESERVE
+        if used > cap: return None
+        rest = {k: list(view[k].items())[offs[k]:] for k in keys}
+        taken = dict.fromkeys(keys, 0)
+        progress = True
+        while progress:
+            progress = False
+            for k in keys:
+                if taken[k] >= len(rest[k]) or taken[k] >= self.max_state_items: continue
+                key, val = rest[k][taken[k]]
+                add = size(key) + size(val) + 2
+                if used + add > cap: continue
+                page[k][key] = val; used += add; taken[k] += 1; progress = True
+        more = any(taken[k] < len(rest[k]) for k in keys)
+        if more and not any(taken.values()): return None
+        return page, dict(offs, **{k: offs[k] + taken[k] for k in keys}), more
+
+    def read_follow(self, space, after, as_, limit=1000, **kw):
         """§3 read with follow: `limit` backlog records, then the live records from the head at registration. If the backlog was
         longer, the client sees a seq gap between the last backlog record and the first live one and MUST re-read it."""
-        code, items = self.read(space, after, as_, limit=limit)
+        code, items = self.read(space, after, as_, limit=limit, follow=True, **kw)
         if code != "ok": return code, items, None
         q = self.followers.setdefault(space, {})[as_] = []
         return "ok", items, q
@@ -421,18 +498,23 @@ class Home:
     def follow(self, space, as_):
         if space.startswith("profile:"):
             if space[len("profile:"):] != as_: return "denied", "only the actor may follow its own profile, for its notices"
-            return "ok", self.inbox.setdefault(as_, [])
+            return "ok", dict.setdefault(self.inbox, as_, [])      # the subscription: from now on the actor's notices are kept in this list
         S = self.spaces.get(space)
         if not S or not P.can_read(S["state"], as_, S["state"]["head"]): return "denied", None
         q = self.followers.setdefault(space, {}).setdefault(as_, [])
         return "ok", q
+
+    def unfollow(self, space, as_):
+        """The actor's subscription ends (its connection closed): a profile inbox goes with it, so later notices are dropped (F4)."""
+        if space.startswith("profile:"): self.inbox.pop(as_, None)
+        else: self.followers.get(space, {}).pop(as_, None)
 
     def signal(self, space: str, actor: str, body: dict, relayed_by: str = None):
         """G-04; on a profile space only server notices are accepted, and they reach only the actor's own inbox (G-03)."""
         if space.startswith("profile:"):
             if not (actor.startswith("@:") and isinstance(body, dict) and body.get("type") == "notice"):
                 return "denied", "only server notices on profile spaces"
-            self.inbox.setdefault(space[len("profile:"):], []).append({"type": "signal", "from": actor, "body": body})
+            self.inbox.setdefault(space[len("profile:"):], []).append({"type": "signal", "from": actor, "body": body})      # F4: Inbox hands a throwaway list to an actor with no live subscription
             return "ok", None
         S = self.spaces.get(space)
         if not S: return "not_found", space

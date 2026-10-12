@@ -57,6 +57,28 @@ def wire_vectors():
             out.append((f"{fn}::{v['id']}", sorted({t for r in v.get("rules", []) for t in TAG.findall(r)})))
     return out
 
+FAMILIES = (("operations (golden)", lambda fn: fn[:2].isdigit()), ("agreed probes", lambda fn: fn == "probes.json"), ("decided probes", lambda fn: fn == "probes-decided.json"),
+            ("round-22 probes", lambda fn: fn == "probes-r22.json"), ("round-23 probes", lambda fn: fn == "probes-r23.json"))
+
+def wire_expectations():
+    """Per vector family: (name, files, vectors, expectations, steps, generated appends). An expectation is what the runner counts as one: an `expect`, `expect_close`,
+    `expect_silence`, `http_get` or `clock` step. A `generate` step is one step, its `count` appends are checked by the runner and are not expectations."""
+    d = os.path.join(HERE, "wire-vectors")
+    if not os.path.exists(os.path.join(d, "index.json")): return []
+    rows = {name: [name, 0, 0, 0, 0, 0] for name, _ in FAMILIES}
+    for fn in json.load(open(os.path.join(d, "index.json"), encoding="utf-8"))["files"]:
+        doc = json.load(open(os.path.join(d, fn), encoding="utf-8"))
+        fam = next((name for name, test in FAMILIES if test(fn)), None)
+        if fam is None: raise SystemExit(f"list_tests: {fn} belongs to no wire-vector family; add it to FAMILIES")
+        rows[fam][1] += 1
+        for v in (doc["vectors"] if "vectors" in doc else [doc]):
+            rows[fam][2] += 1
+            for st in v["steps"]:
+                rows[fam][4] += 1
+                rows[fam][3] += any(k in st for k in ("expect", "expect_close", "expect_silence", "http_get", "clock"))
+                rows[fam][5] += st["generate"]["count"] if "generate" in st else 0
+    return [tuple(r) for r in rows.values() if r[2]]
+
 def main():
     tests, scen, wires = py_tests(), ts_scenarios(), wire_vectors()
     if "--rules" in sys.argv:
@@ -75,6 +97,8 @@ def main():
     for n, t in scen: print(f"interop.ts: {n}  [{' '.join(t) or '-'}]")
     print()
     for n, t in wires: print(f"wire-vectors/{n}  [{' '.join(t) or '-'}]")
+    print()
+    for name, files, nv, ne, ns, ng in wire_expectations(): print(f"{nv:4} vectors, {ne:5} expectations, {ns:5} steps  {name} ({files} file{'s' if files != 1 else ''})" + (f"; {ng} generated appends, not expectations" if ng else ""))
     print()
     per = {}
     for f, _n, _t, _l, k in tests: per[f] = per.get(f, 0) + k

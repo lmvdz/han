@@ -10,8 +10,8 @@ from .store import Store, BlobStore
 
 log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
-CURSOR = re.compile(r"(\d+)\.(\d+)\.(\d+)", re.ASCII)       # E8: `<seq>.<effects offset>.<tasks offset>` of the next page of a state read
-EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents")      # what `read {state, effect}` adds to the one effect
+PAGED, CURSOR, FRAME_RESERVE = W.PAGED, W.CURSOR, W.FRAME_RESERVE    # F3(c): the four cut maps; the cursor `<seq>.<effects>.<tasks>.<sessions>.<roleHistory>`; room for `{id, item}`
+EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded")      # what `read {state, effect}` adds to the one effect
 MAX_OPEN_UPLOADS = 16        # E11: unfinished blob uploads one actor may hold at a time
 OWN_BLOB_SECONDS = 86400      # G-01 / D3: an uploader may read its own unreferenced blob this long
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)
@@ -32,19 +32,17 @@ class Sub:
         else: self.q.put_nowait(item)
 
 class Notices(list):
-    """An actor's inbox on its profile (G-03): Home appends signals here; we persist them and push them to live subscribers."""
+    """An actor's inbox on its profile (G-03): Home appends signals here and we push them to the actor's live subscriptions. Notices are
+    signals (F4): never stored and never replayed, so one for an actor with no live subscription is dropped (the list stays empty)."""
     def __init__(self, seq, actor): super().__init__(); self.seq, self.actor = seq, actor
     def append(self, item):
-        super().append(item)
-        self.seq.store.add_notice(self.actor, item)
-        if len(self) > 256: del self[0]
         for s in list(self.seq.notice_subs.get(self.actor, ())): s.push(item)
 
 class Inbox(dict):
+    """Home.signal files a profile notice with `inbox.setdefault(actor, []).append(...)`: ours is a fresh `Notices` each time, never kept
+    (the live subscriptions are `Sequencer.notice_subs`), so nothing accumulates for actors that are not subscribed."""
     def __init__(self, seq): super().__init__(); self.seq = seq
-    def setdefault(self, k, default=None):
-        if k not in self: self[k] = Notices(self.seq, k)
-        return self[k]
+    def setdefault(self, k, default=None): return Notices(self.seq, k)
 
 def key_list(keys: dict) -> list[dict]:
     """A server's key set as published (§4.3): [{keyId, publicKey, from, until?, compromised?}]."""
@@ -64,6 +62,30 @@ class _Chains(Chains):
         if actor == "@:" + self.seq.server or (not actor.startswith("@:") and P.server_of(actor) == self.seq.server):
             return self.seq.profile(actor, seq) or {"actor": actor, "seq": seq, "actorKind": "human", "operatorConfirmed": False, "keys": {}}
         return super().profile(actor, seq)
+
+def state_page(view: dict, base: dict, keys: tuple, offs: dict):
+    """F3(c): `base` plus the next items of the maps `keys` of `view` from the offsets `offs`, taken one map at a time in turn while the
+    state item as a frame stays within maxFrameBytes (less FRAME_RESERVE) and each map within maxStateItems. -> (page, offsets after it,
+    more remain), or None when `base` alone does not fit or an item cannot be placed on a page by itself (the read is then `unavailable`)."""
+    size = lambda v: len(P.jcs(v))
+    keys = [k for k in keys if k in view]
+    page = dict(base, **{k: {} for k in keys})
+    used, cap = size({"type": "state", "state": page}), LIMITS["maxFrameBytes"] - FRAME_RESERVE
+    if used > cap: return None
+    rest = {k: list(view[k].items())[offs[k]:] for k in keys}
+    taken = dict.fromkeys(keys, 0)
+    progress = True
+    while progress:
+        progress = False
+        for k in keys:
+            if taken[k] >= len(rest[k]) or taken[k] >= LIMITS["maxStateItems"]: continue
+            key, val = rest[k][taken[k]]
+            add = size(key) + size(val) + 2
+            if used + add > cap: continue
+            page[k][key] = val; used += add; taken[k] += 1; progress = True
+    more = any(taken[k] < len(rest[k]) for k in keys)
+    if more and not any(taken.values()): return None
+    return page, dict(offs, **{k: offs[k] + taken[k] for k in keys}), more
 
 def wire_state(state: dict) -> dict:
     """The StateView as served (D14): `settled` is present on every claim (a copy; the sequencer's own state is untouched)."""
@@ -150,8 +172,6 @@ class Sequencer:
     # ── startup: reload the chain, check it, rebuild state ──
     def _load(self):
         for sp in self.store.spaces(): self._load_space(sp)
-        for actor, items in self.store.notices().items():
-            n = Notices(self, actor); list.extend(n, items); self.home.inbox[actor] = n
 
     def _load_space(self, sp):
         recs, state, prev = [], None, None
@@ -340,14 +360,14 @@ class Sequencer:
         if at is not None and not (state and P._int(at) and at >= 1): raise _invalid("at needs state and a seq >= 1")
         if (cursor is not None or effect is not None) and not state: raise _invalid("cursor and effect need state")
         if cursor is not None and (effect is not None or at is not None or follow): raise _invalid("cursor excludes effect, at and follow")
-        if effect is not None and (follow or not isinstance(effect, str)): raise _invalid("effect")
+        if effect is not None and (follow or at is not None or not isinstance(effect, str)): raise _invalid("effect excludes at and follow")
         limit = 1000 if limit is None else limit
         if not (P._int(limit) and 1 <= limit <= 1000): raise _invalid("limit")
-        offs = (0, 0)
+        offs = dict.fromkeys(PAGED, 0)
         if cursor is not None:
             m = CURSOR.fullmatch(cursor) if isinstance(cursor, str) else None
             if not m: raise _invalid("cursor")
-            at, offs = int(m[1]), (int(m[2]), int(m[3]))
+            at, offs = int(m[1]), dict(zip(PAGED, map(int, m.groups()[1:])))
             if at < 1: raise _invalid("cursor")
         S = self.home.spaces.get(space)
         if not S and self.fed and space.startswith("profile:") and P.server_of(space) != self.server:
@@ -364,13 +384,16 @@ class Sequencer:
             view = {k: v for k, v in view.items() if k != "entries"}
             if effect is not None:
                 if effect not in view["effects"]: raise WireError("not_found", "no such effect")
-                one = {k: view[k] for k in EFFECT_VIEW if k in view}
-                return [{"type": "state", "state": dict(one, effects={effect: view["effects"][effect]})}], None
-            n, (oe, ot) = LIMITS["maxStateItems"], offs
-            es, ts = list(view["effects"].items()), list(view["tasks"].items())
-            item = {"type": "state", "state": dict(view, effects=dict(es[oe:oe + n]), tasks=dict(ts[ot:ot + n]))}
-            if len(es) > oe + n or len(ts) > ot + n: item["next"] = f"{where}.{oe + n}.{ot + n}"
-            if cursor is not None: return [item], None
+                base = {k: view[k] for k in EFFECT_VIEW if k in view and k not in ("effects", "sessions")} | {"effects": {effect: view["effects"][effect]}}
+                keys = ("sessions",)             # F3(c): the one effect is never cut; sessions are, and `next` continues past everything else
+                offs = {"effects": len(view["effects"]), "tasks": len(view["tasks"]), "sessions": 0, "roleHistory": len(view["roleHistory"])}
+            else: base, keys = {k: v for k, v in view.items() if k not in PAGED}, PAGED
+            got = state_page(view, base, keys, offs)
+            if got is None: raise WireError("unavailable", "the state does not fit maxFrameBytes even paged")
+            page, offs, more = got
+            item = {"type": "state", "state": page}
+            if more: item["next"] = f"{where}." + ".".join(str(offs[k]) for k in PAGED)
+            if cursor is not None or effect is not None: return [item], None
             out.append(item)
         code, items = self.home.read(space, after, who, False)
         if code != "ok": raise WireError(code, items or "")
@@ -382,7 +405,7 @@ class Sequencer:
         return out, sub
 
     def subscribe(self, who, space, after=None):
-        """T-01/T-05 for `who`: records and signals of `space` (and, on one's own profile, notices). Live from the head,
+        """T-01/T-05 for `who`: records and signals of `space` (and, on one's own profile, notices, live only: F4). Live from the head,
         or from after `after` first."""
         if not (isinstance(space, str) and P._space(space)) or (after is not None and not P._int(after)): raise _invalid("subscribe args")
         self.route(space)
@@ -394,7 +417,6 @@ class Sequencer:
         sub = Sub(who, space, st["head"], signals=True); self.subs.setdefault(space, set()).add(sub)
         if space == "profile:" + who:                                                   # G-03/G-04: only the actor gets its notices
             self.notice_subs.setdefault(who, set()).add(sub)
-            items += list(self.home.inbox.get(who, []))
         return items, sub
 
     def unsubscribe(self, sub):

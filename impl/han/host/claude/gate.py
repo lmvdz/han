@@ -32,7 +32,10 @@ class Decision:
 NETWORK = re.compile(r"(?i)(?<![\w.-])(curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp|ping|nslookup|dig|invoke-webrequest|iwr|"
                      r"invoke-restmethod|irm|git\s+(push|pull|fetch|clone|remote)|pip3?\s+install|npm\s+(i|install|publish)|"
                      r"npx|yarn\s+add|docker|az|aws|gcloud|gh)(?![\w-])|\b[a-z][a-z0-9+.-]*://")
-UNSAFE_CHARS = re.compile(r"[;&|<>$`()\n\r{}*?\"'\\~]")
+# F6: every shell metacharacter is refused in every mode: separators, redirections, expansion ($, backticks, !, braces, ~) and every glob
+# character (*?[]{}), so no word can name anything but itself. `set -f;` (globbing off) is then prefixed to what runs, a second line.
+UNSAFE_CHARS = re.compile(r"[;&|<>$`!()\n\r{}\[\]*?\"'\\~]")
+NOGLOB = "set -f; "
 
 # E7: Bash is default-deny. A command runs only if it is in COMMANDS and EVERY argument is accounted for: a flag must be one the command
 # lists (an unknown flag is refused), a flag's value is checked by its kind, and every other word is a path, a number or plain text as
@@ -109,6 +112,7 @@ class Gate:
         """No sandbox exists for Bash on Windows, so there is no way to bound what a shell command touches. A command that names the
         network is a world action (an effect); anything else is default-deny (E7): one plain command from COMMANDS with no shell syntax,
         every flag known and every path argument inside the workspace. A strict turn (guarded or held) is limited to what only reads."""
+        if cmd.startswith(NOGLOB): cmd = cmd[len(NOGLOB):]             # our own prefix, seen again by the second line (can_use_tool)
         if NETWORK.search(cmd): return Decision("world", action="bash.network", args={"command": cmd[:2000]})
         if UNSAFE_CHARS.search(cmd): return Decision("deny", "Bash: shell syntax is not allowed; one plain command only")
         words, strict = cmd.split(), mode == "strict"
@@ -117,7 +121,7 @@ class Gate:
             avail = [n for n in self.bash_allow if n in COMMANDS and not (strict and COMMANDS[n].write)]
             return Decision("deny", f"Bash: only {', '.join(avail)} are allowed" + (" in a strict turn" if strict else ""))
         why = self._check_args(spec, words[1:], strict)
-        return Decision("deny", f"Bash: {why}") if why else Decision("allow")
+        return Decision("deny", f"Bash: {why}") if why else Decision("allow", args={"command": NOGLOB + cmd})
 
     def path_ok(self, p: str) -> bool:
         """E7: a path argument names something inside the workspace. `~` (home expansion), UNC (`\\\\`, `//`), drive letters, absolute

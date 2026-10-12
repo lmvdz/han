@@ -50,7 +50,7 @@
        "space": "s1:a.localhost",
        "seq": 10,
        "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
-       "prev": "eb0d7b1d4fe24e8728665e6a40871d1ef72d282acf9c72a21b70c0ce5c3c9915",
+       "prev": "a0daf3c8b48fc74a18da5b78a265e904e69820dc2fe8b80ccd90db12f7e5896b",
        "home": "a.localhost",
        "homeKey": "h1",
        "time": "2026-01-01T00:00:00Z",
@@ -58,7 +58,7 @@
        "profiles": {
         "@alice:a.localhost": 1
        },
-       "homeSig": "8heb3qDeljL7UIqcABUOT8GwibWR03xkuPygkEflvx1gYKopgL5yWIY_VNZKrPFMn4ED6CV3vuE_JKVBN5dUCA"
+       "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
       }
      }
     },
@@ -124,29 +124,11 @@
          "@vera:a.localhost": "member",
          "@x:a.localhost": "member"
         },
-        "roleHistory": {
-         "@alice:a.localhost": [
-          {
-           "from": 1
-          }
-         ],
-         "@bob:a.localhost": [
-          {
-           "from": 2
-          }
-         ],
-         "@vera:a.localhost": [
-          {
-           "from": 3
-          }
-         ],
-         "@x:a.localhost": [
-          {
-           "from": 4
-          }
-         ]
-        },
-        "tasks": {},
+        "held": {},
+        "guarded": {},
+        "cleared": {},
+        "outside": {},
+        "budgetLeft": null,
         "effects": {
          "e548c91a75f1273b3779d49eb6bd4c4d76647b42aa718fcf1ed1f8a985282575": {
           "proposer": "@bob:a.localhost",
@@ -168,13 +150,30 @@
           "phase": "ready"
          }
         },
+        "tasks": {},
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "agents": {},
-        "cleared": {},
-        "outside": {},
-        "budgetLeft": null
+        "roleHistory": {
+         "@alice:a.localhost": [
+          {
+           "from": 1
+          }
+         ],
+         "@bob:a.localhost": [
+          {
+           "from": 2
+          }
+         ],
+         "@vera:a.localhost": [
+          {
+           "from": 3
+          }
+         ],
+         "@x:a.localhost": [
+          {
+           "from": 4
+          }
+         ]
+        }
        }
       }
      }
@@ -632,9 +631,10 @@
          "time": "2026-01-01T00:00:00Z",
          "durability": "local",
          "profiles": {
-          "@bob:a.localhost": 1
+          "@bob:a.localhost": 1,
+          "@x:a.localhost": 1
          },
-         "homeSig": "vTs9tPv7dyznwHB8qIrhZFOe432BhdOSwY3p3XqtFEndtjJbItm2mh00XrwMDhFidR92NMF0kvoSAmkaDV28CA"
+         "homeSig": "Nfae4wUdgKUuAyBkkDc97zzlfJvyqqsiut_MOpPh7UadgFHglLHJ77SN2hcq0CDGMGrWlIwS1xQwEsFrJoIPAg"
         }
        }
       }
@@ -673,7 +673,7 @@
          "space": "s1:a.localhost",
          "seq": 10,
          "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
-         "prev": "eb0d7b1d4fe24e8728665e6a40871d1ef72d282acf9c72a21b70c0ce5c3c9915",
+         "prev": "a0daf3c8b48fc74a18da5b78a265e904e69820dc2fe8b80ccd90db12f7e5896b",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -681,7 +681,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "8heb3qDeljL7UIqcABUOT8GwibWR03xkuPygkEflvx1gYKopgL5yWIY_VNZKrPFMn4ED6CV3vuE_JKVBN5dUCA"
+         "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
         }
        }
       }
@@ -739,7 +739,7 @@
        "space": "s1:a.localhost",
        "seq": 10,
        "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
-       "prev": "eb0d7b1d4fe24e8728665e6a40871d1ef72d282acf9c72a21b70c0ce5c3c9915",
+       "prev": "a0daf3c8b48fc74a18da5b78a265e904e69820dc2fe8b80ccd90db12f7e5896b",
        "home": "a.localhost",
        "homeKey": "h1",
        "time": "2026-01-01T00:00:00Z",
@@ -747,7 +747,7 @@
        "profiles": {
         "@alice:a.localhost": 1
        },
-       "homeSig": "8heb3qDeljL7UIqcABUOT8GwibWR03xkuPygkEflvx1gYKopgL5yWIY_VNZKrPFMn4ED6CV3vuE_JKVBN5dUCA"
+       "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
       }
      }
     },
@@ -813,29 +813,11 @@
          "@vera:a.localhost": "member",
          "@x:a.localhost": "member"
         },
-        "roleHistory": {
-         "@alice:a.localhost": [
-          {
-           "from": 1
-          }
-         ],
-         "@bob:a.localhost": [
-          {
-           "from": 2
-          }
-         ],
-         "@vera:a.localhost": [
-          {
-           "from": 3
-          }
-         ],
-         "@x:a.localhost": [
-          {
-           "from": 4
-          }
-         ]
-        },
-        "tasks": {},
+        "held": {},
+        "guarded": {},
+        "cleared": {},
+        "outside": {},
+        "budgetLeft": null,
         "effects": {
          "e548c91a75f1273b3779d49eb6bd4c4d76647b42aa718fcf1ed1f8a985282575": {
           "proposer": "@bob:a.localhost",
@@ -857,13 +839,30 @@
           "phase": "ready"
          }
         },
+        "tasks": {},
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "agents": {},
-        "cleared": {},
-        "outside": {},
-        "budgetLeft": null
+        "roleHistory": {
+         "@alice:a.localhost": [
+          {
+           "from": 1
+          }
+         ],
+         "@bob:a.localhost": [
+          {
+           "from": 2
+          }
+         ],
+         "@vera:a.localhost": [
+          {
+           "from": 3
+          }
+         ],
+         "@x:a.localhost": [
+          {
+           "from": 4
+          }
+         ]
+        }
        }
       }
      }
@@ -1321,9 +1320,10 @@
          "time": "2026-01-01T00:00:00Z",
          "durability": "local",
          "profiles": {
-          "@bob:a.localhost": 1
+          "@bob:a.localhost": 1,
+          "@x:a.localhost": 1
          },
-         "homeSig": "vTs9tPv7dyznwHB8qIrhZFOe432BhdOSwY3p3XqtFEndtjJbItm2mh00XrwMDhFidR92NMF0kvoSAmkaDV28CA"
+         "homeSig": "Nfae4wUdgKUuAyBkkDc97zzlfJvyqqsiut_MOpPh7UadgFHglLHJ77SN2hcq0CDGMGrWlIwS1xQwEsFrJoIPAg"
         }
        }
       }
@@ -1362,7 +1362,7 @@
          "space": "s1:a.localhost",
          "seq": 10,
          "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
-         "prev": "eb0d7b1d4fe24e8728665e6a40871d1ef72d282acf9c72a21b70c0ce5c3c9915",
+         "prev": "a0daf3c8b48fc74a18da5b78a265e904e69820dc2fe8b80ccd90db12f7e5896b",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -1370,7 +1370,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "8heb3qDeljL7UIqcABUOT8GwibWR03xkuPygkEflvx1gYKopgL5yWIY_VNZKrPFMn4ED6CV3vuE_JKVBN5dUCA"
+         "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
         }
        }
       }

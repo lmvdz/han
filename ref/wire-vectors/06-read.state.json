@@ -68,6 +68,14 @@
        "@vera:a.localhost": "member",
        "@x:a.localhost": "member"
       },
+      "held": {},
+      "guarded": {},
+      "cleared": {},
+      "outside": {},
+      "budgetLeft": null,
+      "effects": {},
+      "tasks": {},
+      "sessions": {},
       "roleHistory": {
        "@alice:a.localhost": [
         {
@@ -89,16 +97,7 @@
          "from": 4
         }
        ]
-      },
-      "tasks": {},
-      "effects": {},
-      "sessions": {},
-      "held": {},
-      "guarded": {},
-      "agents": {},
-      "cleared": {},
-      "outside": {},
-      "budgetLeft": null
+      }
      }
     }
    }

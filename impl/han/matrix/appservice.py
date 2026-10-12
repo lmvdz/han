@@ -119,6 +119,10 @@ class AppService:
                 want = {a for a in cands if not a.startswith("@:") and P.session_access(state, a, sid)[kind]}
                 await self._set_members(row[kind], want)
             if not live: self.store.finish_session(space, sid)       # everyone is out of both rooms
+        for sid, row in self.store.open_sessions(space).items():
+            if sid in state["sessions"]: continue                   # F3(b): a closed session has left the state, and with it everyone leaves its rooms
+            for kind in ("watch", "read"): await self._set_members(row[kind], set())
+            self.store.finish_session(space, sid)
 
     def _stream_room_body(self, name: str, actor: str) -> dict:
         return {"name": name, "preset": "private_chat", "visibility": "private",

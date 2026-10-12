@@ -48,7 +48,7 @@
      "space": "s1:a.localhost",
      "seq": 11,
      "id": "291af395b85cb033d6b8c8c82dbb74e8f0e4078fccecf6deb1b62cfd708b6824",
-     "prev": "73ebbc412a01f3f7d3dc48607f90754a7d71a2b6c1b66ff0b99f621627e83d87",
+     "prev": "1203a500075cfb05ee6b642754a38258c87fc92e6bfc1555c6d0dd6b2e3c9670",
      "home": "a.localhost",
      "homeKey": "h1",
      "time": "2026-01-01T00:00:00Z",
@@ -56,7 +56,7 @@
      "profiles": {
       "@alice:a.localhost": 1
      },
-     "homeSig": "izoUNsXpwgpPrpUSJWk6nVhvZ9x71Gtp7zHxT5jhp8dUxlqo1UT7ik7seLHumqDou47pyBLvWx7rOY1rApmZAg"
+     "homeSig": "pWIxoIEImMpmox9QRIi60viDRSVrIYjg7pLDdx4rHGjj14tlASd9INJwbfeyInhHGNCbyeqY0Ku-oFAqHOtpDg"
     }
    }
   },

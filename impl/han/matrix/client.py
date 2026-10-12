@@ -541,7 +541,8 @@ class MatrixClient(StateReads):
         deadline = time.monotonic() + wait
         while True:
             st = await self.read_state(space)
-            cands = set(st["roles"]) | {st["sessions"][sid]["actor"]} | ({st["sessions"][sid]["guard"]} if st["sessions"][sid].get("guard") else set())
+            sess = st["sessions"].get(sid)                          # F3(b): a closed session has left the state, and nobody may be in its rooms
+            cands = set(st["roles"]) | {sess["actor"]} | ({sess["guard"]} if sess.get("guard") else set()) if sess else set()
             want = {a for a in cands if P.session_access(st, a, sid)[kind]}
             have = {u for u, m in (await self.api.members(rooms[kind])).items() if m in ("join", "invite")} - {service_user(P.server_of(space))}
             if have <= want: break

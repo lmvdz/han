@@ -23,7 +23,7 @@ def _sessions(r):
     L = ["guest", "member", "owner", "nobody"]
     w = r.randrange(4)
     return {"watch": L[w], "read": L[r.randrange(w, 4)], "steer": L[r.randrange(w, 4)],
-            "modes": r.sample(["auto", "guarded"], r.randint(1, 2))}
+            "modes": r.sample(["auto", "guarded"], r.randint(1, 2)), "forceGuarded": r.random() < .4}
 
 def H(x): return hashlib.sha256(x.encode()).hexdigest()
 
@@ -38,7 +38,7 @@ def policy(r):
 
 def profile(a, revoked=False):
     kind = "service" if a == X else "agent" if a == BOT else "human"
-    return {"actor": a, "seq": 1, "actorKind": kind, "operatorConfirmed": kind != "human",
+    return {"actor": a, "seq": 1, "actorKind": kind, "operatorConfirmed": kind != "human", **({"operator": O} if kind != "human" else {}),
             "keys": {"k1": {"publicKey": "pk", "status": "revoked" if revoked else "valid"}, "k2": {"publicKey": "pk2", "status": "valid"}}}
 
 def random_entry(r, state, n):
@@ -50,7 +50,7 @@ def random_entry(r, state, n):
     cost = {"unit": unit, "amount": r.randint(0, 120)}
     kind = r.choice(["member.set", "member.set", "message", "task", "task", "task.update", "task.cancel", "effect.propose",
                      "effect.propose", "effect.approve", "effect.claim", "effect.claim", "effect.cancel", "effect.outcome",
-                     "effect.outcome", "effect.resolve", "policy.set", "checkpoint", "redact", "space.move", "x.ext", "session.open", "session.close", "session.input"])
+                     "effect.outcome", "effect.resolve", "policy.set", "checkpoint", "redact", "space.move", "x.ext", "session.open", "session.close", "session.input", "agent.release"])
     body = {
         "member.set": lambda: {"actor": r.choice(ACTORS), "role": r.choice(["owner", "member", "member", "guest", "banned", "none"])},
         "message": lambda: {"to": [r.choice(ACTORS)]},
@@ -80,7 +80,8 @@ def random_entry(r, state, n):
         "x.ext": lambda: {"anything": r.randint(0, 9)},
         "session.open": lambda: dict({"steerMode": r.choice(["auto", "guarded"])}, **({"task": pick(tasks, H("nope"))} if r.random() < .3 else {})),
         "session.close": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
-        "session.input": lambda: dict({"session": pick(list(state["sessions"]), H("nope"))}, **({"release": True} if r.random() < .2 else {})),
+        "session.input": lambda: {"session": pick(list(state["sessions"]), H("nope"))},
+        "agent.release": lambda: dict({"agent": r.choice(ACTORS)}, **({"unguard": True} if r.random() < .3 else {})),
     }[kind]()
     author = r.choice(ACTORS + [O, O, X, X])
     return {"id": H(f"e{n}"), "v": 1, "space": S, "kind": kind, "author": author, "keyId": "k1", "body": body,

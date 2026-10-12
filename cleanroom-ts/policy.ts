@@ -147,12 +147,11 @@ export function badBody(kind: string, b: A): string | null {
       if (b.steerMode !== "auto" && b.steerMode !== "guarded") return "steerMode";
       return !("task" in b) || isHex(b.task) ? null : "task";
     case "session.close": return (e = c(["session"])) ? e : isHex(b.session) ? null : "session";
-    case "session.input":
-      if ((e = c(["session"], ["release", "unguard"]))) return e;
-      if (!isHex(b.session)) return "session";
-      if ("release" in b && b.release !== true) return "release";
-      if ("unguard" in b && (b.unguard !== true || b.release !== true)) return "unguard";
-      return null;
+    case "session.input": return (e = c(["session"])) ? e : isHex(b.session) ? null : "session";
+    case "agent.release":
+      if ((e = c(["agent"], ["unguard"]))) return e;
+      if (!isActorId(b.agent)) return "agent";
+      return "unguard" in b && b.unguard !== true ? "unguard" : null;
     default:
       if (!isExtensionKind(kind)) return "unknown kind";
       if (!isObj(b)) return "extension body not an object";
@@ -247,7 +246,7 @@ function effMode(s: SpaceState, sess: A): "auto" | "guarded" | null {
   return null;
 }
 function live(s: SpaceState, sess: A): boolean {
-  if (!sess.open || !holds(s, sess.actor)) return false;
+  if (!holds(s, sess.actor)) return false;
   const m = effMode(s, sess);
   if (m === null) return false;
   return sess.human || m === "auto" || holds(s, sess.guard);
@@ -258,7 +257,6 @@ export function guardedNow(s: SpaceState, x: string): ActorId | null {
   for (const sess of Object.values(s.sessions) as A[]) {
     if (sess.actor === x && sess.guard && live(s, sess) && effMode(s, sess) === "guarded") return sess.guard;
   }
-  if (s.policy.sessions.forceGuarded === true && (s.agents as A)[x] && holds(s, x)) return (s.agents as A)[x];
   return null;
 }
 function guardsOf(s: SpaceState, e: A): string[] {
@@ -266,7 +264,17 @@ function guardsOf(s: SpaceState, e: A): string[] {
   for (const g of [(s.held as A)[e.proposer], (s.held as A)[e.executor]]) if (g && !out.includes(g)) out.push(g);
   return out.slice(0, 2);
 }
-const openApproval = (a: A, time: string) => !a.consumedBy && !a.dropped && unexpired(a.expiresAt, time);
+const openApproval = (a: A, time: string) => !a.consumedBy && unexpired(a.expiresAt, time);
+
+/** P-15 Forcing, per instruction: the guard of an instruction to `x` under `forceGuarded`, from the profile pinned for this entry.
+ *  null: not forced for this instruction; "deny": forced, but no confirmed operator holding a role here. */
+function forcedGuard(s: SpaceState, ctx: PolicyCtx, x: string, author: string, asExecutor: boolean): string | null | "deny" {
+  if (s.policy.sessions.forceGuarded !== true || x === author) return null;
+  const k = kindOf(ctx, x);
+  if (k === "human" || (k === "service" && asExecutor)) return null;
+  const v = (ctx.profiles as A)?.[x];
+  return v?.operatorConfirmed && v.operator && holds(s, v.operator) ? v.operator : "deny";
+}
 
 // ───────────────────────── P-02 read ─────────────────────────
 export function canRead(state: SpaceState, reader: string, seq: Seq): boolean {
@@ -309,6 +317,9 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, time
   const out: string[] = [e.author];
   const add = (a: string | undefined) => { if (a !== undefined && !out.includes(a)) out.push(a); };
   if (e.kind === "member.set") add(e.body?.actor);
+  if (e.kind === "session.input" && state) add((state.sessions as A)[e.body?.session]?.actor);
+  if (e.kind === "task" && Array.isArray(e.body?.to)) for (const x of e.body.to) if (typeof x === "string") add(x);
+  if (e.kind === "effect.propose") add(e.body?.executor);
   if (e.kind === "effect.claim" && state) {
     const ef = (state.effects as A)[e.body?.proposal];
     if (ef) {
@@ -443,11 +454,11 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     case "session.open": return decideSessionOpen(s, e, ctx);
     case "session.close": {
       const sess = (s.sessions as A)[b.session];
-      if (!sess) return inv("not a session");
-      if (!sess.open) return deny("session already closed");
+      if (!sess) return inv("no such session");
       return sess.actor === a || isOwner(s, a) ? ok : deny("not the session's actor or an owner");
     }
     case "session.input": return decideInput(s, e, ctx);
+    case "agent.release": return decideRelease(s, e);
     default: return inv("unknown kind");
   }
 }
@@ -545,6 +556,7 @@ function decideTask(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
     const avail = parent && parent.left ? parent.left.amount : (s.budgetLeft as A).amount;
     if (b.budget.amount > avail) return deny("budget does not fit");
   }
+  for (const x of b.to) if (forcedGuard(s, ctx, x, a, false) === "deny") return deny("a forced space needs every agent's operator here");
   return ok;
 }
 
@@ -563,6 +575,7 @@ function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (s.policy.budget && kindOf(ctx, a) !== "human") {
     if (!task || !task.open || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
   }
+  if (forcedGuard(s, ctx, b.executor, a, true) === "deny") return deny("a forced space needs every agent's operator here");
   return ok;
 }
 
@@ -679,7 +692,7 @@ function decideSessionOpen(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (!holds(s, a)) return deny("no role");
   if (!accountable(s, ctx, a)) return deny("not accountable");
   if (!s.policy.sessions.modes.includes(b.steerMode)) return deny("steerMode not allowed");
-  const open = (Object.values(s.sessions) as A[]).filter((x) => x.actor === a && x.open).length;
+  const open = (Object.values(s.sessions) as A[]).filter((x) => x.actor === a).length;
   if (open >= 64) return deny("too many open sessions");
   if (b.steerMode === "guarded" && kindOf(ctx, a) !== "human") {
     const v = (ctx.profiles as A)?.[a];
@@ -696,18 +709,18 @@ function decideSessionOpen(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
 function decideInput(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   const sess = (s.sessions as A)[b.session];
-  if (!sess) return inv("not a session");
-  if (b.release === true) {
-    const x = sess.actor;
-    if (b.unguard === true) {
-      if ((s.held as A)[x] !== a && (s.guarded as A)[x] !== a) return deny("not the guard of a guarded or held agent");
-    } else if ((s.held as A)[x] !== a) return deny("not the guard of a held agent");
-    if (!holds(s, a)) return deny("guard holds no role");
-    if (((s.outside as A)[x] ?? 0) > e.seen) return deny("an outside instruction arrived after seen");
-    return ok;
-  }
+  if (!sess) return inv("no such session");
   if (!sessionAccess(s, a as ActorId, b.session).steer) return deny("no steer right");
   if (!accountable(s, ctx, a)) return deny("not accountable");
+  if (!sess.human && forcedGuard(s, ctx, sess.actor, a, false) === "deny") return deny("a forced space needs every agent's operator here");
+  return ok;
+}
+
+function decideRelease(s: SpaceState, e: A): Decision {
+  const b = e.body as A, a = e.author as string, x = b.agent as string;
+  if ((s.held as A)[x] !== a && !(b.unguard === true && guardedNow(s, x) === a)) return deny("not the guard of a held agent, nor of a guarded one to unguard");
+  if (((s.outside as A)[x] ?? 0) > e.seen) return deny("an outside instruction arrived after seen");
+  if (!holds(s, a)) return deny("guard holds no role");
   return ok;
 }
 
@@ -736,7 +749,7 @@ function freshPhase(s: SpaceState, ef: A): string {
 /** §6.4 re-arm: cancelled if a cancel was requested, else ready if the approvals are in hand (no expiry or key checks), else awaiting-approval. */
 function rearm(s: SpaceState, ef: A): string {
   if (ef.cancelRequested) return "cancelled";
-  const live = (x: A) => !x.consumedBy && !x.dropped;
+  const live = (x: A) => !x.consumedBy;
   const rule = ruleFor(s.policy, ef.action);
   if (rule && !ef.approvals.some((x: A) => live(x) && satisfiesRule(s, rule, x.author) && !(s.policy.separateApprover && x.author === ef.proposer))) return "awaiting-approval";
   for (const g of guardsOf(s, ef)) if (!ef.approvals.some((x: A) => live(x) && x.author === g)) return "awaiting-approval";
@@ -748,9 +761,17 @@ function satisfied(s: SpaceState, ef: A, time: string): boolean {
   for (const g of guardsOf(s, ef)) if (!ef.approvals.some((x: A) => x.author === g && openApproval(x, time))) return false;
   return true;
 }
-function instruct(s: SpaceState, x: string, author: string, seq: number) {
-  const g = guardedNow(s, x);
-  if (g && author !== x && author !== g) { (s.held as A)[x] = g; (s.outside as A)[x] = seq; }
+/** An instruction to `x` (P-15): held for its guard when `x` is guarded now, or forced for this instruction from the profile pinned for this entry.
+ *  Returns the guard it was held for, if any. */
+function instruct(s: SpaceState, ctx: PolicyCtx, x: string, author: string, seq: number, asExecutor = false): string | undefined {
+  let g: string | null = guardedNow(s, x);
+  if (!g) { const f = forcedGuard(s, ctx, x, author, asExecutor); if (f && f !== "deny") g = f; }
+  if (g && author !== x && author !== g) { (s.held as A)[x] = g; (s.outside as A)[x] = seq; return g; }
+  return undefined;
+}
+/** F3 (a): a consumed approval leaves the state once the claim that consumed it has settled. */
+function pruneSettled(ef: A) {
+  ef.approvals = ef.approvals.filter((x: A) => !(x.consumedBy && ef.claims.find((c: A) => c.id === x.consumedBy)?.settled));
 }
 
 export function fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState {
@@ -766,7 +787,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     s = {
       space: e.space, head: 0, home: spaceServer(e.space), policy: structuredClone(b.policy), roles: {}, roleHistory: {}, tasks: {}, effects: {},
       budgetLeft: b.policy.budget ? { unit: b.policy.budget.unit, amount: b.policy.budget.amount } : null,
-      entries: {}, sessions: {}, held: {}, cleared: {}, outside: {}, guarded: {}, agents: {},
+      entries: {}, sessions: {}, held: {}, cleared: {}, outside: {}, guarded: {},
     } as SpaceState;
     if (isProfileSpace(e.space)) {
       s.profile = { actorKind: b.profile.actorKind, operatorConfirmed: false, keys: { [b.profile.key.keyId]: { publicKey: b.profile.key.publicKey, status: "valid" } } };
@@ -790,14 +811,9 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const t = b.actor as string;
       const was = READABLE.includes((s.roles as A)[t] ?? "none");
       if (b.role === "none") delete (s.roles as A)[t]; else (s.roles as A)[t] = b.role;
-      {
-        const v = (ctx.profiles as A)?.[t];
-        if (READABLE.includes(b.role) && v?.actorKind === "agent" && v.operatorConfirmed && v.operator) (s.agents as A)[t] = v.operator;
-        else delete (s.agents as A)[t];
-      }
       const now = READABLE.includes(b.role);
       const hist = ((s.roleHistory as A)[t] ??= []);
-      if (!was && now) hist.push({ from: seq });
+      if (!was && now) { hist.push({ from: seq }); while (hist.length > 64) hist.shift(); }
       else if (was && !now) { const last = hist[hist.length - 1]; if (last && last.to === undefined) last.to = seq; }
       break;
     }
@@ -827,7 +843,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         if (parent && parent.left) parent.left.amount -= b.budget.amount; else s.budgetLeft!.amount -= b.budget.amount;
       }
       (s.tasks as A)[id] = t;
-      for (const x of b.to) instruct(s, x, a, seq);
+      for (const x of b.to) instruct(s, ctx, x, a, seq);
       break;
     }
     case "task.update": {
@@ -852,12 +868,17 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (hg) ef.guards = [hg];
       ef.phase = freshPhase(s, ef);
       (s.effects as A)[id] = ef;
-      instruct(s, b.executor, a, seq);
+      const g = instruct(s, ctx, b.executor, a, seq, true);
+      if (g) {
+        ef.guards ??= [];
+        if (!ef.guards.includes(g)) ef.guards.push(g);
+        if (ef.phase === "ready") ef.phase = "awaiting-approval";
+      }
       break;
     }
     case "effect.approve": {
       const ef = (s.effects as A)[b.proposal];
-      for (const x of ef.approvals) if (x.author === a && !x.consumedBy && !x.dropped) x.dropped = true;
+      ef.approvals = ef.approvals.filter((x: A) => !(x.author === a && !x.consumedBy));
       const ap: A = { id, author: a, keyId: e.keyId };
       if (b.expiresAt !== undefined) ap.expiresAt = b.expiresAt;
       ef.approvals.push(ap);
@@ -896,10 +917,10 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       claim.outcome = b.result; claim.started = b.started;
       if (!own) { ef.phase = "unknown"; break; } // abandon: always unknown, reservation stays charged
       const giveBack = () => {
-        for (const x of ef.approvals) if (x.consumedBy === claim.id) {
-          delete x.consumedBy;
-          if (ef.approvals.some((y: A) => y !== x && y.author === x.author && !y.dropped && !y.consumedBy)) x.dropped = true; // superseded meanwhile (vector 94)
-        }
+        const returned = ef.approvals.filter((x: A) => x.consumedBy === claim.id);
+        for (const x of returned) delete x.consumedBy;
+        // a returned approval stays superseded if its author approved again meanwhile (A5): one open approval per author
+        ef.approvals = ef.approvals.filter((x: A) => !(returned.includes(x) && ef.approvals.some((y: A) => y !== x && y.author === x.author && !y.consumedBy)));
       };
       const settle = (cost: A | undefined) => {
         if (!claim.reserved) { claim.settled = true; return; }
@@ -920,6 +941,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         if (ef.repeatable && !ef.cancelRequested) { claim.settled = true; ef.phase = rearm(s, ef); }
         else ef.phase = "unknown";
       }
+      pruneSettled(ef);
       break;
     }
     case "effect.resolve": {
@@ -932,16 +954,17 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       } else {
         if (claim.reserved) refundClaim(s, claim, claim.reserved.amount);
         claim.settled = true;
-        for (const x of ef.approvals) x.dropped = true;
+        ef.approvals = [];
         ef.phase = rearm(s, ef);
       }
+      pruneSettled(ef);
       break;
     }
     case "space.move": s.home = b.to; break;
     case "session.open": {
       const v = (ctx.profiles as A)?.[a];
       const human = kindOf(ctx, a) === "human";
-      const sess: A = { actor: a, open: true, opened: time, steerMode: b.steerMode, steers: 0, human };
+      const sess: A = { actor: a, opened: time, steerMode: b.steerMode, steers: 0, human };
       if (b.task !== undefined) sess.task = b.task;
       if (!human && v?.operatorConfirmed && v.operator) sess.guard = v.operator;
       (s.sessions as A)[id] = sess;
@@ -949,20 +972,19 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       break;
     }
     case "session.close": {
-      const sess = (s.sessions as A)[b.session];
-      sess.open = false;
+      delete (s.sessions as A)[b.session];
       break;
     }
     case "session.input": {
       const sess = (s.sessions as A)[b.session];
-      if (b.release === true) {
-        delete (s.held as A)[sess.actor];
-        (s.cleared as A)[sess.actor] = e.seen;
-        if (b.unguard === true) delete (s.guarded as A)[sess.actor];
-      } else {
-        sess.steers += 1;
-        if (!sess.human) instruct(s, sess.actor, a, seq);
-      }
+      sess.steers += 1;
+      if (!sess.human) instruct(s, ctx, sess.actor, a, seq);
+      break;
+    }
+    case "agent.release": {
+      delete (s.held as A)[b.agent];
+      (s.cleared as A)[b.agent] = e.seen;
+      if (b.unguard === true) delete (s.guarded as A)[b.agent];
       break;
     }
     default: break;
@@ -974,7 +996,6 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
 /** P-15 "after every entry Policy also settles holds in one place". */
 function settle(s: SpaceState, createdId: string, time: string) {
   const agents = new Set<string>([...Object.keys(s.guarded), ...(Object.values(s.sessions) as A[]).map((x) => x.actor)]);
-  if (s.policy.sessions.forceGuarded === true) for (const x of Object.keys(s.agents)) agents.add(x);
   for (const x of agents) {
     const g = guardedNow(s, x);
     if (!g) continue;

@@ -17,10 +17,10 @@ const reTimeParts = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0
 const reMediaHalf = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/;
 const rePrefix = /^[a-z][a-z0-9-]{0,31}$/;
 const reExtName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-export const CORE_PREFIXES = ["space", "member", "policy", "key", "message", "task", "effect", "checkpoint", "redact", "session"];
+export const CORE_PREFIXES = ["space", "member", "policy", "key", "message", "task", "effect", "checkpoint", "redact", "session", "agent"];
 export const CORE_KINDS = ["space.create", "member.set", "policy.set", "key.add", "key.revoke", "message", "task", "task.update", "task.cancel",
   "effect.propose", "effect.approve", "effect.claim", "effect.cancel", "effect.outcome", "effect.resolve", "checkpoint", "redact",
-  "space.move", "session.open", "session.close", "session.input"];
+  "space.move", "session.open", "session.close", "session.input", "agent.release"];
 
 export const isServerName = (s: unknown): s is string => typeof s === "string" && reServer.test(s);
 export const isActorId = (s: unknown): s is string => typeof s === "string" && reActor.test(s);
@@ -156,8 +156,8 @@ export function parseStrict(text: string, big?: { found: boolean }): unknown {
     if (text.startsWith("null", i)) { i += 4; return null; }
     const m = /^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?/.exec(text.slice(i));
     if (!m) return fail("value expected");
-    // integers only: no fraction, no exponent, no leading zeros, no negatives (incl. -0)
-    if (!/^(0|[1-9][0-9]*)$/.test(m[0])) fail("non-integer number form");
+    // integers only: no fraction, no exponent, no leading zeros, no -0; a negative integer parses (G-07 (1a)) and every position that takes a count refuses it (isInt)
+    if (!/^(0|-?[1-9][0-9]*)$/.test(m[0])) fail("non-integer number form");
     const n = Number(m[0]);
     if (!Number.isSafeInteger(n)) { if (!big) fail("number out of range"); big!.found = true; i += m[0].length; return BigInt(m[0]); }
     i += m[0].length; return n;
@@ -240,7 +240,7 @@ export function validateContent(kind: string, content: any, body?: any): string 
     case "session.open": return need([], ["title"], (c) => ("title" in c && !strMax(c.title, 256)) ? "title" : null);
     case "session.input": return need(["text"], ["blobs"], (c) => !strMax(c.text, 32768) ? "text" : ("blobs" in c && blobs(c.blobs)) || null);
     case "member.set": case "policy.set": case "key.add": case "key.revoke": case "task.cancel": case "effect.claim":
-    case "effect.cancel": case "space.move": case "session.close":
+    case "effect.cancel": case "space.move": case "session.close": case "agent.release":
       return none ? null : "content not allowed";
     default: // extension: opaque Json with integer numbers
       if (none) return null;

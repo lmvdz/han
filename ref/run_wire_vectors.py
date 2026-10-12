@@ -6,8 +6,8 @@
   python ref/run_wire_vectors.py --check                                offline: the vector files are well formed and self-consistent (run by run_all.py)
 Options: --only SUBSTR...  run only vectors whose file or id contains one   -v  list every vector   --keys DIR  key files {keyId, public, private}
          (must be the config.json keys)   --json FILE  write the results   --timeout S  wait for one expected frame (default 5)
-Test mode (G-11): ServerName a.localhost, a frozen clock at 2026-01-01T00:00:00Z, the server key and actors of ref/wire-vectors/config.json
-provisioned, an empty data directory. Format of the vectors and how a server passes: ref/wire-vectors/README.md.
+Test mode (G-11): ServerName a.localhost, a clock that starts at 2026-01-01T00:00:00Z and moves only when a vector says so (`test.clock`), the server key
+and actors of ref/wire-vectors/config.json provisioned, an empty data directory. Format of the vectors and how a server passes: ref/wire-vectors/README.md.
 Needs only the Python standard library and `cryptography` (for the hello proofs and --check)."""
 import argparse, base64, hashlib, json, os, queue, re, socket, ssl, struct, subprocess, sys, tempfile, threading, time, urllib.request
 from urllib.parse import urlparse
@@ -168,12 +168,14 @@ def match(exp, act, path, ctx, key=None):
             return None if isinstance(act, str) and CHALLENGE_SHAPE.fullmatch(act) else f"{path}: challenge must be 22-128 characters of [A-Za-z0-9_-], got {act!r}"
         if exp == "<url-of-the-binding>":
             return None if isinstance(act, str) and re.fullmatch(r"wss?://\S+/han", act) else f"{path}: sequencer must be a complete ws(s):// URL ending in /han (D7, D13), got {act!r}"
+        if exp == "<posint>":
+            return None if type(act) is int and act >= 1 else f"{path}: expected a positive integer, got {act!r:.40}"
         if exp == "<cursor>":
             ok = isinstance(act, str) and 1 <= len(act) <= 1024 and act.isascii() and act.isprintable()
             if ok: ctx.vars["cursor"] = act
             return None if ok else f"{path}: a state page's `next` must be an opaque non-empty printable ASCII string of at most 1024 characters, got {act!r:.80}"
-        m = re.fullmatch(r"<receipt(?: seq=(\d+))?>", exp)
-        if m: return check_receipt(act, int(m.group(1)) if m.group(1) else None, path, ctx, key)
+        m = re.fullmatch(r"<receipt(?: seq=(\d+))?(?: time=(\S+))?>", exp)
+        if m: return check_receipt(act, int(m.group(1)) if m.group(1) else None, path, ctx, key, m.group(2))
         m = re.fullmatch(r"<profile-bootstrap (@\S+) (human|agent|service)>", exp)
         if m: return check_profile_bootstrap(act, m.group(1), m.group(2), path, ctx)
     if isinstance(exp, dict):
@@ -193,10 +195,11 @@ def match(exp, act, path, ctx, key=None):
         return f"{path}: expected {exp!r:.100}, got {act!r:.100}"
     return None
 
-def check_receipt(r, seq, path, ctx, key):
+def check_receipt(r, seq, path, ctx, key, time=None):
     if not isinstance(r, dict) or set(r) != RECEIPT_FIELDS: return f"{path}: not a Receipt: {r!r:.120}"
     cfg = ctx.cfg
     if seq is not None and r["seq"] != seq: return f"{path}: receipt seq {r['seq']}, expected {seq}"
+    if time is not None and r["time"] != time: return f"{path}: receipt time {r['time']}, expected {time}"
     if r["home"] != cfg.server or r["homeKey"] != cfg.server_key["keyId"]: return f"{path}: home/homeKey are {r['home']}/{r['homeKey']}"
     if not W.verify_receipt(r, {cfg.server: {cfg.server_key["keyId"]: cfg.server_key}}): return f"{path}: homeSig does not verify against the server key"
     want = ctx.ids.get(key)
@@ -261,9 +264,25 @@ def expand_send(frame, conn, cfg, ctx=None):
         return v
     return walk(frame, rep)
 
-def run_vector(vec, cfg, url, timeout, verbose=False):
+def nonce_of(tag):
+    """The nonce of a generated entry: the first 26 characters of the lowercase base32 of sha256("wire-vector-nonce-" + tag)."""
+    return base64.b32encode(hashlib.sha256(("wire-vector-nonce-" + tag).encode()).digest()).decode().lower().rstrip("=")[:26]
+
+def generated_entry(cfg, g, k, head):
+    """Entry k of a `generate` step: signed here by the author's config key, so that the vector file need not hold a thousand of them."""
+    sub = lambda v: walk(v, lambda x: x.replace("{k}", str(k)) if isinstance(x, str) else x)
+    content = sub(g["content"]) if "content" in g else None
+    e = {"v": 1, "space": g["space"], "kind": g["kind"], "author": g["author"], "keyId": cfg.keys[g["author"]][0], "body": sub(g["body"]),
+         "contentHash": W.content_hash(content), "refs": [], "seen": head, "nonce": nonce_of(g["nonce"].replace("{k}", str(k))), "time": cfg.c["clock"]}
+    e["sig"] = cfg.sign(g["author"], b"han-sig-v1\n" + P.entry_id(e).encode())
+    return e, content
+
+def run_vector(vec, cfg, url, timeout, verbose=False, clock=None):
+    """Runs one vector; returns (failures, expectations, generated appends). `clock` is the run's view of the test clock {wall, steady}, shared by all vectors."""
     ctx = Ctx(cfg, url)
-    conns, fails, n_exp = {}, [], 0
+    if clock is None: clock = {"wall": cfg.c["clock"], "steady": 0}
+    conns, fails, n_exp, n_gen = {}, [], 0, 0
+    ctl = []
     steps = vec["steps"]
     first = {}
     for s in steps:
@@ -300,6 +319,45 @@ def run_vector(vec, cfg, url, timeout, verbose=False):
     try:
         for i, s in enumerate(steps):
             where = f"step {i}"
+            if "clock" in s:                                                   # G-11 `test.clock`, on the runner's own authenticated connection
+                n_exp += 1
+                if not ctl:
+                    c0 = WS(url); c0.label = "ctl"; m = c0.recv(timeout)
+                    if not m or m[0] != "text": raise Fail("ctl: no challenge frame after connecting")
+                    ch = parse(m[1].decode("utf-8"))["challenge"]; who = "@alice:" + cfg.server
+                    c0.send_text(json.dumps({"id": 1, "call": "hello", "args": {"who": who, "keyId": cfg.keys[who][0], "proof": cfg.sign(who, ("han-hello-v1\n" + ch + "\n" + cfg.server).encode()), "version": 1}}))
+                    r = c0.recv(timeout)
+                    if not r or r[0] != "text" or "ok" not in parse(r[1].decode("utf-8")): raise Fail(f"ctl: set-up hello failed: {r!r:.100}")
+                    ctl.append(c0); conns["ctl"] = c0
+                c0 = ctl[0]
+                c0.send_text(json.dumps({"id": 2, "call": "test.clock", "args": s["clock"]}, separators=(",", ":")))
+                m = c0.recv(timeout)
+                want = {"wall": s["clock"].get("wall", clock["wall"]), "steady": clock["steady"] + s["clock"].get("steadyAdvance", 0)}
+                if m is None or m[0] != "text": fails.append(f"{where}: no reply to test.clock {json.dumps(s['clock'])}"); continue
+                try: f = mask_actual(parse(m[1].decode("utf-8")))
+                except Exception as ex: fails.append(f"{where}: test.clock reply is not I-JSON ({ex})"); continue
+                err = match({"id": 2, "ok": want}, f, "$", ctx)
+                if err: fails.append(f"{where}: test.clock {json.dumps(s['clock'])}: {err} (the server does not support the test clock?)")
+                else: clock.update(want)
+                continue
+            if "generate" in s:                                                # a long run of appends the runner signs itself; each reply is checked, none counts as an expectation
+                g = s["generate"]; c = get(s["conn"])
+                for k in range(g["count"]):
+                    head = g["head"] + k
+                    e, content = generated_entry(cfg, g, k, head)
+                    rid = g["firstId"] + k
+                    a = {"entry": e}
+                    if content is not None: a["content"] = content
+                    ctx.ids[(s["conn"], rid)] = P.entry_id(e)
+                    c.send_text(json.dumps({"id": rid, "call": "append", "args": a}, ensure_ascii=False, separators=(",", ":")))
+                    m = c.recv(timeout)
+                    if m is None or m[0] != "text": fails.append(f"{where} ({s['conn']}): generated entry {k}: no reply"); break
+                    try: f = mask_actual(parse(m[1].decode("utf-8")))
+                    except Exception as ex: fails.append(f"{where}: generated entry {k}: reply is not I-JSON ({ex})"); break
+                    err = match({"id": rid, "ok": "<receipt seq=%d>" % (head + 1)}, f, "$", ctx, (s["conn"], rid))
+                    if err: fails.append(f"{where} ({s['conn']}): generated entry {k}: {err}"); break
+                    n_gen += 1
+                continue
             if "http_get" in s:
                 n_exp += 1
                 try:
@@ -336,7 +394,7 @@ def run_vector(vec, cfg, url, timeout, verbose=False):
                 if len(text.encode("utf-8")) > cfg.c["limits"]["maxFrameBytes"]: fails.append(f"{where}: server frame over maxFrameBytes"); continue
                 key = (s["conn"], f.get("id") if isinstance(f, dict) else None)
                 err = match(s["expect"], mask_actual(f), "$", ctx, key)
-                if err: fails.append(f"{where} ({s['conn']}): {err}")
+                if err: fails.append(f"{where} ({s['conn']}): {err} | frame: {json.dumps(f, ensure_ascii=False, separators=(',', ':'))[:260]}")
             elif s.get("expect_close"):
                 n_exp += 1
                 end = time.time() + timeout; ok = False
@@ -361,7 +419,7 @@ def run_vector(vec, cfg, url, timeout, verbose=False):
         fails.append(f"connection error: {ex}")
     finally:
         for c in conns.values(): c.close()
-    return fails, n_exp
+    return fails, sum(any(k in st for k in ("expect", "expect_close", "expect_silence", "http_get", "clock")) for st in steps), n_gen      # every expectation of the vector, whether or not the run got that far
 
 def load_vectors(only):
     idx = json.load(open(os.path.join(VEC, "index.json"), encoding="utf-8"))
@@ -413,7 +471,7 @@ def check_files(cfg):
     idx = json.load(open(os.path.join(VEC, "index.json"), encoding="utf-8"))
     pubs = {a["actor"]: a["publicKey"] for a in cfg.c["actors"]}
     skeys = {cfg.server: {cfg.server_key["keyId"]: cfg.server_key}}
-    known = {"conn", "send", "send_raw", "send_binary", "expect", "expect_close", "expect_silence", "http_get", "expect_status", "expect_type", "expect_json"}
+    known = {"conn", "send", "send_raw", "send_binary", "expect", "expect_close", "expect_silence", "http_get", "expect_status", "expect_type", "expect_json", "clock", "generate"}
     sent = {}
     for fn in idx["files"]:
         d = json.load(open(os.path.join(VEC, fn), encoding="utf-8"))
@@ -423,7 +481,9 @@ def check_files(cfg):
             for i, s in enumerate(v["steps"]):
                 n_steps += 1
                 if not set(s) <= known: problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: unknown members {sorted(set(s) - known)}")
-                if "conn" not in s and "http_get" not in s: problems.append(f"{fn} step {i}: no conn")
+                if "conn" not in s and "http_get" not in s and "clock" not in s: problems.append(f"{fn} step {i}: no conn")
+                if "generate" in s and not {"count", "head", "firstId", "space", "kind", "author", "body", "nonce"} <= set(s["generate"]): problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: generate lacks members")
+                if "clock" in s and not (isinstance(s["clock"], dict) and set(s["clock"]) <= {"wall", "steadyAdvance"}): problems.append(f"{fn}::{v.get('id', v.get('name'))} step {i}: clock takes wall and steadyAdvance only")
                 f = s.get("send") or s.get("expect")
                 if "vectors" in d: continue
                 if "send" in s and isinstance(f, dict) and f.get("call") == "append":
@@ -468,11 +528,12 @@ def main():
     if not url: ap.error("give --url, --launch or --check")
     timeout = a.timeout or cfg.d["expectTimeoutMs"] / 1000
     results, total_exp, ok_exp = [], 0, 0
+    clock = {"wall": cfg.c["clock"], "steady": 0}
     try:
         for fn, v in load_vectors(a.only):
-            try: fails, n = run_vector(v, cfg, url, timeout, a.verbose)
-            except Exception as ex: fails, n = [f"runner error: {type(ex).__name__}: {ex}"], 0
-            results.append({"file": fn, "id": v["id"], "pass": not fails, "expectations": n, "failures": fails})
+            try: fails, n, gen = run_vector(v, cfg, url, timeout, a.verbose, clock)
+            except Exception as ex: fails, n, gen = [f"runner error: {type(ex).__name__}: {ex}"], 0, 0
+            results.append({"file": fn, "id": v["id"], "pass": not fails, "expectations": n, "generated": gen, "failures": fails})
             total_exp += n
             if a.verbose or fails: print(("PASS " if not fails else "FAIL ") + f"{fn}::{v['id']}" + ("" if not fails else "\n      " + "\n      ".join(f[:300] for f in fails[:3])))
     finally:
@@ -487,9 +548,13 @@ def main():
     pr = [r for r in results if r["file"] == "probes.json"]
     dc = [r for r in results if r["file"] == "probes-decided.json"]
     r22 = [r for r in results if r["file"] == "probes-r22.json"]
-    def line(name, rs): return f"{name}: {sum(r['pass'] for r in rs)}/{len(rs)} vectors pass ({sum(r['expectations'] for r in rs if r['pass'])}/{sum(r['expectations'] for r in rs)} expectations)"
+    r23 = [r for r in results if r["file"] == "probes-r23.json"]
+    def line(name, rs):
+        gen = sum(r.get("generated", 0) for r in rs)
+        return (f"{name}: {sum(r['pass'] for r in rs)}/{len(rs)} vectors pass ({sum(r['expectations'] for r in rs if r['pass'])}/{sum(r['expectations'] for r in rs)} expectations"
+                + (f"; {gen} generated appends, not counted" if gen else "") + ")")
     print("---")
-    for name, rs in (("operations (golden)", ops), ("agreed probes", pr), ("decided probes", dc), ("round-22 probes", r22)):
+    for name, rs in (("operations (golden)", ops), ("agreed probes", pr), ("decided probes", dc), ("round-22 probes", r22), ("round-23 probes", r23)):
         if rs: print(line(name, rs))
     print(line("TOTAL", results))
     if a.json: json.dump({"url": url, "results": results}, open(a.json, "w", encoding="utf-8"), indent=1)

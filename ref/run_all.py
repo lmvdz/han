@@ -1,6 +1,7 @@
 """Runs every check shipped with HAN v1 and writes ref/RESULTS.md.
-  python ref/run_all.py            all checks (model check takes ~15–25 min)
-  python ref/run_all.py --quick    skip the model checker
+  python ref/run_all.py            all checks, the guard model at depth 4 (model check of the timing model takes ~15–25 min)
+  python ref/run_all.py --quick    skip the timing model checker
+  python ref/run_all.py --depth5   in addition, the guard model at depth 5 (opt-in: with the round-22 model it needs far more memory and time than a default run should; model_guard.py caps its memory)
 The last row runs ref/sync_docs.py --check on the RESULTS.md written by this very run, and fails if a count or status line in the docs drifted.
 """
 import datetime, os, subprocess, sys
@@ -18,13 +19,13 @@ CHECKS = [
     ("Policy mutations must be caught by the vectors", [PY, os.path.join(HERE, "mutate_vectors.py")]),
     ("Fold totality fuzz: random histories never crash fold and keep budgets in bounds", [PY, os.path.join(HERE, "fuzz_fold.py")]),
     ("Wire mutations must be caught by the scenarios", [PY, os.path.join(HERE, "mutate_wire.py")]),
-    ("Guard model (P-15), depth 4: the invariant holds against the real Policy", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4"], "quick"),
-    ("Guard model (P-15), depth 5 (~10 min)", [PY, os.path.join(HERE, "model_guard.py")], "full"),
+    ("Guard model (P-15), depth 4: the invariant holds against the real Policy", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4"]),
+    ("Guard model (P-15), depth 5 (opt-in, --depth5)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "5"], "depth5"),
     ("Guard model mutations must each give a counterexample, depth 4 (~30 s)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4", "--all-mutations"]),
     ("Signed layer (real Ed25519): home pipeline, content validation, mirror verification, proofs, blobs, notices", [PY, os.path.join(HERE, "run_wire.py")]),
     ("Wire conformance vectors (ref/wire-vectors) are well formed: signatures, receipts, one chain (offline; live runs need a server: run_wire_vectors.py --url)", [PY, os.path.join(HERE, "run_wire_vectors.py"), "--check"]),
-    ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")]),
-    ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"]),
+    ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")], "full"),
+    ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"], "full"),
 ]
 
 SYNC = ("Docs match the checks: every count, status and claim in architecture.md, README.md and ref/README.md is derived (ref/sync_docs.py --check)",
@@ -44,12 +45,12 @@ def write_results(rows, quick):
         for n, res, last in rows: fh.write(f"| {n} | {res} | {last.replace('|', '/')} |\n")
 
 def main():
-    quick = "--quick" in sys.argv
+    quick, depth5 = "--quick" in sys.argv, "--depth5" in sys.argv
     rows, ok_all = [], True
     for name, cmd, *mode in CHECKS:
         mode = mode[0] if mode else "both"
-        if (quick and ("model_check.py" in cmd[1] or mode == "full")) or (not quick and mode == "quick"):
-            rows.append((name, "skipped (--quick)" if quick else "skipped (full run uses depth 5)", "")); continue
+        if (quick and mode == "full") or (mode == "depth5" and not depth5):
+            rows.append((name, "skipped (--quick)" if mode == "full" else "skipped (opt-in: --depth5)", "")); continue
         code, out = run(cmd)
         ok = code == 0
         ok_all &= ok

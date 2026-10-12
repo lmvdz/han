@@ -54,7 +54,7 @@
        "space": "s1:a.localhost",
        "seq": 12,
        "id": "f0f021821773808eead28aaf38b5b68e7881ee3d2c699b17b037daa883a48bba",
-       "prev": "211643332cc472e4f0f3f4681589698ce7988434bbb0fc86f6623ee81f4e7f56",
+       "prev": "75985a08d4816f4123a629dda61538d2a787a1d5f980a3bfa2ab33e8b5e741b9",
        "home": "a.localhost",
        "homeKey": "h1",
        "time": "2026-01-01T00:00:00Z",
@@ -62,7 +62,7 @@
        "profiles": {
         "@alice:a.localhost": 1
        },
-       "homeSig": "EjPdAHoIZTWoRKySOOT1rkKjLoixeU6GDgvQ5f2YbYh0MTSe6y-0Pe-bhHxMqYZhq3PYPqar_0q09JYD6PkaBg"
+       "homeSig": "bKBAR5SpZRPRWcQovr6zxUEh_x9NFozm-LKM8OwYRa6WanDNGFr12EwPwleI9achb9oG3p46Om-NGpoVmmkuAg"
       }
      }
     },
@@ -201,7 +201,7 @@
        "space": "s1:a.localhost",
        "seq": 12,
        "id": "f0f021821773808eead28aaf38b5b68e7881ee3d2c699b17b037daa883a48bba",
-       "prev": "211643332cc472e4f0f3f4681589698ce7988434bbb0fc86f6623ee81f4e7f56",
+       "prev": "75985a08d4816f4123a629dda61538d2a787a1d5f980a3bfa2ab33e8b5e741b9",
        "home": "a.localhost",
        "homeKey": "h1",
        "time": "2026-01-01T00:00:00Z",
@@ -209,7 +209,7 @@
        "profiles": {
         "@alice:a.localhost": 1
        },
-       "homeSig": "EjPdAHoIZTWoRKySOOT1rkKjLoixeU6GDgvQ5f2YbYh0MTSe6y-0Pe-bhHxMqYZhq3PYPqar_0q09JYD6PkaBg"
+       "homeSig": "bKBAR5SpZRPRWcQovr6zxUEh_x9NFozm-LKM8OwYRa6WanDNGFr12EwPwleI9achb9oG3p46Om-NGpoVmmkuAg"
       }
      }
     },

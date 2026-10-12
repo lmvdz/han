@@ -69,9 +69,10 @@
      "time": "2026-01-01T00:00:00Z",
      "durability": "local",
      "profiles": {
-      "@bob:a.localhost": 1
+      "@bob:a.localhost": 1,
+      "@x:a.localhost": 1
      },
-     "homeSig": "vTs9tPv7dyznwHB8qIrhZFOe432BhdOSwY3p3XqtFEndtjJbItm2mh00XrwMDhFidR92NMF0kvoSAmkaDV28CA"
+     "homeSig": "Nfae4wUdgKUuAyBkkDc97zzlfJvyqqsiut_MOpPh7UadgFHglLHJ77SN2hcq0CDGMGrWlIwS1xQwEsFrJoIPAg"
     }
    }
   }
