@@ -7,10 +7,14 @@ Status: draft, 2026-10-12. Decisions so far:
 - One monorepo.
 - A han-node daemon on every device; faces sit over its API.
 - Integrations run as separate processes.
+- **No harness lock-in.** Every agent is driven through ACP (Agent Client Protocol). pi, through `pi-acp`, is the reference harness, and any ACP agent should work.
+- **The sandbox is the gate.** An agent has no egress and no credentials. Its only way out is HAN's `propose` tool, and han-exec runs effects only with valid approvals. Harness permission prompts are a convenience, never the guarantee.
+- **Agents run on members' machines and on shared runners.** A runner is han-node running headless.
+- **A work-timeline engine is in the MVP.** `han-timeline` is built by a two-team clean room (§9).
 
 ## 1. The MVP: team awareness
 
-**A team of 2–4 people, each running several Claude Code agents. Everyone, agents included, sees live what every agent is working on, and can drill into any session. Nobody has to ask "what are you working on?"**
+**A team of 2–4 people, each running several coding agents (pi first; any ACP agent). Everyone, agents included, sees live what every agent is working on, and can drill into any session. Nobody has to ask "what are you working on?"**
 
 1. **A team space.** One member's always-on machine, or a small shared box, runs the sequencer. Everyone dials it by key over iroh.
 2. **`han host` per agent.** It opens a session linked to its GitHub issue and streams output and status. The host derives the status itself (step, last tool, files touched, tests, blocked or waiting); the model adds only an occasional short summary.
@@ -28,9 +32,11 @@ Status: draft, 2026-10-12. Decisions so far:
    - `team.overlaps()`
 
    Answers are marked as data and are never treated as instructions.
-5. **Overlap alerts.** Two sessions on the same files or the same issue light up on the board and notify both agents.
+5. **Overlap alerts.** Two sessions on the same issue, the same files or overlapping ranges (from their live timelines) light up on the board and notify both agents.
 6. **GitHub, one-way.** Issues become tasks; the board shows issue to agents.
 7. **The approval gate is configured per space.** For example, push to `main`, releases and outside HTTP calls need a human; everything else inside the sandbox runs freely.
+
+8. **Live work timelines.** Every agent session is a timeline over its worktree in `han-timeline`, synced to readers. Drill-down shows the agent's actual changes as they happen, before any commit. Accepting the work (merge or push) is an effect that needs approval.
 
 **Defaults where the MVP leaves a choice:**
 - Agents read each other's sessions but don't ask each other questions yet; that's the first feature after the MVP.
@@ -45,7 +51,7 @@ Status: draft, 2026-10-12. Decisions so far:
 |---|---|
 | MVP | the above |
 | Next | A2A questions and tasks; steering; approvals across people; two-way GitHub |
-| Then | GUI (Tauri); Matrix notifier bot; Linear and Jira; other agent runtimes (Codex CLI, Gemini CLI, custom); more executor actions |
+| Then | GUI (Tauri); Matrix notifier bot; Linear and Jira; release-tested support for more ACP agents (Claude Code, Codex, Gemini CLI…); more executor actions |
 | Later | mobile (uniffi, Swift and Kotlin); key-derived actor IDs; peer-to-peer homes and moves; search and summaries across teams; SSO and audit export |
 
 ## 3. Architecture
@@ -78,7 +84,8 @@ han/                       (monorepo; today's v1/ moves under spec/ and conforma
     han-net/       iroh binding: ALPN han/1, frames on QUIC streams, gossip topics, blobs
     han-seq/       sequencer engine: §4.1 pipeline, single writer, SQLite
     han-node/      device runtime, views engine, node API, supervisor
-    han-host/      agent host; drivers/claude_code (later codex, gemini…)
+    han-host/      agent host: the ACP client (pi-acp first), sandbox launch, status derivation, R-24 duties
+    han-timeline/  work-timeline engine (clean room, §9): ops DAG, timelines, CRDT text/maps/tree, sync, SQLite
     han-exec/      executor; actions/{git_push, http_request, file_write}
     han-mcp/       agent tools over the node API
   apps/
@@ -126,12 +133,12 @@ trait AgentDriver {
     async fn turn(&mut self, input: TurnInput, mode: Mode) -> Result<()>;   // Mode::{Auto, Strict}
     fn events(&mut self) -> BoxStream<'_, AgentEvent>;                      // Output, ToolCall, FileTouched, Tests, Summary, TurnEnded
 }
-trait Gate { async fn check(&self, call: &ToolCall, mode: Mode) -> GateVerdict; } // Allow | Propose(EffectPlan) | Deny
 ```
 
-- The host owns the Gate, the R-24 duties (strict triggers, taint, naming the task) and the `StatusItem` derivation.
-- A driver only runs the agent.
-- `drivers/claude_code` runs `claude` in stream-JSON mode and routes permission prompts to the Gate, through a permission-prompt tool or a PreToolUse hook. Which one is settled by the M4 spike.
+- **There is one driver: the ACP client.** A harness is just an ACP agent command (for example `npx pi-acp`) plus its sandbox profile.
+- **Safety doesn't depend on the driver.** The agent process runs in the sandbox (MXC) with no egress and no credentials, so a world action can happen only through HAN's `propose` MCP tool.
+- **ACP permission requests become UX.** The host answers them by policy (allow inside the sandbox, otherwise "use propose"), and they show on the board as `waiting-approval` hints.
+- **The host owns** the R-24 duties (strict triggers, taint, naming the task), `StatusItem` derivation, and mirroring the worktree into `han-timeline`. The driver only runs the agent.
 
 ### Action (han-exec)
 
@@ -182,18 +189,18 @@ The full findings are in `research/{intentd,coordination,agent-plumbing,rust-blo
 | Simulation | **adopt** turmoil 0.7 over the injected `Transport`/`Clock` | real iroh can't run on turmoil sockets, so han-net gets a simulated `Transport` |
 | TUI | **adopt** ratatui 0.30 | |
 | Mobile | **adopt later** uniffi 0.32, exposing only `call(json)` and `view(json, cb)` | the Spacedrive pattern |
-| Claude Code driver | **build** `drivers/claude_code` on the CLI: `-p --bare`, stream-JSON in and out, `--session-id`, `--strict-mcp-config`, and a **PreToolUse hook** passed in `--settings` with `onFailure: "block"` (CLI ≥ 2.1.295) | the hook runs before every rule and mode, and its deny wins even in bypass mode. `defer` parks the turn, so Propose = park, approve, `--resume`. Parallel tool calls fall back to deny with a reason. `--bare` stops the repo from configuring the agent. Also read `claude agents --json` and the hook events instead of re-deriving them |
-| Other agents | **adopt** ACP: `agent-client-protocol` 3.3 (pinned) as `drivers/acp` | covers Codex, Gemini CLI, Copilot CLI, goose, OpenCode… ACP permission requests are optional, so each driver declares its gate strength (`every_call` / `prompt_only`), and `Mode::Strict` refuses `prompt_only`. On ACP, Propose is a han-mcp tool and the raw action is denied |
+| (superseded) Claude Code native driver | **dropped** for ACP; notes kept for reference: `drivers/claude_code` on the CLI: `-p --bare`, stream-JSON in and out, `--session-id`, `--strict-mcp-config`, and a **PreToolUse hook** passed in `--settings` with `onFailure: "block"` (CLI ≥ 2.1.295) | the hook runs before every rule and mode, and its deny wins even in bypass mode. `defer` parks the turn, so Propose = park, approve, `--resume`. Parallel tool calls fall back to deny with a reason. `--bare` stops the repo from configuring the agent. Also read `claude agents --json` and the hook events instead of re-deriving them |
+| Agents (all) | **adopt** ACP: `agent-client-protocol` 3.3 (pinned), one client in han-host | pi through `pi-acp` (registry v0.0.34, Node 22+, pi ≥ 0.81; pi has no permission prompts by design); Claude Code through `claude-agent-acp`; Codex, Gemini CLI, Copilot CLI, goose and OpenCode. Safety is the sandbox plus the `propose` tool, so prompt fidelity doesn't matter |
 | Agent tools | **adopt** `rmcp` 3.5 (pinned) | the MCP 2026-07-28 spec is stateless, so the `team.*` tools take handles as arguments. A required `summary` argument on each call feeds `StatusItem.summary` |
 | Sandbox | **integrate** Microsoft MXC (`mxc-sdk` 1.0, Rust, MIT: Windows 11 without admin, Linux bubblewrap, macOS seatbelt) + a HAN-owned egress proxy for domain allow-lists | Claude Code's own sandbox covers shell commands only and does nothing on native Windows, so we confine the whole agent process. Fallbacks: WSL2 or Podman. Use `landlock` to harden han-exec |
 | git and GitHub | **adopt** octocrab 0.54; shell out to `git` for push; gix for reads | gix still can't push. A push is desired state: "move ref R from A to B", so a retry is safe |
 | Executor ledger | **build** a small SQLite ledger keyed by idempotency key | "unknown is not success"; invocation ids are never reused (from intentd). The job frameworks don't fit |
 | Overlap detection | **build**, in three tiers | 1. claims: advisory leases on issues and paths, with a TTL; a conflict reports who holds it and doesn't block (Agent Mail, intentd). 2. touched hunks: range intersection on `files[].hunks`. 3. real conflicts: a `gix merge-tree` merge simulation between session branches (the Clash technique). Alerts go to both agents and to the board |
-| Work timelines (CRDT) | **defer** | the MVP uses `git diff -U0` hunks. If dogfooding needs live work timelines, add a Loro 1.x extension (frontiers, `fork_at`, `checkout`, `diff`) with HAN-signed delta envelopes. the reference model stays the design reference and is never shipped: the reference model comes from a closed product, so nothing derived from the study enters the HAN repo |
+| Work timelines | **build** `han-timeline` in a two-team clean room (§9), **in the MVP** | informed by the study's evidence only through a behaviour-only functional spec; Loro and Automerge are prior art for the implementers. Updates travel in HAN-signed envelopes over iroh. `git diff -U0` hunks stay as the fallback and cross-check |
 | Agent-to-agent (Next) | **integrate later** Google A2A v1 (`a2a-lf`) as a face over the node API | signed Agent Cards fit Ed25519 profiles. A message to another agent is **data**, never injected input (intentd and Agent Relay inject it, which R-24 forbids) |
 | Existing tools | **bridges later** | `integrations/han-intentd` and Copilot or Agent HQ sessions as board rows, if they have an API |
 
-**Strategic note.** Claude Code's single-user features (agent view, cross-session messaging, hooks) overlap the MVP for one person. HAN's edge is the team: several machines and people, several agent vendors, self-hosting, and verifiable approvals. Keep han-host consuming Claude Code's signals rather than competing with them.
+**Strategic note.** Claude Code's single-user features (agent view, cross-session messaging, hooks) overlap the MVP for one person. HAN's edge is the team: several machines and people, any ACP harness, self-hosting, verifiable approvals, and live work timelines.
 
 ## 6. Rules that keep it changeable
 
@@ -212,11 +219,13 @@ The full findings are in `research/{intentd,coordination,agent-plumbing,rust-blo
 | M1 | han-core | 150/150 policy vectors; 0 differential-fuzz divergences against ref over 1000 seeds |
 | M2 | han-net + han-seq over iroh | wire vectors pass over iroh; the Python impl interoperates through iroh's Python binding |
 | M3 | han-node: client, outbox, sync, views (board, who-is-on, overlaps), node API, supervisor | a three-node turmoil simulation shows the board converging; JSON-RPC works on Windows |
-| M4 | han-host with the Claude Code driver; han-mcp; han-exec with `git_push` | **first week, a spike that answers:**<br>• does PreToolUse fire for tool calls inside subagents?<br>• do hooks given in `--settings` load under `--bare`?<br>• does `defer` and resume work?<br>• does an ACP reject carry a reason back to the agent?<br>• is MXC mature enough on Windows 11?<br>• do Claude Code's terms allow a third-party host to drive it?<br>Then a real session streams status, an agent answers "who is on auth/?" from the tools, and a gated push waits for approval and runs exactly once |
-| M5 | han-tui (board, drill-down, approvals inbox); han-github (one-way) | the full MVP story works across two machines |
+| M4 | han-host (the ACP client, sandbox launch, worktree mirroring into han-timeline); han-mcp; han-exec with `git_push` | **first week, a spike that answers:**<br>• does pi through `pi-acp` work from a non-Zed ACP client?<br>• can MXC confine a Node-based ACP agent on Windows 11, with no egress except the HAN MCP endpoint?<br>• does an ACP reject carry a reason back to the agent?<br>• does a propose-only agent stay productive?<br>Then a real session streams status, an agent answers "who is on auth/?" from the tools, and a gated push waits for approval and runs exactly once |
+| T0 | Timeline functional spec (team A, §9) | the behaviour-only spec and its vectors are reviewed: no code, no transcribed snippets |
+| T1 | han-timeline (team B, §9) | passes the T0 vectors, randomized convergence and sync tests; with HAN-signed envelopes over iroh |
+| M5 | han-tui (board, drill-down with live timelines, approvals inbox); han-github (one-way) | the full MVP story works across two machines and a shared runner, with pi plus a smoke test of two or three other ACP agents |
 | M6 | Team dogfood | 2–4 people, two weeks; issues feed the spec |
 
-M0's spec round and M1 run in parallel: the §8 rewrite doesn't touch Policy.
+M0's spec round, M1 and T0 run in parallel. T1 runs alongside M2–M4, and its integration into the host and the views is on the MVP's critical path.
 
 **Spec round 30 (part of M0):**
 - **Rewrite §8:**
@@ -235,10 +244,28 @@ M0's spec round and M1 run in parallel: the §8 rewrite doesn't touch Policy.
 
 | Risk | Plan |
 |---|---|
-| The `claude` CLI interface changes | spike first in M4; the driver trait keeps the blast radius to one module |
+| ACP adapters lag or break (pi-acp is MVP-quality) | the M4 spike; pin adapter versions; the sandbox keeps safety independent of the adapter |
 | Sandboxing on Windows | MXC first; WSL2 or podman (the existing WSL setup) as the fallback; node, TUI and exec stay native |
 | Status leaking through gossip | decided: status flows only to readers through the node; gossip carries presence only, signed, on a topic only readers know |
 | Claude Code ships team features | han-host consumes them; HAN's edge is multi-vendor, self-hosted and verifiable approvals |
 | Pinned crates churning (ACP, rmcp ship major versions often) | pin exact versions; each sits behind one trait (`AgentDriver`, han-mcp) |
 | Reliance on n0's relays | self-host `iroh-relay` for the team |
 | Interop witnesses drifting | frozen; they only need to pass the vectors and run the interop harness |
+| Provenance of han-timeline | the two-team clean room (§9); the user checks the studied product's terms before anything is published |
+| The engine on the critical path delays the dogfood | `git diff` hunks remain a working fallback for the board and overlaps |
+
+## 9. han-timeline: the two-team clean room
+
+**Why.** The engine's model is informed by a reverse-engineering study of a closed product. HAN is an open standard with a public repo, so the code must not descend from study material.
+
+| | Team A (spec writers) | Team B (implementers) |
+|---|---|---|
+| May read | the study's evidence (the study's evidence), the reference model, the study's notes | **only** `spec/timeline.md`, its vectors, and public prior art (Loro, Automerge, Eg-walker and Fugue papers) |
+| Writes | `spec/timeline.md`: data model, ids and versions, timelines, operation semantics and concurrency rules, sync protocol, storage invariants; plus behavioural vectors (input ops, expected states) | `crates/han-timeline` |
+| Must not | put code, pseudo-code transcribed from the study, addresses or snippets in the spec | read anything under the study's materials, the studied product or the evidence; use agents that have seen them |
+
+**Rules:**
+- **Separate sessions.** Team B agents get fresh contexts whose prompts point only at the spec and the vectors.
+- **A third reviewer** checks the spec for transcribed material before Team B starts. Questions from B to A go through written spec revisions, never through code.
+- **Additions beyond the studied product:** HAN-signed envelopes, actor ids that are HAN ActorIds, worktree mirroring designed from git's own semantics, and merge as an effect.
+- **Before anything is pushed publicly,** the user checks the studied product's terms for reverse-engineering clauses.
