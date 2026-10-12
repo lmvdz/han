@@ -269,3 +269,20 @@ M0's spec round, M1 and T0 run in parallel. T1 runs alongside M2–M4, and its i
 - **A third reviewer** checks the spec for transcribed material before Team B starts. Questions from B to A go through written spec revisions, never through code.
 - **Additions beyond the studied product:** HAN-signed envelopes, actor ids that are HAN ActorIds, worktree mirroring designed from git's own semantics, and merge as an effect.
 - **Before anything is pushed publicly,** the user checks the studied product's terms for reverse-engineering clauses.
+
+## 10. Stack and repository decisions (2026-10-12)
+
+| Area | Decision |
+|---|---|
+| Encoding | Signed authority entries stay JCS JSON (spec, vectors, signatures). Bulk traffic (timeline ops, session streams, sync) uses a compact binary encoding under `han/1` framing |
+| Keys | the OS keychain (`keyring`: Windows Credential Manager, macOS Keychain, Secret Service), with an encrypted-file fallback for headless runners; hardware keys later behind the same interface |
+| GUI | Tauri + TypeScript, borrowing as much as possible from t3code, agent-orchestrator and Intent's app (research: `research/gui.md`) |
+| License | code Apache-2.0 OR MIT; spec CC-BY-4.0 |
+| Storage | one SQLite file per space (log, receipts, timeline), plus one `node.db` per device (outbox, view caches, config). Leaving, moving or deleting a space is a file operation, and each space can have its own encryption key |
+| Mirroring | a file-system watcher (`notify`) on each session's worktree records every change as timeline ops, whatever made it. ACP tool-call events attribute changes to steps |
+| Types | protocol types stay normative in `han.ts`; Rust is hand-written and checked against it by extending the three-way consistency check. Node API types are Rust-first, generated to TS (specta or ts-rs) and to Swift/Kotlin (uniffi) |
+| Tooling | a root `justfile`; cargo-nextest, cargo-deny, cargo-dist; uv for Python; pnpm for TS |
+| Repo move | restructure this repo in place with `git mv` (history and blame survive) |
+| Versioning | the protocol version (`han/1`, bumped only by spec changes and negotiated through ALPN and hello) is separate from one shared workspace version (0.x) for all crates and apps |
+| Clean room | §9's process plus CI guards: `crates/han-timeline` may not import or mention the reference model or the studied product; Team B commits carry a `Clean-Room: B` trailer; `spec/timeline.md` changes need the reviewer's sign-off (CODEOWNERS) |
+| Contributions | DCO sign-off; spec changes go through written proposals (DECISIONS-style RFCs) |
