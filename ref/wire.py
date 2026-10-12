@@ -318,9 +318,10 @@ class Home:
         self.uploads = {}         # hash -> set of actors who uploaded it here
         self.supplied = set()     # (space, hash): bytes this server may serve for that space (G-01)
 
-    def append(self, entry: dict, content, profiles: dict, skip_policy=False):
+    def append(self, entry: dict, content, profiles: dict, skip_policy=False, now=None):
         """§4.1, in the one order of verdicts: 1 dedupe, 2 routing, 3 shape and sizes, 4 profile and signature, 5 Policy,
-        6 rate limit, 7 the moment-dependent `unavailable` (R-16, R-03a, R-08). The first failing check decides."""
+        6 rate limit, 7 the moment-dependent `unavailable` (R-16, R-03a, R-08). The first failing check decides.
+        `now`: the clock reading of this append, if the caller already read it (its pin loop must use the same one, P-01); else read here."""
         sp = entry.get("space")
         S = self.spaces.get(sp)
         eid = entry_id(entry)
@@ -337,7 +338,7 @@ class Home:
         err = validate_content(entry, content)
         if err: return "invalid", err
         state = S["state"] if S else None
-        now = self.clock()                                                  # read once per append
+        now = self.clock() if now is None else now                          # read once per append: the pin loop, ctx.time and the receipt time (P-01)
         if entry["kind"] == "space.move" and S:
             head = S["records"][-1]["receipt"]
             if not verify_accept(self.server_keys, entry["body"]["to"], entry["body"]["accept"], sp, head, now):
@@ -703,6 +704,8 @@ class Mirror:
         if e["kind"] == "space.move" and prev and not verify_accept(self.server_keys, e["body"]["to"], e["body"]["accept"], sp, prev, r["time"]):
             return fault("move without the target's acceptance")
         ctx = {"time": r["time"], "profiles": views}
+        if set(r["profiles"]) != set(P.relevant_actors(S["state"], dict(e, id=eid), ctx)):                # P-01: exactly the last list, at the receipt time
+            return fault("receipt pins other actors than relevantActors names")
         d = P.decide(S["state"], dict(e, id=eid), ctx)                                                     # replay
         if not d["allow"]: return fault(f"home accepted a forbidden entry: {d['reason']}")
         S["state"] = P.fold(S["state"], {"entry": dict(e, id=eid), "content": None, "receipt": r}, ctx)

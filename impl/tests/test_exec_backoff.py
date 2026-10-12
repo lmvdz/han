@@ -49,3 +49,26 @@ async def test_unsupported_and_unsafe_effects_are_declined_once(env, execs):
 def _count(msgs, n):
     async def f(): return len(await msgs()) == n
     return f()
+
+async def test_denied_claim_is_tried_once_per_head(env, execs):
+    """X-09: an executor claims every open effect it is the executor of and lets Policy judge, but at most once per head: a claim
+    refused before approval (E3) is journalled `void` once, and not sent again while the head stays put however often the executor
+    is woken; once the head moves it tries again, and after the approval the claim is ordered."""
+    a = await team(env)
+    plan = file_plan("once.txt", "x")
+    pid, _ = await propose(a, plan, f"@exec:{env.server}")
+    ex = make_exec(env, execs); await ex.start()
+    def voids():
+        return [c for c, evs in ex.journal.claims().items() if not c.startswith("decline:") and evs and evs[0][1].get("proposal") == pid
+                and any(n == "void" for n, _ in evs)]
+    await until(lambda: len(voids()) == 1, what="the first refused claim")
+    for _ in range(5):                                            # woken at the same head: no new claim
+        ex._wake[S].set(); await asyncio.sleep(0.1)
+    assert len(voids()) == 1, voids()
+    await a.append(*a.make_entry("message", S, {}, {"text": "the head moves"}))
+    await until(lambda: len(voids()) == 2, what="a second refused claim after the head moved")
+    await asyncio.sleep(0.3)
+    assert len(voids()) == 2
+    await approve(a, pid, plan)
+    await until(phase_is(a, pid, "succeeded"), what="succeeded")
+    assert len(voids()) == 2 and len(await records_of(a, "effect.claim")) == 1

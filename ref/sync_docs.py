@@ -52,7 +52,7 @@ def facts_exist(F):
     F["wv_generated"] = f"{sum(f[5] for f in fam):,}"
     F["wv_families"] = "; ".join(f"{f[2]} {f[0]}: {f[3]:,} expectations" + (f" (and {f[5]:,} generated appends the runner checks, not counted)" if f[5] else "") for f in fam)
     F["wv_family_ops"], F["wv_family_ops_exp"] = next((f[1], f[3]) for f in fam if f[0].startswith("operations"))
-    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes"), ("r24", "round-24 probes"), ("r25", "round-25 probes")):
+    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes"), ("r24", "round-24 probes"), ("r25", "round-25 probes"), ("r27", "round-27 probes")):
         row = next((f for f in fam if f[0] == name), None)
         F[f"wv_{key}_vec"], F[f"wv_{key}_exp"] = (row[2], row[3]) if row else (0, 0)
     return {t[1] for t in tests}, {n.split("::", 1)[1] for n, _ in wires}

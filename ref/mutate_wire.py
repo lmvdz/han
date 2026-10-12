@@ -17,6 +17,8 @@ RECEIPT7 = '        prev = S["records"][-1]["receipt"] if S else None           
 MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text and replacement may both be tuples of several edits
     ("P-01", "the pin loop stops after one call", "            if not new: break", "            break"),
     ("P-01", "everything fetched is pinned", "        return {a: fetched[a] for a in need} if all(", "        return dict(fetched) if all("),
+    ("R-14", "mirror accepts any pins", 'return fault("receipt pins other actors than relevantActors names")', "pass"),
+    ("R-14", "mirror accepts over-pinning", 'if set(r["profiles"]) != set(P.relevant_actors(', 'if not set(r["profiles"]) >= set(P.relevant_actors('),
     ("P-01", "an unfetchable required actor is left out", "if all(a in fetched for a in need) else None", "if True else None"),
     ("R-01", "dedupe after validation", '''        if S:                                                               # 1 dedupe first (R-01)
             for rec in S["records"]:

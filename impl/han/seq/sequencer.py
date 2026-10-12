@@ -255,14 +255,15 @@ class Sequencer:
             if not W.verify_entry(entry, author): raise _invalid("signature")
             S = self.home.spaces.get(sp)
             state = S["state"] if S else None
-            need = self.pin_actors(state, dict(entry, id=eid))                           # the profiles to pin (all of P-01)
+            now = self.now_str()                                                         # read once: the pin loop, Policy's ctx.time and the receipt time (§4.1 step 4(c))
+            need = self.pin_actors(state, dict(entry, id=eid), now=now)                  # the profiles to pin (all of P-01)
         except WireError: raise
         except (TypeError, KeyError, ValueError, AttributeError, RecursionError) as ex:
             raise _invalid(f"malformed: {type(ex).__name__}")
         profiles = {a: v for a in need if (v := self.profile(a))}
         before = len(S["records"]) if S else 0
         try:
-            code, res = self.home.append(entry, content, profiles)                       # 5 Policy, 6 rate limit, 7 the moment-dependent `unavailable`
+            code, res = self.home.append(entry, content, profiles, now=now)              # 5 Policy, 6 rate limit, 7 the moment-dependent `unavailable`
         except (TypeError, KeyError, ValueError, AttributeError) as ex:                 # a shape the validators let through: invalid, not a crash
             raise _invalid(f"malformed: {type(ex).__name__}")
         if code != "ok":
@@ -296,12 +297,13 @@ class Sequencer:
             except Exception: log.exception("ordered hook failed")        # the record is durable and receipted; a hook cannot undo it
         return res
 
-    def pin_actors(self, state, entry, fetch=None) -> list[str]:
+    def pin_actors(self, state, entry, fetch=None, now=None) -> list[str]:
         """P-01 (M3): Policy's relevant_actors is the whole pin rule; this only fetches. Call it with the views fetched so far, fetch what
         it names that was not tried yet, and call again until nothing new (three rounds at most). The last list is what the receipt pins;
-        an actor in it that could not be fetched makes the entry `unavailable` (the caller). `fetch(actor)` gives a ProfileView or None (default: self.profile)."""
+        an actor in it that could not be fetched makes the entry `unavailable` (the caller). `fetch(actor)` gives a ProfileView or None (default: self.profile).
+        `now` is the append's one clock reading, which Policy then gets as ctx.time and the receipt carries (§4.1 step 4(c)); default: read it here."""
         fetch = fetch or self.profile
-        now = self.now_str()
+        now = self.now_str() if now is None else now
         fetched, tried = {}, set()
         need = []
         for _ in range(3):

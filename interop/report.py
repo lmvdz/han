@@ -125,7 +125,7 @@ OPDESC = {
     "member.set": "append three member.set entries -> receipts",
     "message": "append message with `to`, and a message with escapes/astral/format chars (JCS and I-JSON stress)",
     "read": "read after 0 -> record items, then end",
-    "read.state": "read with state:true -> state item, record items, end",
+    "read.state": "state {space} -> one page {state} (H10 a: the state is its own call; the golden transcript, recorded as read with state:true, is split into state then read)",
     "follow": "read with follow:true from the head; a live record arrives; cancel",
     "subscribe": "subscribe after head; a live record arrives; cancel",
     "signal": "subscribe live-only; another actor signals; signal item with `from`; cancel",
@@ -285,7 +285,7 @@ def main():
     base = fs.get("ts->py")
     for k in ("ts->ts", "py->ts", "py->py"):
         d = diff_json(base, fs[k]) if base and fs.get(k) else [("?", "missing", "missing")]
-        w(f"- final `read {{state:true}}` of s1, {k} vs ts->py: " + ("identical" if not d else "DIFFERENT: " + "; ".join(f"`{p}` {x} vs {y}" for p, x, y in d[:6])))
+        w(f"- final `state {{space: s1}}` (one page) of s1, {k} vs ts->py: " + ("identical" if not d else "DIFFERENT: " + "; ".join(f"`{p}` {x} vs {y}" for p, x, y in d[:6])))
     cl = {}
     for e, s in (("ts", "py"), ("py", "py"), ("py", "ts"), ("ts", "ts")):
         c = (execs.get((e, s, "late"), {}).get("claims") or [{}])[0]

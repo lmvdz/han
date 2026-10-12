@@ -15,7 +15,7 @@ def third_party(env):
 def skip_policy(env):
     """Make the home order whatever it is given (a doctored sequencer). Returns a function that restores it."""
     orig = env.seq.home.append
-    env.seq.home.append = lambda e, c, p, skip_policy=False: orig(e, c, p, skip_policy=True)
+    env.seq.home.append = lambda e, c, p, skip_policy=False, **kw: orig(e, c, p, skip_policy=True, **kw)
     def restore(): env.seq.home.append = orig
     return restore
 

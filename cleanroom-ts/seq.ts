@@ -238,30 +238,39 @@ export class Sequencer {
     if (entry.kind === "space.move") this.checkAccept(sp, entry);
     // 4. the author's profile and the signature, then the other relevant actors (the order of verdicts, E5)
     const time = this.now();
-    const pins: Record<string, number> = {};
-    const profiles: A = {};
-    const pin = (actor: string) => {
-      if (actor in pins) return;
-      const own = state?.profile !== undefined && actor === profileActorOf(state.space) && actor === entry.author;
-      const v = this.profile(actor);
-      pins[actor] = v.seq;
-      if (!own) profiles[actor] = v;
+    // `time` is read once: the pin loop, Policy's ctx.time (step 5) and the receipt time are the same moment (P-01, §4.1 step 4(c))
+    const fetched: Record<string, A> = {};             // every view fetched (an unreachable actor is tried, not fetched)
+    const failed: Record<string, unknown> = {};        // actor -> why it could not be fetched
+    const fetch = (actor: string) => {
+      if (actor in fetched || actor in failed) return;
+      try { fetched[actor] = this.profile(actor); } catch (x) { failed[actor] = x; }
     };
-    pin(entry.author);
-    const authorKeys0 = state?.profile !== undefined && entry.author === profileActorOf(state.space) ? state.profile.keys : profiles[entry.author]?.keys;
+    const isOwn = (actor: string) => state?.profile !== undefined && actor === profileActorOf(state.space) && actor === entry.author;
+    fetch(entry.author);
+    if (entry.author in failed) throw failed[entry.author];
+    const authorKeys0 = state?.profile !== undefined && entry.author === profileActorOf(state.space) ? state.profile.keys : fetched[entry.author]?.keys;
     const k0 = authorKeys0?.[entry.keyId];
     if (k0 && !verifyBytes(k0.publicKey, sigMessage(id), entry.sig)) throw err("invalid", "bad signature");
+    let need: string[] = [entry.author];
     if (!state && isProfileSpace(entry.space)) { /* only the author */ }
     else {
-      // P-01: Policy's relevantActors is the whole pin rule; this only fetches. Call it with the profiles fetched so far, fetch what it names that
-      // was not tried yet, and call again until it names nothing new: three calls at most (an actor it can't fetch makes the append `unavailable`)
+      // P-01: Policy's relevantActors is the whole pin rule; this only fetches. Call it with the views fetched so far, fetch what it names
+      // that was not tried yet, and call again until it names nothing new: three calls at most. The receipt pins exactly the last list; an
+      // actor in it that could not be fetched makes the append `unavailable` (one tried earlier and dropped from the list, e.g. a candidate
+      // after the first valid key, does not)
+      const viewsOf = () => { const o: A = {}; for (const a in fetched) if (!isOwn(a)) o[a] = fetched[a]; return o; };
       for (let call = 1; ; call++) {
-        const fresh = relevantActors(state, entry, { time, profiles }).filter((a) => !(a in pins));
+        need = relevantActors(state, entry, { time, profiles: viewsOf() });
+        const fresh = need.filter((a) => !(a in fetched) && !(a in failed));
         if (fresh.length === 0) break;
         if (call === 3) throw err("unavailable", "relevantActors still names new actors after three calls");
-        for (const a of fresh) pin(a);
+        for (const a of fresh) fetch(a);
       }
+      for (const a of need) if (a in failed) throw failed[a];
     }
+    const pins: Record<string, number> = {};
+    const profiles: A = {};
+    for (const a of need) { pins[a] = fetched[a].seq; if (!isOwn(a)) profiles[a] = fetched[a]; }
     // own-profile-space author: its view is the space's own state; record its seq as the head before this entry
     if (state?.profile !== undefined && entry.author === profileActorOf(state.space)) pins[entry.author] = state.head;
     // 6. policy, with the steady clock rounded down (R-03a)

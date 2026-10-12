@@ -873,6 +873,29 @@ assert ORC.state(BC, A("carol"), agent=A("bob"))[0] == "not_found"
 r25.append(vec("K7a", "`state {agent}` (an ActorId) is `{space, head, home, policy, held, guarded, lastOutside}` with each map cut to that actor (a GuardInput, M5): one frame, no `next`, nothing that grows, empty maps for an actor in none of them; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found",
                steps, ["§3", "G-09", "K7", "M5"], "ok x5 (incl. at 3, head 3), invalid x8, not_found", source="maker (oracle: ref/wire.py Home)"))
 
+# ───────────── probes-r27.json: round-26 review N3 (P-01: the receipt pins exactly the last relevantActors list) ─────────────
+r27 = []
+# Two members approve; the claim's E3 candidates stop at the first with a valid key (bob), so the receipt pins the executor, the proposer and bob, and not
+# carol. A server that pins every actor it tried (the first relevantActors call names every candidate, as no view is known yet) also pins carol, and a
+# carol it cannot reach would block the claim. A vector cannot make a server unreachable, so it pins the exact receipt; the verifier check of R-14
+# (receipt.profiles keys = relevantActors at the receipt time) and wire scenario "claim pins stop at the first valid candidate" cover the rest.
+PN = "pn:" + SERVER
+PN_POLICY = dict(SP_POLICY, approvals=[{"action": "file.write", "approvers": ["member"]}], separateApprover=False)
+e, c, r = oa("alice", "space.create", {"policy": PN_POLICY}, {"name": "pins"}, space=PN, tag="pn-create")
+steps = put(al, 2, e, c, r)
+for k, who in enumerate(("bob", "carol", "x"), start=3): steps += member(al, PN, who, "member", k)
+planp = {"action": "file.write", "target": "out/pn.txt", "args": {"content": "pins"}}
+dgp = hashlib.sha256(P.jcs(planp)).hexdigest()
+e, c, r = oa("alice", "effect.propose", {"executor": xc, "action": "file.write", "planDigest": dgp, "repeatable": False}, {"plan": planp}, space=PN, tag="pn-propose")
+steps += put(al, 6, e, c, r); pnp = r["id"]
+e, c, r = oa("bob", "effect.approve", {"proposal": pnp, "planDigest": dgp}, space=PN, tag="pn-approve-bob"); steps += put(bo, 7, e, c, r)
+e, c, r = oa("carol", "effect.approve", {"proposal": pnp, "planDigest": dgp}, space=PN, tag="pn-approve-carol"); steps += put(ca, 8, e, c, r)
+e, c, r = oa("x", "effect.claim", {"proposal": pnp, "attempt": 1, "instance": "k1", "window": PN_POLICY["launchWindow"]}, space=PN, tag="pn-claim")
+assert set(r["profiles"]) == {xc, al, bo}, r["profiles"]
+steps += put(xc, 9, e, c, r)
+r27.append(vec("N3a", "P-01: the receipt pins exactly the last relevantActors list: in `%s` (approvals by any member) alice proposes with executor x, bob then carol approve; x's claim is ordered with a receipt whose `profiles` are x, alice and bob (the E3 candidates up to and including the first with a valid key), not carol, though the first relevantActors call names her" % PN,
+               steps, ["P-01", "§4.1", "R-14", "E3"], "ok x8, the claim's receipt exact", source="maker (oracle: ref/wire.py Home)"))
+
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""
     head = json.dumps({k: v for k, v in doc.items() if k != "vectors"}, ensure_ascii=False)[:-1]
@@ -886,10 +909,11 @@ dump_vectors(os.path.join(OUT, "probes-r22.json"), {"format": "han-wire-vectors/
 dump_vectors(os.path.join(OUT, "probes-r23.json"), {"format": "han-wire-vectors/1", "kind": "r23", "note": "Round-23 coverage (DECISIONS-r23.md F4, F8; architecture.md G-11 test.clock, G-03, G-07 (1a), G-09, R-03a, R-16, section 4.1). Run last: they move the test clock. Every expected value is from ref/wire.py (W.Home) driven with the same entries and the same clock moves. Each vector that moves the wall clock puts it back before it ends.", "vectors": r23})
 dump_vectors(os.path.join(OUT, "probes-r24.json"), {"format": "han-wire-vectors/1", "kind": "r24", "note": "Round-24 coverage (DECISIONS-r24.md H3, H10 a; architecture.md section 3 state, G-09, G-11 test.limits). Run last: they lower and restore maxFrameBytes (test.limits). Every expected value is from ref/wire.py (W.Home) driven with the same entries; the cursor of a state page is exact.", "vectors": r24})
 dump_vectors(os.path.join(OUT, "probes-r25.json"), {"format": "han-wire-vectors/1", "kind": "r25", "note": "Round-25 coverage (DECISIONS-r25.md K7; architecture.md section 3 state, G-09). Run after probes-r24.json: they use its space `bc:a.localhost`. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r25})
+dump_vectors(os.path.join(OUT, "probes-r27.json"), {"format": "han-wire-vectors/1", "kind": "r27", "note": "Round-27 coverage (round-26 review N3; architecture.md P-01, section 4.1 step 4, R-14). Run after probes-r25.json. Every expected value is from ref/wire.py (W.Home) driven with the same entries; the claim's receipt is exact, so its `profiles` pins are.", "vectors": r27})
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})
-index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json", "probes-r25.json"]
+index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json", "probes-r25.json", "probes-r27.json"]
 
 import run_wire_vectors as RV     # the runner's generated entries must be byte for byte the oracle's: check three of them
 _cfg = RV.Cfg()
@@ -901,5 +925,5 @@ dump(os.path.join(OUT, "index.json"), index)
 if STALE:
     print("STALE GOLDEN: the oracle's state differs from the recorded state in", ", ".join(f"{fn} (steps {s})" for fn, s in STALE.items()))
     print("  re-record the operation files with interop/run.py then interop/report.py once both servers follow the new state; until then the operation files and the probes built from them are not conformant")
-print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "round-25 probes:", len(r25), "head after agreed:", HEAD_AFTER_AGREED)
+print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "round-25 probes:", len(r25), "round-27 probes:", len(r27), "head after agreed:", HEAD_AFTER_AGREED)
 sys.exit(2 if STALE else 0)
