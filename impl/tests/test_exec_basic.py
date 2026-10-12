@@ -40,7 +40,7 @@ async def test_http_post_allow_list(env, execs):
         await until(phase_is(a, p1, "succeeded"))
         await asyncio.sleep(0.4)
         assert http.hits == 1 and http.bodies == ['{"n": 1}']
-        assert (await state(a))["effects"][p2]["phase"] == "ready" and len((await state(a))["effects"][p2]["claims"]) == 0
+        assert (await state(a))["effects"][p2]["phase"] == "open" and len((await state(a))["effects"][p2]["claims"]) == 0
     finally: await http.stop()
 
 def test_sandbox_and_urls(tmp_path):

@@ -128,7 +128,7 @@ async def test_e6_input_queued_before_a_hold_runs_strict_after_it(env):
     await until(lambda: not agent.first)
     queued = await steer(cl["alice"], sid, "second")
     hold = await steer(cl["carol"], sid, "push release")
-    assert hold["seq"] > queued["seq"] and (await state(cl["alice"]))["held"] == {BOT: ALICE}
+    assert hold["seq"] > queued["seq"] and (await state(cl["alice"]))["held"] == {BOT: True}
     at, _ = await host._state_at(queued["seq"], queued["profiles"])
     assert BOT not in at["held"]                                     # at the input's seq the agent was not held
     agent.gate.set()
@@ -241,8 +241,8 @@ async def test_e2_session_less_agent_is_held_by_a_task_when_forced(env):
     await cl["carol"].append(e, c)
     st = await state(cl["alice"])
     prof = (await cl["alice"].read_state("profile:" + BOT))["profile"]
-    assert st["held"] == {BOT: ALICE} and st["guarded"] == {}                                    # held at the instruction, not guarded by a choice
-    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "held": True, "forced": True}       # H8: the operator of the pinned profile
+    assert st["held"] == {BOT: True} and st["guarded"] == {}                                    # held at the instruction, not guarded by a choice
+    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "held": True, "guarded": False, "forced": True}       # H8: the operator of the pinned profile
 
 async def test_e2_unforced_session_less_agent_is_not_held_by_a_task(env):
     cl, botc = await world(env)
@@ -257,7 +257,7 @@ async def test_e2_host_runs_a_forced_agents_task_strict(env):
     await session_id(host)
     await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"}))
     await until(lambda: agent.calls)
-    assert [m for _, m in agent.calls] == ["strict"] and host.held and host.guarded_now == ALICE
+    assert [m for _, m in agent.calls] == ["strict"] and host.held and host.guarded_now
     assert not [r for r in await records(cl["alice"], author=BOT) if r["entry"]["kind"] == "agent.release" or {"release", "unguard"} & set(r["entry"]["body"])]       # the host never lets go
     task.cancel()
 

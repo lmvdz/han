@@ -17,7 +17,8 @@ Every interleaving of these actions is explored (BFS, states deduplicated):
 
 Properties (architecture.md §10):
   AtMostOneLaunchPerClaim · NoLaunchWithoutReceipt · NoLaunchAfterAbandon · HonestNotStarted · HonestStarted
-  RevokedBeforeClaimNeverLaunches · UnknownNeverSilentlyRetried (launches ≤ 1 + resolve(failed) statements that were
+  RevokedBeforeClaimNeverLaunches · AttemptLimit (scenario `limit`: MAX_ATTEMPTS lowered to 2, so the limit is reachable in
+  every interleaving, and non-vacuous: some run reaches it) · UnknownNeverSilentlyRetried (launches ≤ 1 + resolve(failed) statements that were
   already false when made, i.e. made after a launch: honest resolves never allow a second run)
 
 Usage:  python model_check.py [--scenario timing|single|all]       check the spec as written
@@ -54,7 +55,10 @@ BOUNDS = {"timing": {"attempts": 1, "crashes": 1, "ticks": 4, "ticksizes": (9, 9
           "drift":  {"attempts": 1, "crashes": 1, "ticks": 4, "ticksizes": (9, 91, 109), "delay": True, "setwindow": False,
                      "clocks": ((0, (6, 5), (4, 5)),)},
           "single": {"attempts": 2, "crashes": 1, "ticks": 2, "ticksizes": (50, 250), "delay": False, "setwindow": False,
+                     "clocks": ((0, (1, 1), (1, 1)),)},
+          "limit":  {"attempts": 3, "crashes": 2, "ticks": 0, "ticksizes": (), "delay": False, "setwindow": False,
                      "clocks": ((0, (1, 1), (1, 1)),)}}
+LIMIT = 2                    # the "limit" scenario runs the real rule with MAX_ATTEMPTS lowered to this, so every interleaving reaches it
 def bound(k): return BOUNDS[SCENARIO][k]
 MUTATIONS = {
     "no-launch-journal": "X-04 broken: executor launches without journaling `launching`",
@@ -67,6 +71,7 @@ MUTATIONS = {
     "one-sided-drift-margin": "P-09 broken: the margin covers drift of one clock only (round-5 formula)",
     "no-E2": "P-07 E2 broken: claim ignores proposer removal and key revocation",
     "abandon-anytime": "P-09 broken: owner may abandon a claim immediately",
+    "unbounded-attempts": "P-07 E5 broken: no attempt limit",
 }
 MUT = None
 SCENARIO = "single"
@@ -111,6 +116,7 @@ def patch():
                 ctx = dict(ctx, profiles=dict(ctx["profiles"], **{eff["proposer"]: prof(eff["proposer"])}))
             return _orig_claim(state, entry, ctx, role)
         POL._claim = claim
+    POL.MAX_ATTEMPTS = 10**9 if MUT == "unbounded-attempts" else LIMIT if SCENARIO == "limit" else 64
     POL.DRIFT_PPM = MODEL_DRIFT_PPM if SCENARIO == "drift" else 10_000     # the exaggerated bound only where rates differ
     if MUT == "no-quantization-margin":
         POL.abandon_after = lambda w, drift_ppm=None: w
@@ -199,6 +205,13 @@ def deadline_ok(st, sp, a):
         return local_now < (claim_receipt_time(st, sp, a) + w - STALL) * DS
     return local_now - dict(st.sent)[(sp, a)] < (w - STALL) * DS
 
+def claimable(st, sp, S, a):
+    """The executor claims when E3 would pass now (it reads the effect and applies the rule itself, §6.4): a dry-run of Policy's own decision."""
+    eff = S["effects"].get(PR)
+    if not eff or eff["phase"] != "open" or len(eff["claims"]) + 1 != a: return False
+    e = E(f"dry-{sp[:2]}-{a}", sp, "effect.claim", X, {"proposal": PR, "attempt": a, "instance": "k1", "window": S["policy"]["launchWindow"]})
+    return POL.decide(S, e, ctx_for(st))["allow"]
+
 def init_states():
     out = []
     for clk in bound("clocks"):
@@ -218,7 +231,7 @@ def successors(st):
     for sp in spaces:
         S0 = state_of(st.logs, sp)
         e0 = S0["effects"].get(PR) if S0 else None
-        if e0 and e0["phase"] in ("awaiting-approval", "ready") and not any(not a.get("consumedBy") and not a.get("dropped") for a in e0["approvals"]):
+        if e0 and e0["phase"] == "open" and not any(not a.get("consumedBy") and not a.get("dropped") for a in e0["approvals"]):
             out.append((f"O approve {sp[:2]}", append(st, E(f"ap-{sp[:2]}-{len(dict(st.logs).get(sp, ()))}", sp, "effect.approve", O, {"proposal": PR, "planDigest": DG}))))
         if SCENARIO == "single":
             out.append((f"O cancel {sp[:2]}", append(st, E(f"cx-{sp[:2]}", sp, "effect.cancel", O, {"proposal": PR}))))
@@ -259,7 +272,7 @@ def successors(st):
             eff = S["effects"].get(PR) if S else None
             for a in range(1, bound("attempts") + 1):
                 key = (sp, a); cid = claim_id(sp, a)
-                if key not in j and eff and eff["phase"] == "ready" and len(eff["claims"]) + 1 == a:
+                if key not in j and eff and claimable(st, sp, S, a):
                     out.append((f"X journal claiming {sp[:2]}{a}", (st.with_(journal=freeze({**j, key: "claiming"}),
                                                                              wset=freeze({**dict(st.wset), key: S["policy"]["launchWindow"]})), "allow")))
                 if j.get(key) == "claiming" and key not in sent:
@@ -344,6 +357,9 @@ def check(st):
             if e["kind"] == "effect.outcome" and e["body"]["started"] == "yes":
                 a = CLAIM_ATTEMPT[e["body"]["claim"]]
                 if not w.get((sp, a)): return f"HonestStarted: {sp}#{a} reported started but never launched"
+    for sp, log in logs.items():                                  # AttemptLimit (P-07 E5): no effect is ever claimed more than MAX_ATTEMPTS times
+        if sum(1 for x in log if json.loads(x[0])["kind"] == "effect.claim") > (LIMIT if SCENARIO == "limit" else 64):
+            return f"AttemptLimit: {sp} holds more than {LIMIT} claims of one effect"
     if sum(w.values()) > 1 + st.false_resolves:
         return f"UnknownNeverSilentlyRetried: {sum(w.values())} launches, {st.false_resolves} false resolve(failed)"
     return None
@@ -354,10 +370,11 @@ def explore():
     starts = init_states()
     seen = {s.key(): None for s in starts}
     q = deque(starts)
-    launched = False
+    launched = reached = False
     while q:
         s = q.popleft()
         launched = launched or any(n for _, n in s.world)
+        reached = reached or any(sum(1 for x in log if json.loads(x[0])["kind"] == "effect.claim") >= LIMIT for _, log in s.logs)
         err = check(s)
         if err:
             trace, k = [], s.key()
@@ -370,6 +387,8 @@ def explore():
                 q.append(n)
     if not launched:
         return len(seen), "VACUOUS: no reachable state launches anything; the model is not exercising the protocol", []
+    if SCENARIO == "limit" and not reached:
+        return len(seen), "VACUOUS: no reachable state holds LIMIT claims of one effect", []
     return len(seen), None, None
 
 def main():
@@ -377,13 +396,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mutation", choices=sorted(MUTATIONS))
     ap.add_argument("--all-mutations", action="store_true")
-    ap.add_argument("--scenario", choices=["timing", "drift", "single", "all"], default="all")
+    ap.add_argument("--scenario", choices=["timing", "drift", "single", "limit", "all"], default="all")
     args = ap.parse_args()
     if args.all_mutations:
         ok = True
         for m in sorted(MUTATIONS):
             sc = {"deadline-from-receipt-time": "timing", "no-window-check": "timing", "window-not-pinned": "timing",
-                  "executor-uses-current-window": "timing", "no-quantization-margin": "timing", "one-sided-drift-margin": "drift"}.get(m, "single")
+                  "executor-uses-current-window": "timing", "no-quantization-margin": "timing", "one-sided-drift-margin": "drift",
+                  "unbounded-attempts": "limit"}.get(m, "single")
             r = subprocess.run([sys.executable, __file__, "--mutation", m, "--scenario", sc], capture_output=True, text=True, encoding="utf-8")
             caught = r.returncode == 1 and "VIOLATION" in r.stdout and "VACUOUS" not in r.stdout
             print(f"{'caught ' if caught else 'MISSED '} {m:28} {r.stdout.strip().splitlines()[0] if r.stdout.strip() else r.stderr[-300:]}")
@@ -391,7 +411,7 @@ def main():
         print("all mutations caught" if ok else "SOME MUTATIONS MISSED")
         return 0 if ok else 2
     MUT = args.mutation
-    for sc in (["timing", "drift", "single"] if args.scenario == "all" else [args.scenario]):
+    for sc in (["timing", "drift", "single", "limit"] if args.scenario == "all" else [args.scenario]):
         SCENARIO = sc
         n, err, trace = explore()
         if err:
@@ -402,7 +422,8 @@ def main():
         extra = {"timing": f"executor clock offsets {[c[0] / DS for c in b['clocks']]} s, arbitrary claim delay, "
                            f"stall<={STALL}s on the executor clock, whole-second receipts, launchWindow changed {W}→{W_SHORT} or {W_LONG} s at any time, abandon",
                  "drift": f"clocks {b['clocks']} (home 1.2x fast, executor 0.8x slow: drift exaggerated to ±20%), arbitrary claim delay, stall<={STALL}s on the executor clock, whole-second receipts, abandon",
-                 "single": "revocation of membership and key, cancel, abandon"}[sc]
+                 "single": "revocation of membership and key, cancel, abandon",
+                 "limit": f"MAX_ATTEMPTS lowered to {LIMIT}; a crash after each claim re-opens the effect"}[sc]
         print(f"[{sc}] {n} states explored; ALL PROPERTIES HOLD (attempts<={b['attempts']}, crashes<={b['crashes']}, "
               f"ticks<={b['ticks']} of {'/'.join('+%gs' % (t / DS) for t in b['ticksizes'])}; {extra})", flush=True)
     return 0

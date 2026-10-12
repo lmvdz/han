@@ -301,7 +301,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot2:b.example": "@op:b.example"
+     "@bot2:b.example": true
     }
    }
   },
@@ -329,13 +329,9 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot2:b.example": "@op:b.example",
-     "@x:c.example": "@op:b.example"
-    },
-    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.phase": "awaiting-approval",
-    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.guards": [
-     "@op:b.example"
-    ]
+     "@bot2:b.example": true,
+     "@x:c.example": true
+    }
    },
    "note": "H6: a service as executor is guarded too; there is no self-declared exemption"
   }

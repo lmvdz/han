@@ -272,7 +272,7 @@
    "expect": "allow",
    "check": {
     "guarded": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    }
   },
@@ -319,7 +319,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    }
   },
@@ -371,7 +371,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    },
    "note": "still forced"

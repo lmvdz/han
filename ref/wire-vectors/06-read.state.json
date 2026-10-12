@@ -93,8 +93,7 @@
       "sessions": {},
       "held": {},
       "guarded": {},
-      "cleared": {},
-      "outside": {}
+      "lastOutside": {}
      }
     }
    }

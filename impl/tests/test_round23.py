@@ -27,7 +27,7 @@ async def test_f1_agent_confirmed_after_joining_is_held_by_a_task_in_a_forced_sp
     await a.append(*a.make_entry("member.set", "profile:" + BOT, {"actor": ALICE, "role": "owner"}))     # the operator confirms, after bot joined
     r = await c.append(*c.make_entry("task", S, {"to": [BOT]}, {"ask": "after the confirmation"}))
     st = await state(a)
-    assert "agents" not in st and st["held"] == {BOT: ALICE} and st["guarded"] == {} and r["seq"] == st["head"]
+    assert "agents" not in st and st["held"] == {BOT: True} and st["guarded"] == {} and r["seq"] == st["head"]
 
 # ── F2: agent.release ──
 async def test_f2_agent_release_by_the_guard_with_seen_and_unguard(env):
@@ -37,7 +37,7 @@ async def test_f2_agent_release_by_the_guard_with_seen_and_unguard(env):
     host, task = start_host(env, botc, "guarded", ScriptedAgent())
     sid = await session_id(host)
     hold = await steer(cl["carol"], sid, "push to prod")
-    assert (await state(cl["alice"]))["held"] == {BOT: ALICE}
+    assert (await state(cl["alice"]))["held"] == {BOT: True}
     rel = lambda c, seen, **b: c.make_entry("agent.release", S, {"agent": BOT} | b, seen=seen)
     with pytest.raises(WireError) as ex: await cl["carol"].append(*rel(cl["carol"], hold["seq"]))
     assert ex.value.code == "denied"                                                          # only the guard
@@ -49,7 +49,7 @@ async def test_f2_agent_release_by_the_guard_with_seen_and_unguard(env):
     assert ex.value.code == "invalid"                                                         # agent.release has no content (§5)
     await cl["alice"].append(*rel(cl["alice"], hold["seq"]))
     st = await state(cl["alice"])
-    assert st["held"] == {} and st["guarded"] == {BOT: ALICE}
+    assert st["held"] == {} and st["guarded"] == {BOT: True}
     await cl["alice"].append(*rel(cl["alice"], hold["seq"], unguard=True))
     assert (await state(cl["alice"]))["guarded"] == {}
     task.cancel()

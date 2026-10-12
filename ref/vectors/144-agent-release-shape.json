@@ -293,7 +293,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    }
   },
@@ -485,11 +485,11 @@
    "expect": "allow",
    "check": {
     "held": {},
-    "cleared": {
+    "lastOutside": {
      "@bot:b.example": 9
     },
     "guarded": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    }
   }

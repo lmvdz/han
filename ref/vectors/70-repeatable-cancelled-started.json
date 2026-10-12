@@ -3,7 +3,7 @@
  "rules": [
   "P-09"
  ],
- "description": "a repeatable effect stopped partway (cancelled, started:yes) with no cancel requested goes back to ready",
+ "description": "a repeatable effect stopped partway (cancelled, started:yes) with no cancel requested goes back to open",
  "profiles": {
   "@m:a.example": {
    "actorKind": "human",
@@ -222,7 +222,7 @@
    "time": "2026-10-10T12:00:07Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "ready"
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open"
    }
   }
  ],

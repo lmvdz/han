@@ -23,7 +23,7 @@ const err = (code: ErrorCode, m: string, extra?: { retryAfterMs?: number; movedT
 
 export const LIMITS: Limits = {
   maxFrameBytes: 1310720, maxHeaderBytes: 16384, maxContentBytes: 65536, maxBlobBytes: 4294967296, maxBlobPartBytes: 786432,
-  maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60, maxStateItems: 1000, maxAttempts: 64,
+  maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60, maxStateItems: 1000,
 };
 const CALLS = ["hello", "append", "read", "state", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
 const READABLE = ["owner", "member", "guest"];
@@ -257,7 +257,7 @@ export class Sequencer {
       if (plan) {
         for (const a of plan.base) pin(a);
         for (const c of plan.candidates) { pin(c.author); if (profiles[c.author]?.keys?.[c.keyId]?.status === "valid") break; }
-        for (const g of plan.guards) pin(g);
+        for (const g of claimPinPlan(state, entry, time, { time, profiles })!.guards) pin(g);   // the guards: operators in the profiles pinned for the proposer and the executor (P-15)
       } else for (const a of relevantActors(state, entry, time)) pin(a);
     }
     // own-profile-space author: its view is the space's own state; record its seq as the head before this entry
@@ -537,8 +537,7 @@ export class Sequencer {
     if (!verifyBytes(k.publicKey, helloMessage(conn.challenge, this.server), a.proof)) throw err("denied", "bad proof");
     const heads = this.headsFor(a.who, a.knownHeads);
     conn.who = a.who;
-    const { maxAttempts, ...wireLimits } = LIMITS; void maxAttempts;   // hello carries the ten members of §3; maxAttempts (P-07) is a Policy constant
-    return { limits: { ...wireLimits, maxFrameBytes: this.frameLimit(), maxStateItems: this.opts.maxStateItems ?? LIMITS.maxStateItems }, durability: "local", time: this.now(), knownHeads: heads };
+    return { limits: { ...LIMITS, maxFrameBytes: this.frameLimit(), maxStateItems: this.opts.maxStateItems ?? LIMITS.maxStateItems }, durability: "local", time: this.now(), knownHeads: heads };
   }
 
   /** D1: a server with no record of a space answers `moved` (to the server in the space id) for every call naming it, unless it is that server (`not_found`). */
@@ -591,12 +590,12 @@ export class Sequencer {
   /** `state {space, at? | cursor? | effect?}` (§3, G-09): one page of the StateView, or one effect. */
   private doState(who: string, a: A): A {
     const keys = Object.keys(a);
-    if (!("space" in a) || !keys.every((k) => ["space", "at", "cursor", "effect"].includes(k))) throw err("invalid", "state args");
+    if (!("space" in a) || !keys.every((k) => ["space", "at", "cursor", "effect", "agent"].includes(k))) throw err("invalid", "state args");
     const sp = this.spaceFor(who, a.space);
     const st = sp.state!;
     this.requireReadable(sp, who);
     // two or more selectors: `invalid` by presence, whatever the values (null included)
-    if (["at", "cursor", "effect"].filter((k) => k in a).length > 1) throw err("invalid", "at most one of at, cursor, effect");
+    if (["cursor", "effect", "agent"].filter((k) => k in a).length > 1 || ("at" in a && ("cursor" in a || "effect" in a))) throw err("invalid", "cursor, effect and agent exclude each other; at combines with agent only");
     const view = (head: number): A => { const { entries, ...v } = (head === st.head ? st : this.stateAt(sp, head)) as A; void entries; return v; };
     if ("effect" in a) {
       if (typeof a.effect !== "string" || !isHex(a.effect)) throw err("invalid", "`effect` must be an effect id");
@@ -605,8 +604,20 @@ export class Sequencer {
       if (!(a.effect in full.effects)) throw err("not_found", "no such effect");
       return { state: withSettled({ space: full.space, head: full.head, home: full.home, policy: full.policy, effects: { [a.effect]: full.effects[a.effect] } }) };
     }
+    if ("agent" in a) {
+      if (typeof a.agent !== "string" || !isActorId(a.agent)) throw err("invalid", "`agent` must be an ActorId");
+      let head = st.head;
+      if ("at" in a) {
+        if (!isInt(a.at) || a.at < 1 || a.at > st.head) throw err("invalid", "`at` must be a seq in 1…head");
+        head = a.at;
+      }
+      if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + ("at" in a ? "`at`" : "the head"));
+      const full = view(head);
+      return { state: { space: full.space, head: full.head, home: full.home, policy: full.policy,
+        agent: { held: full.held[a.agent] === true, guarded: full.guarded[a.agent] === true, lastOutside: full.lastOutside[a.agent] ?? 0 } } };
+    }
     if ("cursor" in a) {
-      if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){10}$/.test(a.cursor)) throw err("invalid", "malformed cursor");
+      if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){9}$/.test(a.cursor)) throw err("invalid", "malformed cursor");
       const nums = a.cursor.split(".").map(Number);
       if (!nums.every(Number.isSafeInteger) || nums[0] < 1 || nums[0] > st.head) throw err("invalid", "malformed cursor");
       if (!canRead(st, who, nums[0])) throw err("denied", "state needs read rights at the cursor's head");
@@ -975,7 +986,7 @@ function withSettled(view: A): A {
   return v;
 }
 /** han.ts PagedMap, in the order of the cursor and of the fill */
-const PAGED = ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "cleared", "outside", "profile.keys"];
+const PAGED = ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "lastOutside", "profile.keys"];
 const pagedItems = (st: A, m: string): [string, unknown][] => Object.entries(m === "profile.keys" ? (st.profile?.keys ?? {}) : (st[m] ?? {}));
 const sha256Bytes = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 void parseTimeMs; void isServerName; void JsonError;

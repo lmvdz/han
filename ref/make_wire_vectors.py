@@ -399,16 +399,18 @@ def pview(nm):
 PROF = {A(nm): pview(nm) for nm in NAMES}
 ORC = new_home()
 _gold = new_home()
+STALE = {}      # golden operation file -> the steps whose recorded state differs from the oracle's
 for fn in index["files"][:n]:
     _st = json.load(open(os.path.join(OUT, fn), encoding="utf-8"))["steps"]
     for i, st_ in enumerate(_st):
         f = st_.get("send")
         if f and f.get("call") == "append":
             code, r = _gold.append(f["args"]["entry"], f["args"].get("content"), PROF)
-            assert code == "ok" and r == _st[i + 1]["expect"]["ok"], f"the oracle does not reproduce the golden receipt {fn} step {i}: {code} {r}"
+            assert code == "ok", f"the oracle refuses a golden entry {fn} step {i}: {code} {r}"
+            if r != _st[i + 1]["expect"]["ok"]: STALE.setdefault(fn, []).append(i)      # a receipt differs (P-01 pins moved with Policy): re-record, as for a state
         if f and f.get("call") == "state":
             code, r = _gold.state(f["args"]["space"], st_["conn"])
-            assert code == "ok" and r == _st[i + 1]["expect"]["ok"], f"the oracle's state differs from the golden state {fn} step {i}"
+            if not (code == "ok" and r == _st[i + 1]["expect"]["ok"]): STALE.setdefault(fn, []).append(i)      # the state shape moved on (a Policy change): re-record with interop/run.py + report.py, no shim here
 _gread = [x["expect"] for x in json.load(open(os.path.join(OUT, "05-read.json"), encoding="utf-8"))["steps"] if "expect" in x]
 _gitems = [g["item"] for g in _gread if "item" in g]
 assert _gitems == _gold.read("s1:" + SERVER, 0, A("alice"))[1][:len(_gitems)], "the oracle's read of s1 differs from the golden read"
@@ -475,7 +477,7 @@ r22.append(vec("E8-setup", f"setup: alice creates `{PG}`, adds bob and generates
 page1 = state_expect(al, 2, PG, "alice")          # roles, roleHistory and the first 1,000 tasks, with the cursor of the rest
 _p1 = ORC.state(PG, A("alice"))[1]
 c1 = _p1["next"]
-assert len(_p1["state"]["tasks"]) == 1000 and len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["roles"]) == 2 and c1 == f"{ORC.spaces[PG]['state']['head']}.2.2.1000.0.0.0.0.0.0.0", c1
+assert len(_p1["state"]["tasks"]) == 1000 and len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["roles"]) == 2 and c1 == f"{ORC.spaces[PG]['state']['head']}.2.2.1000.0.0.0.0.0.0", c1
 last_page = ORC.state(PG, A("alice"), cursor=c1)[1]      # the rest: one task; every other paged map was complete on page 1
 assert len(last_page["state"]["tasks"]) == 1 and last_page["state"]["roles"] == {} and last_page["state"]["roleHistory"] == {} and "next" not in last_page
 steps = [sx(al, 2, PG)] + page1
@@ -855,6 +857,21 @@ steps += [sx(al, 9, BC, at=3)] + state_expect(al, 9, BC, "alice", at=3)
 r24.append(vec("H10a", "`read` is entries only: records and heads, and `state`, `at`, `cursor` and `effect` are unknown members (invalid); `state {at}` is the old `read {state, at}`", steps,
                ["§3", "G-09", "H10"], "one record, invalid x5, a state page", source="maker (oracle: ref/wire.py Home)"))
 
+# ───────────── probes-r25.json: DECISIONS-r25.md K7 (the `agent` selector of `state`) ─────────────
+r25 = []
+# BC (built above) has no guarded agent: the test servers' profiles have no confirmed operator (P-15 needs one), so the facts are the empty ones; the shape, the
+# selector rules and `at` are what these vectors pin. A guarded agent is shown by the Policy vectors and wire scenario "state {agent}", not by the wire.
+steps = []
+for k, (who, kw) in enumerate((("bob", {}), ("x", {}), ("bob", {"at": 3}), ("carol", {})), start=2):
+    steps += [sx(al, k, BC, agent=A(who), **kw)] + state_expect(al, k, BC, "alice", agent=A(who), **kw)
+steps += [sx(al, 6, BC, agent=A("nobody")), {"conn": al, "expect": {"id": 6, "ok": ORC.state(BC, A("alice"), agent=A("nobody"))[1]}}]
+for k, a in enumerate(({"agent": 5}, {"agent": "bob"}, {"agent": None}, {"agent": A("bob"), "effect": "0" * 64}, {"agent": A("bob"), "cursor": "1" + ".0" * len(W.PAGED)},
+                        {"agent": A("bob"), "at": 3, "effect": "0" * 64}, {"agent": A("bob"), "at": 3, "cursor": None}), start=7):
+    steps += [sx(al, k, BC, **a), {"conn": al, "expect": err(k, "invalid")}]
+steps += [sx(al, 14, BC, agent=A("bob"), at=0), {"conn": al, "expect": err(14, "invalid")}, sx(ca, 15, BC, agent=A("bob")), {"conn": ca, "expect": err(15, "not_found")}]
+assert ORC.state(BC, A("carol"), agent=A("bob"))[0] == "not_found"
+r25.append(vec("K7a", "`state {agent}` (an ActorId) is `{space, head, home, policy, agent: {held, guarded, lastOutside}}` for that actor: one frame, no `next`, nothing that grows, false, false, 0 for an actor in neither set; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found",
+               steps, ["§3", "G-09", "K7"], "ok x5 (incl. at 3, head 3), invalid x8, not_found", source="maker (oracle: ref/wire.py Home)"))
 
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""
@@ -868,10 +885,11 @@ dump_vectors(os.path.join(OUT, "probes-r22.json"), {"format": "han-wire-vectors/
 
 dump_vectors(os.path.join(OUT, "probes-r23.json"), {"format": "han-wire-vectors/1", "kind": "r23", "note": "Round-23 coverage (DECISIONS-r23.md F4, F8; architecture.md G-11 test.clock, G-03, G-07 (1a), G-09, R-03a, R-16, section 4.1). Run last: they move the test clock. Every expected value is from ref/wire.py (W.Home) driven with the same entries and the same clock moves. Each vector that moves the wall clock puts it back before it ends.", "vectors": r23})
 dump_vectors(os.path.join(OUT, "probes-r24.json"), {"format": "han-wire-vectors/1", "kind": "r24", "note": "Round-24 coverage (DECISIONS-r24.md H3, H10 a; architecture.md section 3 state, G-09, G-11 test.limits). Run last: they lower and restore maxFrameBytes (test.limits). Every expected value is from ref/wire.py (W.Home) driven with the same entries; the cursor of a state page is exact.", "vectors": r24})
+dump_vectors(os.path.join(OUT, "probes-r25.json"), {"format": "han-wire-vectors/1", "kind": "r25", "note": "Round-25 coverage (DECISIONS-r25.md K7; architecture.md section 3 state, G-09). Run after probes-r24.json: they use its space `bc:a.localhost`. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r25})
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})
-index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json"]
+index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json", "probes-r25.json"]
 
 import run_wire_vectors as RV     # the runner's generated entries must be byte for byte the oracle's: check three of them
 _cfg = RV.Cfg()
@@ -880,4 +898,8 @@ for _k in (0, 500, NTASK - 1):
     _o = ORC.spaces[PG]["records"][PG_GEN["head"] + _k]
     assert _o["entry"] == _e and _o["content"] == _c, f"the runner's generated task {_k} differs from the oracle's"
 dump(os.path.join(OUT, "index.json"), index)
-print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "head after agreed:", HEAD_AFTER_AGREED)
+if STALE:
+    print("STALE GOLDEN: the oracle's state differs from the recorded state in", ", ".join(f"{fn} (steps {s})" for fn, s in STALE.items()))
+    print("  re-record the operation files with interop/run.py then interop/report.py once both servers follow the new state; until then the operation files and the probes built from them are not conformant")
+print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "round-25 probes:", len(r25), "head after agreed:", HEAD_AFTER_AGREED)
+sys.exit(2 if STALE else 0)

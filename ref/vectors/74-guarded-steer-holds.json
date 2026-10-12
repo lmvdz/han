@@ -5,7 +5,7 @@
   "P-07 E3",
   "R-24"
  ],
- "description": "an outside steer into a guarded agent session puts the agent on hold: everything it proposes needs its operator",
+ "description": "an outside steer into a guarded agent's session holds it and is the newest outside instruction; what the agent proposes needs its operator at claim, whenever it was proposed",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -270,54 +270,13 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:08Z",
-   "expect": "allow"
-  },
-  {
-   "entry": {
-    "id": "3aa30124b53155946e8aa7971d2fe3b7a5698e0fb614aead7bd28b8d39d10d51",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "effect.propose",
-    "author": "@bot:b.example",
-    "keyId": "k1",
-    "body": {
-     "executor": "@x:c.example",
-     "action": "git.push",
-     "planDigest": "e76db4f61a0ad3d404cc1bc895270fd180af5bb6bdd423b5db7678db38688ff5",
-     "repeatable": false
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-p0",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:09Z",
    "expect": "allow",
    "check": {
-    "effects.3aa30124b53155946e8aa7971d2fe3b7a5698e0fb614aead7bd28b8d39d10d51.phase": "ready"
-   },
-   "note": "untainted"
-  },
-  {
-   "entry": {
-    "id": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@m:a.example",
-    "keyId": "k1",
-    "body": {
-     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+    "guarded": {
+     "@bot:b.example": true
     },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-in",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:10Z",
-   "expect": "allow"
+    "held": {}
+   }
   },
   {
    "entry": {
@@ -339,15 +298,40 @@
     "nonce": "n-p",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:11Z",
+   "time": "2026-10-10T12:00:09Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "awaiting-approval",
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.guards": [
-     "@op:b.example"
-    ]
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open"
    },
-   "note": "no tag needed"
+   "note": "proposed before any steer"
+  },
+  {
+   "entry": {
+    "id": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.input",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-in",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@bot:b.example": true
+    },
+    "lastOutside": {
+     "@bot:b.example": 10
+    }
+   }
   },
   {
    "entry": {
@@ -369,9 +353,9 @@
     "nonce": "n-c0",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:12Z",
+   "time": "2026-10-10T12:00:11Z",
    "expect": "denied",
-   "note": "the operator hasn't approved"
+   "note": "its proposer is held: the operator hasn't approved"
   },
   {
    "entry": {
@@ -391,7 +375,7 @@
     "nonce": "n-a0",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:13Z",
+   "time": "2026-10-10T12:00:12Z",
    "expect": "denied",
    "note": "not the guard and no approval rule"
   },
@@ -414,11 +398,8 @@
     "nonce": "n-a1",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:14Z",
-   "expect": "allow",
-   "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "ready"
-   }
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "allow"
   },
   {
    "entry": {
@@ -463,7 +444,16 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:41Z",
-   "expect": "allow"
+   "expect": "allow",
+   "check": {
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.approvals": [
+     {
+      "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+      "author": "@op:b.example",
+      "keyId": "k1"
+     }
+    ]
+   }
   },
   {
    "entry": {
@@ -508,7 +498,6 @@
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
   "p": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-  "p0": "3aa30124b53155946e8aa7971d2fe3b7a5698e0fb614aead7bd28b8d39d10d51",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
  }
 }

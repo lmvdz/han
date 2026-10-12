@@ -109,7 +109,7 @@ export class HanClient {
     await this.stream("read", { space, after, ...opts }, (i) => items.push(i)).done;
     return items;
   }
-  /** `state`: one page (`{state, next?}`); `sel` is at most one of `{at}`, `{cursor}`, `{effect}`. */
+  /** `state`: one page (`{state, next?}`); `sel` is one of `{at}`, `{cursor}`, `{effect}`, `{agent, at?}`. */
   state(space: string, sel: A = {}): Promise<A> { return this.call("state", { space, ...sel }); }
   /** The whole StateView: follows `next` and unions the paged maps (§3). */
   async stateAll(space: string, sel: A = {}): Promise<A> {
@@ -118,7 +118,7 @@ export class HanClient {
       r = await this.state(space, { cursor: r.next });
       for (const k of Object.keys(r.state)) {
         if (k === "profile" && out.profile) Object.assign(out.profile.keys, r.state.profile.keys);
-        else if (r.state[k] && typeof r.state[k] === "object" && !Array.isArray(r.state[k]) && ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "cleared", "outside"].includes(k)) Object.assign(out[k], r.state[k]);
+        else if (r.state[k] && typeof r.state[k] === "object" && !Array.isArray(r.state[k]) && ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "lastOutside"].includes(k)) Object.assign(out[k], r.state[k]);
       }
     }
     return out;

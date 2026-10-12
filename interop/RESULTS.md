@@ -18,7 +18,7 @@ Required directions: **ts->py** (TS client on the Python server) and **py->ts** 
 | subscribe | PASS | PASS | PASS | PASS |
 | signal | PASS | PASS | PASS | PASS |
 | propose | PASS | PASS | PASS | PASS |
-| approve | PASS | PASS | PASS | PASS |
+| approve | FAIL | PASS | FAIL | PASS |
 | blobPut | PASS | PASS | PASS | PASS |
 | blobGet | PASS | PASS | PASS | PASS |
 | blobPut.multipart | PASS | PASS | PASS | PASS |
@@ -39,9 +39,9 @@ Column = client implementation -> server implementation. The verifier row uses t
 
 | direction | passed (incl. workaround) | passed without workaround | total |
 |---|---|---|---|
-| ts->py | 25 | 25 | 25 |
+| ts->py | 24 | 24 | 25 |
 | py->ts | 25 | 25 | 25 |
-| ts->ts | 25 | 25 | 25 |
+| ts->ts | 24 | 24 | 25 |
 | py->py | 25 | 25 | 25 |
 
 Supplementary cells with the TS sequencer's own server key id `srv1`, not the `h1` of the Python server (they exposed a TS verifier that looked for `srv1` only, root cause 6, resolved in round 21 as C21; they now show that a verifier follows the published keys of either server):
@@ -135,9 +135,9 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 
 ```json
 {"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"1VKB62omUsUndVI0akFxvxfRGjJm_mltAO320Gfk0XA\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T05:46:25Z\"}"}
-{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"lXjwZeMu80gctmPXh7oVW16eufRymnuP2Ws_F_9nGEQOKheBzX5Ibc1MOs9AM1I4az0jnIIWSKaQv_dSpnQBBQ\", \"version\": 1}}"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T05:46:25Z\",\"knownHeads\":[]}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"SWjp1yk-OCz1jEvhOtR6yLvm9c65ZfW1JfCNrvS4YAU\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T09:00:33Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"JZT6JgMc_NUcO5EcIHXOMwa4yHCPO5qEceSJtVx9o5zlgR6c40TrdyeXE-U0PX4VFvVC3P_-uOpUeD94BckxDA\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T09:00:33Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
@@ -165,7 +165,7 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T05:47:23Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T09:01:31Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
@@ -175,7 +175,7 @@ TS executor started before the space exists, against the Python server (`exec-ts
 TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the entry signer `@:a.localhost` signed under `h1`, not `srv1` (in round 21 the TS verifier looked under `srv1` only and reported `seq 1: entry signature does not verify against the pinned key`, C21; it now uses the server's published keys, so the row passes):
 
 ```
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "vtPcY-cfmtT8_WA_AhVIvFoAAceFujk5Kc4C_9Q-kshgv6ZCzQjOT4oxpsXkSyq4VXMSnrLc_SpypLNlP-L6CA"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "jDjtcQ4eJv9ZQiVvoX2fm8JgDni1cLw_iBpWujEoi7EL5ahBy3HfU7VQ2mhgBWpxEQgilTCFEQyA9aWgidMiCA"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked
@@ -322,6 +322,7 @@ Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` 
 | wire vectors, round 23 before the transcripts were re-recorded | 97/107 vectors, 347/420 expectations | 97/107 vectors, 347/420 expectations |
 | wire vectors, round 23 | 107/107 vectors, 420/420 expectations | 107/107 vectors, 420/420 expectations |
 | wire vectors, round 24 | 111/111 vectors, 432/432 expectations | 111/111 vectors, 432/432 expectations |
+| wire vectors, round 25 | 112/112 vectors, 446/446 expectations | 112/112 vectors, 446/446 expectations |
 
 ### 6.1 What the round-22 refresh changed and found
 
@@ -347,3 +348,7 @@ The expectations are now counted per vector family (the 1,001-task paging setup 
 ### 6.3 Round 24
 
 `read` is split into `read` (entries) and `state` (pages of the StateView, every per-actor map paged). `interop/run.py` was re-run on the round-24 servers after `py_driver.py` moved to the `state` call: 25/25 in all four directions, executors 8/8. `report.py` re-recorded `golden/` with native `state` frames, so the 432 expectations are not comparable with the 469 counted before the re-recording (the old transcripts carried the state as a stream of records). Two vectors were wrong, not the servers: H10a was built on a space the oracle never held (it pinned `not_found`), and T2 expected a fraction inside `test.limits` to be answered on its own id, against G-07 (1); both are fixed. A new differential fuzz (`ref/fuzz_diff.py`, 2,000 random histories, the whole state compared after every allowed step) found three readings on which ref and the TS clean-room differed; the spec now states each (§6.4 cancel sets `cancelRequested`; a session may not name a closed task; D14 settles an unreserved claim) and the vector `differential-fuzz-pins` holds them.
+
+### 6.4 Round 25
+
+P-15 lost its stored guard, readiness and staleness bookkeeping (the guard is the pinned operator, `held` and `guarded` are sets, one `lastOutside` per agent, the phases `awaiting-approval` and `ready` are one phase `open`), and `state` gained an `agent` selector. Nine operation transcripts in `golden/` carried the old state members and were re-recorded: `interop/run.py` on the round-25 servers gave 25/25 in all four directions and executors 8/8. The TS clean-room, updated from the spec, agreed with ref on the first differential-fuzz run (2,000 histories × 250 steps, 0 divergences). It also found a reference bug no vector reached: the sequencer pinned a guard only when it was an approval candidate, so a guard's own approval made the claim `invalid`; `ref/wire.py` is fixed, and the wire scenario "a guard that is not an approval candidate is pinned" and a wire mutation hold it.

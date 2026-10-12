@@ -229,7 +229,7 @@
    "time": "2026-10-10T12:00:07Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "ready",
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open",
     "budgetLeft": {
      "unit": "USD-cent",
      "amount": 60

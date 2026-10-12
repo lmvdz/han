@@ -4,7 +4,7 @@
   "P-15",
   "P-01"
  ],
- "description": "the guard of a forced instruction is the operator in the profile pinned for that entry",
+ "description": "the guard of a forced instruction, and of a release, is the operator in the profile pinned for that entry",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -273,7 +273,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op2:b.example"
+     "@bot:b.example": true
     }
    },
    "profiles": {
@@ -310,7 +310,7 @@
    },
    "time": "2026-10-10T12:00:09Z",
    "expect": "denied",
-   "note": "OP is not the guard it was held for"
+   "note": "OP is not the guard in the profile in force"
   },
   {
    "entry": {
@@ -341,7 +341,7 @@
     "v": 1,
     "space": "s1:a.example",
     "kind": "task",
-    "author": "@m:a.example",
+    "author": "@op2:b.example",
     "keyId": "k1",
     "body": {
      "to": [
@@ -358,7 +358,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    },
    "profiles": {
@@ -374,7 +374,7 @@
      }
     }
    },
-   "note": "the next instruction pins OP"
+   "note": "the next instruction pins OP: OP2 is an outsider now"
   }
  ],
  "ids": {

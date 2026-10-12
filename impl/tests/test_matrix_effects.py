@@ -26,7 +26,7 @@ async def test_propose_approve_claim_outcome(mx):
     await ex.start()
     try:
         phase = lambda: mx.seq.home.spaces[space]["state"]["effects"][pid]["phase"]
-        assert phase() != "ready"                                              # P-08: no approval yet, nothing to claim
+        assert phase() == "open"                                               # P-08: no approval yet, nothing to claim
         e, ct = alice.client.make_entry("effect.approve", space, {"proposal": pid, "planDigest": digest})
         await alice.client.append(e, ct, room=room, timeout=30)                 # the owner approves
         await until(lambda: phase() == "succeeded", 20, "effect succeeded")

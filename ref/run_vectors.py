@@ -9,7 +9,8 @@ Vector format (language-neutral; see README.md):
         `check` paths are dotted (keys may themselves contain dots, e.g. actor ids) and read the entry's space state.
     {read: {space, actor, seq}, expect: bool}             can_read
     {relevantActors: entry, expect: [actor]}              relevant_actors(state[entry.space], entry)
-    {guardStatus: {space, actor}, expect: {guard?, held, forced}}   guard_status(state[space], ctx, actor), ctx = the profiles in force
+    {guardStatus: {space, actor}, expect: {guard?, held, guarded, forced}}   guard_status(state[space], ctx, actor), ctx = the profiles in force
+    {sessionAccess: {space, actor, session}, expect: {watch, read, steer}}   session_access(state[space], actor, session)
 Every decide/fold is also checked for purity (inputs unchanged) and determinism (two runs agree).
 """
 import copy, glob, hashlib, json, os, sys

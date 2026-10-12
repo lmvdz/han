@@ -114,7 +114,7 @@ class AppService:
             if row is None:
                 if not live: continue
                 row = await self._open_session(space, space_room, sid, sess)
-            cands = set(state["roles"]) | {sess["actor"]} | ({sess["guard"]} if sess.get("guard") else set())
+            cands = set(state["roles"]) | {sess["actor"]}
             for kind in ("watch", "read"):
                 want = {a for a in cands if not a.startswith("@:") and P.session_access(state, a, sid)[kind]}
                 await self._set_members(row[kind], want)

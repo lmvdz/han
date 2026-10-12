@@ -148,23 +148,28 @@ async def cmd_read(c, a):
     else:
         for rec in await records(c, a.space, a.after): await show(rec)
 
+async def profiles_of(c, actors) -> dict:
+    """The current ProfileView of each non-server actor that has one (what `guard_status` and `guards_of` read from ctx.profiles)."""
+    out = {}
+    for x in sorted(set(actors)):
+        if x.startswith("@:"): continue
+        try: out[x] = (await c.read_state("profile:" + x))["profile"]
+        except WireError: pass
+    return out
+
 async def agent_lines(c, st):
-    """F1, H8: per agent, `P.guard_status` (the one guard function) on the current state: `guarded` with its guard, or `forced` (the space forces
-    guarding, so an instruction to a non-human is held for the operator in the profile pinned then; the profile read here is the current one, which
-    `guardStatus` needs only in a forcing space)."""
-    named = set(st["guarded"]) | set(st["held"]) | {s["actor"] for s in st["sessions"].values()}
-    named |= {x for t in st["tasks"].values() for x in t["to"]} | {e["executor"] for e in st["effects"].values()}
-    forcing, lines = bool(st["policy"]["sessions"].get("forceGuarded")), []
+    """F1, H8, K1: per agent, `P.guard_status` (the one guard function) on the current state: `guarded` or `forced` with its guard (the confirmed operator in
+    the profile read here, which is the current one), and whether it is held. A guarded or forced agent whose operator is not confirmed has no guard:
+    instructions to it are denied."""
+    forcing = bool(st["policy"]["sessions"].get("forceGuarded"))
+    named = set(st["guarded"]) | set(st["held"])
+    if forcing: named |= {s["actor"] for s in st["sessions"].values()} | {x for t in st["tasks"].values() for x in t["to"]} | {e["executor"] for e in st["effects"].values()}
+    profs, lines = await profiles_of(c, named), []
     for x in sorted(named):
-        prof = None
-        if forcing and not x.startswith("@:"):
-            try: prof = (await c.read_state("profile:" + x))["profile"]
-            except WireError: continue
-        gs = P.guard_status(st, {"time": "", "profiles": {x: prof} if prof else {}}, x)
-        held = "  held" if gs["held"] else ""
-        if gs["forced"]:
-            lines.append(f"  {x}  forced (operator {prof.get('operator')}{'' if prof.get('operatorConfirmed') else ', unconfirmed: instructions are denied'})" + held)
-        elif gs.get("guard"): lines.append(f"  {x}  guarded (guard {gs['guard']})" + held)
+        gs = P.guard_status(st, {"time": "", "profiles": profs}, x)
+        if not (gs["guarded"] or gs["forced"]): continue
+        how = "forced" if gs["forced"] else "guarded"
+        lines.append(f"  {x}  {how} ({'guard ' + gs['guard'] if gs.get('guard') else 'no confirmed operator: instructions are denied'})" + ("  held" if gs["held"] else ""))
     if lines: out("agents:"); [out(l) for l in lines]
 
 async def cmd_status(c, a):
@@ -176,16 +181,18 @@ async def cmd_status(c, a):
     out("tasks:")
     for tid, t in st["tasks"].items(): out(f"  {tid[:8]} {'open' if t['open'] else 'closed'}  to {', '.join(t['to'])}")
     out("effects:")
+    live_effs = [e for e in st["effects"].values() if e["phase"] not in P.FINAL]
+    profs = await profiles_of(c, {x for e in live_effs for x in (e["proposer"], e["executor"])})
     for eid, e in st["effects"].items():
-        g = P.guards_of(st, e)
+        g = [x or "(no confirmed operator)" for x in P.guards_of(st, {"time": "", "profiles": profs}, e)] if e in live_effs else []
         out(f"  {eid[:8]} {e['phase']}  {e['action']}  proposer {e['proposer']}  executor {e['executor']}  approvals {sum(1 for x in e['approvals'] if not x.get('dropped'))}"
             + (f"  guards {', '.join(g)}" if g else "") + ("  cancel-requested" if e["cancelRequested"] else ""))
     out("sessions:")
     for sid, s in st["sessions"].items():
-        out(f"  {sid[:8]} {s['actor']}  {'open' if P.live(st, s) else 'not live'}  {s['steerMode']}" + (f"  guard {s['guard']}" if s.get("guard") else ""))
+        out(f"  {sid[:8]} {s['actor']}  {'open' if P.live(st, s) else 'not live'}  {s['steerMode']}")
     await agent_lines(c, st)
-    out("held agents: " + (", ".join(f"{x} (for {g})" for x, g in sorted(st["held"].items())) or "none"))
-    out("guarded agents: " + (", ".join(f"{x} (guard {g})" for x, g in sorted(st["guarded"].items())) or "none"))
+    out("held agents: " + (", ".join(sorted(st["held"])) or "none"))
+    out("guarded agents: " + (", ".join(sorted(st["guarded"])) or "none"))
 
 # ── parsing ──
 def parser() -> argparse.ArgumentParser:

@@ -49,9 +49,11 @@
      "time": "2026-01-01T00:00:00Z",
      "durability": "local",
      "profiles": {
-      "@alice:a.localhost": 1
+      "@alice:a.localhost": 1,
+      "@bob:a.localhost": 1,
+      "@x:a.localhost": 1
      },
-     "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
+     "homeSig": "KAn02o5UQQvZcea3AdQiTg1t2-4gwIr2rEMDY6LOsds0CQc9sJ7SISpFDVDS9EwPooizfRtn4wghASRWI0Y_Bw"
     }
    }
   },
@@ -154,14 +156,13 @@
         ],
         "claims": [],
         "seq": 9,
-        "phase": "ready"
+        "phase": "open"
        }
       },
       "sessions": {},
       "held": {},
       "guarded": {},
-      "cleared": {},
-      "outside": {}
+      "lastOutside": {}
      }
     }
    }

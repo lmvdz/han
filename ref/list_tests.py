@@ -58,7 +58,8 @@ def wire_vectors():
     return out
 
 FAMILIES = (("operations (golden)", lambda fn: fn[:2].isdigit()), ("agreed probes", lambda fn: fn == "probes.json"), ("decided probes", lambda fn: fn == "probes-decided.json"),
-            ("round-22 probes", lambda fn: fn == "probes-r22.json"), ("round-23 probes", lambda fn: fn == "probes-r23.json"), ("round-24 probes", lambda fn: fn == "probes-r24.json"))
+            ("round-22 probes", lambda fn: fn == "probes-r22.json"), ("round-23 probes", lambda fn: fn == "probes-r23.json"), ("round-24 probes", lambda fn: fn == "probes-r24.json"),
+            ("round-25 probes", lambda fn: fn == "probes-r25.json"))
 
 def wire_expectations():
     """Per vector family: (name, files, vectors, expectations, steps, generated appends). An expectation is what the runner counts as one: an `expect`, `expect_close`,
