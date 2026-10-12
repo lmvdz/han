@@ -155,13 +155,45 @@ These make deterministic simulation of whole teams possible (fake clock and netw
 ### StatusItem (`han.status/1`: a namespaced, non-authority stream item)
 
 ```
-{ session, agent, issue?: "github:owner/repo#123", repo?: "github:owner/repo",
-  state: "working" | "waiting-approval" | "blocked" | "idle" | "done",
-  step: string, tool?: string, files: [repo-relative path], tests?: {pass, fail},
-  summary?: string, at }
+{ session, agent, delegate_of?: ActorId,             // the human assignee; the agent is the delegate (Linear's model)
+  issue?: "github:owner/repo#123", repo?: "github:owner/repo", base?: sha,
+  state: "working" | "waiting-approval" | "blocked" | "idle" | "done" | "stale" | "failed",
+  step: string, tool?: string, plan?: [{text, done}],
+  files: [{path, hunks: [[start, len]]}],           // from `git diff -U0` against base
+  tests?: {pass, fail}, summary?: string, seq, at }  // seq: per-session counter (freshness without wall clocks)
 ```
 
-This is the one schema the board, the overlap alerts, the agent tools and the GitHub sync all read.
+This is the one schema the board, the overlap alerts, the agent tools and the GitHub sync all read. `stale` is derived from the time since the last item, never from the agent's own claim.
+
+## 5a. Build or adopt (research, 2026-10-12)
+
+The full findings are in `research/{intentd,coordination,agent-plumbing,rust-blocks}.md`. No existing tool gives a self-hosted, live view of every agent session across a team. Claude Code does it for one account, Agent Relay does team messaging through a hosted engine, and MCP Agent Mail does file leases on one server. So the board, overlaps and the trust layer are ours to build. Almost everything below them is adopted.
+
+| Need | Decision | Notes |
+|---|---|---|
+| Transport | **adopt** iroh 1.3 (`Endpoint`, `Router`, one ALPN `han/1`, `IncomingFilter`) | wire and API stable until the next major version; Python binding (core only) for the M2 interop |
+| Presence | **adopt** iroh-gossip, presence only | no access control and origins aren't authenticated: derive the topic from a secret only readers hold, sign every payload, stay under 4 KiB. Status flows to readers through the node, never over gossip |
+| Blobs | **build** as `han/1` frames | iroh-blobs is BLAKE3-only and serves by hash (conflicts with G-01) |
+| Log and sequencer | **build** han-seq on rusqlite 0.40 + rusqlite_migration | nothing gives exclusive claims. p2panda (per-author chains, eventually consistent groups) can't, but its header/body split confirms ours. Later: C2SP checkpoints, witnesses and tlog tiles for head gossip |
+| Signatures | **adopt** ed25519-dalek **3.0**, `verify_strict` | iroh-base requires 3.x; pin edge-case vectors across ref, TS and Rust |
+| JCS | **build** a strict I-JSON parser and canonicalizer; `serde_json_canonicalizer` as a test oracle | the crate casts integers to f64 and doesn't validate |
+| Views | **build** hand-rolled folds emitting a snapshot, then diffs | property: snapshot plus every diff equals a fresh read (from intentd); cap rows by bytes. differential-dataflow and DBSP are too heavy |
+| Local API | **adopt** `interprocess` 2.4 (named pipe or Unix socket; pipe restricted to the current user) + our own JSON-RPC framing | jsonrpsee has no IPC transport; parity-tokio-ipc is dead |
+| Simulation | **adopt** turmoil 0.7 over the injected `Transport`/`Clock` | real iroh can't run on turmoil sockets, so han-net gets a simulated `Transport` |
+| TUI | **adopt** ratatui 0.30 | |
+| Mobile | **adopt later** uniffi 0.32, exposing only `call(json)` and `view(json, cb)` | the Spacedrive pattern |
+| Claude Code driver | **build** `drivers/claude_code` on the CLI: `-p --bare`, stream-JSON in and out, `--session-id`, `--strict-mcp-config`, and a **PreToolUse hook** passed in `--settings` with `onFailure: "block"` (CLI ≥ 2.1.295) | the hook runs before every rule and mode, and its deny wins even in bypass mode. `defer` parks the turn, so Propose = park, approve, `--resume`. Parallel tool calls fall back to deny with a reason. `--bare` stops the repo from configuring the agent. Also read `claude agents --json` and the hook events instead of re-deriving them |
+| Other agents | **adopt** ACP: `agent-client-protocol` 3.3 (pinned) as `drivers/acp` | covers Codex, Gemini CLI, Copilot CLI, goose, OpenCode… ACP permission requests are optional, so each driver declares its gate strength (`every_call` / `prompt_only`), and `Mode::Strict` refuses `prompt_only`. On ACP, Propose is a han-mcp tool and the raw action is denied |
+| Agent tools | **adopt** `rmcp` 3.5 (pinned) | the MCP 2026-07-28 spec is stateless, so the `team.*` tools take handles as arguments. A required `summary` argument on each call feeds `StatusItem.summary` |
+| Sandbox | **integrate** Microsoft MXC (`mxc-sdk` 1.0, Rust, MIT: Windows 11 without admin, Linux bubblewrap, macOS seatbelt) + a HAN-owned egress proxy for domain allow-lists | Claude Code's own sandbox covers shell commands only and does nothing on native Windows, so we confine the whole agent process. Fallbacks: WSL2 or Podman. Use `landlock` to harden han-exec |
+| git and GitHub | **adopt** octocrab 0.54; shell out to `git` for push; gix for reads | gix still can't push. A push is desired state: "move ref R from A to B", so a retry is safe |
+| Executor ledger | **build** a small SQLite ledger keyed by idempotency key | "unknown is not success"; invocation ids are never reused (from intentd). The job frameworks don't fit |
+| Overlap detection | **build**, in three tiers | 1. claims: advisory leases on issues and paths, with a TTL; a conflict reports who holds it and doesn't block (Agent Mail, intentd). 2. touched hunks: range intersection on `files[].hunks`. 3. real conflicts: a `gix merge-tree` merge simulation between session branches (the Clash technique). Alerts go to both agents and to the board |
+| Work timelines (CRDT) | **defer** | the MVP uses `git diff -U0` hunks. If dogfooding needs live work timelines, add a Loro 1.x extension (frontiers, `fork_at`, `checkout`, `diff`) with HAN-signed delta envelopes. the reference model stays the design reference and is never shipped: the reference model comes from a closed product, so nothing derived from the study enters the HAN repo |
+| Agent-to-agent (Next) | **integrate later** Google A2A v1 (`a2a-lf`) as a face over the node API | signed Agent Cards fit Ed25519 profiles. A message to another agent is **data**, never injected input (intentd and Agent Relay inject it, which R-24 forbids) |
+| Existing tools | **bridges later** | `integrations/han-intentd` and Copilot or Agent HQ sessions as board rows, if they have an API |
+
+**Strategic note.** Claude Code's single-user features (agent view, cross-session messaging, hooks) overlap the MVP for one person. HAN's edge is the team: several machines and people, several agent vendors, self-hosting, and verifiable approvals. Keep han-host consuming Claude Code's signals rather than competing with them.
 
 ## 6. Rules that keep it changeable
 
@@ -180,7 +212,7 @@ This is the one schema the board, the overlap alerts, the agent tools and the Gi
 | M1 | han-core | 150/150 policy vectors; 0 differential-fuzz divergences against ref over 1000 seeds |
 | M2 | han-net + han-seq over iroh | wire vectors pass over iroh; the Python impl interoperates through iroh's Python binding |
 | M3 | han-node: client, outbox, sync, views (board, who-is-on, overlaps), node API, supervisor | a three-node turmoil simulation shows the board converging; JSON-RPC works on Windows |
-| M4 | han-host with the Claude Code driver; han-mcp; han-exec with `git_push` | **first week: a spike of the `claude` stream-JSON and permission path**; then a real session streams status, an agent answers "who is on auth/?" from the tools, and a gated push waits for approval and runs exactly once |
+| M4 | han-host with the Claude Code driver; han-mcp; han-exec with `git_push` | **first week, a spike that answers:**<br>• does PreToolUse fire for tool calls inside subagents?<br>• do hooks given in `--settings` load under `--bare`?<br>• does `defer` and resume work?<br>• does an ACP reject carry a reason back to the agent?<br>• is MXC mature enough on Windows 11?<br>• do Claude Code's terms allow a third-party host to drive it?<br>Then a real session streams status, an agent answers "who is on auth/?" from the tools, and a gated push waits for approval and runs exactly once |
 | M5 | han-tui (board, drill-down, approvals inbox); han-github (one-way) | the full MVP story works across two machines |
 | M6 | Team dogfood | 2–4 people, two weeks; issues feed the spec |
 
@@ -204,7 +236,9 @@ M0's spec round and M1 run in parallel: the §8 rewrite doesn't touch Policy.
 | Risk | Plan |
 |---|---|
 | The `claude` CLI interface changes | spike first in M4; the driver trait keeps the blast radius to one module |
-| Sandboxing on Windows | run `han host` in WSL or podman (the existing WSL setup); node, TUI and exec stay native |
-| Status leaking through gossip | decided in round 30; the default is that status flows only to readers |
+| Sandboxing on Windows | MXC first; WSL2 or podman (the existing WSL setup) as the fallback; node, TUI and exec stay native |
+| Status leaking through gossip | decided: status flows only to readers through the node; gossip carries presence only, signed, on a topic only readers know |
+| Claude Code ships team features | han-host consumes them; HAN's edge is multi-vendor, self-hosted and verifiable approvals |
+| Pinned crates churning (ACP, rmcp ship major versions often) | pin exact versions; each sits behind one trait (`AgentDriver`, han-mcp) |
 | Reliance on n0's relays | self-host `iroh-relay` for the team |
 | Interop witnesses drifting | frozen; they only need to pass the vectors and run the interop harness |
