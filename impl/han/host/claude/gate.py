@@ -41,7 +41,7 @@ NOGLOB = "set -f; "
 # E7: Bash is default-deny. A command runs only if it is in COMMANDS and EVERY argument is accounted for: a flag must be one the command
 # lists (an unknown flag is refused), a flag's value is checked by its kind, and every other word is a path, a number or plain text as
 # the command says. Kinds: "bool" (no value), "num" (digits), "text" (a pattern or key; never a path), "path" (read), "wpath" (written).
-# Commands and flags that write are for auto turns only: a strict turn (guarded outside input, or held; R-24) may only read, and so
+# Commands and flags that write are for auto turns only: a strict turn (guarded outside input, or a session it has entered; R-24) may only read, and so
 # may the file tools (H11: Write, Edit and NotebookEdit are refused there).
 @dataclass(frozen=True)
 class Cmd:
@@ -108,14 +108,14 @@ class Gate:
         pat = inp.get("pattern") if tool == "Glob" else None       # a glob can climb out with .. or an absolute prefix
         if isinstance(pat, str) and (os.path.isabs(pat) or re.match(r"^[A-Za-z]:", pat) or ".." in re.split(r"[\\/]", pat)):
             return Decision("deny", "Glob: pattern leaves the workspace")
-        if mode == "strict" and tool in WRITE_TOOLS:                 # H11: guarded (outside input) or held: nothing is written locally, it is proposed
+        if mode == "strict" and tool in WRITE_TOOLS:                 # H11: strict (R-24): nothing is written locally, it is proposed
             return Decision("deny", f"{tool}: writing is not available in a strict turn; propose the change as an effect (the deploy tool)")
         return Decision("allow")
 
     def _bash(self, cmd: str, mode: str) -> Decision:
         """No sandbox exists for Bash on Windows, so there is no way to bound what a shell command touches. A command that names the
         network is a world action (an effect); anything else is default-deny (E7): one plain command from COMMANDS with no shell syntax,
-        every flag known and every path argument inside the workspace. A strict turn (guarded or held) is limited to what only reads."""
+        every flag known and every path argument inside the workspace. A strict turn (R-24) is limited to what only reads."""
         if cmd.startswith(NOGLOB): cmd = cmd[len(NOGLOB):]             # our own prefix, seen again by the second line (can_use_tool)
         if NETWORK.search(cmd): return Decision("world", action="bash.network", args={"command": cmd[:2000]})
         if UNSAFE_CHARS.search(cmd): return Decision("deny", "Bash: shell syntax is not allowed; one plain command only")

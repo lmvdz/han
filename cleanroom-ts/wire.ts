@@ -20,7 +20,7 @@ const reExtName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const CORE_PREFIXES = ["space", "member", "policy", "key", "message", "task", "effect", "checkpoint", "redact", "session", "agent"];
 export const CORE_KINDS = ["space.create", "member.set", "policy.set", "key.add", "key.revoke", "message", "task", "task.update", "task.cancel",
   "effect.propose", "effect.approve", "effect.claim", "effect.cancel", "effect.outcome", "effect.resolve", "checkpoint", "redact",
-  "space.move", "session.open", "session.close", "session.input", "agent.release"];
+  "space.move", "session.open", "session.close", "session.input", "agent.unguard"];
 
 export const isServerName = (s: unknown): s is string => typeof s === "string" && reServer.test(s);
 export const isActorId = (s: unknown): s is string => typeof s === "string" && reActor.test(s);
@@ -240,7 +240,7 @@ export function validateContent(kind: string, content: any, body?: any): string 
     case "session.open": return need([], ["title"], (c) => ("title" in c && !strMax(c.title, 256)) ? "title" : null);
     case "session.input": return need(["text"], ["blobs"], (c) => !strMax(c.text, 32768) ? "text" : ("blobs" in c && blobs(c.blobs)) || null);
     case "member.set": case "policy.set": case "key.add": case "key.revoke": case "task.cancel": case "effect.claim":
-    case "effect.cancel": case "space.move": case "session.close": case "agent.release":
+    case "effect.cancel": case "space.move": case "session.close": case "agent.unguard":
       return none ? null : "content not allowed";
     default: // extension: opaque Json with integer numbers
       if (none) return null;

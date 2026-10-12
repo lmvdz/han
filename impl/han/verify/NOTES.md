@@ -12,4 +12,4 @@
 10. **Equivocation `through`** is `seq - 1`: nothing at or above the conflicting seq is trusted.
 11. **Moves.** A verified `space.move` makes the status `moved` (to the target); following the new home is not implemented (no federation in han-seq).
 12. **Redaction.** When a `redact` record verifies, the verifier deletes the target's content from memory and rewrites its state file (P-12); the redacted record still verifies through its `redactedBy` proof on reload.
-13. **CLI.** `han approve` prints the plan and checks `sha256(JCS(plan)) = planDigest` before signing (P-08) but does not ask for a keypress (the explicit command is the confirmation). `session release` sets `seen` to the head just read (override `--seen`), since P-15 denies a release that predates an outside instruction. Ids may be unique 8+ hex prefixes.
+13. **CLI.** `han approve` prints the plan and checks `sha256(JCS(plan)) = planDigest` before signing (P-08) but does not ask for a keypress (the explicit command is the confirmation). `agent unguard` (round 27) carries no `seen` rule: P-15 has no staleness. Ids may be unique 8+ hex prefixes.

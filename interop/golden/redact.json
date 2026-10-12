@@ -1094,7 +1094,8 @@
           "state": "accepted",
           "cancelRequested": false,
           "depth": 0,
-          "seq": 16
+          "seq": 16,
+          "guardedFor": []
          }
         },
         "effects": {
@@ -1115,13 +1116,12 @@
           ],
           "claims": [],
           "seq": 9,
-          "phase": "open"
+          "phase": "open",
+          "guardedFor": []
          }
         },
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "lastOutside": {}
+        "guarded": {}
        }
       }
      }
@@ -1137,16 +1137,16 @@
     {
      "event": {
       "ev": "close",
-      "conn": 1,
-      "by": "client",
+      "conn": 0,
+      "by": "server",
       "code": 1005
      }
     },
     {
      "event": {
       "ev": "close",
-      "conn": 0,
-      "by": "server",
+      "conn": 1,
+      "by": "client",
       "code": 1005
      }
     },
@@ -2265,7 +2265,8 @@
           "state": "accepted",
           "cancelRequested": false,
           "depth": 0,
-          "seq": 16
+          "seq": 16,
+          "guardedFor": []
          }
         },
         "effects": {
@@ -2286,13 +2287,12 @@
           ],
           "claims": [],
           "seq": 9,
-          "phase": "open"
+          "phase": "open",
+          "guardedFor": []
          }
         },
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "lastOutside": {}
+        "guarded": {}
        }
       }
      }
@@ -2308,17 +2308,17 @@
     {
      "event": {
       "ev": "close",
-      "conn": 1,
-      "by": "client",
-      "code": 1000
+      "conn": 0,
+      "by": "server",
+      "code": 1005
      }
     },
     {
      "event": {
       "ev": "close",
-      "conn": 0,
-      "by": "server",
-      "code": 1005
+      "conn": 1,
+      "by": "client",
+      "code": 1000
      }
     },
     {

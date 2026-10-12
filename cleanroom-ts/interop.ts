@@ -677,38 +677,51 @@ async function round22() {
     for (const p of [ann, bob, bot]) await send(ada, SP, "member.set", { actor: p.id, role: "member" });
     const st = async () => (await ada.client.stateAll(SP));
     let sess = "";
-    await scenario("P-15: only the guard unguards (agent.release + unguard); closing never does; a closed session is no session", async () => {
+    await scenario("P-15: only the guard unguards (agent.unguard); closing never does; a closed session is no session", async () => {
       sess = (await send(bot, SP, "session.open", { steerMode: "guarded" })).id;
       ok((await st()).guarded[bot.id] === true, "bot is in guarded");
       await send(bot, SP, "session.close", { session: sess });
       ok((await st()).guarded[bot.id] === true, "closing does not unguard");
       ok(await code(send(bot, SP, "session.close", { session: sess })) === "invalid", "a closed session has left the state: re-close is invalid");
-      ok(await code(send(bot, SP, "agent.release", { agent: bot.id, unguard: true })) === "denied", "the agent cannot unguard itself");
-      ok(await code(send(ada, SP, "agent.release", { agent: bot.id, unguard: true })) === "denied", "an owner is not the guard");
-      ok(await code(send(ann, SP, "agent.release", { agent: bot.id, unguard: false } as A)) === "invalid", "unguard is true or absent");
+      ok(await code(send(bot, SP, "agent.unguard", { agent: bot.id })) === "denied", "the agent cannot unguard itself");
+      ok(await code(send(ada, SP, "agent.unguard", { agent: bot.id })) === "denied", "an owner is not the guard");
+      ok(await code(send(ann, SP, "agent.release", { agent: bot.id } as A)) === "invalid", "agent.release is an unknown kind");
+      ok(await code(send(ann, SP, "agent.unguard", { agent: bot.id, unguard: true } as A)) === "invalid", "agent.unguard carries only the agent");
       ok(await code(send(ann, SP, "session.input", { session: sess, release: true } as A, { text: "x" })) === "invalid", "session.input carries no release flag");
-      const r = await send(ann, SP, "agent.release", { agent: bot.id, unguard: true });
+      const r = await send(ann, SP, "agent.unguard", { agent: bot.id });
       ok(r.seq > 0 && (await st()).guarded[bot.id] === undefined, "the guard unguards, no session needed");
+      ok(await code(send(ann, SP, "agent.unguard", { agent: bot.id })) === "denied", "an agent not in guarded is not unguarded");
     });
-    await scenario("P-15: forceGuarded guards every non-human target of an instruction, from the profile pinned for it", async () => {
-      ok(await guarded(false), "off by default");
-      const pol = { ...POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"], forceGuarded: true } }) };
+    await scenario("P-15: delegation keeps the guard; a guarded author may not approve, govern or steer others; unguard and forcing off free nothing recorded", async () => {
+      const pol = POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"], forceGuarded: true } });
       await send(ada, SP, "policy.set", { policy: pol });
       ok(!("agents" in await st()), "no agents map");
-      const s2 = (await send(bot, SP, "session.open", { steerMode: "auto" })).id;
-      await send(bob, SP, "session.input", { session: s2 }, { text: "hello" });
-      ok((await st()).held[bot.id] === true, "an outside steer holds the forced agent");
-      await send(ann, SP, "agent.release", { agent: bot.id }, undefined, (await st()).head);
-      ok((await st()).held[bot.id] === undefined, "released");
-      async function guarded(_x: boolean) { return (await st()).guarded[bot.id] === undefined; }
+      const top = (await send(ada, SP, "task", { to: [bot.id] }, { ask: "top" })).id;
+      ok(JSON.stringify((await st()).tasks[top].guardedFor) === "[]", "a human's task records nobody");
+      const sub = (await send(bot, SP, "task", { to: [bob.id], parent: top }, { ask: "delegated" })).id;   // delegation is allowed
+      ok(JSON.stringify((await st()).tasks[sub].guardedFor) === JSON.stringify([bot.id]), "the subtask carries the delegating agent");
+      const plan = planOf("file.write", "d.txt");
+      const prop = await send(bob, SP, "effect.propose", { executor: bob.id, action: "file.write", planDigest: digestOf(plan), repeatable: false, task: sub }, { plan });
+      ok(JSON.stringify((await st()).effects[prop.id].guardedFor) === JSON.stringify([bot.id]), "bob's effect for the subtask carries bot");
+      const mine = (await send(bot, SP, "session.open", { steerMode: "auto" })).id;
+      const bobs = (await send(bob, SP, "session.open", { steerMode: "auto" })).id;
+      ok(await code(send(bot, SP, "effect.approve", { proposal: prop.id, planDigest: digestOf(plan) }, { note: "x" })) === "denied", "a guarded author may not approve");
+      ok(await code(send(bot, SP, "member.set", { actor: bob.id, role: "guest" })) === "denied", "a guarded author may not govern");
+      ok(await code(send(bot, SP, "session.input", { session: bobs }, { text: "x" })) === "denied", "a guarded author may not steer another's session");
+      ok(await code(send(bot, SP, "session.input", { session: mine }, { text: "x" })) === "ok", "its own session is allowed");
+      ok(await code(send(bob, SP, "session.input", { session: mine }, { text: "hello" })) === "ok", "an outside steer of a guarded agent is inert, not denied");
+      ok(await code(send(bot, SP, "effect.propose", { executor: bob.id, action: "file.write", planDigest: digestOf(plan), repeatable: false }, { plan })) === "ok", "a guarded agent may propose for another executor");
+      await send(ada, SP, "policy.set", { policy: POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"] } }) });
+      ok(JSON.stringify((await st()).effects[prop.id].guardedFor) === JSON.stringify([bot.id]), "forcing off frees nothing recorded");
+      ok((await ada.client.agentView(SP, bot.id)).guarded[bot.id as A] === undefined, "state {agent}: guarded cut to the agent, empty when it is not in it");
     });
     await scenario("E8: state pages (maxStateItems), cursor, effect", async () => {
       for (let i = 0; i < 7; i++) await send(ada, SP, "task", { to: [bob.id] }, { ask: "t" + i });
       const first = await ada.client.state(SP);
-      ok(Object.keys(first.state.tasks).length === 3 && typeof first.next === "string" && /^\d+(\.\d+){9}$/.test(first.next), "first page: 3 tasks and a dotted next");
+      ok(Object.keys(first.state.tasks).length === 3 && typeof first.next === "string" && /^\d+(\.\d+){7}$/.test(first.next), "first page: 3 tasks and a dotted next");
       const all: A = { ...first.state.tasks }; let next = first.next, pages = 1;
       while (next) { const it = await ada.client.state(SP, { cursor: next }); Object.assign(all, it.state.tasks); next = it.next; pages++; }
-      ok(Object.keys(all).length === 7 && pages === 3, "7 tasks in 3 pages");
+      ok(Object.keys(all).length === Object.keys((await st()).tasks).length && Object.keys(all).length >= 7 && pages >= 3, "every task arrives, over at least 3 pages");
       ok(await code(ada.client.state(SP, { cursor: "bogus" })) === "invalid" && await code(ada.client.state(SP, { cursor: first.next.replace(/\.0$/, ".00") })) === "invalid", "a malformed cursor is invalid");
       ok(await code(ada.client.read(SP, 0, { cursor: first.next } as A)) === "invalid", "`cursor` is not a member of read");
       const ef = (await send(bob, SP, "effect.propose", { action: "file.write", planDigest: digestOf(planOf("file.write", "a.txt")), executor: bob.id } as A, { plan: planOf("file.write", "a.txt") }).catch((e) => e)) as A;

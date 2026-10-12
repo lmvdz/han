@@ -165,13 +165,12 @@
           ],
           "claims": [],
           "seq": 9,
-          "phase": "open"
+          "phase": "open",
+          "guardedFor": []
          }
         },
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "lastOutside": {}
+        "guarded": {}
        }
       }
      }
@@ -335,13 +334,12 @@
           ],
           "claims": [],
           "seq": 9,
-          "phase": "open"
+          "phase": "open",
+          "guardedFor": []
          }
         },
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "lastOutside": {}
+        "guarded": {}
        }
       }
      }

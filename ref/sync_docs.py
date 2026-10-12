@@ -220,8 +220,9 @@ def facts_models(F):
     if len(model_guard.MUTATIONS) != int(mm[2]): raise Underivable(f"ref/model_guard.py has {len(model_guard.MUTATIONS)} mutations, ref/logs/{os.path.basename(muts[0][1])} says {mm[2]}: re-run python ref/model_guard.py --all-mutations --depth 4")
     F["guard_props"] = F["guard4_props"]
     # depth 5 is opt-in: name the newest complete deep run, if any, and say plainly whether the current Policy has been explored that deep
-    deep = [(r, d, n, m) for r, d, n, t, m in runs if m and int(m[2]) >= 5 and "NOT COMPLETED" not in t]
-    undone = [(r, d, n) for r, d, n, t, m in runs if d >= 5 and ("NOT COMPLETED" in t or not m)]
+    GUARD_MODEL_SINCE = 27                                    # round 27 rewrote the model (no holds): older deep runs explored another model
+    deep = [(r, d, n, m) for r, d, n, t, m in runs if r >= GUARD_MODEL_SINCE and m and int(m[2]) >= 5 and "NOT COMPLETED" not in t]
+    undone = [(r, d, n) for r, d, n, t, m in runs if r >= GUARD_MODEL_SINCE and d >= 5 and ("NOT COMPLETED" in t or not m)]
     for plain in (False, True):
         if not deep:
             F["guard_deep_plain" if plain else "guard_deep"] = f"no deeper run is recorded; the current Policy (round {F['round']}) has not been explored to depth 5"; continue

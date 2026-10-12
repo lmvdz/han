@@ -1,25 +1,33 @@
 """Fold totality and invariants under random entry sequences (the generator ref/fuzz_diff.py also uses).
 
 World: an owner O, members M and PR, a guest G, two operators OP and OP2 (human members, separate from the owner), a service X and
-agents BOT and BOT2 whose operators are OP, OP and OP2. Operators confirm and withdraw, keys are revoked and restored, owners
-force guarding on and off, releases are signed with stale `seen`, and the fitting author (an assignee closing its own task, an
-executor claiming, an operator releasing) is chosen more often than chance, so held agents finish their own work. One seed in
-four is a crowd (M9): 14 more human members, 23 actors in all, who approve the newest effect and are assigned tasks of up to
-65 assignees, so the 16-approval cap (P-08) and the 64-assignee bound (§2) are reached; the run reports how often.
+agents BOT and BOT2 whose operators are OP, OP and OP2. Operators confirm and withdraw, an agent's operator changes to the other
+operator and back, keys are revoked and restored, owners force guarding on and off, agents choose guarding and their guards
+unguard them, and the fitting author (an assignee closing its own task or delegating beneath it, an executor claiming, a guard
+approving or unguarding) is chosen more often than chance, so delegation chains grow from guarded agents. Guarded agents also try
+the kinds they may not use (approve, member.set, steering others' sessions). One seed in four is a crowd (M9): 14 more human
+members, 23 actors in all, who approve the newest effect and are assigned tasks of up to 65 assignees, so the 16-approval cap
+(P-08) and the 64-assignee bound (§2) are reached; the run reports how often, and how often the guard paths were taken.
 
 For every entry decide() allows, fold() must not raise, must not mutate its inputs, and the new state must satisfy:
   · every budget amount (space remainder, task remainders) is ≥ 0
   · the space remainder never exceeds the space budget, a task's remainder never exceeds its budget
   · only allowed phases occur, and a final phase never changes
   · decide() never raises
-  · no effect has more than MAX_ATTEMPTS claims; `lastOutside` never shrinks; every held agent has a `lastOutside`
-  · guard_status never raises and agrees with the state's sets; its `guard` is the operator in the pinned profile, confirmed
-  · an entry that touches an effect leaves it no unconsumed approval that has expired, and no more than MAX_OPEN_APPROVALS + 1 + 3
+  · no effect has more than MAX_ATTEMPTS claims
+  · guard_status never raises; `guarded` is the state's set or forcing, `forced` is forcing on a non-human, and `guard` is the
+    operator in the pinned profile, confirmed
+  · P-15, recomputed here from the definitions: a new task's `guardedFor` is its parent's plus its author if guarded, a new effect's
+    its task's plus its proposer and executor if guarded; a recorded `guardedFor` never changes; it holds each agent once and at
+    most MAX_GUARDED_FOR; an allowed claim consumed an approval by the guard of every agent in `guardedFor` and of its proposer and
+    executor if guarded at the claim; a guarded author is never allowed `effect.approve`, `member.set` or a steer into another's session
+  · an entry that touches an effect leaves it no unconsumed approval that has expired, and no more than MAX_OPEN_APPROVALS + 1 + 1 +
+    MAX_GUARDED_FOR (the open ones, one consumed by the rule and one per guard)
   · the JCS size of every state item (effect, task, session, role history, ...) is within a bound derived from the grammar's
     maximum lengths and the Policy constants, so an item that cannot fit in a state page cannot occur
 Usage: python ref/fuzz_fold.py [seeds] [steps]      (default 2000 seeds × 200 steps)
 """
-import copy, hashlib, os, random, sys
+import collections, copy, hashlib, os, random, sys
 from datetime import datetime, timedelta, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -35,6 +43,7 @@ def actors_of(seed):
     """The world of a seed: one seed in four is a crowd of 23 actors."""
     return ACTORS + CROWD if seed % 4 == 3 else ACTORS
 OPERATOR = {BOT: OP, BOT2: OP2, X: OP}
+OTHER = {OP: OP2, OP2: OP}                                   # an operator change swaps an agent's operator for the other one
 AGENTS = [BOT, BOT2, X]
 BASE = datetime(2026, 10, 10, 12, 0, 0, tzinfo=timezone.utc)
 PHASES = {"open", "claimed", "unknown", "succeeded", "failed", "cancelled"}
@@ -57,20 +66,33 @@ def policy(r):
             "extensionsMinRole": r.choice(["guest", "member", "owner"]),
             "sessions": _sessions(r), "servers": {"deny": []}}
 
-def profile(a, revoked=False, unconfirmed=False):
+def operator_of(a, swapped=()): return OTHER[OPERATOR[a]] if a in swapped else OPERATOR[a]
+
+def profile(a, revoked=False, unconfirmed=False, swapped=False):
     kind = "service" if a == X else "agent" if a in (BOT, BOT2) else "human"
     return {"actor": a, "seq": 1, "actorKind": kind, "operatorConfirmed": kind != "human" and not unconfirmed,
-            **({"operator": OPERATOR[a]} if kind != "human" else {}),
+            **({"operator": OTHER[OPERATOR[a]] if swapped else OPERATOR[a]} if kind != "human" else {}),
             "keys": {"k1": {"publicKey": "pk", "status": "revoked" if revoked else "valid"}, "k2": {"publicKey": "pk2", "status": "valid"}}}
 
-def flip(r, revoked, unconf, actors=ACTORS):
-    """With small probability toggle one actor's key revocation or one agent's operator confirmation; returns the actors whose view changed."""
+def flip(r, revoked, unconf, actors=ACTORS, swapped=None):
+    """With small probability toggle one actor's key revocation, one agent's operator confirmation, or (P9) one agent's operator;
+    returns the actors whose view changed."""
     out = []
     if r.random() < .03: a = r.choice(sorted(revoked) if revoked and r.random() < .75 else actors); revoked ^= {a}; out.append(a)      # revoked keys come back, as a rotation would
     if r.random() < .06: a = r.choice(sorted(unconf) if unconf and r.random() < .6 else AGENTS); unconf ^= {a}; out.append(a)
+    if swapped is not None and r.random() < .03: a = r.choice(AGENTS); swapped ^= {a}; out.append(a)                                  # an operator change
     return out
 
-def profiles_of(revoked, unconf, actors=ACTORS): return {a: profile(a, a in revoked, a in unconf) for a in actors}
+def profiles_of(revoked, unconf, actors=ACTORS, swapped=()): return {a: profile(a, a in revoked, a in unconf, a in swapped) for a in actors}
+
+def guarded(s, ctx, a):
+    """P-15, from its definition: `a` chose guarding (the state's set) or owners force it and the pinned profile says it is not human."""
+    p = ctx["profiles"].get(a)
+    return a in s["guarded"] or bool(p and p["actorKind"] != "human" and s["policy"]["sessions"].get("forceGuarded"))
+
+def guard_of(ctx, a):
+    p = ctx["profiles"].get(a)
+    return p["operator"] if p and p["actorKind"] != "human" and p.get("operatorConfirmed") and p.get("operator") else None
 
 def fmt(t): return (BASE + timedelta(seconds=t)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -87,14 +109,14 @@ def random_entry(r, state, n, actors=ACTORS):
                      "effect.propose", "effect.propose", "effect.approve", "effect.approve", "effect.approve", "effect.claim", "effect.claim", "effect.claim", "effect.cancel", "effect.outcome",
                      "effect.outcome", "effect.resolve", "policy.set", "checkpoint", "redact", "space.move", "x.ext",
                      "session.open", "session.open", "session.close", "session.input", "session.input", "session.input",
-                     "agent.release", "agent.release", "agent.release"])
+                     "agent.unguard", "agent.unguard"])
     if crowd and r.random() < .25: kind = "effect.approve"
     pid, sid, tid = pick(effects, H("nope")), pick(sessions, H("nope")), pick(tasks, H("nope"))
     if crowd and effects and kind == "effect.approve" and r.random() < .8: pid = effects[-1]      # a crowd piles onto the newest effect
     body = {
         "member.set": lambda: {"actor": r.choice(actors), "role": r.choice(["owner", "member", "member", "member", "guest", "banned", "none"])},
         "message": lambda: {"to": [r.choice(actors)]},
-        "task": lambda: dict({"to": r.choices(actors, k=r.choice([63, 64, 64, 65])) if crowd and r.random() < .3 else r.sample(actors, r.choice([1, 1, 2]))},
+        "task": lambda: dict({"to": r.choices(actors, k=r.choice([63, 64, 64, 65])) if crowd and r.random() < .3 else r.sample(actors + AGENTS * 2, r.choice([1, 1, 2]))},
                              **({"budget": cost} if r.random() < .4 else {}),
                              **({"parent": tid} if r.random() < .4 else {})),
         "task.update": lambda: {"task": tid, "state": r.choice(["accepted", "progress", "done", "failed", "declined", "cancelled"])},
@@ -119,12 +141,11 @@ def random_entry(r, state, n, actors=ACTORS):
         "session.open": lambda: dict({"steerMode": r.choice(["auto", "guarded", "guarded"])}, **({"task": tid} if r.random() < .3 else {})),
         "session.close": lambda: {"session": sid},
         "session.input": lambda: {"session": sid},
-        "agent.release": lambda: dict({"agent": r.choice(list(state["held"]) if state and state["held"] and r.random() < .6 else AGENTS)},
-                                      **({"unguard": True} if r.random() < .35 else {})),
+        "agent.unguard": lambda: {"agent": r.choice(list(state["guarded"]) if state and state["guarded"] and r.random() < .7 else AGENTS)},
     }[kind]()
     author = r.choice(actors + [O, O, X, X])
-    if r.random() < (.9 if kind in ("effect.claim", "effect.outcome", "effect.resolve") else .65):                                   # the fitting author: held agents finish their own work, operators release and approve
-        st = state or {"tasks": {}, "effects": {}, "sessions": {}}
+    st = state or {"tasks": {}, "effects": {}, "sessions": {}, "guarded": {}}
+    if r.random() < (.9 if kind in ("effect.claim", "effect.outcome", "effect.resolve") else .65):                                   # the fitting author: assignees work and delegate, guards approve and unguard
         if kind in ("task.update", "task.cancel") and body["task"] in st["tasks"]:
             t = st["tasks"][body["task"]]; author = r.choice(t["to"]) if kind == "task.update" else t["author"]
         elif kind in ("effect.claim", "effect.resolve", "effect.cancel") and body["proposal"] in st["effects"]:
@@ -135,14 +156,18 @@ def random_entry(r, state, n, actors=ACTORS):
         elif kind == "effect.approve":
             e = st["effects"].get(body["proposal"])
             author = r.choice([OP, OP2, O, M, PR] + ([OPERATOR[w] for w in (e["proposer"], e["executor"]) if w in OPERATOR] if e else []) + (CROWD * 2 if crowd else []))
-        elif kind == "agent.release": author = OPERATOR[body["agent"]] if r.random() < .8 else r.choice([O, body["agent"]])
+        elif kind == "agent.unguard": author = r.choice([OP, OP, OP2]) if r.random() < .8 else r.choice([O, body["agent"]])
         elif kind == "session.input" and body["session"] in st["sessions"]:
             author = r.choice([a for a in actors if a != st["sessions"][body["session"]]["actor"]] + [st["sessions"][body["session"]]["actor"]])
         elif kind == "session.open": author = r.choice(AGENTS)
-        elif kind == "task": author = r.choice([PR, M, O, OP, BOT])
+        elif kind == "task" and body.get("parent") in st["tasks"] and r.random() < .7: author = r.choice(st["tasks"][body["parent"]]["to"])     # delegating beneath it
+        elif kind == "task": author = r.choice([PR, M, O, OP, BOT, BOT2, X])
+        elif kind == "effect.propose" and body.get("task") in st["tasks"] and r.random() < .7: author = r.choice(st["tasks"][body["task"]]["to"])
         elif kind == "effect.propose": author = r.choice([PR, M, O, OP, BOT, BOT2])
+    if st["guarded"] and kind in ("effect.approve", "member.set", "session.input", "redact", "task", "effect.propose") and r.random() < .12:
+        author = r.choice(sorted(st["guarded"]))                                                             # a guarded agent tries it
     head = state["head"] if state else 0
-    seen = r.choice([0, head, head, head, r.randint(0, head), max(0, head - r.randint(1, 4))]) if kind == "agent.release" else r.choice([0, head, head, r.randint(0, head)])
+    seen = r.choice([0, head, head, r.randint(0, head)])
     return {"id": H(f"e{n}"), "v": 1, "space": S, "kind": kind, "author": author, "keyId": "k1", "body": body,
             "contentHash": "", "refs": [], "seen": seen, "nonce": f"n{n}", "time": "2026-10-10T12:00:00Z"}
 
@@ -157,33 +182,62 @@ def policy_cut(s, prev):
     return prev and prev["policy"]["budget"] and s["policy"]["budget"] and s["policy"]["budget"]["amount"] < prev["policy"]["budget"]["amount"]
 
 # ── size bounds, derived from the grammar's maximum lengths and the Policy constants ──
+MAX_APPROVALS = P.MAX_OPEN_APPROVALS + 1 + 1 + P.MAX_GUARDED_FOR     # open ones when a new one arrives, the new one, one consumed by the rule, one per guard
 def _worst():
     ACT = "@" + "a" * 64 + ":" + "b" * 253                  # the longest actor id (§2)
     ID, KEY, TIME = "f" * 64, "k" * 64, "2026-10-10T12:00:00Z"
     BUD = {"unit": "u" * 32, "amount": 2 ** 53 - 1}
     approval = {"id": ID, "author": ACT, "keyId": KEY, "expiresAt": TIME, "consumedBy": ID}
-    claim = {"id": ID, "attempt": 64, "instance": KEY, "time": TIME, "window": 3600, "approval": ID, "guardApprovals": [ID, ID], "reserved": BUD,
+    claim = {"id": ID, "attempt": 64, "instance": KEY, "time": TIME, "window": 3600, "approval": ID, "guardApprovals": [ID] * P.MAX_GUARDED_FOR, "reserved": BUD,
              "source": ["task", ID], "settled": True, "outcome": "unknown", "started": "unknown"}
     effect = {"proposer": ACT, "proposerKey": KEY, "executor": ACT, "action": "a" * 128, "planDigest": ID, "seq": 2 ** 53 - 1, "cost": BUD,
-              "repeatable": False, "task": ID, "phase": "unknown", "cancelRequested": False, "expiresAt": TIME,
-              "approvals": [approval] * (P.MAX_OPEN_APPROVALS + 1 + 3), "claims": [claim] * P.MAX_ATTEMPTS}
+              "repeatable": False, "task": ID, "phase": "unknown", "cancelRequested": False, "expiresAt": TIME, "guardedFor": [ACT] * P.MAX_GUARDED_FOR,
+              "approvals": [approval] * MAX_APPROVALS, "claims": [claim] * P.MAX_ATTEMPTS}
     task = {"author": ACT, "to": [ACT] * 64, "open": True, "state": "progress", "cancelRequested": False, "depth": 16, "seq": 2 ** 53 - 1,
-            "parent": ID, "budget": BUD, "left": BUD}
+            "guardedFor": [ACT] * (P.MAX_GUARDED_FOR - 2), "parent": ID, "budget": BUD, "left": BUD}
     session = {"actor": ACT, "opened": TIME, "steerMode": "guarded", "steers": 2 ** 53 - 1, "task": ID}
     history = [{"from": 2 ** 53 - 1, "to": 2 ** 53 - 1}] * P.ROLE_INTERVALS
     return {"effects": len(P.jcs(effect)), "tasks": len(P.jcs(task)), "sessions": len(P.jcs(session)), "roleHistory": len(P.jcs(history))}
 BOUND = _worst()
 
+def check_guarding(s, prev, ctx, e):
+    """P-15 (P2, P4, P5), recomputed from the definitions on the state before the entry (`prev`), never from Policy's helpers."""
+    errs, k, b, a = [], e["kind"], e["body"], e["author"]
+    if guarded(prev, ctx, a) and (k in ("effect.approve", "member.set") or (k == "session.input" and prev["sessions"][b["session"]]["actor"] != a)):
+        errs.append(f"guarded {a} was allowed {k}")
+    if k == "task":
+        parent = prev["tasks"].get(b.get("parent"))
+        want = list(parent["guardedFor"] if parent else []) + ([a] if guarded(prev, ctx, a) and a not in (parent["guardedFor"] if parent else []) else [])
+        if s["tasks"][e["id"]]["guardedFor"] != want: errs.append(f"task guardedFor {s['tasks'][e['id']]['guardedFor']} != {want}")
+    if k == "effect.propose":
+        want = list(prev["tasks"][b["task"]]["guardedFor"]) if "task" in b else []
+        for x in (a, b["executor"]):
+            if x not in want and guarded(prev, ctx, x): want.append(x)
+        if s["effects"][e["id"]]["guardedFor"] != want: errs.append(f"effect guardedFor {s['effects'][e['id']]['guardedFor']} != {want}")
+    if k == "effect.claim":
+        eff, c = s["effects"][b["proposal"]], s["effects"][b["proposal"]]["claims"][-1]
+        consumed = {x["id"]: x["author"] for x in eff["approvals"] if x.get("consumedBy") == c["id"]}
+        need = list(eff["guardedFor"]) + [x for x in (eff["proposer"], eff["executor"]) if guarded(prev, ctx, x)]
+        for x in need:
+            g = guard_of(ctx, x)
+            if g is None or not any(consumed.get(i) == g for i in c.get("guardApprovals", [])) or prev["roles"].get(g) not in P.READ_ROLES:
+                errs.append(f"claim of {b['proposal'][:6]} allowed without an approval by the guard ({g}) of {x}")
+    for tid, t in prev["tasks"].items():
+        if s["tasks"][tid]["guardedFor"] != t["guardedFor"]: errs.append(f"task {tid[:6]} guardedFor changed")
+    for pid, x in prev["effects"].items():
+        if s["effects"][pid]["guardedFor"] != x["guardedFor"]: errs.append(f"effect {pid[:6]} guardedFor changed")
+    for item in list(s["tasks"].values()) + list(s["effects"].values()):
+        g = item["guardedFor"]
+        if len(g) != len(set(g)) or len(g) > P.MAX_GUARDED_FOR: errs.append(f"guardedFor {g} repeats an agent or is longer than {P.MAX_GUARDED_FOR}")
+    return errs
+
 def check_state(s, prev, ctx, e=None, actors=ACTORS):
-    errs = []
-    for x, c in (prev["lastOutside"] if prev else {}).items():
-        if s["lastOutside"].get(x, 0) < c: errs.append(f"lastOutside[{x}] shrank")
-    for x in s["held"]:
-        if x not in s["lastOutside"]: errs.append(f"{x} is held but has no lastOutside")
+    errs = check_guarding(s, prev, ctx, e) if prev and e else []
     for a in actors:
         st = P.guard_status(s, ctx, a)
         p = ctx["profiles"][a]
-        if st["held"] != (a in s["held"]) or st["guarded"] != (a in s["guarded"]): errs.append(f"guard_status disagrees with the sets for {a}: {st}")
+        if st["guarded"] != guarded(s, ctx, a) or st["forced"] != (p["actorKind"] != "human" and bool(s["policy"]["sessions"].get("forceGuarded"))):
+            errs.append(f"guard_status disagrees with the definitions for {a}: {st}")
         if ("guard" in st) != (p["actorKind"] != "human" and p["operatorConfirmed"]) or st.get("guard", p.get("operator")) != p.get("operator"):
             errs.append(f"guard_status guard is not the confirmed pinned operator for {a}: {st}")
     if s["budgetLeft"] is not None:
@@ -198,7 +252,7 @@ def check_state(s, prev, ctx, e=None, actors=ACTORS):
     for pid, eff in s["effects"].items():
         if eff["phase"] not in PHASES: errs.append(f"bad phase {eff['phase']}")
         if len(eff["claims"]) > P.MAX_ATTEMPTS: errs.append("more claims than MAX_ATTEMPTS")
-        if len(eff["approvals"]) > P.MAX_OPEN_APPROVALS + 1 + 3: errs.append(f"{len(eff['approvals'])} approvals on one effect")
+        if len(eff["approvals"]) > MAX_APPROVALS: errs.append(f"{len(eff['approvals'])} approvals on one effect")
         if len(P.jcs(eff)) > BOUND["effects"]: errs.append("an effect exceeds its size bound")
         old = prev["effects"].get(pid) if prev else None
         if old and old["phase"] in P.FINAL and eff["phase"] != old["phase"]: errs.append(f"final phase changed {old['phase']}→{eff['phase']}")
@@ -214,6 +268,7 @@ def check_state(s, prev, ctx, e=None, actors=ACTORS):
 
 CLAIMS = [0]
 STATS = {"crowd seeds": 0, "approvals refused at the cap": 0, "tasks with 64 assignees allowed": 0, "tasks with 65 assignees refused": 0}
+GUARD_STATS = collections.Counter()
 
 def count(stats, e, d):
     """M9: how often the generator reaches the 16-approval cap and the 64-assignee bound."""
@@ -222,9 +277,23 @@ def count(stats, e, d):
     if n == 64 and d["allow"]: stats["tasks with 64 assignees allowed"] += 1
     if n == 65 and not d["allow"]: stats["tasks with 65 assignees refused"] += 1
 
+def count_guard(stats, prev, new, e, d):
+    """P9: how often the guard paths were taken (keys start with `* ` so fuzz_diff lists them with its guard paths)."""
+    k = e["kind"]
+    if not d["allow"]:
+        if "guarded author may not" in d.get("reason", ""): stats["* forbidden kind refused for a guarded author"] += 1
+        if k == "effect.claim" and "guard" in d.get("reason", ""): stats["* claim refused for a guard"] += 1
+        return
+    if k == "task" and len(new["tasks"][e["id"]]["guardedFor"]) >= 1 and "parent" in e["body"]: stats["* subtask carrying a guarded agent"] += 1
+    if k == "task" and len(new["tasks"][e["id"]]["guardedFor"]) >= 2: stats["* task carrying two guarded agents"] += 1
+    if k == "effect.propose" and any(x not in (e["author"], e["body"]["executor"]) for x in new["effects"][e["id"]]["guardedFor"]): stats["* effect carrying a delegating agent"] += 1
+    if k == "effect.claim" and new["effects"][e["body"]["proposal"]]["claims"][-1].get("guardApprovals"): stats["* claim with guard approvals"] += 1
+    if k == "agent.unguard": stats["* unguard allowed"] += 1
+    if k == "policy.set" and prev["policy"]["sessions"].get("forceGuarded") != new["policy"]["sessions"].get("forceGuarded"): stats["* forcing switched"] += 1
+
 def run(seed, steps):
     r = random.Random(seed)
-    t, revoked, unconf = 0, set(), set()
+    t, revoked, unconf, swapped = 0, set(), set(), set()
     actors = actors_of(seed)
     STATS["crowd seeds"] += actors is not ACTORS
     create = {"id": H("create"), "v": 1, "space": S, "kind": "space.create", "author": O, "keyId": "k1", "body": {"policy": policy(r)},
@@ -238,8 +307,9 @@ def run(seed, steps):
     allowed = 0
     for n in range(steps):
         t += r.choice([0, 1, 5, 20, 45])
-        flip(r, revoked, unconf, actors)
-        ctx = {"time": fmt(t), "profiles": profiles_of(revoked, unconf, actors)}
+        before = set(swapped); flip(r, revoked, unconf, actors, swapped)
+        GUARD_STATS["* operator changed"] += swapped != before
+        ctx = {"time": fmt(t), "profiles": profiles_of(revoked, unconf, actors, swapped)}
         e = random_entry(r, state, n, actors)
         before, ctx0 = copy.deepcopy(state), copy.deepcopy(ctx)
         try:
@@ -248,14 +318,15 @@ def run(seed, steps):
             return f"seed {seed} step {n}: decide raised {type(ex).__name__}: {ex} on {e['kind']}", allowed
         if state != before or ctx != ctx0: return f"seed {seed} step {n}: decide mutated input", allowed
         count(STATS, e, d)
-        if not d["allow"]: continue
+        if not d["allow"]: count_guard(GUARD_STATS, state, None, e, d); continue
         try:
             new = P.fold(state, {"entry": e, "content": None, "receipt": {"seq": state["head"] + 1, "time": ctx["time"]}}, ctx)
         except Exception as ex:
             return f"seed {seed} step {n}: fold raised {type(ex).__name__}: {ex} on allowed {e['kind']} {e['body']}", allowed
         if state != before: return f"seed {seed} step {n}: fold mutated input", allowed
         errs = check_state(new, state, ctx, e, actors)
-        if errs: return f"seed {seed} step {n}: after {e['kind']} {e['body']}: {errs}", allowed
+        if errs: return f"seed {seed} step {n}: after {e['kind']} by {e['author']} {e['body']}: {errs}", allowed
+        count_guard(GUARD_STATS, state, new, e, d)
         state = new; allowed += 1
         if e["kind"] == "effect.claim": CLAIMS[0] += 1
     return None, allowed
@@ -270,8 +341,10 @@ def main():
         if err:
             print("FAIL", err); return 1
     print("caps reached (M9): " + "; ".join(f"{k} {v}" for k, v in STATS.items()))
+    print("guard paths (P9): " + "; ".join(f"{k[2:]} {v}" for k, v in sorted(GUARD_STATS.items())))
     print(f"{seeds} seeds × {steps} steps: {total} allowed entries folded ({CLAIMS[0]} claims); decide/fold total, pure, budgets within bounds, "
-          f"final phases stable, lastOutside monotone, expired approvals dropped, every state item within its derived size bound {BOUND}")
+          f"final phases stable, guardedFor recorded as defined and never changed, claims approved by every guard, guarded authors restricted, expired approvals dropped, "
+          f"every state item within its derived size bound {BOUND}")
     return 0
 
 if __name__ == "__main__":

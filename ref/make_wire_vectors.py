@@ -477,7 +477,7 @@ r22.append(vec("E8-setup", f"setup: alice creates `{PG}`, adds bob and generates
 page1 = state_expect(al, 2, PG, "alice")          # roles, roleHistory and the first 1,000 tasks, with the cursor of the rest
 _p1 = ORC.state(PG, A("alice"))[1]
 c1 = _p1["next"]
-assert len(_p1["state"]["tasks"]) == 1000 and len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["roles"]) == 2 and c1 == f"{ORC.spaces[PG]['state']['head']}.2.2.1000.0.0.0.0.0.0", c1
+assert len(_p1["state"]["tasks"]) == 1000 and len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["roles"]) == 2 and c1 == f"{ORC.spaces[PG]['state']['head']}.2.2.1000.0.0.0.0", c1
 last_page = ORC.state(PG, A("alice"), cursor=c1)[1]      # the rest: one task; every other paged map was complete on page 1
 assert len(last_page["state"]["tasks"]) == 1 and last_page["state"]["roles"] == {} and last_page["state"]["roleHistory"] == {} and "next" not in last_page
 steps = [sx(al, 2, PG)] + page1
@@ -859,7 +859,7 @@ r24.append(vec("H10a", "`read` is entries only: records and heads, and `state`, 
 
 # ───────────── probes-r25.json: DECISIONS-r25.md K7 (the `agent` selector of `state`) ─────────────
 r25 = []
-# BC (built above) has no guarded agent: the test servers' profiles have no confirmed operator (P-15 needs one), so the facts are the empty ones; the shape, the
+# BC (built above) has no guarded agent: no test-server profile has chosen guarding or is forced, so `guarded` is empty; the shape, the
 # selector rules and `at` are what these vectors pin. A guarded agent is shown by the Policy vectors and wire scenario "state {agent}", not by the wire.
 steps = []
 for k, (who, kw) in enumerate((("bob", {}), ("x", {}), ("bob", {"at": 3}), ("carol", {})), start=2):
@@ -870,8 +870,8 @@ for k, a in enumerate(({"agent": 5}, {"agent": "bob"}, {"agent": None}, {"agent"
     steps += [sx(al, k, BC, **a), {"conn": al, "expect": err(k, "invalid")}]
 steps += [sx(al, 14, BC, agent=A("bob"), at=0), {"conn": al, "expect": err(14, "invalid")}, sx(ca, 15, BC, agent=A("bob")), {"conn": ca, "expect": err(15, "not_found")}]
 assert ORC.state(BC, A("carol"), agent=A("bob"))[0] == "not_found"
-r25.append(vec("K7a", "`state {agent}` (an ActorId) is `{space, head, home, policy, held, guarded, lastOutside}` with each map cut to that actor (a GuardInput, M5): one frame, no `next`, nothing that grows, empty maps for an actor in none of them; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found",
-               steps, ["§3", "G-09", "K7", "M5"], "ok x5 (incl. at 3, head 3), invalid x8, not_found", source="maker (oracle: ref/wire.py Home)"))
+r25.append(vec("K7a", "`state {agent}` (an ActorId) is `{space, head, home, policy, guarded}` with `guarded` cut to that actor (a GuardInput, P8): one frame, no `next`, nothing that grows, an empty map for an actor not in it; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found",
+               steps, ["§3", "G-09", "K7", "P8"], "ok x5 (incl. at 3, head 3), invalid x8, not_found", source="maker (oracle: ref/wire.py Home)"))
 
 # ───────────── probes-r27.json: round-26 review N3 (P-01: the receipt pins exactly the last relevantActors list) ─────────────
 r27 = []

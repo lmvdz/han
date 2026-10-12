@@ -2,7 +2,7 @@
 
 What drives a turn: a `session.input` with a receipt into the agent's own session, or a `task` naming it. Nothing else does:
 messages, task.updates, outcomes, other sessions' streams and signals are data (R-24), collected and handed to the next turn
-labelled as data. Which mode a turn runs in is decided from the state alone (`_mode_for`, by `guard_status`). What the agent decides becomes
+labelled as data. Which mode a turn runs in is decided from the state alone (`_mode_for`, by `guard_status`) and from one fact the host keeps itself: a session an outside instruction has entered stays strict (R-24). What the agent decides becomes
 journaled intents (journal.py) and only then entries: the host never acts in the world, a World action is an `effect.propose`
 naming the configured executor."""
 from __future__ import annotations
@@ -28,7 +28,7 @@ class Host:
         self.me = client.actor
         self.j = Journal(state_path)
         self.crash = crash                                    # test hook: crash(point, intent key) may raise HostCrash
-        self.state: dict | None = None                        # the light state (K7): the `state {agent}` reply as is (M5): space, head, home, policy, held, guarded, lastOutside
+        self.state: dict | None = None                        # the light state (K7): the `state {agent}` reply as is (M5): space, head, home, policy, guarded
         self.full: dict | None = None                         # the whole StateView, read only when sessions or tasks are needed
         self.profile: dict | None = None                      # this agent's current ProfileView (guard_status wants it in ctx.profiles)
         self.session: str | None = None
@@ -42,17 +42,19 @@ class Host:
         agent.propose = self._propose_now
 
     # ── what the state says ──
-    @property
-    def held(self) -> bool: return bool(self.state) and self._status(self.state, self.profile)["held"]
     def _status(self, state: dict, profile: dict | None, time: str = "") -> dict:
-        """P-15, the one guard function, for this agent: `{guard?, held, guarded, forced}`. The host derives nothing else from the state (R-24)."""
+        """P-15, the one guard function, for this agent: `{guard?, guarded, forced}`. The host derives nothing else from the state (R-24)."""
         return P.guard_status(state, {"time": time, "profiles": {self.me: profile} if profile else {}}, self.me)
 
     @property
     def guarded_now(self) -> bool:
-        if not self.state: return False
-        gs = self._status(self.state, self.profile)
-        return gs["guarded"] or gs["forced"]
+        return bool(self.state) and self._status(self.state, self.profile)["guarded"]
+
+    # R-24: once an outside instruction has entered a session's context, every later turn of that session is strict. The log holds no
+    # state for it; the host's own store does (the journal's meta), so it survives a restart.
+    def tainted(self, session: str | None) -> bool: return session in self.j.get("taint", [])
+    def _taint(self, session: str | None):
+        if session and not self.tainted(session): self.j.put("taint", self.j.get("taint", []) + [session])
 
     def _guarded_session(self) -> bool:
         return self.steer_mode == "guarded" or self.guarded_now
@@ -84,14 +86,13 @@ class Host:
     def _my_sessions(self) -> list[str]:
         return [i for i, s in self.full["sessions"].items() if s["actor"] == self.me]
 
-    def _mode_for(self, author: str, from_sessions: bool, at: dict, profile: dict | None) -> str:
-        """R-24: `strict` while held (every turn, judged at the head); for an outside instruction, one by someone other than the agent and its
-        guard, when `guard_status` on the state at the instruction's seq (with the profile its receipt pinned) says guarded or forced; and when
-        the turn carries another session's stream or context as data."""
-        me = self.me
-        if self.held: return "strict"
+    def _mode_for(self, author: str, from_sessions: bool, session: str | None, at: dict, profile: dict | None) -> str:
+        """R-24: `strict` for an outside instruction, one by someone other than the agent and its guard, when `guard_status` on the state at
+        the instruction's seq (with the profile its receipt pinned) says guarded; for every later turn of a session such an instruction has
+        entered (`tainted`, which this call sets); and when the turn carries another session's stream or context as data."""
         gs = self._status(at, profile)
-        if (gs["guarded"] or gs["forced"]) and author not in (me, gs.get("guard")): return "strict"
+        if gs["guarded"] and author not in (self.me, gs.get("guard")): self._taint(session)
+        if self.tainted(session): return "strict"
         if from_sessions: return "strict"              # SHOULD for any agent, MUST when guarded (R-24)
         return "auto"
 
@@ -166,7 +167,8 @@ class Host:
     async def _turn(self, inp: TurnInput, pins: dict | None = None):
         from_sessions = any(s == "session" for s, _, _ in self.data)
         at = await self._state_at(inp.seq, pins)
-        mode = self._mode_for(inp.author, from_sessions, *at) if at else "strict"      # no state at the receipt: be strict
+        if at: mode = self._mode_for(inp.author, from_sessions, inp.session, *at)
+        else: self._taint(inp.session); mode = "strict"      # no state at the receipt: be strict, and stay so (it may have been an outside instruction)
         data, self.data = self.data, []
         inp.data = [t for _, t, _ in data]
         refs = [inp.trigger] + [r for _, _, r in data if r][-(MAX_REFS - 1):]
@@ -182,8 +184,8 @@ class Host:
             return self.j.commit_turn(inp.seq, [])
         self._ctx = None
         self._crash("decided")
-        await self._refresh()                          # the state may have changed during the turn (a hold, a release)
-        if "Steer" in {type(a).__name__ for a in actions} or P.space_unit(self.state): await self._full()      # `_plan` looks at sessions and tasks
+        await self._refresh()                          # the state may have changed during the turn (a policy change, an unguard)
+        if {"Steer", "Task"} & {type(a).__name__ for a in actions} or P.space_unit(self.state): await self._full()      # `_plan` looks at sessions and tasks
         intents = self._plan(actions, inp, refs)
         self.j.log(f"{mode} turn by {inp.author} at {inp.seq}: {inp.text}")
         for a in actions: self.j.log(f"  -> {a}")
@@ -195,11 +197,11 @@ class Host:
     def _plan(self, actions, inp: TurnInput, refs) -> list[tuple[str, str, dict]]:
         """Actions → intents [(key, kind, payload)], keyed by trigger and position, so a decision is made once. Entries are signed now
         (R-17: `seen` is the instruction's seq, `refs` name it and the data records read)."""
-        out, held = [], self.held
+        out, guarded = [], self.guarded_now
         def refuse(key, why):
             self.refused.append(why); out.append((key + "r", "say", {"text": "refused: " + why}))
         def entry(kind, body, content):
-            assert kind != "agent.release" and not {"release", "unguard"} & set(body)        # E1, F2: only the guard releases or unguards; the host never does, for itself least of all
+            assert kind != "agent.unguard" and "unguard" not in body        # P-15: only the guard unguards; the host never does, for itself least of all
             return self.client.make_entry(kind, self.space, body, content, refs=refs, seen=inp.seq)
         for i, a in enumerate(actions):
             key = f"{inp.trigger}:{i}"
@@ -212,11 +214,14 @@ class Host:
                 out.append((key, "entry", {"entry": e, "content": c}))
                 out.append((key + "s", "say", {"text": f"proposed {a.action} as {P.entry_id(e)}"}))
             elif isinstance(a, Task):
-                if held: refuse(key, f"held: cannot delegate to {a.to}"); continue
-                e, c = entry("task", {"to": [a.to]}, {"ask": a.text})
+                body = {"to": [a.to]}                      # a guarded agent may delegate (P-15): the assignee's effects carry its guard
+                if inp.task:                                # R-24: the chain keeps `guardedFor`; never drop the link
+                    if (self.full["tasks"].get(inp.task) or {}).get("left"): refuse(key, "cannot delegate a budgeted task without a budget"); continue
+                    body["parent"] = inp.task
+                e, c = entry("task", body, {"ask": a.text})
                 out.append((key, "entry", {"entry": e, "content": c}))
             elif isinstance(a, Steer):
-                if held and a.session not in self._my_sessions(): refuse(key, f"held: cannot steer {a.session[:8]}"); continue
+                if guarded and a.session not in self._my_sessions(): refuse(key, f"guarded: cannot steer {a.session[:8]}"); continue
                 e, c = entry("session.input", {"session": a.session}, {"text": a.text})
                 out.append((key, "entry", {"entry": e, "content": c}))
         return out
@@ -232,8 +237,9 @@ class Host:
             task = self._budget_task(inp.task, cost)
             if not cost or cost["unit"] != P.space_unit(self.state): return f"{a.action}: cannot spend, no cost in the space's unit ({P.space_unit(self.state)})"
             if not task: return f"{a.action}: cannot spend, no open budgeted task is assigned to me"
+            if inp.task and task != inp.task: return f"{a.action}: cannot spend, the driving task {inp.task[:8]} is not a budgeted task assigned to me"      # R-24: name the driving task
             body["cost"], body["task"] = dict(cost), task
-        elif inp.task: body["task"] = inp.task
+        elif inp.task: body["task"] = inp.task             # R-24: a task-driven turn names its task in every proposal
         return self.client.make_entry("effect.propose", self.space, body, {"plan": plan}, refs=refs, seen=inp.seq)
 
     def _propose_now(self, a: World) -> str | None:
@@ -244,7 +250,7 @@ class Host:
         if isinstance(made, str): return "refused: " + made
         self._made[id(a)] = made
         gs = self._status(self.state, self.profile) if self.state else {}
-        guard = gs.get("guard") if gs.get("held") else None
+        guard = gs.get("guard") if gs.get("guarded") else None
         return f"proposed as {P.entry_id(made[0])}" + (f", waiting for {guard}" if guard else "")
 
     def _budget_task(self, preferred: str | None, cost: dict | None) -> str | None:

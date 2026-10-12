@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 import policy as P
 
-PAGED = ("roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "lastOutside", "profile.keys")   # §3 (H3): every map (`held` and `guarded` are sets, sent as `{actor: true}` maps) of a state page, in cursor and fill order. Only the scalars and `policy` repeat on every page
+PAGED = ("roles", "roleHistory", "tasks", "effects", "sessions", "guarded", "profile.keys")   # §3 (H3): every map (`guarded` is a set, sent as an `{actor: true}` map) of a state page, in cursor and fill order. Only the scalars and `policy` repeat on every page
 CURSOR = re.compile(r"(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*)){%d}" % len(PAGED), re.ASCII)      # §3: head.o1.….oN, one offset per PAGED map: how many of its items the earlier pages sent
 EFFECT_VIEW = ("space", "head", "home", "policy")   # §3: what `state {effect}` and `state {agent}` hold besides the one effect or the agent's guard facts
 MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: items of each paged map per page of a state read (E8)
@@ -113,7 +113,7 @@ CONTENT = {   # kind → {field: (validator, required)};  None = the kind has no
     "redact": {"reason": (_str(1024), False)},
     "session.open": {"title": (_str(256), False)},
     "session.close": None,
-    "agent.release": None,
+    "agent.unguard": None,
     "session.input": {"text": (_str(32768), True), "blobs": (_blobs, False)},
 }
 
@@ -269,7 +269,7 @@ def _has(view, path) -> bool:
     return path in view
 
 def _get_map(view, path):
-    """The paged member `path`: a map, or (`held`, `guarded`) a set held as a sorted array."""
+    """The paged member `path`: a map (`guarded` is a set, a map whose values are all `true`)."""
     return view["profile"]["keys"] if path == "profile.keys" else view[path]
 
 def _put_map(view, path, value):
@@ -289,9 +289,9 @@ def _add(m, key, val):
 def _empty_like(view, path): return {} if isinstance(_get_map(view, path), dict) else []
 
 def agent_facts(state, actor) -> dict:
-    """K7, M5: what a host needs of one agent besides its profile: the state's `held`, `guarded` and `lastOutside` cut to that one actor (each `{}` when
-    the actor is not in it), so the reply is a GuardInput that `guard_status` takes as is (R-24)."""
-    return {k: {actor: state[k][actor]} if actor in state.get(k, {}) else {} for k in ("held", "guarded", "lastOutside")}
+    """K7, P8: what a host needs of one agent besides its profile: the state's `guarded` cut to that one actor (`{}` when the actor is not
+    in it), so the reply is a GuardInput that `guard_status` takes as is (R-24)."""
+    return {"guarded": {actor: True} if actor in state.get("guarded", {}) else {}}
 
 # ── a reference home ──
 class Home:
@@ -394,7 +394,7 @@ class Home:
     def pin(self, state, entry, profiles, now):
         """P-01: Policy's relevantActors is the whole pin rule; this only fetches. Call it with the views fetched so far, fetch what it
         names that was not tried yet, and call again until it names nothing new (three calls at most: the first names the actors the
-        entry names and every candidate, the second adds the guards from the proposer's and executor's views, the third nothing).
+        entry names and every candidate, the second adds the guards from the views of the agents a claim needs them for, the third nothing).
         `profiles` is every view this home could fetch now. None (`unavailable`) if the final list names an actor it could not fetch."""
         fetched, tried = {}, set()
         for _ in range(3):
@@ -469,7 +469,7 @@ class Home:
         """§3 state: one StateView page as `{state, next?}`. At most one of `cursor`, `effect`, `agent` is present, and `at` may join `agent` only (None here means absent;
         on the wire presence decides, whatever the value): any other two or more is `invalid`, judged before any of them is looked at. `at` gives the state after record `at`
         and needs read rights at `at` (P-02), not at the head. `cursor` (the `next` of an earlier page) gives the page it names, from its own head. `effect` gives the one
-        effect. `agent` (an ActorId) gives `held`, `guarded` and `lastOutside` cut to that actor (K7, M5).
+        effect. `agent` (an ActorId) gives `guarded` cut to that actor (K7, P8).
         Every item of a paged map is bounded, so a page always has room for at least one (H3): a violation is a bug in the server and raises."""
         S = self.spaces.get(space)
         if not S: return "not_found", None

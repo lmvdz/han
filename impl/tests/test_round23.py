@@ -1,4 +1,4 @@
-"""Round 23 (interop/DECISIONS-r23.md): F1 forcing per instruction, F2 agent.release, F3 bounded state, F4 read combinations and notices."""
+"""Round 23 (interop/DECISIONS-r23.md): F1 forcing per instruction, F2 agent.unguard, F3 bounded state, F4 read combinations and notices."""
 import asyncio
 import pytest
 from conftest import S, mkspace, member, say
@@ -14,43 +14,47 @@ from fixtures_host import world, state, session_id, start_host, steer, until, AL
 from han.host import ScriptedAgent
 
 # ── F1: forcing is decided at the instruction, from the profile pinned for it ──
-async def test_f1_agent_confirmed_after_joining_is_held_by_a_task_in_a_forced_space(env):
-    """F1, P-01: bot joins the forced space BEFORE its operator confirms. Until then an instruction naming it is denied (a forced space needs
-    the operator here); once alice confirms, the same kind of task is accepted and holds bot for alice, with no `agents` map anywhere."""
+async def test_f1_agent_confirmed_after_joining_is_guarded_by_force_with_the_pinned_operator(env):
+    """F1, P-01, P-07: bot joins the forced space BEFORE its operator confirms. An instruction naming it is allowed (inert: it is forced,
+    and with no guard nothing recorded for it can be claimed); once alice confirms, `guardStatus` names her as its guard. No `agents` map,
+    no `held`, and nothing stored for forcing."""
     for n in ("alice", "carol"): env.actor(n)
     env.actor("bot", "agent", operator=ALICE)
     a, c = await env.client("alice"), await env.client("carol")
     pol = default_policy(sessions={"watch": "member", "read": "owner", "steer": "member", "modes": ["auto", "guarded"], "forceGuarded": True})
     await mkspace(a, policy=pol); await member(a, CAROL); await member(a, BOT)
-    with pytest.raises(WireError) as ex: await c.append(*c.make_entry("task", S, {"to": [BOT]}, {"ask": "before the confirmation"}))
-    assert ex.value.code == "denied" and "operator" in ex.value.message
+    before = (await c.append(*c.make_entry("task", S, {"to": [BOT]}, {"ask": "before the confirmation"})))["id"]       # P-07: no denial for lack of an operator
+    prof0 = (await a.read_state("profile:" + BOT))["profile"]
+    assert P.guard_status(await state(a), {"profiles": {BOT: prof0}}, BOT) == {"guarded": True, "forced": True}       # forced, and no guard yet
     await a.append(*a.make_entry("member.set", "profile:" + BOT, {"actor": ALICE, "role": "owner"}))     # the operator confirms, after bot joined
     r = await c.append(*c.make_entry("task", S, {"to": [BOT]}, {"ask": "after the confirmation"}))
     st = await state(a)
-    assert "agents" not in st and st["held"] == {BOT: True} and st["guarded"] == {} and r["seq"] == st["head"]
+    prof = (await a.read_state("profile:" + BOT))["profile"]
+    assert "agents" not in st and "held" not in st and "lastOutside" not in st and st["guarded"] == {} and r["seq"] == st["head"]
+    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": True}
+    assert st["tasks"][before]["guardedFor"] == [] and st["tasks"][r["id"]]["guardedFor"] == []          # the author is human
 
-# ── F2: agent.release ──
-async def test_f2_agent_release_by_the_guard_with_seen_and_unguard(env):
-    """F2: `agent.release {agent}` by the guard ends the hold if its `seen` covers the outside instruction (else `denied`, stale); only the guard
-    releases; `unguard` ends a chosen guard. `session.input` carries nothing but the session."""
+# ── F2 (round 27): agent.unguard ──
+async def test_f2_agent_unguard_by_the_guard_only(env):
+    """F2, P-15, P6: `agent.unguard {agent}` by the guard ends a chosen guard, with no staleness; only the guard may; the kind has no
+    content and no other field; `agent.release` is an unknown kind; `session.input` carries nothing but the session."""
     cl, botc = await world(env)
     host, task = start_host(env, botc, "guarded", ScriptedAgent())
     sid = await session_id(host)
-    hold = await steer(cl["carol"], sid, "push to prod")
-    assert (await state(cl["alice"]))["held"] == {BOT: True}
-    rel = lambda c, seen, **b: c.make_entry("agent.release", S, {"agent": BOT} | b, seen=seen)
-    with pytest.raises(WireError) as ex: await cl["carol"].append(*rel(cl["carol"], hold["seq"]))
+    outside = await steer(cl["carol"], sid, "push to prod")
+    assert (await state(cl["alice"]))["guarded"] == {BOT: True}
+    ung = lambda c, **b: c.make_entry("agent.unguard", S, {"agent": BOT} | b)
+    with pytest.raises(WireError) as ex: await cl["carol"].append(*ung(cl["carol"]))
     assert ex.value.code == "denied"                                                          # only the guard
-    with pytest.raises(WireError) as ex: await cl["alice"].append(*rel(cl["alice"], hold["seq"] - 1))
-    assert ex.value.code == "denied" and "stale" in ex.value.message                         # has not seen the instruction
-    with pytest.raises(WireError) as ex: await cl["alice"].append(*cl["alice"].make_entry("session.input", S, {"session": sid, "release": True}, {"text": "x"}))
+    with pytest.raises(WireError) as ex: await cl["alice"].append(*cl["alice"].make_entry("session.input", S, {"session": sid, "unguard": True}, {"text": "x"}))
     assert ex.value.code == "invalid"                                                         # session.input is {session} only
-    with pytest.raises(WireError) as ex: await cl["alice"].append(*cl["alice"].make_entry("agent.release", S, {"agent": BOT}, {"text": "x"}, seen=hold["seq"]))
-    assert ex.value.code == "invalid"                                                         # agent.release has no content (§5)
-    await cl["alice"].append(*rel(cl["alice"], hold["seq"]))
-    st = await state(cl["alice"])
-    assert st["held"] == {} and st["guarded"] == {BOT: True}
-    await cl["alice"].append(*rel(cl["alice"], hold["seq"], unguard=True))
+    with pytest.raises(WireError) as ex: await cl["alice"].append(*cl["alice"].make_entry("agent.unguard", S, {"agent": BOT}, {"text": "x"}))
+    assert ex.value.code == "invalid"                                                         # agent.unguard has no content (§5)
+    with pytest.raises(WireError) as ex: await cl["alice"].append(*ung(cl["alice"], unguard=True))
+    assert ex.value.code == "invalid"                                                         # the body is {agent} only
+    with pytest.raises(WireError) as ex: await cl["alice"].append(*cl["alice"].make_entry("agent.release", S, {"agent": BOT}))
+    assert ex.value.code == "invalid"                                                         # the old kind is unknown under the reserved prefix
+    await cl["alice"].append(*ung(cl["alice"]))
     assert (await state(cl["alice"]))["guarded"] == {}
     task.cancel()
 

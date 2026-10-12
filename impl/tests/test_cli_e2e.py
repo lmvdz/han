@@ -59,32 +59,33 @@ async def test_task_and_read_json(env):
     assert [r["entry"]["kind"] for r in recs] == ["member.set", "task"] and recs[1]["content"] == {"ask": "write the docs"}
     assert "open" in await han(env, "bob", "status", S)
 
-async def test_session_steer_hold_and_release(env):
-    """P-15, R-24: a member steers a guarded agent through the CLI (it is held for its operator), `status` shows the hold, the operator
-    releases it through the CLI, and the hold is gone; `watch` prints the session's StreamItems."""
-    ana = env.actor("ana"); env.actor("carol"); bot = env.actor("bot", "agent", operator=ana)
+async def test_session_steer_guarded_delegation_and_unguard(env):
+    """P-15, R-24: a member steers a guarded agent through the CLI (allowed, inert), the agent delegates (`status` shows `guardedFor` on the
+    task), only the guard ends the guarded choice with `agent unguard`, and `watch` prints the session's StreamItems."""
+    ana = env.actor("ana"); carol = env.actor("carol"); bot = env.actor("bot", "agent", operator=ana)
     c_ana = await env.client("ana")
     pol = '{"watch": "member", "read": "member", "steer": "member", "modes": ["auto", "guarded"]}'
     await han(env, "ana", "space", "create", S, "--set", f"sessions={pol}")
-    await han(env, "ana", "member", "set", S, "@carol:a.localhost", "member")
+    await han(env, "ana", "member", "set", S, carol, "member")
     await han(env, "ana", "member", "set", S, bot, "member")
     await c_ana.append(*c_ana.make_entry("member.set", "profile:" + bot, {"actor": ana, "role": "owner"}))     # the operator confirms
     sid = last_id(await han(env, "bot", "session", "open", S, "--mode", "guarded", "--title", "work"))
     st = await han(env, "ana", "status", S)
-    assert f"{sid[:8]} {bot}  open  guarded" in st and "held agents: none" in st
-    out = await han(env, "carol", "session", "steer", S, sid[:8], "push to prod")
+    assert f"{sid[:8]} {bot}  open  guarded" in st and "held" not in st
+    assert f"{bot}  guarded (guard {ana})" in st and f"guarded agents: {bot}" in st             # F1: per agent, from the current state
+    await han(env, "carol", "session", "steer", S, sid[:8], "push to prod")                    # an outside instruction is allowed (inert)
+    await han(env, "bot", "task", S, "write the docs", "--to", carol)                           # a guarded agent may delegate
     st = await han(env, "ana", "status", S)
-    assert f"held agents: {bot}" in st
-    assert f"{bot}  guarded (guard {ana})  held" in st                                   # F1: per agent, from the current state
-    code, _, err = await han(env, "carol", "agent", "release", S, bot, ok=False)       # only the guard releases
+    assert f"to {carol}  guardedFor {bot}" in st                                                 # recorded on the work, at creation
+    code, _, err = await han(env, "carol", "agent", "unguard", S, bot, ok=False)               # only the guard unguards
     assert code == 1 and "denied" in err
-    await han(env, "ana", "agent", "release", S, bot)
+    code, _, err = await han(env, "ana", "agent", "unguard", S, ana, ok=False)                  # an agent that is not guarded can't be
+    assert code == 1 and "denied" in err
+    code, _, err = await han(env, "ana", "agent", "release", S, bot, ok=False)                  # the old kind is gone (argparse refuses it)
+    assert code != 0
+    await han(env, "ana", "agent", "unguard", S, bot)
     st = await han(env, "ana", "status", S)
-    assert "held agents: none" in st and f"guarded agents: {bot}" in st    # released, still guarded (sticky)
-    code, _, err = await han(env, "carol", "agent", "release", S, bot, "--unguard", ok=False)       # E1: only the guard loosens
-    assert code == 1 and "denied" in err
-    await han(env, "ana", "agent", "release", S, bot, "--unguard")
-    assert "guarded agents: none" in await han(env, "ana", "status", S)                  # the operator loosened it
+    assert "guarded agents: none" in st and f"to {carol}  guardedFor {bot}" in st            # unguarded; recorded work keeps its guardedFor
     bc = await env.client("bot")
     watcher = asyncio.create_task(han(env, "carol", "watch", S, sid[:8], "--count", "1", "--timeout", "30"))
     n = 0
@@ -107,4 +108,4 @@ async def test_status_shows_forced_agents_per_agent_f1(env):
     await c_ana.append(*c_ana.make_entry("member.set", "profile:" + bot, {"actor": ana, "role": "owner"}))     # the operator confirms, after bot joined
     await han(env, "carol", "task", S, "deploy", "--to", bot); await han(env, "carol", "task", S, "chat", "--to", ana)
     st = await han(env, "ana", "status", S)
-    assert f"{bot}  forced (guard {ana})  held" in st and f"{ana}  forced" not in st and "agents:" in st
+    assert f"{bot}  forced (guard {ana})" in st and "held" not in st and f"{ana}  forced" not in st and "agents:" in st
