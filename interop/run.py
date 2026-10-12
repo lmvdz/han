@@ -20,7 +20,7 @@ def server_cmd(kind, mode, port, wd, keys):
         cmd = [PY, "-m", "han.seq", "--server", SERVER, "--port", str(port), "--db", os.path.join(wd, "seq.db"), "--key", kf]
         for a in actors_list(keys):
             n = a["actor"][1:].split(":")[0]
-            cmd += ["--register", f"{a['actor']}={os.path.join(KEYS, n + '.json')},{a['kind']}"]
+            cmd += ["--register", f"{a['actor']}={os.path.join(KEYS, n + '.json')},{a['kind']}" + (f",{a['operator']}" if a.get("operator") else "")]
         return cmd, IMPL
     d = os.path.join(wd, "tsdata"); os.makedirs(d, exist_ok=True)
     s = keys["server"]

@@ -8,7 +8,7 @@ The docs mark each derived value as `<!--s:key-->value<!--/s-->`. This script co
   - ref/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
   - interop/DECISIONS-rNN.md the round being built (the newest such file, H9); HISTORY.md the scores of the rounds already graded;
   - the sources of impl/     three claims that used to be written by hand (the PreToolUse gate, the advisory status, a Matrix test of §8.2)
-and rewrites the marked values in architecture.md, README.md, coverage.md, ref/README.md and ref/wire-vectors/README.md.
+and rewrites the marked values in architecture.md, README.md, goal.md, coverage.md, ref/README.md and ref/wire-vectors/README.md.
   python ref/sync_docs.py             rewrite the docs
   python ref/sync_docs.py --check     change nothing; list every value that drifted and exit 1 (run_all.py runs this)
   python ref/sync_docs.py --facts     print the derived facts
@@ -24,7 +24,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import list_tests as LT
 
-DOCS = ["architecture.md", "README.md", "coverage.md", os.path.join("ref", "README.md"), os.path.join("ref", "wire-vectors", "README.md")]
+DOCS = ["architecture.md", "README.md", "goal.md", "coverage.md", os.path.join("ref", "README.md"), os.path.join("ref", "wire-vectors", "README.md")]
 MARK = re.compile(r"<!--s:([a-z_0-9]+)-->(.*?)<!--/s-->", re.S)
 
 class Underivable(Exception): pass

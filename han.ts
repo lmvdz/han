@@ -68,7 +68,7 @@ export interface Bodies {
   "space.create": {
     policy: PolicyDoc;
     forkOf?: { space: SpaceId; through: Seq };
-    profile?: { actorKind: ActorKind; operator?: ActorId; key: { keyId: KeyId; publicKey: string } };   // the operator named here is fixed for the life of the profile; it only confirms and withdraws (§4.3)
+    profile?: { actorKind: ActorKind; operator?: ActorId; key: { keyId: KeyId; publicKey: string } };   // an agent or service MUST name its operator here (invalid otherwise, §4.3); a human names none. Fixed for the life of the profile; it only confirms and withdraws
   };
   "member.set": { actor: ActorId; role: Role | "none" };
   "policy.set": { policy: PolicyDoc };
@@ -155,7 +155,7 @@ export interface ProfileView {                          // fold of a profile spa
   actor: ActorId;
   seq: Seq;
   actorKind: ActorKind;
-  operator?: ActorId;                                // fixed by the profile's space.create; never changes (§4.3)
+  operator?: ActorId | null;                         // an agent's or service's: always an ActorId, named by the profile's space.create, never changed (§4.3); absent or null only for a human
   operatorConfirmed: boolean;
   keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
 }
@@ -185,9 +185,9 @@ export interface SpaceState {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      guardedFor: ActorId[];                        // P-15: the task's guardedFor, plus the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; at most MAX_GUARDED_FOR agents
+      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then that of every other open task listing the proposer as an assignee, plus the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; a proposal that would make it longer than MAX_GUARDED_FOR is denied
       expiresAt?: Time;                             // E5: no claim at or after this time
-      approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
+      approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect, and unconsumed ones whose author lost its role or is guarded are dropped (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
         window: number;                             // the launchWindow in force when the claim was ordered (pinned for X-04, P-09)
@@ -204,7 +204,7 @@ export interface SpaceState {
   // P-15. A set of actors is a map whose every value is `true`. Besides the guardedFor of tasks and effects there is no other agent-guard state; the guard is never stored, it is the operator in the profile pinned for the entry (guardStatus)
   guarded: { [agent: ActorId]: true };                          // agents that chose guarding (a `guarded` session); sticky, ended only by their guard's agent.unguard (owners' forceGuarded is not stored)
   profile?: {                                                          // profile spaces only (§4.3)
-    actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
+    actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;   // operator as in ProfileView (an ActorId for an agent or service, absent or null only for a human)
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
   };
 }
@@ -228,11 +228,11 @@ export interface Challenge { challenge: string /* 43 chars: 32 random bytes, bas
 /** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never host:port). */
 /** Policy's numeric constants (P-07 E5, P-08, P-15, P-02): fixed by the protocol, not negotiated by `hello`. */
 export interface PolicyConstants {
-  MAX_OPEN_APPROVALS: 16;      // open (unconsumed, unexpired) approvals by other authors that aren't its guards a proposal may hold when a new one by a non-guard arrives; a guard's is never capped and never counts (P-08)
+  MAX_OPEN_APPROVALS: 16;      // countable open (unconsumed, unexpired) approvals by other authors a proposal may hold when a new one by a non-guard arrives: an approval counts while its author holds a role, isn't guarded and isn't one of its guards; a guard's is never capped and never counts (P-08)
   MAX_OPEN_SESSIONS: 64;       // open sessions per actor per space (P-15)
   MAX_ATTEMPTS: 64;            // claims per effect: the 65th effect.claim is `denied`, the executor proposes again (P-07 E5)
-  MAX_GUARDED_FOR: 19;         // derived, never checked: a guardedFor holds at most the authors of a task chain (maxDelegationDepth ≤ 16, so 17) plus a proposer and an executor (P-15)
-  MAX_UNCONSUMED_APPROVALS: 36;   // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 by authors that are never guards (one more returned by a not-started outcome), plus one per possible guard (MAX_GUARDED_FOR; operators never change)
+  MAX_GUARDED_FOR: 19;         // P-15: a task's guardedFor holds at most the authors of its chain (maxDelegationDepth ≤ 16, so 17; derived); an effect's, which also takes the proposer's open tasks', is checked: a proposal that would exceed it is denied
+  MAX_UNCONSUMED_APPROVALS: 36;   // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 by authors that are never guards (one more returned by a not-started outcome; an approval's fold keeps only countable ones besides the guards'), plus one per possible guard (MAX_GUARDED_FOR; operators never change)
   MAX_APPROVALS: 55;           // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 + 2 × MAX_GUARDED_FOR, each guard holding one unconsumed and one consumed approval
   ROLE_INTERVALS: 64;          // role intervals kept per actor (P-02)
 }
@@ -324,6 +324,7 @@ export interface Policy {                                // M2 — six pure func
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
   /** P-01, the whole pin rule: author, member.set target, the targets of an instruction (session actor, assignees, executor), an unguard's agent, approve/cancel/claim: proposer, executor and guardedFor;
+   *  for an approve while forceGuarded is on, then the authors of the proposal's unconsumed approvals (the cap judges whether each is forced, P-08);
    *  for a claim then the guards from ctx.profiles (P-15) and the approval candidates in E3 order up to and including the first usable one by ctx.profiles: a valid key and an author not guarded.
    *  The sequencer calls it with the profiles fetched so far until it names none it has not tried: three calls at most. */
   relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[];

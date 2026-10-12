@@ -55,7 +55,7 @@ async def test_receipt_time_non_decreasing_and_mirror_checks_it(env):
 # ── R-16 ──
 async def _claimed(env):
     """alice (owner), bob (proposer), exec (service, the executor): bob proposes, exec claims. Returns clients and the claim id."""
-    alice, bob, ex = env.actor("alice"), env.actor("bob"), env.actor("exec", "service")
+    alice, bob = env.actor("alice"), env.actor("bob"); ex = env.actor("exec", "service", operator=alice)
     a, b, x = await env.client("alice"), await env.client("bob"), await env.client("exec")
     await mkspace(a, policy=default_policy(launchWindow=15))
     await member(a, bob); await member(a, ex)

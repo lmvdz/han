@@ -27,7 +27,7 @@ def make_keys(outdir: str, names=("alice", "bob", "carol", "vera", "x", "server"
     return out
 
 def actors_list(keys: dict):
-    return [{"actor": f"@{n}:{SERVER}", "kind": "service" if n == "x" else "human", "keyId": keys[n]["keyId"], "public": keys[n]["public"]}
+    return [{"actor": f"@{n}:{SERVER}", "kind": "service" if n == "x" else "human", "keyId": keys[n]["keyId"], "public": keys[n]["public"], **({"operator": f"@alice:{SERVER}"} if n == "x" else {})}
             for n in ("alice", "bob", "carol", "vera", "x")]
 
 def free_ports(n):

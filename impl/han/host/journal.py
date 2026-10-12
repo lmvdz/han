@@ -14,6 +14,25 @@ CREATE TABLE IF NOT EXISTS transcript (i INTEGER PRIMARY KEY AUTOINCREMENT, line
 
 def _j(v): return json.dumps(v, separators=(",", ":"), ensure_ascii=False)
 
+class TaintStore:
+    """R-24, T5: what the host keeps per AGENT, not per session or space: whether the agent has taken an outside instruction (in any of
+    its sessions, in any space), and the spaces in which that taint has been seen with the agent guarded (strict from then on, also
+    after an unguard). One small SQLite file that every host of the agent shares (one row per fact, so two processes don't overwrite
+    each other); the log holds nothing for it."""
+    def __init__(self, path: str):
+        self.db = sqlite3.connect(path, timeout=10)
+        self.db.execute("PRAGMA journal_mode=WAL"); self.db.execute("PRAGMA synchronous=FULL")
+        self.db.executescript("CREATE TABLE IF NOT EXISTS taint (k INTEGER PRIMARY KEY CHECK (k = 1));"
+                              "CREATE TABLE IF NOT EXISTS armed (space TEXT PRIMARY KEY);"); self.db.commit()
+
+    def tainted(self) -> bool: return self.db.execute("SELECT 1 FROM taint").fetchone() is not None
+    def taint(self):
+        with self.db: self.db.execute("INSERT OR IGNORE INTO taint (k) VALUES (1)")
+    def armed(self, space: str) -> bool: return self.db.execute("SELECT 1 FROM armed WHERE space=?", (space,)).fetchone() is not None
+    def arm(self, space: str):
+        with self.db: self.db.execute("INSERT OR IGNORE INTO armed (space) VALUES (?)", (space,))
+    def close(self): self.db.close()
+
 class Journal:
     def __init__(self, path: str):
         self.db = sqlite3.connect(path)

@@ -2,7 +2,7 @@
 
 What drives a turn: a `session.input` with a receipt into the agent's own session, or a `task` naming it. Nothing else does:
 messages, task.updates, outcomes, other sessions' streams and signals are data (R-24), collected and handed to the next turn
-labelled as data. Which mode a turn runs in is decided from the state alone (`_mode_for`, by `guard_status`) and from one fact the host keeps itself: a session an outside instruction has entered stays strict (R-24). What the agent decides becomes
+labelled as data. Which mode a turn runs in is decided from the state alone (`_mode_for`, by `guard_status`) and from one fact the host keeps itself: an agent an outside instruction has reached stays strict, in every session and space (R-24, per agent). What the agent decides becomes
 journaled intents (journal.py) and only then entries: the host never acts in the world, a World action is an `effect.propose`
 naming the configured executor."""
 from __future__ import annotations
@@ -10,7 +10,7 @@ import asyncio, hashlib, time
 from ..core import P, WireError
 from ..entries import fmt_time
 from .agent import ADVISORY, Agent, Say, Steer, Task, TurnInput, World
-from .journal import Journal
+from .journal import Journal, TaintStore
 
 MAX_DATA = 50
 MAX_REFS = 64
@@ -21,12 +21,13 @@ class HostCrash(Exception):
 
 class Host:
     def __init__(self, client, space: str, agent: Agent, state_path: str, mode: str = "auto", executor: str | None = None,
-                 crash=None, cost: dict | None = None):
+                 crash=None, cost: dict | None = None, taint_path: str | None = None):
         assert mode in ("auto", "guarded")
         self.client, self.space, self.agent, self.steer_mode, self.executor = client, space, agent, mode, executor
         self.default_cost = cost                              # {unit, amount} for a World action that names none (budgeted spaces)
         self.me = client.actor
         self.j = Journal(state_path)
+        self.taints = TaintStore(taint_path or state_path + ".taint.db")      # R-24: per agent; hosts of one agent in several spaces share the file
         self.crash = crash                                    # test hook: crash(point, intent key) may raise HostCrash
         self.state: dict | None = None                        # the light state (K7): the `state {agent}` reply as is (M5): space, head, home, policy, guarded
         self.full: dict | None = None                         # the whole StateView, read only when sessions or tasks are needed
@@ -38,6 +39,7 @@ class Host:
         self._watchers: list[asyncio.Task] = []
         self._last_context = 0.0
         self._ctx: tuple[TurnInput, list[str]] | None = None  # the running turn and its refs, for propose hook calls
+        self._guard_profiles: dict[str, dict] = {}            # profiles of the agents in the turn's `guardedFor` (to name whose guard a proposal waits for)
         self._made: dict[int, tuple] = {}                     # id(World) → (entry, content) signed while the turn ran
         agent.propose = self._propose_now
 
@@ -50,19 +52,17 @@ class Host:
     def guarded_now(self) -> bool:
         return bool(self.state) and self._status(self.state, self.profile)["guarded"]
 
-    # R-24: a session that has taken an outside instruction (author neither the agent nor its guard), whether or not the agent was guarded
-    # then, runs every turn strict from the moment the agent is guarded. The log holds no state for it; the host's own store does (the
-    # journal's meta), so it survives a restart. `taint` is the sessions that took one; `armed` the tainted sessions seen with the agent
-    # guarded (strict from then on, also after an unguard).
-    def tainted(self, session: str | None) -> bool: return session in self.j.get("taint", [])
-    def _taint(self, session: str | None):
-        if session and not self.tainted(session): self.j.put("taint", self.j.get("taint", []) + [session])
-    def _armed(self, session: str | None) -> bool:
-        """True when `session` is tainted and the agent is guarded now or was when this was last looked at (arming is recorded)."""
-        if not self.tainted(session): return False
-        if session in self.j.get("armed", []): return True
-        if self.guarded_now:
-            self.j.put("armed", self.j.get("armed", []) + [session]); return True
+    # R-24 (T5): the agent that has taken an outside instruction (author neither the agent nor its guard), in any of its sessions and in any
+    # space, whether or not it was guarded then, runs every later turn strict once it is guarded in that turn's space. The log holds no
+    # state for it; the host's own per-agent store does (`TaintStore`), so it survives a restart. `armed` is recorded per space: the
+    # agent was seen guarded here while tainted (strict from then on, also after an unguard).
+    def tainted(self, session: str | None = None) -> bool: return self.taints.tainted()       # `session` is kept for callers: the taint is per agent
+    def _taint(self, session: str | None = None): self.taints.taint()
+    def _armed(self, session: str | None = None) -> bool:
+        """True when the agent is tainted and is guarded in this space now or was when this was last looked at (arming is recorded)."""
+        if not self.taints.tainted(): return False
+        if self.taints.armed(self.space): return True
+        if self.guarded_now: self.taints.arm(self.space); return True
         return False
 
     def _guarded_session(self) -> bool:
@@ -76,7 +76,7 @@ class Host:
         self.full = None
         try: self.profile = (await self.client.read_state("profile:" + self.me))["profile"]
         except WireError: pass                                   # keep the last one
-        for t in self.j.get("taint", []): self._armed(t)         # R-24: a tainted session is strict from the moment the agent is guarded, even if it is unguarded again before a turn
+        self._armed()                                            # R-24: a tainted agent is strict from the moment it is guarded in this space, even if it is unguarded again before a turn
 
     async def _full(self) -> dict:
         """The whole StateView at the head, read once per refresh and only when sessions or tasks are looked at."""
@@ -109,19 +109,16 @@ class Host:
     def _mode_for(self, author: str, from_sessions: bool, session: str | None, at: dict, profile: dict | None,
                   delegated: bool = False) -> str:
         """R-24: `strict` for an outside instruction (by someone other than the agent and its guard) when `guard_status` on the state at the
-        instruction's seq (with the profile its receipt pinned) says guarded; for every later turn of a session such an instruction has
-        entered, once the agent is guarded (`_armed`; the taint is recorded here whether or not the agent is guarded); for a turn driven
+        instruction's seq (with the profile its receipt pinned) says guarded; for every later turn of the agent (any session) once such an instruction
+        has reached it and it is guarded in this space (`_armed`; the taint is recorded here whether or not the agent is guarded); for a turn driven
         by a guarded author or a task with a `guardedFor` (`delegated`), whatever the agent's own guarding; and when the turn carries
         another session's stream or context as data."""
         gs = self._status(at, profile)
         if author not in (self.me, gs.get("guard")): self._taint(session)
         if delegated or self._armed(session): return "strict"
-        if gs["guarded"] and author not in (self.me, gs.get("guard")): self._arm(session); return "strict"
+        if gs["guarded"] and author not in (self.me, gs.get("guard")): self.taints.arm(self.space); return "strict"
         if from_sessions: return "strict"              # SHOULD for any agent, MUST when guarded (R-24)
         return "auto"
-
-    def _arm(self, session: str | None):
-        if session and session not in self.j.get("armed", []): self.j.put("armed", self.j.get("armed", []) + [session])
 
     # ── life cycle ──
     async def run(self):
@@ -137,7 +134,7 @@ class Host:
     def stop(self):
         for t in self._watchers: t.cancel()
         self._watchers.clear()
-        self.j.close()
+        self.j.close(); self.taints.close()
 
     async def _finish_journal(self):
         for i in self.j.intents():
@@ -196,11 +193,12 @@ class Host:
         at = await self._state_at(inp.seq, pins)
         delegated = bool(inp.task and (self.full or {"tasks": {}})["tasks"].get(inp.task, {}).get("guardedFor")) or await self._author_guarded(inp.author, inp.seq, pins)
         if at: mode = self._mode_for(inp.author, from_sessions, inp.session, *at, delegated=delegated)
-        else: self._taint(inp.session); self._arm(inp.session); mode = "strict"      # no state at the receipt: be strict, and stay so (it may have been an outside instruction)
+        else: self._taint(); self.taints.arm(self.space); mode = "strict"      # no state at the receipt: be strict, and stay so (it may have been an outside instruction)
         data, self.data = self.data, []
         inp.data = [t for _, t, _ in data]
         refs = [inp.trigger] + [r for _, _, r in data if r][-(MAX_REFS - 1):]
-        if P.space_unit(self.state): await self._full()      # a budgeted space: `_budget_task` looks at the tasks while the turn runs
+        await self._full()                                  # the tasks: `_budget_task` and the guards a proposal waits for are looked up while the turn runs
+        await self._load_guard_profiles(inp)
         self._ctx, self._made = (inp, refs), {}
         await self._emit({"type": "status", "state": "working"})
         self.turns += 1
@@ -277,9 +275,36 @@ class Host:
         made = self._world_entry(a, *self._ctx)
         if isinstance(made, str): return "refused: " + made
         self._made[id(a)] = made
-        gs = self._status(self.state, self.profile) if self.state else {}
-        guard = gs.get("guard") if gs.get("guarded") else None
-        return f"proposed as {P.entry_id(made[0])}" + (f", waiting for {guard}" if guard else "")
+        guards = self._guards_for(made[0]["body"].get("task"))
+        return f"proposed as {P.entry_id(made[0])}" + (f", waiting for {', '.join(guards)}" if guards else "")
+
+    def _guarded_for(self, task: str | None) -> tuple[list[str], dict]:
+        """The effect's `guardedFor` as Policy will record it (P-15 `effect_guarded_for`, on the tasks read for this turn) and the ctx to
+        judge the guards with: the profiles read for it."""
+        profiles = self._guard_profiles | ({self.me: self.profile} if self.profile else {})
+        ctx = {"time": "", "profiles": profiles}
+        st = self.full or self.state
+        if not st: return [], ctx
+        st = {"policy": st["policy"], "guarded": st["guarded"], "tasks": st.get("tasks", {})}
+        return P.effect_guarded_for(st, ctx, self.me, self.executor, task if task in st["tasks"] else None), ctx
+
+    def _guards_for(self, task: str | None) -> list[str]:
+        """Whose approval the proposal waits for: the guard of every agent in the effect's `guardedFor` (this agent too if it is guarded),
+        each once. An agent with no confirmed operator has none to name."""
+        agents, ctx = self._guarded_for(task)
+        st = self.full or self.state
+        return [g for g in dict.fromkeys(P.guard_status(st, ctx, a).get("guard") for a in agents) if g] if st else []
+
+    async def _load_guard_profiles(self, inp: TurnInput):
+        """Read the profiles of the agents whose guarding the turn's proposals will carry (the driving task's, the open tasks assigned to
+        this agent, the executor), so `_propose_now` can name their guards without a read."""
+        tasks = (self.full or {"tasks": {}})["tasks"]
+        need = {self.executor} if self.executor else set()
+        for tid, t in tasks.items():
+            if tid == inp.task or (t.get("open") and self.me in t["to"]): need |= set(t.get("guardedFor", []))
+        for a in need - {self.me}:
+            try: self._guard_profiles[a] = (await self.client.read_state("profile:" + a))["profile"]
+            except WireError: self._guard_profiles.pop(a, None)
 
     def _budget_task(self, preferred: str | None, cost: dict | None) -> str | None:
         """An open budgeted task assigned to this agent: the one that drove the turn if it qualifies, else one with enough left."""

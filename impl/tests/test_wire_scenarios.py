@@ -15,7 +15,7 @@ async def base(env):
 async def test_content_validation(env):
     """R-09, §5: a plan that doesn't match planDigest, over-long text, unknown content fields and wrong content are invalid at the home; mirrors reject tampered content."""
     alice, bob, a, b = await base(env)
-    env.actor("exec", "service")                                          # P-01 pins the executor's profile (F1), so it must be one this server can see
+    env.actor("exec", "service", operator="@alice:a.localhost")                                          # P-01 pins the executor's profile (F1), so it must be one this server can see
     plan = {"action": "git.push", "target": "repo"}
     body = {"executor": f"@exec:{env.server}", "action": "git.push", "planDigest": plan_digest(plan), "repeatable": False}
     async def code(c, kind, body, content):

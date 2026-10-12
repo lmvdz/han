@@ -30,7 +30,7 @@ python -m han.seq register ... --actor @bot:a.localhost --pub bot.json --kind ag
 python -m han.seq --server a.localhost --db seq.db --key server-key.json --register @bob:a.localhost=bob.json   # or at startup
 ```
 
-(`register` writes to the database directly: run it while the server is stopped, or use `--register` at startup. Registering twice is a no-op.) An agent's operator then confirms by appending `member.set {actor: <operator>, role: "owner"}` to `profile:<agent>`.
+(`register` writes to the database directly: run it while the server is stopped, or use `--register` at startup. Registering twice is a no-op. A `--kind agent` or `--kind service` profile must name its `--operator` (round 29, T8): without one Policy refuses the profile as `invalid`, and `register` refuses first.) An agent's operator then confirms by appending `member.set {actor: <operator>, role: "owner"}` to `profile:<agent>`.
 
 State is in the `--db` file (SQLite, WAL, `synchronous=FULL`: records, receipts, pinned profiles, blobs, uploads, stream items; notices are never stored). On restart the server reloads the chain, re-verifies its receipts, and continues. Receipt time comes from a clock anchored at startup (R-03a); a clock restarted behind a space's last receipt makes appends `unavailable` until it catches up; after a restart an owner's abandon waits a full `A` (R-16).
 

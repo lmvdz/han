@@ -21,7 +21,7 @@ def members_are(mx, room, want):
 async def setup(mx):
     """alice (owner), bob and carol (members), a bot (agent, member) in one space whose policy lets members watch and only owners
     read; the bot opens an `auto` session. Returns everything the tests need."""
-    alice, bob, carol, bot = await mx.person("alice"), await mx.person("bob"), await mx.person("carol"), await mx.person("bot", "agent")
+    alice, bob, carol = await mx.person("alice"), await mx.person("bob"), await mx.person("carol"); bot = await mx.person("bot", "agent", operator=alice.actor)
     pol = default_policy(sessions={"watch": "member", "read": "owner", "steer": "owner", "modes": ["auto", "guarded"]})
     room, space = await open_space(mx, alice, invite=[bob, carol, bot], policy=pol)
     e, ct = bot.client.make_entry("session.open", space, {"steerMode": "auto"})

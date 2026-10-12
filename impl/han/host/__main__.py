@@ -1,5 +1,5 @@
 """han-host:  python -m han.host --url ws://127.0.0.1:8701/han --actor @bot:a.localhost --key KEYFILE --space s1:a.localhost
-                 --mode auto|guarded --agent scripted|claude --state PATH [--executor @exec:a.localhost] [--cost UNIT:AMOUNT] [--outbox PATH] [--cwd DIR]"""
+                 --mode auto|guarded --agent scripted|claude --state PATH [--executor @exec:a.localhost] [--cost UNIT:AMOUNT] [--outbox PATH] [--cwd DIR] [--taint PATH]"""
 import argparse, asyncio, os
 from ..client import Client
 from ..core import P
@@ -20,11 +20,12 @@ def main(argv=None):
     ap.add_argument("--executor", help="ActorId that world actions are proposed to")
     ap.add_argument("--cost", type=_cost, help="UNIT:AMOUNT charged to a world action that names no cost, in a budgeted space")
     ap.add_argument("--outbox", help="client outbox (default: STATE.outbox.db)"); ap.add_argument("--server", help="server name to dial, if not the actor's")
+    ap.add_argument("--taint", help="the agent's taint store, shared by all its hosts (R-24, per agent; default: KEY.taint.db)")
     ap.add_argument("--cwd", default=os.getcwd(), help="workspace for --agent claude")
     a = ap.parse_args(argv)
     agent = ScriptedAgent() if a.agent == "scripted" else ClaudeCodeAgent(a.cwd)
     client = Client(a.url, a.actor, a.key, a.outbox or a.state + ".outbox.db", server=a.server)
-    host = Host(client, a.space, agent, a.state, a.mode, a.executor, cost=a.cost)
+    host = Host(client, a.space, agent, a.state, a.mode, a.executor, cost=a.cost, taint_path=a.taint or a.key + ".taint.db")
     try: asyncio.run(host.run())
     except KeyboardInterrupt: pass
     return 0

@@ -43,7 +43,8 @@
    "kind": "service",
    "keyId": "k1",
    "seed": "han-interop-key-x",
-   "publicKey": "tKMyq_8MvN9nfQuf1y8VxTOmgv9KUCJjXMUh-WWayhs"
+   "publicKey": "tKMyq_8MvN9nfQuf1y8VxTOmgv9KUCJjXMUh-WWayhs",
+   "operator": "@alice:a.localhost"
   }
  ],
  "blobs": {

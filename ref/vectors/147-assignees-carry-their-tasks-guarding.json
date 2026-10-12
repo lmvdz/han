@@ -1,11 +1,11 @@
 {
- "name": "delegation-carries-only-named-work",
+ "name": "assignees-carry-their-tasks-guarding",
  "rules": [
   "P-15",
   "R-24",
   "§7.5"
  ],
- "description": "R1 (Q1): a guarded agent's delegate, agent or human, carries the delegator's guard into the work that names the task; work that names no task, and a task without a parent, carry nothing (R-24 makes naming the task a host duty for agents; nothing covers a human delegate, §7.5)",
+ "description": "T1 (S1): an effect's guardedFor also holds the guardedFor of every open task that lists its proposer as an assignee, whether or not it names one: an agent's later, task-less proposal (the reviewer's S1) and a human delegate's work both wait for the delegator's guard; a task without a parent carries nothing; work proposed after the task closes is free, work proposed before stays recorded",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -331,59 +331,6 @@
   },
   {
    "entry": {
-    "id": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "effect.propose",
-    "author": "@m:a.example",
-    "keyId": "k1",
-    "body": {
-     "executor": "@x:c.example",
-     "action": "git.push",
-     "planDigest": "d7ae90264d32c99128b486eaeef1a29985dd7b7a0c885c06018a71c2161bd411",
-     "repeatable": false,
-     "task": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-h",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:11Z",
-   "expect": "allow",
-   "check": {
-    "effects.2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d.guardedFor": [
-     "@bot:b.example"
-    ]
-   },
-   "note": "a human delegate's work for the task waits for BOT's guard too"
-  },
-  {
-   "entry": {
-    "id": "9f2d5d2bd3ba014871f7b642b8f88476c2bdeeccbdba7c35a829c3773df8a6ed",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "effect.claim",
-    "author": "@x:c.example",
-    "keyId": "k1",
-    "body": {
-     "proposal": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
-     "attempt": 1,
-     "instance": "k1",
-     "window": 30
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-ch0",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:12Z",
-   "expect": "denied"
-  },
-  {
-   "entry": {
     "id": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
     "v": 1,
     "space": "s1:a.example",
@@ -402,12 +349,87 @@
     "nonce": "n-n",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:13Z",
+   "time": "2026-10-10T12:00:11Z",
    "expect": "allow",
    "check": {
-    "effects.fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a.guardedFor": []
+    "effects.fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a.guardedFor": [
+     "@bot:b.example"
+    ]
    },
-   "note": "names no task: carries nothing"
+   "note": "S1: a later proposal by the assignee that names no task"
+  },
+  {
+   "entry": {
+    "id": "ca6eaa93f8f11133c8230d21c005b0968c54a3ab703057581cf7772bb5bdafb8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cn0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "denied",
+   "note": "E3: BOT's guard hasn't approved"
+  },
+  {
+   "entry": {
+    "id": "e6c6e4f83d18ae915fc09a5cef5944eaec0607a6d6f629eecca4c52ec77bcd65",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
+     "planDigest": "e14b6f631fd95c63be030c1203a222f0a78459ad3832740403676894df423b08"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-an",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "26dd74ce7b9d41cae267743064bfd8e0528a241dd518334945231ff48527b06d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cn",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "effects.fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a.claims.0.guardApprovals": [
+     "e6c6e4f83d18ae915fc09a5cef5944eaec0607a6d6f629eecca4c52ec77bcd65"
+    ]
+   }
   },
   {
    "entry": {
@@ -429,15 +451,18 @@
     "nonce": "n-hn",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:14Z",
+   "time": "2026-10-10T12:00:15Z",
    "expect": "allow",
    "check": {
-    "effects.ebe957ddb3b730a17d512b1e1c156e602b7590d28d83d516f21d49a7de712a6c.guardedFor": []
-   }
+    "effects.ebe957ddb3b730a17d512b1e1c156e602b7590d28d83d516f21d49a7de712a6c.guardedFor": [
+     "@bot:b.example"
+    ]
+   },
+   "note": "a human assignee carries it too"
   },
   {
    "entry": {
-    "id": "357a72dd5b88bfd7f6f03555e2ab1a10b41dc63dcd66967c46e03db1722cabfb",
+    "id": "57cb57a4edd3f0838b79ccdf6eb4c6b023bda1f779e0fac7e6982a525d0ab490",
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.claim",
@@ -452,12 +477,60 @@
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-chn",
+    "nonce": "n-chn0",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:15Z",
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "denied"
+  },
+  {
+   "entry": {
+    "id": "42c5cc0bcd614aef0d1367d3849b48520381351a97967e64848a6ddce3e99108",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.cancel",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-tc",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "c85b689ed4f466cdb26f2c5972d8193767f12d1af028eac1b7d7fd3d7e50762f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "b5c28c8b18a0d867e7842a2495b14c729e5aee1d90afb652a7bb0578e0fe9090",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-hc",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
    "expect": "allow",
-   "note": "the residue of §7.5: a human delegate's work that names no task"
+   "check": {
+    "effects.c85b689ed4f466cdb26f2c5972d8193767f12d1af028eac1b7d7fd3d7e50762f.guardedFor": [
+     "@bot:b.example"
+    ]
+   },
+   "note": "a cancel request doesn't close the task"
   },
   {
    "entry": {
@@ -478,30 +551,189 @@
     "nonce": "n-t2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:16Z",
+   "time": "2026-10-10T12:00:19Z",
    "expect": "allow",
    "check": {
     "tasks.de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8.guardedFor": []
    },
-   "note": "a task without a parent carries nothing"
+   "note": "§7.5's residue: a task without a parent carries nothing"
+  },
+  {
+   "entry": {
+    "id": "d9af79a0e7d5d36dab510bca5fec98a5f16d088e2e252e9c5f7c0eaeecbf5a9d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "93313be72b1f4360d2317e979c67d0ab2593219bf5dee27ff61744aacc5cb3a4",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow",
+   "check": {
+    "effects.d9af79a0e7d5d36dab510bca5fec98a5f16d088e2e252e9c5f7c0eaeecbf5a9d.guardedFor": []
+   }
+  },
+  {
+   "entry": {
+    "id": "cb6f4e2c95b50086876cddcf405f5d23024b7e304afefa19d3043b490a5c4379",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "task": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+     "state": "done"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-done",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "allow",
+   "check": {
+    "tasks.2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815.open": false
+   }
+  },
+  {
+   "entry": {
+    "id": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "834c4e55137913bccf8c8619c7b251c0a74442e7cb08bfef963ca78535e99e3b",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-h2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "allow",
+   "check": {
+    "effects.028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a.guardedFor": []
+   },
+   "note": "the task is closed: later work is free"
+  },
+  {
+   "entry": {
+    "id": "45d44da245e663148decdda7eccab9a37afdc6fc223550e87c2ec7bc404ded62",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ch2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@bot2:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "21ed69938340107cf415dbf268a5d9eb4c80e2a9f6adb70ee48ba97159ad5ee4",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-n2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "allow",
+   "check": {
+    "effects.77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f.guardedFor": []
+   }
+  },
+  {
+   "entry": {
+    "id": "014253ee9e7d1834d47ced44c365e0b3ac81dcd2c8b7cb191ec3789390795d42",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "ebe957ddb3b730a17d512b1e1c156e602b7590d28d83d516f21d49a7de712a6c",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-chn1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "denied",
+   "note": "what was recorded before the close never shrinks"
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "an": "e6c6e4f83d18ae915fc09a5cef5944eaec0607a6d6f629eecca4c52ec77bcd65",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
-  "ch0": "9f2d5d2bd3ba014871f7b642b8f88476c2bdeeccbdba7c35a829c3773df8a6ed",
-  "chn": "357a72dd5b88bfd7f6f03555e2ab1a10b41dc63dcd66967c46e03db1722cabfb",
-  "h": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
+  "ch2": "45d44da245e663148decdda7eccab9a37afdc6fc223550e87c2ec7bc404ded62",
+  "chn0": "57cb57a4edd3f0838b79ccdf6eb4c6b023bda1f779e0fac7e6982a525d0ab490",
+  "chn1": "014253ee9e7d1834d47ced44c365e0b3ac81dcd2c8b7cb191ec3789390795d42",
+  "cn": "26dd74ce7b9d41cae267743064bfd8e0528a241dd518334945231ff48527b06d",
+  "cn0": "ca6eaa93f8f11133c8230d21c005b0968c54a3ab703057581cf7772bb5bdafb8",
+  "done": "cb6f4e2c95b50086876cddcf405f5d23024b7e304afefa19d3043b490a5c4379",
+  "h2": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+  "hc": "c85b689ed4f466cdb26f2c5972d8193767f12d1af028eac1b7d7fd3d7e50762f",
   "hn": "ebe957ddb3b730a17d512b1e1c156e602b7590d28d83d516f21d49a7de712a6c",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "n": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
+  "n2": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
   "p": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
   "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
-  "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8"
+  "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+  "tc": "42c5cc0bcd614aef0d1367d3849b48520381351a97967e64848a6ddce3e99108",
+  "x": "d9af79a0e7d5d36dab510bca5fec98a5f16d088e2e252e9c5f7c0eaeecbf5a9d"
  }
 }

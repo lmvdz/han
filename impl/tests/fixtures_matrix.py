@@ -55,7 +55,7 @@ class MxEnv:
             except Exception: pass
         await self.ws.stop(); await self.svc.stop(); self.seq.close()
 
-    async def person(self, name, kind="human", start=True) -> Person:
+    async def person(self, name, kind="human", start=True, operator=None) -> Person:
         """A Matrix user that is also a HAN actor of the same id, with a key, a profile and (if `start`) a started client."""
         local = f"{name}-{uuid.uuid4().hex[:6]}"
         actor = f"@{local}:{self.server}"
@@ -63,7 +63,7 @@ class MxEnv:
         assert user == actor
         path = os.path.join(self.tmp, f"{local}.key.json")
         kp = keys.load_or_generate(path, "k1")
-        self.seq.register(actor, kind, kp.key_id, kp.pub)
+        self.seq.register(actor, kind, kp.key_id, kp.pub, operator)
         c = MatrixClient(self.syn.base_url, actor, token, path, os.path.join(self.tmp, f"{local}.outbox.db"), service_url=f"http://127.0.0.1:{self.as_port}")
         self.clients.append(c)
         if start: await c.start()

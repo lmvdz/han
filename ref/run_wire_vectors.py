@@ -441,7 +441,7 @@ def launch(kind, cfg):
     td = tempfile.mkdtemp(prefix="han-wire-")
     s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
     sk = cfg.c["serverKey"]; seed = hashlib.sha256(sk["seed"].encode()).digest()
-    actors = [{"actor": a["actor"], "kind": a["kind"], "keyId": a["keyId"], "public": a["publicKey"]} for a in cfg.c["actors"]]
+    actors = [{"actor": a["actor"], "kind": a["kind"], "keyId": a["keyId"], "public": a["publicKey"], **({"operator": a["operator"]} if a.get("operator") else {})} for a in cfg.c["actors"]]
     json.dump(actors, open(os.path.join(td, "actors.json"), "w"))
     log = open(os.path.join(td, "server.log"), "wb")
     if kind == "py":

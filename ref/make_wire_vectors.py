@@ -41,7 +41,7 @@ CONFIG = {
     "server": SERVER, "clock": T0,
     "note": "Test mode (architecture.md G-11): a clock that starts at `clock` and moves only by the control call test.clock, this server key, these actors, an empty data directory. Private key of a key = sha256(UTF-8 seed), 32 raw bytes.",
     "serverKey": {"keyId": "h1", "seed": KEYS["server"].seed_text, "publicKey": KEYS["server"].pub, "from": "1970-01-01T00:00:00Z"},
-    "actors": [{"actor": A(n), "kind": "service" if n == "x" else "human", "keyId": "k1", "seed": KEYS[n].seed_text, "publicKey": KEYS[n].pub} for n in NAMES],
+    "actors": [{"actor": A(n), "kind": "service" if n == "x" else "human", "keyId": "k1", "seed": KEYS[n].seed_text, "publicKey": KEYS[n].pub, **({"operator": A("alice")} if n == "x" else {})} for n in NAMES],
     "blobs": {
         "b1": {"hash": None, "size": 2000, "type": "application/octet-stream"},
         "b2": {"hash": None, "size": 1700000, "type": "application/octet-stream"},
@@ -394,7 +394,7 @@ class Clk:
 CLK = Clk()
 def new_home(): return W.Home(SERVER, KEYS["server"], clock=lambda: W.fmt(CLK.wall), server_keys=SKEYS, steady=lambda: CLK.steady)
 def pview(nm):
-    return {"actor": A(nm), "seq": 1, "actorKind": "service" if nm == "x" else "human", "operatorConfirmed": False,
+    return {"actor": A(nm), "seq": 1, "actorKind": "service" if nm == "x" else "human", **({"operator": A("alice")} if nm == "x" else {}), "operatorConfirmed": False,
             "keys": {"k1": {"publicKey": KEYS[nm].pub, "status": "valid"}}}
 PROF = {A(nm): pview(nm) for nm in NAMES}
 ORC = new_home()
