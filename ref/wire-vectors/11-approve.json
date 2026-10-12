@@ -1,7 +1,7 @@
 {
  "format": "han-wire-vector/1",
  "name": "approve",
- "description": "append effect.approve -> receipt; state shows phase ready",
+ "description": "append effect.approve -> receipt; state shows phase open",
  "rules": [
   "P-08"
  ],

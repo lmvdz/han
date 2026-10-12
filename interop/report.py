@@ -130,7 +130,7 @@ OPDESC = {
     "subscribe": "subscribe after head; a live record arrives; cancel",
     "signal": "subscribe live-only; another actor signals; signal item with `from`; cancel",
     "propose": "append effect.propose (plan with JCS ordering stress) -> receipt",
-    "approve": "append effect.approve -> receipt; state shows phase ready",
+    "approve": "append effect.approve -> receipt; state shows phase open",
     "blobPut": "blobPut a 2000-byte blob in one part",
     "blobGet": "reference the blob in a message; another member blobGets it",
     "blobPut.multipart": "blobPut 1,700,000 bytes in three parts",

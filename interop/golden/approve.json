@@ -1,13 +1,183 @@
 {
  "op": "approve",
- "description": "append effect.approve -> receipt; state shows phase ready",
+ "description": "append effect.approve -> receipt; state shows phase open",
  "status": {
-  "ts->py": "fail",
+  "ts->py": "pass",
   "py->ts": "pass",
-  "ts->ts": "fail",
+  "ts->ts": "pass",
   "py->py": "pass"
  },
  "clients": {
+  "ts-client": {
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 1,
+      "call": "append",
+      "args": {
+       "entry": {
+        "v": 1,
+        "space": "s1:a.localhost",
+        "kind": "effect.approve",
+        "author": "@alice:a.localhost",
+        "keyId": "k1",
+        "body": {
+         "proposal": "e548c91a75f1273b3779d49eb6bd4c4d76647b42aa718fcf1ed1f8a985282575",
+         "planDigest": "b4dd41798a7009a574c18d327eb240cc620a52fbba26b61d0e832f3632843bbc"
+        },
+        "contentHash": "567fab7e50fd0b2d3a7a4e37b80f3afeabe2962aeec73ef975e211b39e111bca",
+        "refs": [],
+        "seen": 9,
+        "nonce": "aq7yvursey52ztxf2axibqfyhm",
+        "time": "2026-01-01T00:00:00Z",
+        "sig": "oWhIxvmsnxbwjAh_JxxoTG0oqI3KImuNsktK7P3L7PSaYfkBh8bUmg2-gcfAp-GkSHR9eCIQyjiwW685IQpEAg"
+       },
+       "content": {
+        "note": "ok"
+       }
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 1,
+      "ok": {
+       "space": "s1:a.localhost",
+       "seq": 10,
+       "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
+       "prev": "a0daf3c8b48fc74a18da5b78a265e904e69820dc2fe8b80ccd90db12f7e5896b",
+       "home": "a.localhost",
+       "homeKey": "h1",
+       "time": "2026-01-01T00:00:00Z",
+       "durability": "local",
+       "profiles": {
+        "@alice:a.localhost": 1,
+        "@bob:a.localhost": 1,
+        "@x:a.localhost": 1
+       },
+       "homeSig": "KAn02o5UQQvZcea3AdQiTg1t2-4gwIr2rEMDY6LOsds0CQc9sJ7SISpFDVDS9EwPooizfRtn4wghASRWI0Y_Bw"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "c2s",
+     "frame": {
+      "id": 2,
+      "call": "state",
+      "args": {
+       "space": "s1:a.localhost"
+      }
+     }
+    },
+    {
+     "conn": "@alice:a.localhost",
+     "dir": "s2c",
+     "frame": {
+      "id": 2,
+      "ok": {
+       "state": {
+        "space": "s1:a.localhost",
+        "head": 10,
+        "home": "a.localhost",
+        "policy": {
+         "visibility": "members",
+         "join": "invite",
+         "membersMayInvite": false,
+         "allowAgents": "any",
+         "approvals": [
+          {
+           "action": "file.write",
+           "approvers": [
+            "owner"
+           ]
+          }
+         ],
+         "separateApprover": true,
+         "budget": null,
+         "maxDelegationDepth": 2,
+         "minDurability": "local",
+         "launchWindow": 15,
+         "extensionsMinRole": "member",
+         "sessions": {
+          "watch": "member",
+          "read": "member",
+          "steer": "owner",
+          "modes": [
+           "auto",
+           "guarded"
+          ]
+         },
+         "servers": {
+          "deny": []
+         }
+        },
+        "budgetLeft": null,
+        "roles": {
+         "@alice:a.localhost": "owner",
+         "@bob:a.localhost": "member",
+         "@vera:a.localhost": "member",
+         "@x:a.localhost": "member"
+        },
+        "roleHistory": {
+         "@alice:a.localhost": [
+          {
+           "from": 1
+          }
+         ],
+         "@bob:a.localhost": [
+          {
+           "from": 2
+          }
+         ],
+         "@vera:a.localhost": [
+          {
+           "from": 3
+          }
+         ],
+         "@x:a.localhost": [
+          {
+           "from": 4
+          }
+         ]
+        },
+        "tasks": {},
+        "effects": {
+         "e548c91a75f1273b3779d49eb6bd4c4d76647b42aa718fcf1ed1f8a985282575": {
+          "proposer": "@bob:a.localhost",
+          "proposerKey": "k1",
+          "executor": "@x:a.localhost",
+          "action": "file.write",
+          "planDigest": "b4dd41798a7009a574c18d327eb240cc620a52fbba26b61d0e832f3632843bbc",
+          "repeatable": false,
+          "cancelRequested": false,
+          "approvals": [
+           {
+            "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
+            "author": "@alice:a.localhost",
+            "keyId": "k1"
+           }
+          ],
+          "claims": [],
+          "seq": 9,
+          "phase": "open"
+         }
+        },
+        "sessions": {},
+        "held": {},
+        "guarded": {},
+        "lastOutside": {}
+       }
+      }
+     }
+    }
+   ]
+  },
   "py-client": {
    "pythonServerAndTsServerAgree": true,
    "frames": [
@@ -179,6 +349,7 @@
    ]
   }
  },
- "vectorFrom": "py-client",
+ "vectorFrom": "ts-client",
+ "clientsSendTheSameFrames": true,
  "vectorRule": "frames below are what the named client sent and BOTH servers answered, byte for byte after JSON parsing (hello challenge/proof masked, blob data >300 chars summarised); keys, nonces, entry times and both server clocks fixed"
 }

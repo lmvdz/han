@@ -109,7 +109,7 @@ async function scenario() {
   await op("approve", ["propose"], async () => {
     await send("approve");
     const c = await login("alice"); const st = (await c.state(SPACE)).state;
-    ok(st.effects?.[ids.propose]?.phase === "ready", "effect phase ready after approval, got " + st.effects?.[ids.propose]?.phase);
+    ok(st.effects?.[ids.propose]?.phase === "open", "effect phase open after approval, got " + st.effects?.[ids.propose]?.phase);
   });
   await op("blobPut", ["member.set"], async () => { const c = await login("alice"); blobs.b1 = await c.blobPut(blobBytes("b1"), "application/octet-stream"); ok(blobs.b1.hash === sha(blobBytes("b1")), "ref hash"); });
   await op("blobGet", ["blobPut"], async () => {
