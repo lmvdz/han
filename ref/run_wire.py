@@ -592,6 +592,20 @@ def _():
     code, r = h.append(e, c, pf())
     return code == "ok" and Z in r["profiles"], f"{code} {sorted(r['profiles']) if code == 'ok' else r}"
 
+@scenario("a mirror checks the pins are exactly relevantActors", "P-01, R-14, E3", "a claim receipt that also pins a later approver (over-pinning: every actor tried; Policy would still allow the entry), or leaves out a named actor, is a fault at the mirror; the honest receipt passes")
+def _():
+    h, pid = approved_home()
+    e, c = entry("effect.claim", X, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30})
+    code, r = h.append(e, c, profiles()); assert code == "ok" and Z not in r["profiles"], (code, r)
+    out = {}
+    for name, pins in [("honest", dict(r["profiles"])), ("over", dict(r["profiles"], **{Z: 1})), ("under", {a: n for a, n in r["profiles"].items() if a != M})]:
+        recs = copy.deepcopy(h.spaces[S]["records"])
+        recs[-1]["receipt"] = W.sign_receipt(dict({k: v for k, v in recs[-1]["receipt"].items() if k != "homeSig"}, profiles=pins), HOME_A)
+        m = mirror(); res = [m.ingest(x) for x in recs]
+        out[name] = res[-1][0] and all(ok for ok, _ in res[:-1]), res[-1][1]
+    ok = out["honest"][0] and not out["over"][0] and "relevantActors" in out["over"][1] and not out["under"][0] and "relevantActors" in out["under"][1]
+    return ok, str(out)
+
 @scenario("a role held now reads the state at an earlier seq", "P-02, §3 state", "a member who joined at seq 3 reads the state after seq 2 (rights are judged on the current state); a stranger does not")
 def _():
     h = base_home()                                               # 1 create, 2 member M, 3 member X

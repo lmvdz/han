@@ -10,18 +10,23 @@ The generator (fuzz_fold's) has several operators separate from the owner, opera
 and held agents finishing their own work; one seed in four is a crowd of 23 actors (M9), so the 16-approval cap and the 64-assignee
 bound are reached. Histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
 The run prints the generator's statistics so a reader can see what was exercised, the caps included.
-Usage: python ref/fuzz_diff.py [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 2000 seeds from 0 × 250 steps)
+Usage: python ref/fuzz_diff.py [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 2000 seeds from 0 x 250 steps)
+--keep DIR: where the batches and the divergence repros go (default: a new directory under the system temp). Only the batch*/,
+divergences/ and replay.mjs this script writes are ever removed there; DIR itself is never deleted.
 """
-import argparse, collections, copy, json, multiprocessing, os, random, re, shutil, subprocess, sys, time
+import argparse, collections, copy, json, multiprocessing, os, random, re, shutil, subprocess, sys, tempfile, time
 from datetime import timedelta
 HERE = os.path.dirname(os.path.abspath(__file__))
+try:
+    sys.stdout.reconfigure(encoding="utf-8")       # the docstring and the report use non-ASCII text; a cp1252 console must not crash
+except Exception:
+    pass
 sys.path.insert(0, HERE)
 import policy as P
 import fuzz_fold as F
 
 TS = os.path.join(os.path.dirname(HERE), "cleanroom-ts")
 RUNNER = os.path.join(TS, "dist", "run-vectors.js")
-WORK = r"H:\agentic\temp\claude\H--HAN\5c1257e4-8c11-4fbf-80b1-3b3209de9c9f\scratchpad\fuzzdiff"
 BATCH = 1000
 fmt = F.fmt
 
@@ -156,17 +161,25 @@ def repro_of(v, i):
     return dict(v, steps=v["steps"][:i + 1])
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Differential fuzz: ref/policy.py against the clean-room TypeScript Policy (decision H5).")
     ap.add_argument("--seeds", type=int, default=2000)
-    ap.add_argument("--seed-offset", type=int, default=0, help="the first seed (M9): run seeds K … K+N−1")
+    ap.add_argument("--seed-offset", type=int, default=0, help="the first seed (M9): run seeds K .. K+N-1")
     ap.add_argument("--steps", type=int, default=250)
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--keep", default=WORK)
+    ap.add_argument("--keep", default=None, metavar="DIR", help="directory for the batches and the divergence repros (default: a new directory under the system temp); "
+                    "only the batch*/, divergences/ and replay.mjs this script writes are removed from it, never DIR itself")
     a = ap.parse_args()
     if shutil.which("node") is None or not os.path.exists(RUNNER):
         print("SKIP differential fuzz: node or cleanroom-ts/dist/run-vectors.js is missing"); return 0
     t0 = time.time()
-    shutil.rmtree(a.keep, ignore_errors=True); os.makedirs(a.keep)
+    made = a.keep is None
+    if made: a.keep = tempfile.mkdtemp(prefix="han-fuzzdiff-")                 # ours, and new: nothing in it to clear
+    else:
+        os.makedirs(a.keep, exist_ok=True)
+        for old in os.listdir(a.keep):                                             # only what an earlier run of this script wrote there
+            path = os.path.join(a.keep, old)
+            if os.path.isdir(path) and (old == "divergences" or re.fullmatch(r"batch[0-9]+", old)): shutil.rmtree(path)
+            elif old == "replay.mjs": os.remove(path)
     steps_n = allowed = 0; divergences = []; stats = collections.Counter()
     pool = multiprocessing.Pool(a.workers)
     end = a.seed_offset + a.seeds
@@ -208,6 +221,9 @@ def main():
     print(f"{a.seeds} seeds from {a.seed_offset} × {a.steps} steps: {steps_n} vector steps ({allowed} allowed, whole state compared after each); "
           f"{len(divergences)} seeds diverge; {time.time() - t0:.0f}s")
     if divergences: print(f"minimal repro vectors: {os.path.join(a.keep, 'divergences')}")
+    elif made:
+        try: os.rmdir(a.keep)                                                      # the directory this run made, now empty (never a tree delete)
+        except OSError: pass
     return 1 if divergences else 0
 
 if __name__ == "__main__":

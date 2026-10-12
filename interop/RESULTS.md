@@ -54,9 +54,9 @@ Supplementary cells with the TS sequencer's own server key id `srv1`, not the `h
 
 ### 1.1 StateView after the whole scenario (frozen clocks)
 
-- final `read {state:true}` of s1, ts->ts vs ts->py: identical
-- final `read {state:true}` of s1, py->ts vs ts->py: identical
-- final `read {state:true}` of s1, py->py vs ts->py: identical
+- final `state {space: s1}` (one page) of s1, ts->ts vs ts->py: identical
+- final `state {space: s1}` (one page) of s1, py->ts vs ts->py: identical
+- final `state {space: s1}` (one page) of s1, py->py vs ts->py: identical
 - claim fields in the StateView after an executor run: Python server ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window'] / ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window']; TS server ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window'] / ['approval', 'attempt', 'id', 'instance', 'outcome', 'settled', 'started', 'time', 'window']
 
 ## 2. Wire probes (raw frames at each server)

@@ -1,6 +1,6 @@
 // A minimal R-14 verifier for the interop test: chain, receipt signatures, entry signatures, content hashes and a Policy replay.
 import type { LogRecord, PolicyCtx, ProfileView, SpaceState } from "./han.js";
-import { decide, fold, profileViewOf } from "./policy.js";
+import { decide, fold, profileViewOf, relevantActors } from "./policy.js";
 import { entryId, jcs, sha256, profileActorOf, isProfileSpace } from "./wire.js";
 import { homeSigMessage, receiptHash, sigMessage, verifyBytes, parseTimeMs } from "./keys.js";
 
@@ -79,6 +79,9 @@ export async function verifySpace(space: string, recs: LogRecord[], deps: Verify
     if (!k || !verifyBytes(k.publicKey, sigMessage(id), e.sig)) { bad("entry signature does not verify against the pinned key"); break; }
     // Policy replay
     const ctx: PolicyCtx = { time: rc.time, profiles };
+    // P-01: the receipt pins exactly the last relevantActors list, judged at the receipt time with the pinned views (no more: over-pinning; no less)
+    const want = new Set<string>(relevantActors(st, e, ctx)), got = Object.keys(rc.profiles);
+    if (got.length !== want.size || !got.every((a) => want.has(a))) { bad("receipt pins other actors than relevantActors names (P-01)"); break; }
     const d = decide(st, e, ctx);
     if (!d.allow) { bad("Policy.decide replay says " + d.code + ": " + d.reason); break; }
     st = fold(st, r, ctx);

@@ -1,7 +1,7 @@
 {
  "format": "han-wire-vector/1",
  "name": "read.state",
- "description": "read with state:true -> state item, record items, end",
+ "description": "state {space} -> one page {state} (H10 a: the state is its own call; the golden transcript, recorded as read with state:true, is split into state then read)",
  "rules": [
   "§3",
   "G-09",
