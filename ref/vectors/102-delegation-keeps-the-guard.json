@@ -592,9 +592,12 @@
    "time": "2026-10-10T12:00:19Z",
    "expect": "allow",
    "check": {
-    "effects.6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021.guardedFor": []
+    "effects.6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021.guardedFor": [
+     "@bot:b.example",
+     "@bot2:b.example"
+    ]
    },
-   "note": "work that names no task carries nothing (R-24: a host names the task that drove the turn)"
+   "note": "T1: work that names no task still carries the open tasks BOT3 is assigned"
   },
   {
    "entry": {

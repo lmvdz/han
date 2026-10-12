@@ -57,7 +57,7 @@ async def test_abandon_of_an_open_claim_is_still_unavailable_until_due(env):
 async def test_unreachable_second_approver_does_not_block_a_claim(pair):
     """P-01, E3: approvals are tried in order and the claim pins only up to the first whose key is valid. The second approver's server is
     down (and its cached profile stale), yet a claim with a valid first approval succeeds and pins nobody from b."""
-    alice, carol, ex_ = pair.actor("alice", A), pair.actor("carol", A), pair.actor("exec", A, "service")
+    alice, carol, ex_ = pair.actor("alice", A), pair.actor("carol", A), pair.actor("exec", A, "service", operator="@alice:a.localhost")
     bob = pair.actor("bob", B)
     a, c, x = await pair.client("alice", A), await pair.client("carol", A), await pair.client("exec", A)
     bt = await pair.client("bob", B, dial=A)

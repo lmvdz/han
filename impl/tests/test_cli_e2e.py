@@ -25,7 +25,7 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     pub = next(l.split()[1] for l in out.splitlines() if l.startswith("public"))
     assert keys.load(key).pub == pub and (await han(env, "ana", "keygen", "--out", key, ok=False))[0] == 1       # refuses to overwrite
     env.seq.register("@ana:a.localhost", "human", "k1", pub)
-    env.actor("bob"); env.actor("exec", "service")
+    env.actor("bob"); env.actor("exec", "service", operator="@ana:a.localhost")
     pol = '[{"action": "fs.write", "approvers": ["owner"]}]'
     assert "seq 1" in await han(env, "ana", "space", "create", S, "--name", "room", "--set", f"approvals={pol}")
     await han(env, "ana", "member", "set", S, "@bob:a.localhost", "member")

@@ -22,7 +22,7 @@ async def until(pred, timeout=5.0):
 async def world(env, steer="member", force=False):
     """Register the actors, create the space, confirm alice as bot's operator. Returns the clients by name (bot's is made by start_host)."""
     for n in ("alice", "carol", "dave"): env.actor(n)
-    env.actor("bot", "agent", operator=ALICE); env.actor("exec", "service")
+    env.actor("bot", "agent", operator=ALICE); env.actor("exec", "service", operator=ALICE)
     cl = {n: await env.client(n) for n in ("alice", "carol", "dave", "exec")}
     pol = default_policy(sessions={"watch": "member", "read": "owner", "steer": steer, "modes": ["auto", "guarded"]} | ({"forceGuarded": True} if force else {}))
     await mkspace(cl["alice"], policy=pol)

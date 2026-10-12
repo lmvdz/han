@@ -9,8 +9,8 @@ from han.exec import Executor
 pytestmark = pytest.mark.asyncio(loop_scope=LOOP)
 
 async def test_propose_approve_claim_outcome(mx):
-    alice, bot = await mx.person("alice"), await mx.person("bot", "agent")
-    execp = await mx.person("exec", "service", start=False)                  # a HAN actor; it talks to the generic binding, not Matrix
+    alice = await mx.person("alice"); bot = await mx.person("bot", "agent", operator=alice.actor)
+    execp = await mx.person("exec", "service", operator=alice.actor, start=False)                  # a HAN actor; it talks to the generic binding, not Matrix
     pol = default_policy(approvals=[{"action": "*", "approvers": ["owner"]}])
     room, space = await open_space(mx, alice, invite=[bot], policy=pol)
     e, ct = alice.client.make_entry("member.set", space, {"actor": execp.actor, "role": "member"})
@@ -43,7 +43,7 @@ async def test_executor_runs_over_the_matrix_binding(mx):
     """ClientProtocol: han-exec is handed a MatrixClient instead of a WebSocket Client. It subscribes and reads through the HTTP read
     (P-02), claims and reports as header-only entry events with their content posted ahead, and the room verifies (R-14)."""
     from han.client import ClientProtocol
-    alice, bot, execp = await mx.person("alice"), await mx.person("bot", "agent"), await mx.person("exec", "service")
+    alice = await mx.person("alice"); bot = await mx.person("bot", "agent", operator=alice.actor); execp = await mx.person("exec", "service", operator=alice.actor)
     assert isinstance(execp.client, ClientProtocol)
     room, space = await open_space(mx, alice, invite=[bot, execp])
     plan = {"action": "file.write", "target": "out/over-matrix.txt", "args": {"content": "executed over matrix"}}

@@ -238,7 +238,7 @@ const FINAL_PHASES = ["succeeded", "failed", "cancelled"];
 const isFinalPhase = (p: string) => FINAL_PHASES.includes(p);
 
 // ───────────────────────── P-15 derived ─────────────────────────
-const MAX_OPEN_APPROVALS = 16, MAX_OPEN_SESSIONS = 64, MAX_ATTEMPTS = 64, ROLE_INTERVALS = 64;   // han.ts PolicyConstants
+const MAX_GUARDED_FOR = 16 + 3, MAX_OPEN_APPROVALS = 16, MAX_OPEN_SESSIONS = 64, MAX_ATTEMPTS = 64, ROLE_INTERVALS = 64;   // han.ts PolicyConstants
 /** P-15: a session is live while it is open and its actor holds a role. */
 function live(s: SpaceState, sess: A): boolean {
   return holds(s, sess.actor);
@@ -260,6 +260,14 @@ function guardedFor(s: GuardInput, ctx: PolicyCtx, recorded: string[], ...agents
   return out;
 }
 /** P-15 whose own approval a claim needs: the guard of each agent in the effect's guardedFor and of its proposer and executor if guarded now. null: such an agent has no confirmed operator. */
+function effectGuardedFor(s: SpaceState, ctx: PolicyCtx, proposer: string, executor: string, taskId: string | undefined): string[] {
+  const out: string[] = taskId !== undefined ? [...((s.tasks as A)[taskId].guardedFor as string[])] : [];
+  const open = (Object.values(s.tasks) as A[]).filter((t) => t.open && t.to.includes(proposer)).sort((x, y) => x.seq - y.seq);
+  for (const t of open) for (const x of t.guardedFor as string[]) if (!out.includes(x)) out.push(x);
+  return guardedFor(s, ctx, out, proposer, executor);
+}
+/** P-08: an open approval counts toward the cap only while its author holds a role and is not guarded (chosen, or forced by the profile pinned for the new approval). */
+const countable = (s: SpaceState, ctx: PolicyCtx, x: string): boolean => holds(s, x) && !guardStatus(s, ctx, x).guarded;
 function guardsOf(s: SpaceState, ctx: PolicyCtx, ef: A): (string | null)[] {
   const out: (string | null)[] = [];
   for (const x of guardedFor(s, ctx, ef.guardedFor, ef.proposer, ef.executor)) { const v = guardStatus(s, ctx, x).guard ?? null; if (!out.includes(v)) out.push(v); }
@@ -315,6 +323,7 @@ function namedActors(state: SpaceState | undefined, e: A): string[] {
   if ((e.kind === "effect.approve" || e.kind === "effect.cancel" || e.kind === "effect.claim") && state) {
     const ef = (state.effects as A)[e.body?.proposal];
     if (ef) { add(ef.proposer); add(ef.executor); for (const x of ef.guardedFor ?? []) add(x); }
+    if (ef && e.kind === "effect.approve" && state.policy.sessions.forceGuarded) for (const x of ef.approvals) if (!x.consumedBy) add(x.author);   // the cap judges whether each is forced (P-08)
   }
   return out;
 }
@@ -416,7 +425,7 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
       if (!ef) return inv("not a proposal");
       if (!holds(s, a)) return deny("no role");
       const may = ef.proposer === a || isOwner(s, a) || guardsOf(s, ctx, ef).includes(a)
-        || ef.approvals.some((x: A) => x.author === a && (x.consumedBy || openApproval(x, ctx.time)));
+        || (!guardStatus(s, ctx, a).guarded && ef.approvals.some((x: A) => x.author === a && (x.consumedBy || openApproval(x, ctx.time))));   // a guarded author's approval grants no cancel right (P-04)
       if (!may) return deny("not allowed to cancel");
       if (ef.phase === "open") return ok;
       if (ef.phase === "claimed" || ef.phase === "unknown") return ef.cancelRequested ? deny("cancel already requested") : ok;
@@ -481,6 +490,7 @@ function decideCreate(e: A, ctx: PolicyCtx): Decision {
   if (isProfileSpace(e.space)) {
     if (a !== "@:" + home) return deny("profile space is created by the server actor");
     if (!b.profile) return inv("profile space needs body.profile");
+    if (b.profile.actorKind !== "human" && !("operator" in b.profile)) return inv("a non-human profile names its operator");
     if (b.profile.operator !== undefined && b.profile.operator === profileActorOf(e.space)) return inv("actor names itself as operator");
   } else if (b.profile) return inv("body.profile only in profile spaces");
   if (b.policy.servers.deny.includes(home)) return inv("policy denies its own home");
@@ -566,6 +576,7 @@ function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (s.policy.budget && kindOf(ctx, a) !== "human") {
     if (!task || !task.open || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
   }
+  if (effectGuardedFor(s, ctx, a, b.executor, b.task).length > MAX_GUARDED_FOR) return deny("too many guarded tasks; close some");   // P-15: the bound is kept, never exceeded
   return ok;
 }
 
@@ -581,7 +592,7 @@ function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (!(guards.includes(a) && holds(s, a))) {   // a guard approves as a guard (P-15): no rule, no cap
     if (!rule || !satisfiesRule(s, rule, a)) return deny("not an approver");
     if (s.policy.separateApprover && a === ef.proposer) return deny("proposer cannot approve");
-    if (openApprovals(ef, ctx.time).filter((x: A) => x.author !== a && !guards.includes(x.author)).length >= MAX_OPEN_APPROVALS) return deny("too many open approvals");
+    if (openApprovals(ef, ctx.time).filter((x: A) => x.author !== a && !guards.includes(x.author) && countable(s, ctx, x.author)).length >= MAX_OPEN_APPROVALS) return deny("too many open approvals");
   }
   return ok;
 }
@@ -743,6 +754,9 @@ function pruneSettled(ef: A) {
   ef.approvals = ef.approvals.filter((x: A) => !(x.consumedBy && ef.claims.find((c: A) => c.id === x.consumedBy)?.settled));
 }
 /** P-08 (K4): whenever an entry touches an effect, its unconsumed approvals that have expired leave the state. */
+function dropOpenApprovals(s: SpaceState, actor: string) {
+  for (const ef of Object.values(s.effects) as A[]) ef.approvals = ef.approvals.filter((x: A) => x.author !== actor || x.consumedBy);
+}
 function dropExpired(ef: A, time: string) {
   ef.approvals = ef.approvals.filter((x: A) => x.consumedBy || unexpired(x.expiresAt, time));
 }
@@ -788,6 +802,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const hist = ((s.roleHistory as A)[t] ??= []);
       if (!was && now) { hist.push({ from: seq }); while (hist.length > ROLE_INTERVALS) hist.shift(); }
       else if (was && !now) { const last = hist[hist.length - 1]; if (last && last.to === undefined) last.to = seq; }
+      if (!now) dropOpenApprovals(s, t);   // P-08: they could never count again
       break;
     }
     case "policy.set": {
@@ -834,13 +849,13 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (b.cost) ef.cost = { unit: b.cost.unit, amount: b.cost.amount };
       if (b.task !== undefined) ef.task = b.task;
       if (b.expiresAt !== undefined) ef.expiresAt = b.expiresAt;
-      ef.guardedFor = guardedFor(s, ctx, b.task !== undefined ? (s.tasks as A)[b.task].guardedFor : [], a, b.executor);   // P-15
+      ef.guardedFor = effectGuardedFor(s, ctx, a, b.executor, b.task);   // P-15
       (s.effects as A)[id] = ef;
       break;
     }
     case "effect.approve": {
       const ef = (s.effects as A)[b.proposal];
-      ef.approvals = ef.approvals.filter((x: A) => !(x.author === a && !x.consumedBy));
+      ef.approvals = ef.approvals.filter((x: A) => x.consumedBy || !(x.author === a || guardStatus(s, ctx, x.author).guarded));   // supersedes the author's open ones and drops those of authors guarded now (forced ones are pinned, P-01)
       const ap: A = { id, author: a, keyId: e.keyId };
       if (b.expiresAt !== undefined) ap.expiresAt = b.expiresAt;
       ef.approvals.push(ap);
@@ -884,7 +899,8 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         const returned = ef.approvals.filter((x: A) => x.consumedBy === claim.id);
         for (const x of returned) delete x.consumedBy;
         // a returned approval stays superseded if its author approved again meanwhile (A5): one open approval per author
-        ef.approvals = ef.approvals.filter((x: A) => !(returned.includes(x) && ef.approvals.some((y: A) => y !== x && y.author === x.author && !y.consumedBy)));
+        ef.approvals = ef.approvals.filter((x: A) => !(returned.includes(x) && (ef.approvals.some((y: A) => y !== x && y.author === x.author && !y.consumedBy)
+          || !holds(s, x.author) || (s.guarded as A)[x.author] === true)));   // or its author lost its role / chose guarding meanwhile (P-08)
       };
       const settle = (cost: A | undefined) => {
         if (!claim.reserved) { claim.settled = true; return; }
@@ -932,7 +948,10 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const sess: A = { actor: a, opened: time, steerMode: b.steerMode, steers: 0 };
       if (b.task !== undefined) sess.task = b.task;
       (s.sessions as A)[id] = sess;
-      if (b.steerMode === "guarded" && kindOf(ctx, a) !== "human") (s.guarded as A)[a] = true;   // sticky: only its guard unguards it
+      if (b.steerMode === "guarded" && kindOf(ctx, a) !== "human") {
+        (s.guarded as A)[a] = true;   // sticky: only its guard unguards it
+        dropOpenApprovals(s, a);      // P-08: a guarded author's approval never counts
+      }
       break;
     }
     case "session.close": {

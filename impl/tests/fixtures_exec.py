@@ -33,7 +33,7 @@ def make_exec(env, execs, name="exec", spaces=(S,), journal=None, start=False, *
 
 async def team(env, policy=None, **policy_over):
     """alice (owner, human) and an executor actor `exec` (service, member) in S. Returns alice's client."""
-    env.actor("alice"); env.actor("exec", "service")
+    env.actor("alice"); env.actor("exec", "service", operator=ALICE)
     a = await env.client("alice")
     await mkspace(a, policy=policy or default_policy(approvals=APPROVE_ALL, **policy_over))
     await member(a, f"@exec:{env.server}")

@@ -39,7 +39,7 @@ async def run(root: str, say=print, model: str | None = None, max_turns: int = 4
     seq = Sequencer(SERVER, keys.load_or_generate(os.path.join(root, "server.key.json"), "h1"), os.path.join(root, "seq.db"))
     srv = await SeqServer(seq, "127.0.0.1", 0).start()
     kp = lambda name: os.path.join(root, f"{name}.key.json")
-    for name, kind, op in (("alice", "human", None), ("carol", "human", None), ("bot", "agent", ALICE), ("exec", "service", None)):
+    for name, kind, op in (("alice", "human", None), ("carol", "human", None), ("bot", "agent", ALICE), ("exec", "service", ALICE)):
         k = keys.load_or_generate(kp(name), "k1"); seq.register(f"@{name}:{SERVER}", kind, k.key_id, k.pub, op)
     async def client(name):
         c = Client(srv.url, f"@{name}:{SERVER}", kp(name), os.path.join(root, f"{name}.outbox.db"), server=SERVER)

@@ -25,6 +25,7 @@ def main(argv=None):
         ap.add_argument("--actor", required=True); ap.add_argument("--pub", required=True)
         ap.add_argument("--kind", default="human", choices=["human", "agent", "service"]); ap.add_argument("--operator")
         a = ap.parse_args(argv[1:])
+        if a.kind != "human" and not a.operator: ap.error(f"--operator is required for --kind {a.kind} (a non-human profile names its operator)")
         seq = Sequencer(a.server, keys.load_or_generate(a.key, "h1"), a.db)
         _register(seq, a.actor, a.pub, a.kind, a.operator); seq.close(); return 0
     ap = argparse.ArgumentParser(prog="han-seq"); _common(ap)

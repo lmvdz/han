@@ -201,7 +201,7 @@ async def test_taint_survives_a_restart_and_an_unguard(env):
     agent2 = ScriptedAgent()
     host2, task2 = start_host(env, botc2, "auto", agent2)
     await until(lambda: host2.state and host2.session)
-    assert host2.session == sid and host2.tainted(sid) and not host2.tainted("other") and not host2.guarded_now
+    assert host2.session == sid and host2.tainted(sid) and host2.tainted("other") and not host2.guarded_now      # round 29 (T5): the taint is the agent's, not the session's
     await steer(cl["alice"], sid, "hello again")                                       # the guard's own steer, the agent no longer guarded
     await until(lambda: agent2.calls)
     assert [m for _, m in agent2.calls] == ["strict"]
@@ -342,3 +342,57 @@ async def test_taint_taken_while_unguarded_survives_a_restart(env):
     await until(lambda: agent2.calls)
     assert [m for _, m in agent2.calls] == ["strict"]
     task2.cancel()
+
+# ── round 29: the taint is per agent (T5) ──
+async def test_taint_is_carried_across_sessions(env):
+    """R-24 (round 29, T5): carol's steer of bot's first session is outside and taints the AGENT while it is unguarded (auto). Once bot
+    is guarded (it opens a guarded second session), the guard's own steer of the second session, which took no outside instruction,
+    runs strict; the first session's does too."""
+    cl, botc = await world(env)
+    agent = ScriptedAgent()
+    host, task = start_host(env, botc, "auto", agent)
+    sid1 = await session_id(host)
+    await steer(cl["carol"], sid1, "hello")
+    await until(lambda: len(agent.calls) == 1)
+    assert [m for _, m in agent.calls] == ["auto"] and host.tainted() and not host.guarded_now
+    sid2 = (await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "second"})))["id"]
+    await steer(cl["alice"], sid2, "second session, the guard's own steer")
+    await until(lambda: len(agent.calls) == 2)
+    await steer(cl["alice"], sid1, "first session again")
+    await until(lambda: len(agent.calls) == 3)
+    assert [m for _, m in agent.calls] == ["auto", "strict", "strict"] and agent.calls[1][0].session == sid2
+    task.cancel()
+
+async def test_taint_is_carried_across_spaces(env):
+    """R-24 (round 29, T5): an outside instruction in space S taints the agent; in a second space S2, where bot is guarded and its
+    guard (alice) steers it, the turn runs strict though S2 never saw an outside instruction. Hosts of one agent share the taint store;
+    an agent with no taint stays auto in S2 (control, the store of another agent's file)."""
+    from han.client import default_policy
+    from han.host import Host
+    from conftest import mkspace
+    S2 = "s2:a.localhost"
+    cl, botc = await world(env)
+    pol = default_policy(sessions={"watch": "member", "read": "owner", "steer": "member", "modes": ["auto", "guarded"]})
+    await mkspace(cl["alice"], space=S2, policy=pol)
+    await member(cl["alice"], BOT, "member", space=S2); await member(cl["alice"], EXEC, "member", space=S2)
+    shared = os.path.join(env.tmp, "bot.taint.db")
+    agent1, agent2 = ScriptedAgent(), ScriptedAgent()
+    host1 = Host(botc, S, agent1, os.path.join(env.tmp, "bot.state.db"), "auto", EXEC, taint_path=shared)
+    t1 = asyncio.create_task(host1.run())
+    sid1 = await session_id(host1)
+    await steer(cl["carol"], sid1, "hello")
+    await until(lambda: agent1.calls)
+    assert host1.tainted() and not host1.guarded_now
+    host2 = Host(botc, S2, agent2, os.path.join(env.tmp, "bot2.state.db"), "guarded", EXEC, taint_path=shared)     # the same agent, another space
+    t2 = asyncio.create_task(host2.run())
+    await until(lambda: host2.session)
+    async def guarded():
+        await host2._refresh(); return host2.guarded_now                      # the session.open that chooses guarding is ordered
+    await until(guarded)
+    assert host2.tainted()
+    await cl["alice"].append(*cl["alice"].make_entry("session.input", S2, {"session": host2.session}, {"text": "hello from the guard"}))
+    await until(lambda: agent2.calls)
+    assert [m for _, m in agent2.calls] == ["strict"]
+    t1.cancel(); t2.cancel(); host1.stop(); host2.stop()
+    ctl = Host(botc, S2, ScriptedAgent(), os.path.join(env.tmp, "ctl.state.db"), "guarded", EXEC, taint_path=os.path.join(env.tmp, "other.taint.db"))
+    assert not ctl.tainted(); ctl.stop()

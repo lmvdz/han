@@ -2,7 +2,7 @@
 translation, and the host's "proposed as <id>, waiting for <guard>" answer with a fake SDK client."""
 import os, pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, PermissionResultAllow, PermissionResultDeny
-from conftest import S
+from conftest import S, member
 from fixtures_host import world, start_host, until, records, state, session_id, steer, ALICE, BOT, EXEC
 from han.host import ClaudeCodeAgent, TurnInput, Say, World
 from han.host.claude import Gate
@@ -255,3 +255,43 @@ async def test_pre_tool_use_hook_denies_in_cwd_writes_in_a_strict_turn_h11(ws):
     await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
     assert all(a["hookSpecificOutput"]["permissionDecision"] == "deny" and "strict turn" in a["hookSpecificOutput"]["permissionDecisionReason"] for a in made[0].answers[:2])
     assert agent.trace == [("Write", "deny"), ("Edit", "deny")]
+
+# ── round 29: the stricter mode of an unguarded delegate (T4) ──
+async def test_strict_turn_of_an_unguarded_delegate_has_no_local_allow_and_proposes_naming_the_task(env, ws):
+    """R-24 (round 29, T4): bot2 is not guarded, but its task's author bot is, so its turn is strict. The SDK runs in permission mode
+    `default` with no allow rules; every call that reaches outside the workspace (a declared tool, a web tool, network Bash) is denied
+    locally and becomes an effect.propose naming the driving task, and the model is told whose guard it waits for (bot's operator,
+    from the effect's `guardedFor`, though bot2 is unguarded); no world call is ever allowed by the gate."""
+    cl, botc = await world(env)
+    BOT2 = env.actor("bot2", "agent", operator=ALICE)
+    await cl["alice"].append(*cl["alice"].make_entry("member.set", "profile:" + BOT2, {"actor": ALICE, "role": "owner"}))
+    await member(cl["alice"], BOT2)
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))      # bot is guarded
+    b2 = await env.client("bot2")
+    script = [("mcp__han__deploy", {"target": "hello.txt", "content": "hi"}), ("WebFetch", {"url": "http://x.example/"}),
+              ("Bash", {"command": "curl http://x.example"}), ("Write", {"file_path": "local.txt", "content": "x"})]
+    agent, made = fake_agent(ws, script)
+    host, task = start_host(env, b2, "auto", agent, state=os.path.join(env.tmp, "bot2.state.db"), executor=EXEC)
+    await session_id(host)
+    tid = (await botc.append(*botc.make_entry("task", S, {"to": [BOT2]}, {"ask": "deploy it"})))["id"]
+    async def three(): return len(await records(cl["alice"], "effect.propose", BOT2)) == 3
+    await until(three)
+    props = await records(cl["alice"], "effect.propose", BOT2)
+    st = await state(cl["alice"])
+    assert not host.guarded_now and made[0].modes == ["default"] and made[0].options.allowed_tools == []
+    assert all(isinstance(a, PermissionResultDeny) for a in made[0].answers)                                  # nothing is approved locally
+    assert all(p["entry"]["body"]["task"] == tid for p in props)                                               # each proposal names the driving task
+    assert all(st["effects"][p["receipt"]["id"]]["guardedFor"] == [BOT] for p in props)
+    pids = [p["receipt"]["id"] for p in props]
+    assert [a.message for a in made[0].answers[:3]] == [f"proposed as {pid}, waiting for {ALICE}" for pid in pids]
+    assert "strict turn" in made[0].answers[3].message
+    assert [k for _, k in agent.trace] == ["world", "world", "world", "deny"]
+    task.cancel()
+
+def test_strict_gate_never_allows_a_call_that_reaches_the_world(ws):
+    """R-24 (round 29, T4): whatever the call, a strict turn's gate answers `world` or `deny` for anything outside the workspace."""
+    g = Gate(ws)
+    calls = [("mcp__han__deploy", {"target": "t", "content": "x"}), ("mcp__han__http_post", {"url": "http://x", "body": "b"}), ("WebFetch", {"url": "http://x"}),
+             ("WebSearch", {"query": "q"}), ("Bash", {"command": "curl http://x"}), ("Bash", {"command": "git push"}), ("Bash", {"command": "ssh h"}),
+             ("Write", {"file_path": "../x"}), ("mcp__other__tool", {})]
+    assert all(k != "allow" for k in kinds(g, "strict", *calls))

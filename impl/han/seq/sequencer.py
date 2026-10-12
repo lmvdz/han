@@ -193,6 +193,7 @@ class Sequencer:
         """Create `profile:<actor>` (the server actor appends it, §4.3). Idempotent. An agent's operator then confirms
         with its own member.set in that space."""
         sp = "profile:" + actor
+        if kind != "human" and not operator: raise ValueError(f"a {kind} profile names its operator (T8): {actor}")
         if sp in self.home.spaces: return self.home.spaces[sp]["records"][0]["receipt"]
         prof = {"actorKind": kind, "key": {"keyId": key_id, "publicKey": public_key}}
         if operator: prof["operator"] = operator

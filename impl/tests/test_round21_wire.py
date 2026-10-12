@@ -357,7 +357,7 @@ async def test_d14_claim_is_settled_after_its_outcome(env, execs):
 
 # ── D5: an executor started before its space exists keeps asking ──
 async def test_d5_executor_retries_a_missing_space(env, execs):
-    env.actor("alice"); env.actor("exec", "service")
+    env.actor("alice"); env.actor("exec", "service", operator="@alice:a.localhost")
     ex = make_exec(env, execs); await ex.start()                                 # S does not exist yet: not_found at once
     await asyncio.sleep(0.5)
     a = await team(env)

@@ -1,0 +1,237 @@
+{
+ "name": "agents-name-an-operator",
+ "rules": [
+  "§4.3",
+  "R-09",
+  "P-16"
+ ],
+ "description": "T8 (S8): a non-human profile (agent or service) must name an operator at its profile space.create, else invalid; a human's may name none",
+ "profiles": {
+  "@:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7822f22001bcb2aade5fc7dfe8a3736ab25f84beb7e34c0a1d45dd7f5a899149",
+    "v": 1,
+    "space": "profile:@ghost:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-A0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "invalid",
+   "note": "an agent with no operator"
+  },
+  {
+   "entry": {
+    "id": "19f8a9dcb30b188a5eb437f692228912464302c92012fe237727aa47396cdebb",
+    "v": 1,
+    "space": "profile:@svc:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "service",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-S0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "invalid",
+   "note": "a service with no operator"
+  },
+  {
+   "entry": {
+    "id": "5506db117de149428576975e858da2a0e0854fb6c1ff584f10650deaa7c47116",
+    "v": 1,
+    "space": "profile:@ghost:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "agent",
+      "operator": "@op:b.example",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-A1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "6e9d5980ba30052503e94b2566bfec6dccc1fadf81e0332d46b523e049957bf4",
+    "v": 1,
+    "space": "profile:@hu:b.example",
+    "kind": "space.create",
+    "author": "@:b.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "public",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "profile": {
+      "actorKind": "human",
+      "key": {
+       "keyId": "k1",
+       "publicKey": "pk"
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-H0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow",
+   "note": "a human has no operator"
+  }
+ ],
+ "ids": {
+  "A0": "7822f22001bcb2aade5fc7dfe8a3736ab25f84beb7e34c0a1d45dd7f5a899149",
+  "A1": "5506db117de149428576975e858da2a0e0854fb6c1ff584f10650deaa7c47116",
+  "H0": "6e9d5980ba30052503e94b2566bfec6dccc1fadf81e0332d46b523e049957bf4",
+  "S0": "19f8a9dcb30b188a5eb437f692228912464302c92012fe237727aa47396cdebb"
+ }
+}
