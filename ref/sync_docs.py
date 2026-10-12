@@ -201,35 +201,34 @@ def facts_models(F):
     """The guard model and the timing model, as the logs show them. A log counts only if it is complete; a newer log that is not (out of memory, aborted) is named, never skipped silently.
     The `rNN` in a log's name is the round of the Policy it ran on."""
     GUARD = re.compile(r"^\[guard\] (\d+) transitions to depth (\d+); (.*) HOLD", re.M)
-    done = [(r, d, n, GUARD.search(t)) for r, d, n, t in logs("model_guard") if "NOT COMPLETED" not in t and GUARD.search(t)]
-    undone = [(r, d, n) for r, d, n, t in logs("model_guard") if "NOT COMPLETED" in t or not GUARD.search(t)]
-    if not done: raise Underivable("ref/logs has no complete model_guard log")
-    r, d, n, m = done[0]
-    F["guard_round"], F["guard_depth"], F["guard_trans"] = r, d, f"{int(m[1]):,}"
-    for plain in (False, True):
-        later = [f"round {r2}'s depth-{d2} run did not complete ({link(n2, plain)})" for r2, d2, n2 in undone if r2 >= r]
-        F["guard_deep_plain" if plain else "guard_deep"] = (f"the newest complete deep run is depth {d}, {F['guard_trans']} transitions, on the round-{r} Policy ({link(n, plain)})"
-                       + ("; " + "; ".join(later) if later else "") + (f"; the current Policy (round {F['round']}) has not been explored to depth {d}" if r < F["round"] else ""))
-    # depth 4 and the mutation count come from the newest log that completed depth 4 (K8): the guard model is too slow to be re-derived from a quick run
-    LEVEL = re.compile(r"^\s*depth (\d+): (\d+) transitions", re.M)
-    MUT = re.compile(r"(\d+)/(\d+) mutations caught")
-    best = None
-    for r2, d2, n2, t2 in logs("model_guard"):
-        levels = {int(a_): int(b_) for a_, b_ in LEVEL.findall(t2)}
-        g2 = GUARD.search(t2)
-        if g2: levels[int(re.search(r"to depth (\d+)", g2[0])[1])] = int(g2[1])
-        if 4 in levels and best is None: best = (r2, n2, levels[4], MUT.search(t2))
-    if best is None: raise Underivable("ref/logs has no model_guard log that completed depth 4")
-    r4, n4, t4, mm = best
-    if not mm or mm[1] != mm[2]: raise Underivable(f"ref/logs/{n4}: the mutation count (N/N mutations caught) is missing or not all caught")
+    runs = [(r, d, n, t, GUARD.search(t)) for r, d, n, t in logs("model_guard")]
+    # M9: "last complete depth-4 run" is the newest log that completed depth 4 cleanly: a [guard] line for depth 4 and no NOT COMPLETED
+    clean4 = [(r, n, int(m[1])) for r, d, n, t, m in runs if m and int(m[2]) == 4 and "NOT COMPLETED" not in t]
+    if not clean4: raise Underivable("ref/logs has no model_guard log that completed depth 4 cleanly: run python ref/model_guard.py --depth 4 > ref/logs/model_guard-depth4-rNN.log")
+    r4, n4, t4 = clean4[0]
+    # the mutation count: the newest ref/logs/model_guard-mutations-rNN.log, written by python ref/model_guard.py --all-mutations --depth 4
+    muts = sorted(((int(re.search(r"-r(\d+)\.log$", f)[1]), f) for f in glob.glob(os.path.join(HERE, "logs", "model_guard-mutations-r*.log"))), reverse=True)
+    if not muts: raise Underivable("ref/logs has no model_guard-mutations-rNN.log")
+    mm = re.search(r"(\d+)/(\d+) guard mutations caught", open(muts[0][1], encoding="utf-8").read())
+    if not mm or mm[1] != mm[2]: raise Underivable(f"ref/logs/{os.path.basename(muts[0][1])}: the mutation count (N/N guard mutations caught) is missing or not all caught")
     src = read("ref", "model_guard.py")
     tail = src[src.index('print(f"[guard]'):]
     names = re.findall(r"[A-Z][A-Za-z]+", tail[:tail.index("HOLD")].split("depth {a.depth}; ", 1)[1])
     F["guard4_round"], F["guard4_trans"], F["guard4_props"], F["guard_mut"] = r4, f"{t4:,}", len(names), int(mm[2])
     F["guard4_log"], F["guard4_log_plain"] = link(n4), link(n4, True)
     import model_guard                                        # the log must describe the mutations the code has now
-    if len(model_guard.MUTATIONS) != int(mm[2]): raise Underivable(f"ref/model_guard.py has {len(model_guard.MUTATIONS)} mutations, ref/logs/{n4} says {mm[2]}: re-run python ref/model_guard.py --all-mutations --depth 4")
+    if len(model_guard.MUTATIONS) != int(mm[2]): raise Underivable(f"ref/model_guard.py has {len(model_guard.MUTATIONS)} mutations, ref/logs/{os.path.basename(muts[0][1])} says {mm[2]}: re-run python ref/model_guard.py --all-mutations --depth 4")
     F["guard_props"] = F["guard4_props"]
+    # depth 5 is opt-in: name the newest complete deep run, if any, and say plainly whether the current Policy has been explored that deep
+    deep = [(r, d, n, m) for r, d, n, t, m in runs if m and int(m[2]) >= 5 and "NOT COMPLETED" not in t]
+    undone = [(r, d, n) for r, d, n, t, m in runs if d >= 5 and ("NOT COMPLETED" in t or not m)]
+    for plain in (False, True):
+        if not deep:
+            F["guard_deep_plain" if plain else "guard_deep"] = f"no deeper run is recorded; the current Policy (round {F['round']}) has not been explored to depth 5"; continue
+        r, d, n, m = deep[0]
+        later = [f"round {r2}'s depth-{d2} run did not complete ({link(n2, plain)})" for r2, d2, n2 in undone if r2 >= r]
+        F["guard_deep_plain" if plain else "guard_deep"] = (f"the newest complete deep run is depth {m[2]}, {int(m[1]):,} transitions, on the round-{r} Policy ({link(n, plain)})"
+                       + ("; " + "; ".join(later) if later else "") + (f"; the current Policy (round {F['round']}) has not been explored to depth {m[2]}" if r < F["round"] else ""))
     # the timing model
     MC = [(r, d, n, t) for r, d, n, t in logs("model_check") if "all mutations caught" in t and all(f"[{k}]" in t and "ALL PROPERTIES HOLD" in t for k in ("timing", "drift", "single"))]
     if not MC: raise Underivable("ref/logs has no complete model_check log")

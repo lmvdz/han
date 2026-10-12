@@ -3,7 +3,7 @@
  "rules": [
   "P-15"
  ],
- "description": "J1: becoming guarded again raises lastOutside to the newest unfinished outside instruction but never lowers it below the newest ever received",
+ "description": "M8: becoming guarded holds only for unfinished outside work newer than lastOutside, which never lowers: after an unguard, work its guard had seen holds no one, work that came later does",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -390,14 +390,94 @@
    "time": "2026-10-10T12:00:13Z",
    "expect": "allow",
    "check": {
-    "held": {
+    "held": {},
+    "guarded": {
      "@bot:b.example": true
     },
     "lastOutside": {
      "@bot:b.example": 10
     }
    },
-   "note": "tA is still open, but tB came later and stays the bound"
+   "note": "tA is still open, but OP had seen it when it unguarded: it holds no one, and the bound stays"
+  },
+  {
+   "entry": {
+    "id": "28013e231b79aef441949d3f0945b1a3b4ca22785b3fb4a37bda515bbeff0800",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "agent.release",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "agent": "@bot:b.example",
+     "unguard": true
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 13,
+    "nonce": "n-u2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "guarded": {}
+   }
+  },
+  {
+   "entry": {
+    "id": "6d89ac6b1f1a3e8fed26fefd99ddf430a0f65c2faba11a6c49a06bc32b456fb4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@bot:b.example"
+     ]
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-tC",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow",
+   "check": {
+    "held": {}
+   },
+   "note": "unguarded: no hold"
+  },
+  {
+   "entry": {
+    "id": "d59a1725f7cf671b304558f30d74ae972edae262cf45224f9913cc3aa0bb913a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.open",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "steerMode": "guarded"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-s3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@bot:b.example": true
+    },
+    "lastOutside": {
+     "@bot:b.example": 15
+    }
+   },
+   "note": "tC is newer than anything OP saw: it holds"
   },
   {
    "entry": {
@@ -412,13 +492,13 @@
     },
     "contentHash": "",
     "refs": [],
-    "seen": 9,
+    "seen": 14,
     "nonce": "n-r0",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:14Z",
+   "time": "2026-10-10T12:00:17Z",
    "expect": "denied",
-   "note": "signed before tB"
+   "note": "signed before tC"
   },
   {
    "entry": {
@@ -433,12 +513,15 @@
     },
     "contentHash": "",
     "refs": [],
-    "seen": 13,
+    "seen": 16,
     "nonce": "n-r1",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:15Z",
-   "expect": "allow"
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "allow",
+   "check": {
+    "held": {}
+   }
   }
  ],
  "ids": {
@@ -453,9 +536,12 @@
   "r1": "98a7b13f6218fe6e3f84ce6eda37943da85bcc3aeb39c803706f825498926ea5",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
   "s2": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c",
+  "s3": "d59a1725f7cf671b304558f30d74ae972edae262cf45224f9913cc3aa0bb913a",
   "tA": "13a28770f9dfc107e7ea0427cf2b0351b57e813961b02e69f03d285ba0397598",
   "tB": "6759cc937df5466a099a8b1e68a2e84fa9505345e6936f6b083de85287ab3a83",
   "tBd": "8ef2069f558cf695622f62ea73cf2c335054b30edd782b0abec2ed7d7c4ddbf6",
-  "u": "58a9a5bda21bb79847089822280e36caa873eb2f36bb6ed81cdc79670c067447"
+  "tC": "6d89ac6b1f1a3e8fed26fefd99ddf430a0f65c2faba11a6c49a06bc32b456fb4",
+  "u": "58a9a5bda21bb79847089822280e36caa873eb2f36bb6ed81cdc79670c067447",
+  "u2": "28013e231b79aef441949d3f0945b1a3b4ca22785b3fb4a37bda515bbeff0800"
  }
 }

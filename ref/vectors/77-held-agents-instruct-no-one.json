@@ -3,7 +3,7 @@
  "rules": [
   "P-15"
  ],
- "description": "a held agent may talk, report and propose, but may not steer others, create tasks, approve or govern: nothing to launder through",
+ "description": "a held agent may talk, report and propose work for itself, but may not steer others, create tasks, approve or govern: nothing to launder through",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -476,7 +476,7 @@
   },
   {
    "entry": {
-    "id": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
+    "id": "a533dbdbf5ecf6252d57a3d9ca11bd63bbcb16f1204aa3eb041abd38c0077f1c",
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.propose",
@@ -484,6 +484,30 @@
     "keyId": "k1",
     "body": {
      "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "eac536cde506949ce74fe321e3927f375b32f7b1680c45a041581c41af3a4c5d",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qx",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "denied",
+   "note": "nor proposing work for another executor (M2)"
+  },
+  {
+   "entry": {
+    "id": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@bot:b.example",
      "action": "git.push",
      "planDigest": "da1cbe976f523891155352874773d0aad8fabc287c0ee0b265a2b403442c544d",
      "repeatable": false
@@ -494,7 +518,7 @@
     "nonce": "n-q",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:18Z",
+   "time": "2026-10-10T12:00:19Z",
    "expect": "allow"
   },
   {
@@ -515,7 +539,7 @@
     "nonce": "n-aq",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:19Z",
+   "time": "2026-10-10T12:00:20Z",
    "expect": "allow"
   },
   {
@@ -524,7 +548,7 @@
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.claim",
-    "author": "@x:c.example",
+    "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
      "proposal": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
@@ -538,7 +562,7 @@
     "nonce": "n-cq",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:20Z",
+   "time": "2026-10-10T12:00:21Z",
    "expect": "denied",
    "note": "the rule is met, the guard hasn't approved"
   },
@@ -560,7 +584,7 @@
     "nonce": "n-ao",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:21Z",
+   "time": "2026-10-10T12:00:22Z",
    "expect": "allow"
   },
   {
@@ -569,7 +593,7 @@
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.claim",
-    "author": "@x:c.example",
+    "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
      "proposal": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
@@ -583,7 +607,7 @@
     "nonce": "n-cq2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:22Z",
+   "time": "2026-10-10T12:00:23Z",
    "expect": "allow"
   }
  ],
@@ -605,6 +629,7 @@
   "own": "df98250a2651410660997b010503de688a598dbad8797c7a86acff3d4f379cc5",
   "pm": "e6a24bb71ccd20de6697ae89f09ac4f6b2136ef735d6f6abaf9171dfd2b9c9e8",
   "q": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
+  "qx": "a533dbdbf5ecf6252d57a3d9ca11bd63bbcb16f1204aa3eb041abd38c0077f1c",
   "relay": "c7ceb138494eb8e7149561971ddc2f0670597a9f602ae1f9b4b00ef8e180ef92",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
   "s2": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c",

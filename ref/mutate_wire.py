@@ -15,7 +15,9 @@ LIMIT6 = """        if self.limiter:                                            
 """
 RECEIPT7 = '        prev = S["records"][-1]["receipt"] if S else None                    # 7'
 MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text and replacement may both be tuples of several edits
-    ("P-01", "guards pinned only when relevant", "for a in list(need) + sorted(required - set(need)):", "for a in need:"),
+    ("P-01", "the pin loop stops after one call", "            if not new: break", "            break"),
+    ("P-01", "everything fetched is pinned", "        return {a: fetched[a] for a in need} if all(", "        return dict(fetched) if all("),
+    ("P-01", "an unfetchable required actor is left out", "if all(a in fetched for a in need) else None", "if True else None"),
     ("R-01", "dedupe after validation", '''        if S:                                                               # 1 dedupe first (R-01)
             for rec in S["records"]:
                 if rec["receipt"]["id"] == eid: return "ok", rec["receipt"]''', '''        pass'''),
@@ -49,7 +51,6 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text a
     ("R-16", "no elapsed-time check on the steady clock", 'steady_wait = A - (self.steady() - started)', 'steady_wait = 0'),
     ("R-16", "a restart forgets nothing", 'started = self.claim_steady.get(c["id"], self.run_start)', 'started = self.claim_steady.get(c["id"], -10**9)'),
     ("R-16", "an abandon that can never be allowed is still unavailable", '        if not P.decide(state, dict(entry, id=eid), {"time": fmt(due), "profiles": pinned})["allow"]: return 0', "        pass"),
-    ("P-01", "all approval candidates are pinned", '            if found_valid and a not in required: continue', "            pass"),
     ("P-02", "state at judged on the state at `at`", 'if not P.can_read(st, as_, where):', 'if not P.can_read(self.state_at(space, where) or st, as_, where):'),
     ("§3", "state at ignores `at`", 'view = st if where == st["head"] else self.state_at(space, where)', 'view = st'),
     ("§3", "state at needs rights at the head", '            where = at\n', '            where = st["head"]\n'),
@@ -101,10 +102,11 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text a
     ("K7", "agent together with cursor is accepted", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if (effect is not None and (cursor is not None or agent is not None)) or (at is not None and (cursor is not None or effect is not None)):'),
     ("K7", "agent together with at is refused", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None or agent is not None)):'),
     ("K7", "a non-ActorId agent is accepted", 'if agent is not None and not P._actor(agent): return "invalid", "agent must be an ActorId"', 'pass'),
-    ("K7", "the agent view carries the roles too", 'one = dict({k: view[k] for k in EFFECT_VIEW}, agent=agent_facts(view, agent))', 'one = dict({k: view[k] for k in EFFECT_VIEW + ("roles",)}, agent=agent_facts(view, agent))'),
-    ("K7", "the agent view ignores `at`", 'agent=agent_facts(view, agent))', 'agent=agent_facts(st, agent))'),
-    ("K7", "guarded is read from the held set", '"guarded": actor in state["guarded"]', '"guarded": actor in state["held"]'),
-    ("K7", "lastOutside is not reported", '"lastOutside": state.get("lastOutside", {}).get(actor, 0)', '"lastOutside": 0'),
+    ("K7", "the agent view carries the roles too", 'one = dict({k: view[k] for k in EFFECT_VIEW}, **agent_facts(view, agent))', 'one = dict({k: view[k] for k in EFFECT_VIEW + ("roles",)}, **agent_facts(view, agent))'),
+    ("K7", "the agent view ignores `at`", '**agent_facts(view, agent))', '**agent_facts(st, agent))'),
+    ("M5", "the agent view is the whole of the three maps", 'return {k: {actor: state[k][actor]} if actor in state.get(k, {}) else {} for k in ("held", "guarded", "lastOutside")}', 'return {k: dict(state.get(k, {})) for k in ("held", "guarded", "lastOutside")}'),
+    ("K7", "the facts are reported as true", '{actor: state[k][actor]} if actor', '{actor: True} if actor'),
+    ("K7", "lastOutside is not reported", 'for k in ("held", "guarded", "lastOutside")}', 'for k in ("held", "guarded")} | {"lastOutside": {}}'),
     ("H10", "a non-string effect is not_found", 'if effect is not None and not isinstance(effect, str): return "invalid", "effect must be an EntryId"', 'pass'),
     ("H10", "at must be an integer", 'if isinstance(at, bool) or not isinstance(at, int) or not 1 <= at <= st["head"]:', 'if not 1 <= int(at) <= st["head"]:'),
     ("F4", "notices are replayed to a later subscription", '        self.inbox = Inbox()      # actor', '        self.inbox = {}      # actor'),

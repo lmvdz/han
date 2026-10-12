@@ -3,7 +3,7 @@
  "rules": [
   "P-01"
  ],
- "description": "author, target, proposer, then every approval candidate in order, each actor once",
+ "description": "author, target, proposer and executor, then the approval candidates in order (every one while none is known to be valid), each actor once",
  "profiles": {
   "@m:a.example": {
    "actorKind": "human",
@@ -290,11 +290,39 @@
     "nonce": "n-c",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:09Z",
    "expect": [
     "@x:c.example",
     "@p:b.example",
     "@m:a.example",
     "@o:a.example"
+   ],
+   "pinned": []
+  },
+  {
+   "relevantActors": {
+    "id": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": [
+    "@x:c.example",
+    "@p:b.example"
    ]
   },
   {
@@ -317,6 +345,7 @@
     "nonce": "n-c9",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:09Z",
    "expect": [
     "@x:c.example"
    ]
@@ -339,6 +368,7 @@
     "nonce": "n-self",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:09Z",
    "expect": [
     "@o:a.example"
    ]

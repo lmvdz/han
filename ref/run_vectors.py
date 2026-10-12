@@ -8,8 +8,8 @@ Vector format (language-neutral; see README.md):
         `profiles` overrides persist for later steps. `predecessor` names the space whose current state is ctx.predecessor.
         `check` paths are dotted (keys may themselves contain dots, e.g. actor ids) and read the entry's space state.
     {read: {space, actor, seq}, expect: bool}             can_read
-    {relevantActors: entry, expect: [actor]}              relevant_actors(state[entry.space], entry)
-    {guardStatus: {space, actor}, expect: {guard?, held, guarded, forced}}   guard_status(state[space], ctx, actor), ctx = the profiles in force
+    {relevantActors: entry, time, pinned?, expect: [actor]}   relevant_actors(state[entry.space], entry, ctx), ctx.profiles = the profiles in force, only those of `pinned` if given
+    {guardStatus: {space | view, actor}, expect: {guard?, held, guarded, forced}}   guard_status(state[space] or the `state {agent}` reply `view`, ctx, actor), ctx = the profiles in force
     {sessionAccess: {space, actor, session}, expect: {watch, read, steer}}   session_access(state[space], actor, session)
 Every decide/fold is also checked for purity (inputs unchanged) and determinism (two runs agree).
 """
@@ -59,12 +59,13 @@ def run_vector(vec):
             continue
         if "guardStatus" in st:
             q = st["guardStatus"]
-            got = P.guard_status(states[q["space"]], {"time": "2026-10-10T12:00:00Z", "profiles": copy.deepcopy(profiles)}, q["actor"])
+            got = P.guard_status(q["view"] if "view" in q else states[q["space"]], {"time": "2026-10-10T12:00:00Z", "profiles": copy.deepcopy(profiles)}, q["actor"])
             if got != st["expect"]: fails.append(f"step {n} guardStatus {q['actor']}: expected {st['expect']} got {got}")
             continue
         if "relevantActors" in st:
             e = st["relevantActors"]
-            got = P.relevant_actors(states.get(e["space"]), e)
+            known = {a: v for a, v in profiles.items() if "pinned" not in st or a in st["pinned"]}
+            got = P.relevant_actors(states.get(e["space"]), e, {"time": st["time"], "profiles": copy.deepcopy(known)})
             if got != st["expect"]: fails.append(f"step {n} relevantActors: expected {st['expect']} got {got}")
             continue
         for a, v in st.get("profiles", {}).items():

@@ -202,7 +202,7 @@ export interface SpaceState {
   // P-15. A set of actors is a map whose every value is `true`. There is no other agent-guard state; the guard is never stored, it is the operator in the profile pinned for the entry (guardStatus)
   held: { [agent: ActorId]: true };                             // agents waiting for their guard
   guarded: { [agent: ActorId]: true };                          // agents that chose guarding (a `guarded` session); sticky, ended only by their guard's unguard (owners' forceGuarded is not stored)
-  lastOutside: { [agent: ActorId]: Seq };                       // seq of the newest outside instruction received while the agent was guarded or forced (raised on becoming guarded to the newest unfinished one); never lowered; a release signed with `seen` below it is denied
+  lastOutside: { [agent: ActorId]: Seq };                       // seq of the newest outside instruction received while the agent was guarded or forced, or of the newest proposal it made while held (raised on becoming guarded to the newest unfinished outside instruction newer than it); never lowered; a release signed with `seen` below it is denied
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
@@ -228,7 +228,7 @@ export interface Challenge { challenge: string /* 43 chars: 32 random bytes, bas
 /** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never host:port). */
 /** Policy's numeric constants (P-07 E5, P-08, P-15, P-02): fixed by the protocol, not negotiated by `hello`. */
 export interface PolicyConstants {
-  MAX_OPEN_APPROVALS: 16;      // unconsumed approvals per proposal (P-08)
+  MAX_OPEN_APPROVALS: 16;      // open (unconsumed, unexpired) approvals by other authors a proposal may hold when a new one arrives (P-08)
   MAX_OPEN_SESSIONS: 64;       // open sessions per actor per space (P-15)
   MAX_ATTEMPTS: 64;            // claims per effect: the 65th effect.claim is `denied`, the executor proposes again (P-07 E5)
   ROLE_INTERVALS: 64;          // role intervals kept per actor (P-02)
@@ -239,9 +239,11 @@ export type PagedMap = "roles" | "roleHistory" | "tasks" | "effects" | "sessions
 export type StateView = Omit<SpaceState, "entries">;   // the wire state, one page: the PagedMap members are cut as above, each present (possibly `{}`) on every page; the others are repeated; never `limit`
 /** `state {space, effect}`: that one effect and nothing else that grows. Never cut, never paged: one effect is bounded (at most 20 approvals, 64 claims) and `policy` is bounded by the header limit. */
 export type EffectStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "effects">;
-/** `state {space, agent}` (K7): one actor's guard facts and nothing else that grows. Never cut. `held`/`guarded`: the actor is in that set of the state (P-15); `lastOutside`: the seq of the newest outside instruction
- *  received while it was guarded or forced, 0 if none. A host combines it with the profile it pinned instead of paging the whole state. */
-export type AgentStateView = Pick<StateView, "space" | "head" | "home" | "policy"> & { agent: { held: boolean; guarded: boolean; lastOutside: Seq } };
+/** `state {space, agent}` (K7, M5): the state's `held`, `guarded` and `lastOutside` cut to that one actor (each `{}` when it is not in it) and nothing else that grows. Never cut.
+ *  It is a GuardInput: a host passes it to guardStatus as is, with the profiles it pinned, instead of paging the whole state (R-24). */
+export type AgentStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "held" | "guarded" | "lastOutside">;
+/** What guardStatus reads of a state (M5). SpaceState and AgentStateView both satisfy it. */
+export type GuardInput = Pick<SpaceState, "policy" | "held" | "guarded">;
 /** The answer to `state`: one page. `next` is the cursor of the following page, absent on the last. A cursor is `<head>.<o1>.….<oN>` (decimal, no leading zeros), N = the number of PagedMap members in order, each
  *  the count of that map's items the earlier pages sent (§3). A client treats it as opaque; a server rejects anything else as `invalid`. */
 export type StateReply = { state: StateView | EffectStateView | AgentStateView; next?: string };
@@ -318,10 +320,13 @@ export interface Policy {                                // M2 — six pure func
   fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState;   // the entry's id is record.receipt.id (R-25)
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
-  relevantActors(state: SpaceState | undefined, entry: Entry, time: Time): ActorId[];   // P-01: author, member.set target, the targets of an instruction (session actor, assignees, executor), a release's agent, approve/cancel: proposer and executor, claim: proposer and every approval candidate in order
+  /** P-01, the whole pin rule: author, member.set target, the targets of an instruction (session actor, assignees, executor), a release's agent, approve/cancel/claim: proposer and executor;
+   *  for a claim then the guards from ctx.profiles (P-15) and the approval candidates in E3 order up to and including the first whose profile in ctx.profiles shows a valid key.
+   *  The sequencer calls it with the profiles fetched so far until it names none it has not tried: three calls at most. */
+  relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[];
   /** P-15, the one guard function hosts call (R-24) instead of re-deriving it. `guard`: the `operator` of ctx.profiles[agent] if it is confirmed and the agent is not human, else absent.
    *  `held`, `guarded`: membership of the state's sets. `forced`: policy.sessions.forceGuarded is on and ctx.profiles[agent] is not human. */
-  guardStatus(state: SpaceState, ctx: PolicyCtx, agent: ActorId): { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean };
+  guardStatus(state: GuardInput, ctx: PolicyCtx, agent: ActorId): { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean };
 }
 export interface Identity {                              // M3
   profile(actor: ActorId, minSeq?: Seq): Promise<ProfileView>;

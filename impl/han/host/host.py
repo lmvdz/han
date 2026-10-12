@@ -28,7 +28,7 @@ class Host:
         self.me = client.actor
         self.j = Journal(state_path)
         self.crash = crash                                    # test hook: crash(point, intent key) may raise HostCrash
-        self.state: dict | None = None                        # the light state (K7): `state {agent}` made into what `guard_status` reads: policy, head, held, guarded
+        self.state: dict | None = None                        # the light state (K7): the `state {agent}` reply as is (M5): space, head, home, policy, held, guarded, lastOutside
         self.full: dict | None = None                         # the whole StateView, read only when sessions or tasks are needed
         self.profile: dict | None = None                      # this agent's current ProfileView (guard_status wants it in ctx.profiles)
         self.session: str | None = None
@@ -48,11 +48,6 @@ class Host:
         """P-15, the one guard function, for this agent: `{guard?, held, guarded, forced}`. The host derives nothing else from the state (R-24)."""
         return P.guard_status(state, {"time": time, "profiles": {self.me: profile} if profile else {}}, self.me)
 
-    def _light(self, view: dict) -> dict:
-        """K7: the reply of `state {agent}` as a state `guard_status` can read (`held` and `guarded` are sets of actors)."""
-        a = view["agent"]
-        return {"head": view["head"], "policy": view["policy"], "held": {self.me: True} if a["held"] else {}, "guarded": {self.me: True} if a["guarded"] else {}}
-
     @property
     def guarded_now(self) -> bool:
         if not self.state: return False
@@ -66,7 +61,7 @@ class Host:
         if self.crash: self.crash(point, key)
 
     async def _refresh(self):
-        self.state = self._light((await self.client.state(self.space, agent=self.me))["state"])
+        self.state = (await self.client.state(self.space, agent=self.me))["state"]       # M5: the reply is guard_status's input as is
         self.full = None
         try: self.profile = (await self.client.read_state("profile:" + self.me))["profile"]
         except WireError: pass                                   # keep the last one
@@ -80,7 +75,7 @@ class Host:
         """R-24: the agent's guard facts after record `seq` (`state {agent, at}`) and this agent's profile as that record's receipt pinned it
         (`pins` = receipt.profiles), or None when either cannot be read (the turn is then strict)."""
         try:
-            at = self._light((await self.client.state(self.space, agent=self.me, at=seq))["state"])
+            at = (await self.client.state(self.space, agent=self.me, at=seq))["state"]
             n = (pins or {}).get(self.me)
             prof = (await self.client.read_state("profile:" + self.me, at=n))["profile"] if n else self.profile
             return at, prof

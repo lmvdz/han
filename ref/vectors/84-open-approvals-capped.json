@@ -415,7 +415,7 @@
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "executor": "@x:c.example",
+     "executor": "@bot:b.example",
      "action": "git.push",
      "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
      "repeatable": false

@@ -10,7 +10,7 @@ import {
   isActorId, isHex, isInt, isKeyId, isNonce, isServerName, isSig, isCanonB64u, isSpaceId, isTime, isProfileSpace, profileActorOf, serverOf, spaceServer,
   jcs, sha256, entryId, parseStrict, validateContent, validBlobRef, utf8len, JsonError, isKind, jsonInts,
 } from "./wire.js";
-import { badBody, canRead, claimPinPlan, decide, fold, profileViewOf, relevantActors, sessionAccess } from "./policy.js";
+import { badBody, canRead, decide, fold, profileViewOf, relevantActors, sessionAccess } from "./policy.js";
 import { acceptMessage, b64u, helloMessage, homeSigMessage, importKey, KeyPair, newKey, exportPrivate, receiptHash, signBytes, timeString, unb64u, verifyBytes, sigMessage, parseTimeMs } from "./keys.js";
 
 type A = any;
@@ -253,12 +253,14 @@ export class Sequencer {
     if (k0 && !verifyBytes(k0.publicKey, sigMessage(id), entry.sig)) throw err("invalid", "bad signature");
     if (!state && isProfileSpace(entry.space)) { /* only the author */ }
     else {
-      const plan = claimPinPlan(state, entry, time);
-      if (plan) {
-        for (const a of plan.base) pin(a);
-        for (const c of plan.candidates) { pin(c.author); if (profiles[c.author]?.keys?.[c.keyId]?.status === "valid") break; }
-        for (const g of claimPinPlan(state, entry, time, { time, profiles })!.guards) pin(g);   // the guards: operators in the profiles pinned for the proposer and the executor (P-15)
-      } else for (const a of relevantActors(state, entry, time)) pin(a);
+      // P-01: Policy's relevantActors is the whole pin rule; this only fetches. Call it with the profiles fetched so far, fetch what it names that
+      // was not tried yet, and call again until it names nothing new: three calls at most (an actor it can't fetch makes the append `unavailable`)
+      for (let call = 1; ; call++) {
+        const fresh = relevantActors(state, entry, { time, profiles }).filter((a) => !(a in pins));
+        if (fresh.length === 0) break;
+        if (call === 3) throw err("unavailable", "relevantActors still names new actors after three calls");
+        for (const a of fresh) pin(a);
+      }
     }
     // own-profile-space author: its view is the space's own state; record its seq as the head before this entry
     if (state?.profile !== undefined && entry.author === profileActorOf(state.space)) pins[entry.author] = state.head;
@@ -613,8 +615,9 @@ export class Sequencer {
       }
       if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + ("at" in a ? "`at`" : "the head"));
       const full = view(head);
+      const cut = (m: A) => (a.agent in m ? { [a.agent]: m[a.agent] } : {});
       return { state: { space: full.space, head: full.head, home: full.home, policy: full.policy,
-        agent: { held: full.held[a.agent] === true, guarded: full.guarded[a.agent] === true, lastOutside: full.lastOutside[a.agent] ?? 0 } } };
+        held: cut(full.held), guarded: cut(full.guarded), lastOutside: cut(full.lastOutside) } };
     }
     if ("cursor" in a) {
       if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){9}$/.test(a.cursor)) throw err("invalid", "malformed cursor");

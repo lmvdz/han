@@ -7,9 +7,10 @@ verdict and a `check` of the WHOLE state (path "", which the TS runner resolves 
 few batches. The first divergence per seed is reported with the step before it and, for a state divergence, the
 top-level state keys that differ. Each divergent seed's history up to the divergence is saved as a minimal vector.
 The generator (fuzz_fold's) has several operators separate from the owner, operator confirm/withdraw, forced spaces, stale `seen`
-and held agents finishing their own work; histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
-The run prints the generator's statistics so a reader can see what was exercised.
-Usage: python ref/fuzz_diff.py [--seeds N] [--steps N] [--keep DIR] [--workers N]      (default 2000 seeds × 250 steps)
+and held agents finishing their own work; one seed in four is a crowd of 23 actors (M9), so the 16-approval cap and the 64-assignee
+bound are reached. Histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
+The run prints the generator's statistics so a reader can see what was exercised, the caps included.
+Usage: python ref/fuzz_diff.py [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 2000 seeds from 0 × 250 steps)
 """
 import argparse, collections, copy, json, multiprocessing, os, random, re, shutil, subprocess, sys, time
 from datetime import timedelta
@@ -32,7 +33,8 @@ def history(seed, steps):
     """One random history as a vector: ref verdicts, whole folded states, guardStatus probes; also the generator's statistics."""
     r = random.Random(seed)
     revoked, unconf, t = set(), set(), 0
-    profiles = {a: view(a) for a in F.ACTORS}
+    actors = F.actors_of(seed)
+    profiles = {a: view(a) for a in actors}
     out, stats = [], collections.Counter()
     def ctx_of(time_):
         return {"time": time_, "profiles": {a: dict(v, actor=a, seq=1) for a, v in profiles.items()}}
@@ -45,6 +47,7 @@ def history(seed, steps):
         st = {"entry": e, "time": time_, "expect": verdict}
         if override: st["profiles"] = override
         stats[f"{e['kind']} {verdict}"] += 1
+        F.count(stats, e, d)
         if d["allow"]:
             prev = state
             state = P.fold(state, {"entry": e, "content": None, "receipt": {"space": F.S, "seq": (state["head"] if state else 0) + 1, "id": e["id"], "time": time_}}, ctx)
@@ -59,20 +62,21 @@ def history(seed, steps):
         return ctx
     create = {"id": F.H("create"), "v": 1, "space": F.S, "kind": "space.create", "author": F.O, "keyId": "k1",
               "body": {"policy": F.policy(r)}, "contentHash": "", "refs": [], "seen": 0, "nonce": "c", "time": "2026-10-10T12:00:00Z"}
+    if actors is not F.ACTORS: create["body"]["policy"]["approvals"] = [{"action": "*", "approvers": ["member"]}]; stats["crowd seeds"] += 1
     step(create, fmt(0))
-    for ms in F.setup(r, None, None): step(ms, fmt(0))
+    for ms in F.setup(r, None, None, actors): step(ms, fmt(0))
     for n in range(steps):
         t += r.choice([0, 1, 5, 20, 45])
-        changed = F.flip(r, revoked, unconf)
+        changed = F.flip(r, revoked, unconf, actors)
         for a in changed: profiles[a] = view(a, a in revoked, a in unconf)
         override = {a: profiles[a] for a in changed} if changed else None
-        e = F.random_entry(r, state, n)
+        e = F.random_entry(r, state, n, actors)
         ctx = step(e, fmt(t), override)
         if r.random() < .15:
-            a = r.choice(F.ACTORS)
+            a = r.choice(actors)
             out.append({"guardStatus": {"space": F.S, "actor": a}, "expect": P.guard_status(state, ctx, a)})
             stats["* guardStatus probes"] += 1
-    return {"name": f"fuzz-diff seed {seed}", "profiles": {a: view(a) for a in F.ACTORS}, "steps": out}, stats
+    return {"name": f"fuzz-diff seed {seed}", "profiles": {a: view(a) for a in actors}, "steps": out}, stats
 
 def build(job):
     seed, steps, d = job
@@ -154,6 +158,7 @@ def repro_of(v, i):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=2000)
+    ap.add_argument("--seed-offset", type=int, default=0, help="the first seed (M9): run seeds K … K+N−1")
     ap.add_argument("--steps", type=int, default=250)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--keep", default=WORK)
@@ -164,10 +169,11 @@ def main():
     shutil.rmtree(a.keep, ignore_errors=True); os.makedirs(a.keep)
     steps_n = allowed = 0; divergences = []; stats = collections.Counter()
     pool = multiprocessing.Pool(a.workers)
-    for lo in range(0, a.seeds, BATCH):
+    end = a.seed_offset + a.seeds
+    for lo in range(a.seed_offset, end, BATCH):
         d = os.path.join(a.keep, f"batch{lo // BATCH}"); os.makedirs(d)
         vecs = {}
-        for seed, n, al, st_, v in pool.imap_unordered(build, [(s, a.steps, d) for s in range(lo, min(lo + BATCH, a.seeds))], 8):
+        for seed, n, al, st_, v in pool.imap_unordered(build, [(s, a.steps, d) for s in range(lo, min(lo + BATCH, end))], 8):
             vecs[f"seed{seed}"] = v; steps_n += n; allowed += al; stats.update(st_)
         first, _ = node_all(d)
         for name, (i, msg) in sorted(first.items(), key=lambda kv: int(kv[0][4:])):
@@ -195,9 +201,11 @@ def main():
         print(f"    e.g. {name} step {i} {body}")
         print(f"    seeds: {seeds}")
     pool.close()
-    print("generator statistics, entries by kind and verdict: " + "; ".join(f"{k} {n}" for k, n in sorted(stats.items()) if not k.startswith("*")))
+    caps = ("crowd seeds",) + tuple(F.STATS)[1:]
+    print("generator statistics, entries by kind and verdict: " + "; ".join(f"{k} {n}" for k, n in sorted(stats.items()) if not k.startswith("*") and k not in caps))
+    print("generator statistics, caps reached (M9): " + "; ".join(f"{k} {stats[k]}" for k in caps))
     print("generator statistics, guard paths: " + "; ".join(f"{k[2:]} {n}" for k, n in sorted(stats.items()) if k.startswith("*")))
-    print(f"{a.seeds} seeds × {a.steps} steps: {steps_n} vector steps ({allowed} allowed, whole state compared after each); "
+    print(f"{a.seeds} seeds from {a.seed_offset} × {a.steps} steps: {steps_n} vector steps ({allowed} allowed, whole state compared after each); "
           f"{len(divergences)} seeds diverge; {time.time() - t0:.0f}s")
     if divergences: print(f"minimal repro vectors: {os.path.join(a.keep, 'divergences')}")
     return 1 if divergences else 0

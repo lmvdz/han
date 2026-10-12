@@ -194,8 +194,8 @@
    ]
   },
   "py-client": {
-   "pythonServerAndTsServerAgree": false,
-   "pythonServerFrames": [
+   "pythonServerAndTsServerAgree": true,
+   "frames": [
     {
      "conn": "@bob:a.localhost",
      "dir": "c2s",
@@ -375,196 +375,11 @@
       "id": 2,
       "ok": null
      }
-    }
-   ],
-   "tsServerFrames": [
-    {
-     "conn": "@bob:a.localhost",
-     "dir": "c2s",
-     "frame": {
-      "id": 1,
-      "call": "watch",
-      "args": {
-       "space": "s1:a.localhost",
-       "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4"
-      }
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "c2s",
-     "frame": {
-      "id": 1,
-      "call": "stream",
-      "args": {
-       "item": {
-        "space": "s1:a.localhost",
-        "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-        "time": "2026-01-01T00:00:00Z",
-        "n": 1,
-        "type": "output",
-        "text": "line 1"
-       }
-      }
-     }
-    },
-    {
-     "conn": "@bob:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 1,
-      "item": {
-       "space": "s1:a.localhost",
-       "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-       "time": "2026-01-01T00:00:00Z",
-       "n": 1,
-       "type": "output",
-       "text": "line 1"
-      }
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 1,
-      "ok": null
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "c2s",
-     "frame": {
-      "id": 2,
-      "call": "stream",
-      "args": {
-       "item": {
-        "space": "s1:a.localhost",
-        "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-        "time": "2026-01-01T00:00:00Z",
-        "n": 2,
-        "type": "status",
-        "state": "working"
-       }
-      }
-     }
-    },
-    {
-     "conn": "@bob:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 1,
-      "item": {
-       "space": "s1:a.localhost",
-       "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-       "time": "2026-01-01T00:00:00Z",
-       "n": 2,
-       "type": "status",
-       "state": "working"
-      }
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 2,
-      "ok": null
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "c2s",
-     "frame": {
-      "id": 3,
-      "call": "stream",
-      "args": {
-       "item": {
-        "space": "s1:a.localhost",
-        "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-        "time": "2026-01-01T00:00:00Z",
-        "n": 3,
-        "type": "output",
-        "text": "line 3 é"
-       }
-      }
-     }
-    },
-    {
-     "conn": "@bob:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 1,
-      "item": {
-       "space": "s1:a.localhost",
-       "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-       "time": "2026-01-01T00:00:00Z",
-       "n": 3,
-       "type": "output",
-       "text": "line 3 é"
-      }
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 3,
-      "ok": null
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "c2s",
-     "frame": {
-      "id": 4,
-      "call": "stream",
-      "args": {
-       "item": {
-        "space": "s1:a.localhost",
-        "session": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-        "time": "2026-01-01T00:00:00Z",
-        "n": 3,
-        "type": "output",
-        "text": "line 3 é"
-       }
-      }
-     }
-    },
-    {
-     "conn": "@alice:a.localhost",
-     "dir": "s2c",
-     "frame": {
-      "id": 4,
-      "ok": null
-     }
-    },
-    {
-     "conn": "@bob:a.localhost",
-     "dir": "c2s",
-     "frame": {
-      "id": 2,
-      "call": "cancel",
-      "args": {
-       "target": 1
-      }
-     }
-    }
-   ],
-   "differences": [
-    {
-     "conn": "@bob:a.localhost",
-     "dir": "s2c",
-     "index": 3,
-     "pythonServer": {
-      "id": 2,
-      "ok": null
-     },
-     "tsServer": null
     }
    ]
   }
  },
  "vectorFrom": "ts-client",
+ "clientsSendTheSameFrames": true,
  "vectorRule": "frames below are what the named client sent and BOTH servers answered, byte for byte after JSON parsing (hello challenge/proof masked, blob data >300 chars summarised); keys, nonces, entry times and both server clocks fixed"
 }

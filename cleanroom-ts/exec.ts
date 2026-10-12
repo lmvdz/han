@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import type { LogRecord, ReadItem, SpaceState } from "./han.js";
 import { HanClient, WireFault } from "./client.js";
 import { exportPrivate, importKey, KeyPair, makeEntry, newKey } from "./keys.js";
-import { approvalsInHand, fold } from "./policy.js";
+import { fold } from "./policy.js";
 import { jcs, sha256 } from "./wire.js";
 
 type A = any;
@@ -51,7 +51,8 @@ export class Executor {
   private cl(space: string): HanClient { return this.homes.get(space) ?? this.client; }
   private states = new Map<string, SpaceState>();
   private plans = new Map<string, A>();              // proposal id -> plan (null if redacted)
-  private claimed = new Set<string>();               // proposals this instance has ever journaled a claim for
+  private claimed = new Set<string>();               // proposals this instance has journaled a claim for that was not refused, or declined to run
+  private deniedAt = new Map<string, number>();       // proposal id -> the head at which its last claim was refused: tried again once the head has moved (X-09)
   private queue: Promise<void> = Promise.resolve();
   private dead = false;
   private backoff = new Map<string, number>(); private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -109,7 +110,8 @@ export class Executor {
       good += Buffer.byteLength(l) + 1;
     }
     if (good < Buffer.byteLength(text)) fs.truncateSync(jf, good);
-    for (const e of this.journal) if (e.t === "claiming") this.claimed.add(e.proposal);
+    const refused = new Set(this.journal.filter((e) => e.t === "refused").map((e) => e.claimId));
+    for (const e of this.journal) if (e.t === "claiming" && !refused.has(e.claimId)) this.claimed.add(e.proposal);
   }
   private ev(s: string) { this.o.onEvent?.(s); }
   private crashPoint(p: NonNullable<ExecOptions["crashAt"]>) { if (this.o.crashAt === p) throw new Crash(p); }
@@ -180,7 +182,7 @@ export class Executor {
     if (!st) return;
     for (const [pid, ef] of Object.entries(st.effects) as Array<[string, A]>) {
       if (this.dead) return;
-      if (ef.executor === this.o.actor && ef.phase === "open" && !this.claimed.has(pid) && approvalsInHand(st, pid, new Date().toISOString().replace(/\.\d+Z$/, "Z"))) {
+      if (ef.executor === this.o.actor && ef.phase === "open" && !this.claimed.has(pid) && (this.deniedAt.get(pid) ?? -1) < st.head) {   // X-09: every open effect, once per head; Policy judges
         this.claimed.add(pid);
         try { await this.claim(space, pid); } catch (x) { if (x instanceof Crash) { this.crash(); this.ev("crashed at " + x.message); return; } throw x; }
       }
@@ -229,7 +231,7 @@ export class Executor {
 
   // ───────────── the claim protocol (X-01 … X-05) ─────────────
   private async claim(space: string, pid: string) {
-    const st = this.states.get(space)!, ef = st.effects[pid] as A;
+    const st = this.states.get(space)!, ef = st.effects[pid] as A, head = st.head;
     const chk = this.checkPlan(pid, ef);
     if (!chk.ok) { this.ev(`refuse ${pid.slice(0, 8)}: ${chk.why}`); await this.refuse(space, pid, chk.why); return; }
     const W = st.policy.launchWindow;
@@ -240,7 +242,7 @@ export class Executor {
     this.crashPoint("after-claiming-journal");
     try { await this.cl(space).appendReliable(entry); }
     catch (e) {
-      if (e instanceof WireFault && (e.code === "denied" || e.code === "invalid")) { this.j({ t: "refused", claimId: id, code: e.code }); this.ev("claim refused: " + e.message); return; }
+      if (e instanceof WireFault && (e.code === "denied" || e.code === "invalid")) { this.j({ t: "refused", claimId: id, code: e.code }); this.claimed.delete(pid); this.deniedAt.set(pid, head); this.ev("claim refused: " + e.message); return; }
       throw e;
     }
     this.crashPoint("after-receipt");
