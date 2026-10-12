@@ -148,10 +148,9 @@ export function badBody(kind: string, b: A): string | null {
       return !("task" in b) || isHex(b.task) ? null : "task";
     case "session.close": return (e = c(["session"])) ? e : isHex(b.session) ? null : "session";
     case "session.input": return (e = c(["session"])) ? e : isHex(b.session) ? null : "session";
-    case "agent.release":
-      if ((e = c(["agent"], ["unguard"]))) return e;
-      if (!isActorId(b.agent)) return "agent";
-      return "unguard" in b && b.unguard !== true ? "unguard" : null;
+    case "agent.unguard":
+      if ((e = c(["agent"]))) return e;
+      return isActorId(b.agent) ? null : "agent";
     default:
       if (!isExtensionKind(kind)) return "unknown kind";
       if (!isObj(b)) return "extension body not an object";
@@ -244,34 +243,30 @@ const MAX_OPEN_APPROVALS = 16, MAX_OPEN_SESSIONS = 64, MAX_ATTEMPTS = 64, ROLE_I
 function live(s: SpaceState, sess: A): boolean {
   return holds(s, sess.actor);
 }
-/** P-15 guardStatus(state, ctx, agent): guard = the operator in the profile pinned for this entry if confirmed and the agent is not human; held, guarded =
- *  membership of the state's sets; forced = forceGuarded on and the pinned profile not human. `state` needs only `policy`, `held` and `guarded` (a `state {agent}` reply serves). */
-export function guardStatus(s: GuardInput, ctx: PolicyCtx, x: string): { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean } {
+/** P-15 guardStatus(state, ctx, agent): guard = the operator in the profile pinned for this entry if confirmed and the agent is not human; forced = forceGuarded on and
+ *  the pinned profile not human; guarded = forced or the agent is in the state's set `guarded` (its own choice). `state` needs only `policy` and `guarded` (a `state {agent}` reply serves). */
+export function guardStatus(s: GuardInput, ctx: PolicyCtx, x: string): { guard?: ActorId; guarded: boolean; forced: boolean } {
   const v = (ctx.profiles as A)?.[x];
   const agent = !!v && v.actorKind !== "human";
-  const r: { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean } = {
-    held: (s.held as A)[x] === true, guarded: (s.guarded as A)[x] === true, forced: agent && s.policy.sessions.forceGuarded === true,
-  };
+  const forced = agent && s.policy.sessions.forceGuarded === true;
+  const r: { guard?: ActorId; guarded: boolean; forced: boolean } = { guarded: forced || (s.guarded as A)[x] === true, forced };
   if (agent && v.operatorConfirmed && v.operator) r.guard = v.operator as ActorId;
   return r;
 }
-/** P-15 whose own approval a claim needs: the guard of the proposer and of the executor, each if held, guarded or forced. null: such an agent has no confirmed operator. */
+/** P-15: `recorded` plus each of `agents` that is guarded at this entry, each once. The fold records it on a new task and effect. */
+function guardedFor(s: GuardInput, ctx: PolicyCtx, recorded: string[], ...agents: string[]): string[] {
+  const out = [...recorded];
+  for (const x of agents) if (!out.includes(x) && guardStatus(s, ctx, x).guarded) out.push(x);
+  return out;
+}
+/** P-15 whose own approval a claim needs: the guard of each agent in the effect's guardedFor and of its proposer and executor if guarded now. null: such an agent has no confirmed operator. */
 function guardsOf(s: SpaceState, ctx: PolicyCtx, ef: A): (string | null)[] {
   const out: (string | null)[] = [];
-  for (const who of [ef.proposer, ...(ef.executor !== ef.proposer ? [ef.executor] : [])]) {
-    const g = guardStatus(s, ctx, who);
-    if (g.held || g.guarded || g.forced) { const v = g.guard ?? null; if (!out.includes(v)) out.push(v); }
-  }
+  for (const x of guardedFor(s, ctx, ef.guardedFor, ef.proposer, ef.executor)) { const v = guardStatus(s, ctx, x).guard ?? null; if (!out.includes(v)) out.push(v); }
   return out;
 }
 const openApproval = (a: A, time: string) => !a.consumedBy && unexpired(a.expiresAt, time);
 const openApprovals = (ef: A, time: string): A[] => ef.approvals.filter((a: A) => openApproval(a, time));
-/** P-15: an instruction to a guarded or forced `x` from anyone but itself needs its guard here: a confirmed operator holding a role. */
-function instructionDenial(s: SpaceState, ctx: PolicyCtx, x: string, author: string): Decision | null {
-  const g = guardStatus(s, ctx, x);
-  if (author === x || !(g.guarded || g.forced)) return null;
-  return holds(s, g.guard) ? null : deny("a guarded agent needs its operator here");
-}
 
 // ───────────────────────── P-02 read ─────────────────────────
 export function canRead(state: SpaceState, reader: string, seq: Seq): boolean {
@@ -316,10 +311,10 @@ function namedActors(state: SpaceState | undefined, e: A): string[] {
   if (e.kind === "task" && Array.isArray(e.body?.to)) for (const x of e.body.to) if (typeof x === "string") add(x);
   if (e.kind === "effect.propose") add(e.body?.executor);
   if (e.kind === "session.input" && state) add((state.sessions as A)[e.body?.session]?.actor);
-  if (e.kind === "agent.release") add(e.body?.agent);
+  if (e.kind === "agent.unguard") add(e.body?.agent);
   if ((e.kind === "effect.approve" || e.kind === "effect.cancel" || e.kind === "effect.claim") && state) {
     const ef = (state.effects as A)[e.body?.proposal];
-    if (ef) { add(ef.proposer); add(ef.executor); }
+    if (ef) { add(ef.proposer); add(ef.executor); for (const x of ef.guardedFor ?? []) add(x); }
   }
   return out;
 }
@@ -339,9 +334,6 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, ctx:
 }
 
 // ───────────────────────── decide ─────────────────────────
-const HELD_OK = ["message", "session.open", "session.close", "session.input", "task.update", "effect.outcome", "effect.resolve", "effect.claim",
-  "effect.cancel", "task.cancel", "effect.propose"];
-
 export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision {
   const e = entry as A;
   // P-16 common step 1: shape of the header fields Policy reads, and of the body
@@ -376,14 +368,10 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     if (e.kind === "member.set") return decideProfileMember(s, e, ctx);
     return deny("kind not allowed in a profile space");
   }
-  // step 8: held
-  if ((s.held as A)[a] === true) {
-    if (!HELD_OK.includes(e.kind)) return deny("agent is on hold");
-    if (e.kind === "effect.propose" && b.executor !== a) return deny("a held agent can't instruct another agent");
-    if (e.kind === "session.input") {
-      const ts = (s.sessions as A)[b.session];
-      if (ts && ts.actor !== a) return deny("held agent may only steer its own sessions");
-    }
+  // step 8: a guarded author may not approve, govern or steer others (P-15)
+  if (guardStatus(s, ctx, a).guarded) {
+    const own = e.kind === "session.input" ? ((s.sessions as A)[b.session] === undefined || (s.sessions as A)[b.session].actor === a) : true;
+    if (e.kind === "effect.approve" || e.kind === "member.set" || !own) return deny("a guarded author may not approve, govern or steer others");
   }
   // step 9: extension kinds
   if (isExtensionKind(e.kind)) {
@@ -458,7 +446,7 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
       return sess.actor === a || isOwner(s, a) ? ok : deny("not the session's actor or an owner");
     }
     case "session.input": return decideInput(s, e, ctx);
-    case "agent.release": return decideRelease(s, e, ctx);
+    case "agent.unguard": return decideUnguard(s, e, ctx);
     default: return inv("unknown kind");
   }
 }
@@ -556,7 +544,6 @@ function decideTask(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
     const avail = parent && parent.left ? parent.left.amount : (s.budgetLeft as A).amount;
     if (b.budget.amount > avail) return deny("budget does not fit");
   }
-  for (const x of b.to) { const d = instructionDenial(s, ctx, x, a); if (d) return d; }
   return ok;
 }
 
@@ -575,7 +562,7 @@ function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (s.policy.budget && kindOf(ctx, a) !== "human") {
     if (!task || !task.open || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
   }
-  return instructionDenial(s, ctx, b.executor, a) ?? ok;
+  return ok;
 }
 
 function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
@@ -716,14 +703,12 @@ function decideInput(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (!live(s, sess)) return deny("session not live");
   if (!accountable(s, ctx, a)) return deny("not accountable");
   if (!sessionAccess(s, a as ActorId, b.session).steer) return deny("no steer right");
-  return instructionDenial(s, ctx, sess.actor, a) ?? ok;
+  return ok;
 }
 
-function decideRelease(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
+function decideUnguard(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string, x = b.agent as string;
-  const g = guardStatus(s, ctx, x);
-  if (g.guard !== a || !(g.held || (b.unguard === true && g.guarded))) return deny("only the guard of a held or guarded agent releases it");
-  if (((s.lastOutside as A)[x] ?? 0) > e.seen) return deny("stale release: an outside instruction arrived after what the guard had seen");
+  if (!(s.guarded as A)[x] || guardStatus(s, ctx, x).guard !== a) return deny("only the guard of an agent that chose guarding unguards it");
   return holds(s, a) ? ok : deny("guard holds no role");
 }
 
@@ -748,12 +733,6 @@ function refundClaim(s: SpaceState, claim: A, amount: number) {
 }
 /** The phase after an attempt ends without success (§6.4): `cancelled` if a cancel was requested, else `open` again (E3 decides at claim time). */
 const reopen = (ef: A): string => (ef.cancelRequested ? "cancelled" : "open");
-/** P-15, the one hold rule: an instruction to `x` (a steer into any of its sessions, a task naming it, a proposal naming it as executor) from anyone but `x` and its
- *  guard, while `x` is guarded or forced, holds `x` and is the newest outside instruction. */
-function instruct(s: SpaceState, ctx: PolicyCtx, x: string, author: string, seq: number) {
-  const g = guardStatus(s, ctx, x);
-  if (author !== x && author !== g.guard && (g.guarded || g.forced)) { (s.held as A)[x] = true; (s.lastOutside as A)[x] = seq; }
-}
 /** F3 (a): a consumed approval leaves the state once the claim that consumed it has settled. */
 function pruneSettled(ef: A) {
   ef.approvals = ef.approvals.filter((x: A) => !(x.consumedBy && ef.claims.find((c: A) => c.id === x.consumedBy)?.settled));
@@ -776,7 +755,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     s = {
       space: e.space, head: 0, home: spaceServer(e.space), policy: structuredClone(b.policy), roles: {}, roleHistory: {}, tasks: {}, effects: {},
       budgetLeft: b.policy.budget ? { unit: b.policy.budget.unit, amount: b.policy.budget.amount } : null,
-      entries: {}, sessions: {}, held: {}, guarded: {}, lastOutside: {},
+      entries: {}, sessions: {}, guarded: {},
     } as SpaceState;
     if (isProfileSpace(e.space)) {
       s.profile = { actorKind: b.profile.actorKind, operatorConfirmed: false, keys: { [b.profile.key.keyId]: { publicKey: b.profile.key.publicKey, status: "valid" } } };
@@ -828,8 +807,8 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         t.left = { unit: b.budget.unit, amount: b.budget.amount };
         if (parent && parent.left) parent.left.amount -= b.budget.amount; else s.budgetLeft!.amount -= b.budget.amount;
       }
+      t.guardedFor = guardedFor(s, ctx, parent ? parent.guardedFor : [], a);   // P-15: fixed now, never shrinks
       (s.tasks as A)[id] = t;
-      for (const x of b.to) instruct(s, ctx, x, a, seq);
       break;
     }
     case "task.update": {
@@ -850,9 +829,8 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (b.cost) ef.cost = { unit: b.cost.unit, amount: b.cost.amount };
       if (b.task !== undefined) ef.task = b.task;
       if (b.expiresAt !== undefined) ef.expiresAt = b.expiresAt;
+      ef.guardedFor = guardedFor(s, ctx, b.task !== undefined ? (s.tasks as A)[b.task].guardedFor : [], a, b.executor);   // P-15
       (s.effects as A)[id] = ef;
-      if ((s.held as A)[a] === true) (s.lastOutside as A)[a] = seq;   // M1: a held agent's own proposal waits for its guard too
-      instruct(s, ctx, b.executor, a, seq);
       break;
     }
     case "effect.approve": {
@@ -949,18 +927,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const sess: A = { actor: a, opened: time, steerMode: b.steerMode, steers: 0 };
       if (b.task !== undefined) sess.task = b.task;
       (s.sessions as A)[id] = sess;
-      if (b.steerMode === "guarded" && kindOf(ctx, a) !== "human" && (s.guarded as A)[a] !== true) {
-        (s.guarded as A)[a] = true;   // sticky: only its guard unguards it
-        const g = guardStatus(s, ctx, a).guard;
-        const pending: number[] = [];
-        for (const t of Object.values(s.tasks) as A[]) if (t.open && t.to.includes(a) && t.author !== a && t.author !== g) pending.push(t.seq);
-        for (const ef of Object.values(s.effects) as A[]) if (!isFinalPhase(ef.phase) && ef.executor === a && ef.proposer !== a && ef.proposer !== g) pending.push(ef.seq);
-        const fresh = pending.filter((q) => q > ((s.lastOutside as A)[a] ?? 0));   // M8: older work was covered by a release, or holds it still
-        if (fresh.length) {   // becoming guarded with outside work unfinished holds at once
-          (s.held as A)[a] = true;
-          (s.lastOutside as A)[a] = Math.max(...fresh);
-        }
-      }
+      if (b.steerMode === "guarded" && kindOf(ctx, a) !== "human") (s.guarded as A)[a] = true;   // sticky: only its guard unguards it
       break;
     }
     case "session.close": {
@@ -970,14 +937,9 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     case "session.input": {
       const sess = (s.sessions as A)[b.session];
       sess.steers += 1;
-      instruct(s, ctx, sess.actor, a, seq);
       break;
     }
-    case "agent.release": {
-      delete (s.held as A)[b.agent];
-      if (b.unguard === true) delete (s.guarded as A)[b.agent];
-      break;
-    }
+    case "agent.unguard": delete (s.guarded as A)[b.agent]; break;
     default: break;
   }
   return s;

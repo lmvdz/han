@@ -6,9 +6,9 @@ Signatures, content and the exact wire header are checked by Log/Identity (ref/w
 only `kind`, `author`, `keyId`, `body`, `refs`, `seen`. Test vectors may carry an explicit "id" (see ref/README.md).
 """
 from __future__ import annotations
-import copy
 import hashlib
 import json
+import pickle
 import re
 from datetime import datetime, timezone
 
@@ -31,6 +31,7 @@ MAX_OPEN_APPROVALS = 16       # unconsumed approvals per proposal (bounds receip
 MAX_OPEN_SESSIONS = 64        # open sessions per actor per space (P-15)
 MAX_ATTEMPTS = 64             # claims per effect (P-07 E5): the 65th is denied, propose again
 ROLE_INTERVALS = 64           # P-02: role intervals kept per actor (the most recent)
+MAX_GUARDED_FOR = 16 + 3      # P-15, derived and never checked: the authors of a task chain (maxDelegationDepth <= 16, so 17), a proposer, an executor
 
 # ───────────────────────── encoding ─────────────────────────
 def _jcs_str(s: str) -> str:
@@ -174,7 +175,7 @@ SCHEMA = {
     "session.open": {"task": (_id, False), "steerMode": (lambda v: v in STEER_MODES, True)},
     "session.close": {"session": (_id, True)},
     "session.input": {"session": (_id, True)},
-    "agent.release": {"agent": (_actor, True), "unguard": (lambda v: v is True, False)},
+    "agent.unguard": {"agent": (_actor, True)},
     "space.move": {"to": (lambda v: isinstance(v, str) and bool(SERVER.fullmatch(v)), True),
                    "accept": (lambda v: isinstance(v, dict) and set(v) == {"keyId", "sig"} and _keyid(v["keyId"]) and isinstance(v["sig"], str), True)},
 }
@@ -257,8 +258,8 @@ def approval_candidates(state, eff, time):
 
 def named_actors(state, entry) -> list[str]:
     """P-01, the actors an entry names, which `decide` needs pinned: the author; the target of member.set; the targets of an instruction
-    (the actor of the session a steer goes into, each assignee of a task, the executor of a proposal); the agent of a release; for an
-    approve, cancel or claim, the proposer and the executor of the proposal (their operators are the guards, P-15)."""
+    (the actor of the session a steer goes into, each assignee of a task, the executor of a proposal); the agent of an unguard; for an
+    approve, cancel or claim, the proposer, the executor and the `guardedFor` of the proposal (their operators are the guards, P-15)."""
     out = [entry["author"]]
     b = entry["body"]
     if entry["kind"] == "member.set":
@@ -270,18 +271,18 @@ def named_actors(state, entry) -> list[str]:
     if entry["kind"] == "session.input" and state:
         sess = state["sessions"].get(b["session"])
         if sess: out.append(sess["actor"])
-    if entry["kind"] == "agent.release":
+    if entry["kind"] == "agent.unguard":
         out.append(b["agent"])
     if entry["kind"] in ("effect.approve", "effect.cancel", "effect.claim") and state:
         eff = state["effects"].get(b["proposal"])
-        if eff: out.extend((eff["proposer"], eff["executor"]))
+        if eff: out.extend([eff["proposer"], eff["executor"]] + eff["guardedFor"])
     return list(dict.fromkeys(out))
 
 def relevant_actors(state, entry, ctx) -> list[str]:
     """P-01, the complete pin list given the profiles pinned so far (`ctx.profiles`): the named actors; for a claim, then the guards
-    (the operators in the profiles in `ctx` of the proposer and executor, P-15) and the E3 candidates in order up to and including
-    the first whose profile in `ctx` shows a valid key (every candidate before it, unknown or revoked, included). The sequencer
-    calls it again with what it fetched until it names nothing new: at most three calls (P-01)."""
+    (the operators, in the profiles in `ctx`, of the agents whose guard must approve it, P-15) and the E3 candidates in order up to
+    and including the first whose profile in `ctx` shows a valid key (every candidate before it, unknown or revoked, included). The
+    sequencer calls it again with what it fetched until it names nothing new: at most three calls (P-01)."""
     out = named_actors(state, entry)
     eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
     if eff:
@@ -352,8 +353,8 @@ def decide(state, entry, ctx) -> dict:
     if state["space"].startswith("profile:"): return _decide_profile(state, entry, ctx)
 
     role = role_of(state, author)
-    if author in state["held"] and not held_may(state, entry):
-        return deny("held: a held agent instructs no one and waits for its guard")     # P-15
+    if guard_status(state, ctx, author)["guarded"] and guarded_may_not(state, entry):
+        return deny("a guarded author may not approve, govern or steer others")     # P-15
     if is_extension(kind):
         need = state["policy"]["extensionsMinRole"]
         return ALLOW if role in READ_ROLES[:READ_ROLES.index(need) + 1] else deny(f"extensions need role {need} or higher")
@@ -363,7 +364,7 @@ def decide(state, entry, ctx) -> dict:
           "effect.outcome": _outcome, "effect.resolve": _resolve, "checkpoint": _checkpoint,
           "redact": _redact, "space.move": _move,
           "session.open": _session_open, "session.close": _session_close, "session.input": _session_input,
-          "agent.release": _agent_release}.get(kind)
+          "agent.unguard": _agent_unguard}.get(kind)
     if fn is None: return deny(f"{kind} not allowed here")
     return fn(state, entry, ctx, role)
 
@@ -454,9 +455,6 @@ def _task(state, entry, ctx, role):
         if unit is None: return deny("no space budget")
         if b["budget"]["unit"] != unit: return deny("budget unit must be the space's unit")
         if b["budget"]["amount"] > remaining(state, task_source(state, b.get("parent"))): return deny("budget exceeds what is left")
-    for a in b["to"]:
-        d = instruction_denial(state, ctx, a, author)
-        if d: return d
     return ALLOW
 
 def _task_update(state, entry, ctx, role):
@@ -494,7 +492,7 @@ def _propose(state, entry, ctx, role):
     if unit and ctx["profiles"][author]["actorKind"] != "human":
         mine = _budgeted_tasks_of(state, author)
         if b.get("task") not in mine: return deny("agents spend only from a budgeted task assigned to them")
-    return instruction_denial(state, ctx, b["executor"], author) or ALLOW
+    return ALLOW
 
 def _budgeted_tasks_of(state, actor):
     return [tid for tid, t in state["tasks"].items() if t["open"] and t.get("left") and actor in t["to"]]
@@ -636,53 +634,41 @@ def _redact(state, entry, ctx, role):
 def is_human(ctx, actor):
     return ctx["profiles"].get(actor, {}).get("actorKind") == "human"
 
-HELD_KINDS = {"message", "effect.propose", "effect.claim", "effect.outcome", "effect.resolve", "effect.cancel",
-              "task.update", "task.cancel", "session.open", "session.close"}
-
-def held_may(state, entry):
-    """P-15: a held agent may talk, report, propose work for itself (it waits for its guard), and work its own sessions; it
-    may not instruct anyone else (session.input into others' sessions, a task, a proposal naming another executor), approve, or govern."""
-    if entry["kind"] == "effect.propose": return entry["body"]["executor"] == entry["author"]
-    if entry["kind"] == "session.input":
-        sess = state["sessions"].get(entry["body"]["session"])
-        return not sess or sess["actor"] == entry["author"]        # a session that isn't there is `invalid`, whoever steers it
-    return entry["kind"] in HELD_KINDS
+def guarded_may_not(state, entry) -> bool:
+    """P-15: a guarded author may not approve, govern or steer others: `effect.approve`, `member.set`, and a `session.input` into a
+    session that isn't its own. (`policy.set`, `agent.unguard` and redacting another's entry need an owner or a guard, who are human,
+    so a guarded author never has them.) A session that isn't there is left to the kind's own checks (`invalid`)."""
+    k, b = entry["kind"], entry["body"]
+    if k in ("effect.approve", "member.set"): return True
+    if k == "session.input": return b["session"] in state["sessions"] and state["sessions"][b["session"]]["actor"] != entry["author"]
+    return False
 
 def guard_status(state, ctx, x) -> dict:
-    """P-15, the one guard function: `{guard?, held, guarded, forced}` for `x` at this entry. `state` needs only `policy`, `held` and
-    `guarded` (han.ts GuardInput), so a `state {agent}` reply serves as is (R-24). `guard` is the `operator` in the profile
-    pinned for this entry, if it is confirmed and `x` is not human. `guarded`: `x` chose it (sticky). `forced`: owners' `forceGuarded`
-    is on and `x` is not human. `held`: `x` waits for its guard."""
+    """P-15, the one guard function: `{guard?, guarded, forced}` for `x` at this entry. `state` needs only `policy` and `guarded`
+    (han.ts GuardInput), so a `state {agent}` reply serves as is (R-24). `guard` is the `operator` in the profile pinned for this
+    entry, if it is confirmed and `x` is not human. `forced`: owners' `forceGuarded` is on and `x` is not human. `guarded`: `x`
+    chose it (sticky) or is forced."""
     p = ctx["profiles"].get(x)
     agent = bool(p) and p["actorKind"] != "human"
-    out = {"held": x in state["held"], "guarded": x in state["guarded"],
-           "forced": agent and bool(state["policy"]["sessions"].get("forceGuarded"))}
+    forced = agent and bool(state["policy"]["sessions"].get("forceGuarded"))
+    out = {"guarded": forced or x in state["guarded"], "forced": forced}
     if agent and p.get("operatorConfirmed") and p.get("operator"): out["guard"] = p["operator"]
     return out
 
-def instruction_denial(state, ctx, x, author):
-    """P-15: an instruction to a guarded or forced agent from anyone but itself needs its guard here: a confirmed operator holding a role."""
-    g = guard_status(state, ctx, x)
-    if author == x or not (g["guarded"] or g["forced"]): return None
-    if role_of(state, g.get("guard")) not in READ_ROLES: return deny("a guarded agent needs its operator here")
-    return None
-
-def instruct(s, ctx, x, author, seq):
-    """P-15, the one hold rule: an instruction (a steer into any of `x`'s sessions, a task naming it, a proposal naming it as executor)
-    from anyone but `x` and its guard, while `x` is guarded or forced, holds `x` and is the newest outside instruction."""
-    g = guard_status(s, ctx, x)
-    if author not in (x, g.get("guard")) and (g["guarded"] or g["forced"]):
-        s["held"][x] = True
-        s["lastOutside"][x] = seq
+def guarded_for(state, ctx, recorded, *agents) -> list:
+    """P-15: `recorded` plus each of `agents` that is guarded at this entry, each once. Fold records it on a new task (the parent's
+    list, the author) and effect (the task's list, the proposer, the executor); a claim adds its proposer and executor if guarded now."""
+    out = list(recorded)
+    for a in agents:
+        if a not in out and guard_status(state, ctx, a)["guarded"]: out.append(a)
+    return out
 
 def guards_of(state, ctx, eff):
-    """P-15: whose own approval a claim of `eff` needs besides any rule: the guard (pinned operator) of its proposer and of its executor,
-    each if held, guarded or forced. `None` stands for such an agent whose operator isn't confirmed: nobody can approve for it."""
-    out = []
-    for who in dict.fromkeys((eff["proposer"], eff["executor"])):
-        g = guard_status(state, ctx, who)
-        if g["held"] or g["guarded"] or g["forced"]: out.append(g.get("guard"))
-    return list(dict.fromkeys(out))
+    """P-15: whose own approval a claim of `eff` needs besides any rule: the guard (pinned operator) of each agent in its `guardedFor`,
+    and of its proposer and executor if guarded now, each guard once. `None` stands for such an agent with no confirmed operator in
+    the pinned profile (or none pinned yet): nobody can approve for it."""
+    need = guarded_for(state, ctx, eff["guardedFor"], eff["proposer"], eff["executor"])
+    return list(dict.fromkeys(guard_status(state, ctx, a).get("guard") for a in need))
 
 def guard_approval(state, eff, g, ctx):
     """E3 for a guard: an unconsumed, unexpired approval by `g` itself, while `g` holds a role, signed with a
@@ -719,7 +705,7 @@ def _session_open(state, entry, ctx, role):
     if role not in READ_ROLES: return deny("author holds no role")
     if not _accountable(state, ctx, author): return deny("agent's operator confirmation withdrawn")
     if b["steerMode"] not in state["policy"]["sessions"]["modes"]: return deny("steer mode not allowed in this space")
-    if b["steerMode"] != "auto" and not is_human(ctx, author):
+    if b["steerMode"] == "guarded" and not is_human(ctx, author):
         if role_of(state, guard_status(state, ctx, author).get("guard")) not in READ_ROLES:
             return deny("a guarded agent session needs a confirmed operator who holds a role here")
     t = b.get("task")
@@ -744,15 +730,12 @@ def _session_input(state, entry, ctx, role):
     if not live(state, sess): return deny("session not live")
     if not _accountable(state, ctx, entry["author"]): return deny("agent's operator confirmation withdrawn")
     if not session_access(state, entry["author"], entry["body"]["session"])["steer"]: return deny("no steer right on this session")
-    return instruction_denial(state, ctx, sess["actor"], entry["author"]) or ALLOW
+    return ALLOW
 
-def _agent_release(state, entry, ctx, role):
-    b, author = entry["body"], entry["author"]
-    g = guard_status(state, ctx, b["agent"])
-    if g.get("guard") != author or not (g["held"] or (b.get("unguard") and g["guarded"])):
-        return deny("only the guard of a held or guarded agent releases it")
-    if state["lastOutside"].get(b["agent"], 0) > entry["seen"]:
-        return deny("stale release: an outside instruction arrived after what the guard had seen")
+def _agent_unguard(state, entry, ctx, role):
+    x = entry["body"]["agent"]
+    if x not in state["guarded"] or guard_status(state, ctx, x).get("guard") != entry["author"]:
+        return deny("only the guard of an agent that chose guarding unguards it")
     return ALLOW if role in READ_ROLES else deny("guard holds no role")
 
 def _move(state, entry, ctx, role):
@@ -767,7 +750,7 @@ def fold(state, record, ctx) -> dict:
     eid = e.get("id") or entry_id(e)
     if state is None:
         return _fold_create(e, rc, ctx, eid)
-    s = copy.deepcopy(state)
+    s = pickle.loads(pickle.dumps(state, pickle.HIGHEST_PROTOCOL))           # a deep copy: fold never changes its input
     s["head"] = rc["seq"]
     s["entries"][eid] = {"author": author, "kind": kind}
     seq = rc["seq"]
@@ -798,7 +781,7 @@ def fold(state, record, ctx) -> dict:
         t = {"author": author, "to": b["to"], "open": True, "state": "pending", "cancelRequested": False, "depth": parent["depth"] + 1 if parent else 0,
              "seq": rc["seq"]}
         if parent: t["parent"] = b["parent"]
-        for x in b["to"]: instruct(s, ctx, x, author, seq)
+        t["guardedFor"] = guarded_for(s, ctx, parent["guardedFor"] if parent else [], author)       # P-15: fixed now, never shrinks
         if "budget" in b:
             _debit(s, task_source(s, b.get("parent")), b["budget"]["amount"])
             t["budget"] = dict(b["budget"]); t["left"] = dict(b["budget"])
@@ -821,8 +804,7 @@ def fold(state, record, ctx) -> dict:
         if "cost" in b: eff["cost"] = dict(b["cost"])
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
-        if author in s["held"]: s["lastOutside"][author] = seq                  # M1: a held agent's own proposal waits for its guard too
-        instruct(s, ctx, b["executor"], author, seq)
+        eff["guardedFor"] = guarded_for(s, ctx, s["tasks"][b["task"]]["guardedFor"] if "task" in b else [], author, b["executor"])   # P-15
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
@@ -896,26 +878,16 @@ def fold(state, record, ctx) -> dict:
         s["home"] = b["to"]
     elif kind == "session.open":
         s["sessions"][eid] = {"actor": author, "opened": rc["time"], "steers": 0, "steerMode": b["steerMode"]}
-        if b["steerMode"] == "guarded" and not is_human(ctx, author) and author not in s["guarded"]:
+        if b["steerMode"] == "guarded" and not is_human(ctx, author):
             s["guarded"][author] = True                                          # sticky: only its guard unguards it
-            g = guard_status(s, ctx, author).get("guard")                         # the same guard every P-15 rule uses
-            pending = [t["seq"] for t in s["tasks"].values() if t["open"] and author in t["to"] and t["author"] not in (author, g)]
-            pending += [x["seq"] for x in s["effects"].values() if x["phase"] not in FINAL and x["executor"] == author and x["proposer"] not in (author, g)]
-            pending = [q for q in pending if q > s["lastOutside"].get(author, 0)]   # M8: older work was covered by a release, or holds it still
-            if pending:                                                           # becoming guarded with outside work unfinished holds at once
-                s["held"][author] = True
-                s["lastOutside"][author] = max(pending)
         if "task" in b: s["sessions"][eid]["task"] = b["task"]
     elif kind == "session.close":
         del s["sessions"][b["session"]]                                          # F3(b): closed sessions leave the state
     elif kind == "session.input":
         sess = s["sessions"][b["session"]]
         sess["steers"] += 1
-        instruct(s, ctx, sess["actor"], author, seq)
-    elif kind == "agent.release":
-        x = b["agent"]
-        s["held"].pop(x, None)
-        if b.get("unguard"): s["guarded"].pop(x, None)                           # only the guard loosens its agent
+    elif kind == "agent.unguard":
+        s["guarded"].pop(b["agent"], None)                                       # only the guard loosens its agent
     if kind.startswith("effect."):                                               # K4: every entry touching an effect drops its expired approvals
         live_ = open_approvals(eff, ctx["time"])
         eff["approvals"] = [a for a in eff["approvals"] if a.get("consumedBy") or a in live_]
@@ -951,7 +923,7 @@ def _credit(s, task_id, amount):
 def _fold_create(e, rc, ctx, eid):
     b, author, space = e["body"], e["author"], e["space"]
     base = {"space": space, "head": rc["seq"], "home": server_of(space), "policy": b["policy"], "roles": {}, "roleHistory": {},
-            "tasks": {}, "effects": {}, "sessions": {}, "held": {}, "guarded": {}, "lastOutside": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
+            "tasks": {}, "effects": {}, "sessions": {}, "guarded": {}, "budgetLeft": dict(b["policy"]["budget"]) if b["policy"]["budget"] else None,
             "entries": {eid: {"author": author, "kind": "space.create"}}}
     if space.startswith("profile:"):
         actor = space[len("profile:"):]

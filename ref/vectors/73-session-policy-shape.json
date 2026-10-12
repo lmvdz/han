@@ -324,7 +324,11 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:09Z",
-   "expect": "allow"
+   "expect": "allow",
+   "check": {
+    "guarded": {}
+   },
+   "note": "a human's guarded session guards no one: humans are never guarded"
   }
  ],
  "ids": {

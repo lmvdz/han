@@ -48,7 +48,7 @@ class Agent:
 
     async def turn(self, input: TurnInput, mode: Mode) -> list[Action]:
         """Run one turn. `strict` is the harness's stricter mode (R-24): the host sets it for outside input while the agent is guarded
-        and for every turn while it is held."""
+        and for every later turn of a session such input has entered."""
         raise NotImplementedError
 
 Rule = tuple[str, "callable"]

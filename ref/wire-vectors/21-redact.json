@@ -1066,7 +1066,8 @@
         "state": "accepted",
         "cancelRequested": false,
         "depth": 0,
-        "seq": 16
+        "seq": 16,
+        "guardedFor": []
        }
       },
       "effects": {
@@ -1087,13 +1088,12 @@
         ],
         "claims": [],
         "seq": 9,
-        "phase": "open"
+        "phase": "open",
+        "guardedFor": []
        }
       },
       "sessions": {},
-      "held": {},
-      "guarded": {},
-      "lastOutside": {}
+      "guarded": {}
      }
     }
    }

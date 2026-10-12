@@ -626,10 +626,10 @@ export class Sequencer {
       const full = view(head);
       const cut = (m: A) => (a.agent in m ? { [a.agent]: m[a.agent] } : {});
       return { state: { space: full.space, head: full.head, home: full.home, policy: full.policy,
-        held: cut(full.held), guarded: cut(full.guarded), lastOutside: cut(full.lastOutside) } };
+        guarded: cut(full.guarded) } };
     }
     if ("cursor" in a) {
-      if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){9}$/.test(a.cursor)) throw err("invalid", "malformed cursor");
+      if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){7}$/.test(a.cursor)) throw err("invalid", "malformed cursor");
       const nums = a.cursor.split(".").map(Number);
       if (!nums.every(Number.isSafeInteger) || nums[0] < 1 || nums[0] > st.head) throw err("invalid", "malformed cursor");
       if (!canRead(st, who, nums[0])) throw err("denied", "state needs read rights at the cursor's head");
@@ -998,7 +998,7 @@ function withSettled(view: A): A {
   return v;
 }
 /** han.ts PagedMap, in the order of the cursor and of the fill */
-const PAGED = ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "lastOutside", "profile.keys"];
+const PAGED = ["roles", "roleHistory", "tasks", "effects", "sessions", "guarded", "profile.keys"];
 const pagedItems = (st: A, m: string): [string, unknown][] => Object.entries(m === "profile.keys" ? (st.profile?.keys ?? {}) : (st[m] ?? {}));
 const sha256Bytes = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 void parseTimeMs; void isServerName; void JsonError;

@@ -1,4 +1,4 @@
-"""Executor crash safety (X-02…X-07, X-10) and P-15: crashes at journal points, real process kills, the instance lock, held agents."""
+"""Executor crash safety (X-02…X-07, X-10) and P-15: crashes at journal points, real process kills, the instance lock, guarded agents."""
 import asyncio, os, sys
 import pytest
 from conftest import S, member
@@ -107,7 +107,7 @@ async def test_key_without_its_journal_refuses(env, execs):
     os.remove(key_path(env, "exec") + ".used")                                         # (a key never used) starts normally
     await make_exec(env, execs).start()
 
-async def test_held_agent_effect_waits_for_its_guard(env, execs):
+async def test_guarded_executor_effect_waits_for_its_guard(env, execs):
     """P-15, E3: an effect naming a guarded agent as executor stays open and is not claimed; once the guard (its
     operator) approves, the agent's executor claims and runs it. Proposed by another member, no approval rule in the policy."""
     alice, bob = env.actor("alice"), env.actor("bob")
@@ -121,7 +121,8 @@ async def test_held_agent_effect_waits_for_its_guard(env, execs):
     await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))   # sticky guarded
     plan = file_plan("held.txt", "x")
     pid, _ = await propose(b, plan, bot)
-    assert (await state(a))["effects"][pid]["phase"] == "open" and (await state(a))["held"] == {bot: True}
+    eff = (await state(a))["effects"][pid]
+    assert eff["phase"] == "open" and eff["guardedFor"] == [bot]              # recorded when proposed: the executor was guarded
     ex = make_exec(env, execs, name="bot"); await ex.start()
     await asyncio.sleep(0.5)
     assert not [k for k, _ in await kinds(a) if k == "effect.claim"] and not ex.launched

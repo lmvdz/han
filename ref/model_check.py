@@ -26,7 +26,7 @@ Usage:  python model_check.py [--scenario timing|single|all]       check the spe
         python model_check.py --all-mutations                      every mutation; exit 0 only if each is caught
 """
 from __future__ import annotations
-import argparse, hashlib, json, os, re, subprocess, sys
+import argparse, functools, hashlib, json, os, re, subprocess, sys
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
@@ -76,7 +76,12 @@ MUTATIONS = {
 MUT = None
 SCENARIO = "single"
 
+@functools.lru_cache(maxsize=None)
 def iso(t): return (BASE + timedelta(seconds=t // DS)).strftime("%Y-%m-%dT%H:%M:%SZ")     # receipts round down
+@functools.lru_cache(maxsize=None)
+def field(j, k):
+    """One string field of a logged entry's JSON (an id or a kind), parsed once: speed only, the strings are immutable."""
+    return json.loads(j)[k]
 def home_now(st):
     _, (n, d), _ = st.clk
     return st.time * n // d                       # home clock (ds) from true time
@@ -165,7 +170,7 @@ def ctx_for(st):
 def append(st, e):
     """The home appends with R-01 dedupe → (state, allow|dup|denied|invalid)."""
     logs = dict(st.logs); sp = e["space"]; log = logs.get(sp, ())
-    if any(json.loads(x[0])["id"] == e["id"] for x in log): return st, "dup"
+    if any(field(x[0], "id") == e["id"] for x in log): return st, "dup"
     ctx = ctx_for(st)
     mk = (sp, log, e["id"], json.dumps(e["body"], sort_keys=True), iso(home_now(st)), st.keyrev)
     d = _decide_cache.get(mk)
@@ -176,7 +181,7 @@ def append(st, e):
 
 def rec_index(st, space, eid):
     for i, x in enumerate(dict(st.logs).get(space, ())):
-        if json.loads(x[0])["id"] == eid: return i
+        if field(x[0], "id") == eid: return i
     return -1
 
 def claim_id(space, a):
@@ -184,7 +189,7 @@ def claim_id(space, a):
 
 def claim_receipt_time(st, space, a):
     for x in dict(st.logs).get(space, ()):
-        if json.loads(x[0])["id"] == claim_id(space, a): return secs(json.loads(x[1])["time"])
+        if field(x[0], "id") == claim_id(space, a): return secs(json.loads(x[1])["time"])
     return None
 
 def claim_entry(st, sp, a):
@@ -358,7 +363,7 @@ def check(st):
                 a = CLAIM_ATTEMPT[e["body"]["claim"]]
                 if not w.get((sp, a)): return f"HonestStarted: {sp}#{a} reported started but never launched"
     for sp, log in logs.items():                                  # AttemptLimit (P-07 E5): no effect is ever claimed more than MAX_ATTEMPTS times
-        if sum(1 for x in log if json.loads(x[0])["kind"] == "effect.claim") > (LIMIT if SCENARIO == "limit" else 64):
+        if sum(1 for x in log if field(x[0], "kind") == "effect.claim") > (LIMIT if SCENARIO == "limit" else 64):
             return f"AttemptLimit: {sp} holds more than {LIMIT} claims of one effect"
     if sum(w.values()) > 1 + st.false_resolves:
         return f"UnknownNeverSilentlyRetried: {sum(w.values())} launches, {st.false_resolves} false resolve(failed)"
@@ -374,7 +379,7 @@ def explore():
     while q:
         s = q.popleft()
         launched = launched or any(n for _, n in s.world)
-        reached = reached or any(sum(1 for x in log if json.loads(x[0])["kind"] == "effect.claim") >= LIMIT for _, log in s.logs)
+        reached = reached or any(sum(1 for x in log if field(x[0], "kind") == "effect.claim") >= LIMIT for _, log in s.logs)
         err = check(s)
         if err:
             trace, k = [], s.key()

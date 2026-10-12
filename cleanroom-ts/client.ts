@@ -112,7 +112,7 @@ export class HanClient {
   }
   /** `state`: one page (`{state, next?}`); `sel` is one of `{at}`, `{cursor}`, `{effect}`, `{agent, at?}`. */
   state(space: string, sel: A = {}): Promise<A> { return this.call("state", { space, ...sel }); }
-  /** `state {agent}` (K7, M5): `held`, `guarded` and `lastOutside` cut to `agent`. It is a GuardInput: pass it to `guardStatus` as is, with the profiles pinned. */
+  /** `state {agent}` (K7, M5): `guarded` cut to `agent` (`{}` when it is not in it). It is a GuardInput: pass it to `guardStatus` as is, with the profiles pinned. */
   async agentView(space: string, agent: string, at?: number): Promise<AgentStateView> {
     return (await this.state(space, at === undefined ? { agent } : { agent, at })).state as AgentStateView;
   }
@@ -123,7 +123,7 @@ export class HanClient {
       r = await this.state(space, { cursor: r.next });
       for (const k of Object.keys(r.state)) {
         if (k === "profile" && out.profile) Object.assign(out.profile.keys, r.state.profile.keys);
-        else if (r.state[k] && typeof r.state[k] === "object" && !Array.isArray(r.state[k]) && ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "lastOutside"].includes(k)) Object.assign(out[k], r.state[k]);
+        else if (r.state[k] && typeof r.state[k] === "object" && !Array.isArray(r.state[k]) && ["roles", "roleHistory", "tasks", "effects", "sessions", "guarded"].includes(k)) Object.assign(out[k], r.state[k]);
       }
     }
     return out;

@@ -96,9 +96,7 @@
         "tasks": {},
         "effects": {},
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "lastOutside": {}
+        "guarded": {}
        }
       }
      }
@@ -193,9 +191,7 @@
         "tasks": {},
         "effects": {},
         "sessions": {},
-        "held": {},
-        "guarded": {},
-        "lastOutside": {}
+        "guarded": {}
        }
       }
      }

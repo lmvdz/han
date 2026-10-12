@@ -8,7 +8,7 @@
   task SP ASK --to ACTOR… [--deadline T]    propose SP --executor A --plan FILE [--repeatable] [--cost UNIT=N]
   approve SP PROPOSAL [--note T]            cancel SP ID [--task]
   session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session close SP SESSION
-  agent release SP AGENT [--unguard]        (the guard's release; `seen` is the head this client has read, as `status` shows it)
+  agent unguard SP AGENT                    (the guard ends the agent's choice of guarding; it frees nothing already recorded)
   watch SP SESSION [--count N]              read SP [--after N] [--follow] [--json]        status SP
 Ids may be given as a unique prefix (8+ hex digits)."""
 from __future__ import annotations
@@ -115,17 +115,16 @@ async def cmd_session(c, a):
         body = {"steerMode": a.mode} | ({"task": await resolve(c, a.space, a.task)} if a.task else {})
         await put(c, "session.open", a.space, body, {"title": a.title} if a.title else None)
         return
-    recs = await records(c, a.space)                                  # also sets `seen` to what we have read (R-17, P-15 release)
+    recs = await records(c, a.space)                                  # also sets `seen` to what we have read (R-17)
     sid = await resolve(c, a.space, a.session, recs)
     if a.action == "steer": await put(c, "session.input", a.space, {"session": sid}, {"text": a.text})
     else: await put(c, "session.close", a.space, {"session": sid})
 
 async def cmd_agent(c, a):
-    """F2: `agent.release {agent, unguard?}`, authored by the guard; `seen` is the head it has read (R-17), or --seen."""
+    """P-15: `agent.unguard {agent}`, authored by the agent's guard; it removes the agent from `guarded` and frees no recorded work."""
     if not P._actor(a.agent): return die(f"not an actor id: {a.agent}")
-    await records(c, a.space)                                         # reading sets `seen` to the head (R-17, P-15)
-    body = {"agent": a.agent} | ({"unguard": True} if a.unguard else {})       # E1: only the guard's `unguard` ends a guarded choice
-    e, ct = c.make_entry("agent.release", a.space, body, seen=a.seen)           # no content (§5)
+    await records(c, a.space)                                         # reading sets `seen` to the head (R-17)
+    e, ct = c.make_entry("agent.unguard", a.space, {"agent": a.agent})          # no content (§5)
     r = await c.append(e, ct); out(f"seq {r['seq']} id {r['id']}")
 
 async def cmd_watch(c, a):
@@ -158,18 +157,17 @@ async def profiles_of(c, actors) -> dict:
     return out
 
 async def agent_lines(c, st):
-    """F1, H8, K1: per agent, `P.guard_status` (the one guard function) on the current state: `guarded` or `forced` with its guard (the confirmed operator in
-    the profile read here, which is the current one), and whether it is held. A guarded or forced agent whose operator is not confirmed has no guard:
-    instructions to it are denied."""
+    """F1, H8, K1: per agent, `P.guard_status` (the one guard function) on the current state: `guarded` (it chose, or is `forced`) with its guard (the confirmed operator in
+    the profile read here, which is the current one). A guarded agent whose operator is not confirmed has no guard: nothing recorded for it can be claimed."""
     forcing = bool(st["policy"]["sessions"].get("forceGuarded"))
-    named = set(st["guarded"]) | set(st["held"])
+    named = set(st["guarded"])
     if forcing: named |= {s["actor"] for s in st["sessions"].values()} | {x for t in st["tasks"].values() for x in t["to"]} | {e["executor"] for e in st["effects"].values()}
     profs, lines = await profiles_of(c, named), []
     for x in sorted(named):
         gs = P.guard_status(st, {"time": "", "profiles": profs}, x)
-        if not (gs["guarded"] or gs["forced"]): continue
+        if not gs["guarded"]: continue
         how = "forced" if gs["forced"] else "guarded"
-        lines.append(f"  {x}  {how} ({'guard ' + gs['guard'] if gs.get('guard') else 'no confirmed operator: instructions are denied'})" + ("  held" if gs["held"] else ""))
+        lines.append(f"  {x}  {how} ({'guard ' + gs['guard'] if gs.get('guard') else 'no confirmed operator: nothing recorded can be claimed'})")
     if lines: out("agents:"); [out(l) for l in lines]
 
 async def cmd_status(c, a):
@@ -179,19 +177,18 @@ async def cmd_status(c, a):
     out(f"{a.space}  head {st['head']}  home {st['home']}  visibility {pol['visibility']}  join {pol['join']}")
     out("members: " + (", ".join(f"{x} {r}" for x, r in sorted(st["roles"].items()) if r != "none") or "none"))
     out("tasks:")
-    for tid, t in st["tasks"].items(): out(f"  {tid[:8]} {'open' if t['open'] else 'closed'}  to {', '.join(t['to'])}")
+    for tid, t in st["tasks"].items(): out(f"  {tid[:8]} {'open' if t['open'] else 'closed'}  to {', '.join(t['to'])}" + (f"  guardedFor {', '.join(t['guardedFor'])}" if t["guardedFor"] else ""))
     out("effects:")
     live_effs = [e for e in st["effects"].values() if e["phase"] not in P.FINAL]
     profs = await profiles_of(c, {x for e in live_effs for x in (e["proposer"], e["executor"])})
     for eid, e in st["effects"].items():
         g = [x or "(no confirmed operator)" for x in P.guards_of(st, {"time": "", "profiles": profs}, e)] if e in live_effs else []
         out(f"  {eid[:8]} {e['phase']}  {e['action']}  proposer {e['proposer']}  executor {e['executor']}  approvals {sum(1 for x in e['approvals'] if not x.get('dropped'))}"
-            + (f"  guards {', '.join(g)}" if g else "") + ("  cancel-requested" if e["cancelRequested"] else ""))
+            + (f"  guardedFor {', '.join(e['guardedFor'])}" if e["guardedFor"] else "") + (f"  guards {', '.join(g)}" if g else "") + ("  cancel-requested" if e["cancelRequested"] else ""))
     out("sessions:")
     for sid, s in st["sessions"].items():
         out(f"  {sid[:8]} {s['actor']}  {'open' if P.live(st, s) else 'not live'}  {s['steerMode']}")
     await agent_lines(c, st)
-    out("held agents: " + (", ".join(sorted(st["held"])) or "none"))
     out("guarded agents: " + (", ".join(sorted(st["guarded"])) or "none"))
 
 # ── parsing ──
@@ -224,8 +221,7 @@ def parser() -> argparse.ArgumentParser:
     cmd("steer", cmd_session, "space", "session", "text", parent=ss)
     cmd("close", cmd_session, "space", "session", parent=ss)
     ag = sub.add_parser("agent").add_subparsers(dest="action", required=True)
-    cmd("release", cmd_agent, "space", "agent", ("--seen", {"type": int, "help": "what the guard has seen (default: the head)"}),
-        ("--unguard", {"action": "store_true", "help": "also end the agent's guarded state (the guard only; closing sessions never does)"}), parent=ag)
+    cmd("unguard", cmd_agent, "space", "agent", parent=ag)
     cmd("watch", cmd_watch, "space", "session", ("--count", {"type": int, "default": 0}), ("--timeout", {"type": float, "default": 0}), ("--json", {"action": "store_true"}))
     cmd("read", cmd_read, "space", ("--after", {"type": int, "default": 0}), ("--follow", {"action": "store_true"}), ("--json", {"action": "store_true"}))
     cmd("status", cmd_status, "space")

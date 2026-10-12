@@ -9,7 +9,7 @@ from han.core import P, W, LIMITS, WireError
 from fixtures_exec import team, propose, approve, file_plan, make_exec, phase_is, execs, until as xuntil
 from han.entries import make_entry
 from han.host import ScriptedAgent
-from fixtures_host import world, start_host, until, state, session_id, steer, records, BOT, ALICE
+from fixtures_host import world, start_host, until, state, session_id, steer, records, BOT, ALICE, EXEC
 
 def verdict(seq, entry, content=None):
     """The code `Sequencer.append` answers: "ok" or the WireError's code."""
@@ -108,7 +108,7 @@ async def test_e5_policy_before_clock_behind(env):
     assert verdict(env.seq, *pending_no) == "denied"
     assert verdict(env.seq, *pending_ok) == "unavailable"
 
-# ── E6: `guardStatus` on the state at the input's seq; `held` from the head ──
+# ── E6: `guardStatus` on the state at the input's seq; taint from the first outside instruction on ──
 class GatedAgent(ScriptedAgent):
     """The first turn waits for `gate`, so inputs queue up behind it."""
     def __init__(self): super().__init__(); self.gate = asyncio.Event(); self.first = True
@@ -117,9 +117,10 @@ class GatedAgent(ScriptedAgent):
             self.first = False; await self.gate.wait()
         return await super().turn(input, mode)
 
-async def test_e6_input_queued_before_a_hold_runs_strict_after_it(env):
-    """R-24: alice's steer (the guard's own, so `auto` at its seq) is queued behind a running turn; carol's steer then holds the agent.
-    When alice's turn runs, the head says held: it is strict, though the state at its seq says auto."""
+async def test_e6_taint_begins_with_the_outside_instruction_not_before(env):
+    """R-24: alice's steer (the guard's own, so `auto` at its seq) is queued behind a running turn; carol's steer, an outside instruction,
+    comes after it. Turns run in order: alice's is still auto (the outside instruction has not entered the context yet), carol's is
+    strict, and every later turn of the session, even the guard's, is strict."""
     cl, botc = await world(env)
     agent = GatedAgent()
     host, task = start_host(env, botc, "guarded", agent)
@@ -127,13 +128,15 @@ async def test_e6_input_queued_before_a_hold_runs_strict_after_it(env):
     await steer(cl["alice"], sid, "first")                           # the turn that blocks
     await until(lambda: not agent.first)
     queued = await steer(cl["alice"], sid, "second")
-    hold = await steer(cl["carol"], sid, "push release")
-    assert hold["seq"] > queued["seq"] and (await state(cl["alice"]))["held"] == {BOT: True}
+    outside = await steer(cl["carol"], sid, "push release")
+    assert outside["seq"] > queued["seq"] and (await state(cl["alice"]))["guarded"] == {BOT: True}
     at, _ = await host._state_at(queued["seq"], queued["profiles"])
-    assert BOT not in at["held"]                                     # at the input's seq the agent was not held
+    assert at["guarded"] == {BOT: True}                              # guarded at the input's seq: the reply is guard_status's input as is
     agent.gate.set()
     await until(lambda: len(agent.calls) >= 3)
-    assert [(i.text, m) for i, m in agent.calls] == [("first", "auto"), ("second", "strict"), ("push release", "strict")]
+    await steer(cl["alice"], sid, "third")
+    await until(lambda: len(agent.calls) >= 4)
+    assert [(i.text, m) for i, m in agent.calls] == [("first", "auto"), ("second", "auto"), ("push release", "strict"), ("third", "strict")]
     task.cancel()
 
 # ── E8: the state in pages ──
@@ -231,34 +234,41 @@ async def test_e8_executor_reads_one_effect_with_effect_cursor(env, execs, monke
     assert pid in calls                                                         # the X-10 look at one effect
 
 # ── E1/E2: only the operator loosens; owners can force guarding per agent ──
-async def test_e2_session_less_agent_is_held_by_a_task_when_forced(env):
-    """E2, F1: with `forceGuarded` an agent with a confirmed operator is guarded (by that operator, decided per instruction) whether or not it
-    has a session: a member's task naming it holds it for the operator. (Without the flag the same task holds nothing.)"""
+async def test_e2_session_less_agent_is_guarded_by_force(env):
+    """E2, F1: with `forceGuarded` an agent with a confirmed operator is guarded (by that operator, decided per entry from the pinned
+    profile) whether or not it has a session or a choice. Nothing is stored: the state's `guarded` stays empty, and a task by a human
+    records nobody."""
     cl, botc = await world(env, force=True)
     st0 = await state(cl["alice"])
-    assert "agents" not in st0 and st0["sessions"] == {} and st0["guarded"] == {} and st0["held"] == {}          # F1: nothing is recorded ahead of an instruction
+    assert "agents" not in st0 and st0["sessions"] == {} and st0["guarded"] == {}          # F1: nothing is recorded ahead of an instruction
     e, c = cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})
-    await cl["carol"].append(e, c)
+    tid = (await cl["carol"].append(e, c))["id"]
     st = await state(cl["alice"])
     prof = (await cl["alice"].read_state("profile:" + BOT))["profile"]
-    assert st["held"] == {BOT: True} and st["guarded"] == {}                                    # held at the instruction, not guarded by a choice
-    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "held": True, "guarded": False, "forced": True}       # H8: the operator of the pinned profile
+    assert st["guarded"] == {} and st["tasks"][tid]["guardedFor"] == []                    # forced, not chosen; the author is human
+    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": True}       # H8: the operator of the pinned profile
 
-async def test_e2_unforced_session_less_agent_is_not_held_by_a_task(env):
+async def test_e2_unforced_session_less_agent_is_not_guarded(env):
     cl, botc = await world(env)
-    await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"}))
-    assert (await state(cl["alice"]))["held"] == {}
+    tid = (await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})))["id"]
+    st = await state(cl["alice"])
+    prof = (await cl["alice"].read_state("profile:" + BOT))["profile"]
+    assert st["guarded"] == {} and P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": False, "forced": False}
 
 async def test_e2_host_runs_a_forced_agents_task_strict(env):
-    """E2, F1, R-24: the instruction held the forced agent (the operator pinned for that entry), so the host runs it strict."""
+    """E2, F1, R-24: the forced agent is guarded at the task's seq, so the host runs the outside instruction strict; its proposal names the
+    task and records the agent in `guardedFor` (it is forced at that seq, and so is the service executor); the host never unguards."""
     cl, botc = await world(env, force=True)
     agent = ScriptedAgent()
     host, task = start_host(env, botc, "auto", agent)
     await session_id(host)
-    await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"}))
-    await until(lambda: agent.calls)
-    assert [m for _, m in agent.calls] == ["strict"] and host.held and host.guarded_now
-    assert not [r for r in await records(cl["alice"], author=BOT) if r["entry"]["kind"] == "agent.release" or {"release", "unguard"} & set(r["entry"]["body"])]       # the host never lets go
+    e, c = cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})
+    await cl["carol"].append(e, c)
+    props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
+    assert [m for _, m in agent.calls] == ["strict"] and host.guarded_now and host.tainted(host.session)
+    assert props[0]["entry"]["body"]["task"] == P.entry_id(e)
+    assert (await state(cl["alice"]))["effects"][props[0]["receipt"]["id"]]["guardedFor"] == [BOT, EXEC]
+    assert not [r for r in await records(cl["alice"], author=BOT) if r["entry"]["kind"] == "agent.unguard" or "unguard" in r["entry"]["body"]]       # the host never lets go
     task.cancel()
 
 # ── E11 ──

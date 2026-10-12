@@ -26,7 +26,7 @@ def test_file_tools_only_inside_the_workspace(ws):
         assert kinds(g, mode, *outside) == ["deny"] * len(outside)
 
 def test_strict_turns_refuse_write_edit_and_notebookedit_but_read_on_h11(ws):
-    """H11: while guarded (outside input) or held, Write, Edit and NotebookEdit are refused like Bash writes and the model is pointed at a
+    """H11: in a strict turn (R-24), Write, Edit and NotebookEdit are refused like Bash writes and the model is pointed at a
     proposal; reads stay; auto mode is unchanged."""
     g = Gate(ws)
     writes = [("Write", {"file_path": "a.txt", "content": "x"}), ("Edit", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
@@ -180,12 +180,12 @@ async def test_error_result_is_said(ws):
 
 # ── through the host (real han-seq, fake SDK client) ──
 async def test_host_answers_the_model_with_the_proposal_id_and_guard(env, ws):
-    """§8.4: while held, the model is told "proposed as <id>, waiting for <guard>" during the turn, and the id is the entry the host
-    then appends; an auto, unheld agent is told just "proposed as <id>"."""
+    """§8.4: while guarded, the model is told "proposed as <id>, waiting for <guard>" during the turn, and the id is the entry the host
+    then appends; an auto, unguarded agent is told just "proposed as <id>"."""
     cl, botc = await world(env)
     script = [("mcp__han__deploy", {"target": "hello.txt", "content": "hi from HAN"}), ("Write", {"file_path": "../evil.txt"})]
     agent, made = fake_agent(ws, script)
-    host, task = start_host(env, botc, "guarded", agent, executor=BOT)      # M2: a held agent proposes only for itself
+    host, task = start_host(env, botc, "guarded", agent, executor=BOT)      # M2: a guarded agent proposes only for itself
     sid = await session_id(host)
     await steer(cl["carol"], sid, "deploy hello.txt")
     props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
@@ -194,7 +194,7 @@ async def test_host_answers_the_model_with_the_proposal_id_and_guard(env, ws):
     assert deploy.message == f"proposed as {pid}, waiting for {ALICE}" and "outside the workspace" in write.message
     assert made[0].modes == ["default"]
     st = await state(cl["alice"])
-    assert st["held"] == {BOT: True} and st["effects"][pid]["phase"] == "open"
+    assert st["guarded"] == {BOT: True} and st["effects"][pid]["phase"] == "open" and st["effects"][pid]["guardedFor"] == [BOT]
     assert props[0]["entry"]["body"]["action"] == "file.write"
     task.cancel()
 

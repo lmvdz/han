@@ -69,7 +69,10 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
   const peers: Record<string, Record<string, string>> = {};
   const viewOf = (actor: string): A => {
     if (actor === harness) return { actor, seq: 1, actorKind: "service", operatorConfirmed: false, keys: { h: { publicKey: keyFor(actor, "h").publicKey, status: "valid" } } };
-    const p = profiles[actor]; if (!p) return null;
+    let p = profiles[actor];
+    // an operator a vector names but gives no profile (r27 vector 106's `@gone`) is a human who exists and holds no role; P-01 would otherwise make the claim `unavailable`
+    if (!p && Object.values(profiles).some((q: A) => q.operator === actor)) p = { actorKind: "human", operatorConfirmed: false, keys: { k1: { publicKey: "", status: "valid" } } };
+    if (!p) return null;
     const view = clone(p); view.actor = actor; view.seq = 1;
     for (const kid of Object.keys(view.keys)) view.keys[kid].publicKey = keyFor(actor, kid).publicKey;
     return view;

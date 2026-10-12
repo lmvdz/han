@@ -89,7 +89,7 @@ export interface Bodies {
   "session.open": { steerMode: SteerMode; task?: EntryId };   // a live session by its author (P-15); the stream itself travels on the transport (T-07)
   "session.close": { session: EntryId };
   "session.input": { session: EntryId };      // steering, accountable and sequenced (P-15)
-  "agent.release": { agent: ActorId; unguard?: true };   // by the agent's guard (the operator in its pinned profile): ends its hold unless an outside instruction is newer than the header's `seen`; unguard also ends the agent's own guarded choice (P-15)
+  "agent.unguard": { agent: ActorId };   // by the agent's guard (the operator in its pinned profile), holding a role: ends the agent's own guarded choice; frees no recorded work (P-15)
   "space.move": { to: ServerName; accept: { keyId: KeyId; sig: Sig } };   // sig = Ed25519(to's key, "han-accept-move-v1\n" ‖ space ‖ "\n" ‖ receiptHash(head))
 }
 
@@ -115,11 +115,11 @@ export interface Contents {
   "session.open": { title?: string };
   "session.close": null;
   "session.input": { text: string; blobs?: BlobRef[] };
-  "agent.release": null;
+  "agent.unguard": null;
 }
 export type KindName = keyof Bodies;
 /** How a session's host treats input from someone other than the session's own actor (P-15, R-24):
- *  auto: like its own input · guarded: the harness's stricter mode, and an outside steer holds the agent (P-15). Opening a `guarded` session is one of the two ways an agent becomes guarded;
+ *  auto: like its own input · guarded: the agent chooses guarding (P-15), and the host runs outside input in the harness's stricter mode (R-24). Opening a `guarded` session is one of the two ways an agent becomes guarded;
  *  `policy.sessions.modes` only limits which modes `session.open` may use. */
 export type SteerMode = "auto" | "guarded";
 /** Extension kinds: `<prefix>.<name>`, prefix [a-z][a-z0-9-]{0,31} not a core prefix, name [a-z0-9][a-z0-9._-]{0,63}.
@@ -145,7 +145,7 @@ export interface PolicyDoc {
   minDurability: Durability;                             // R-08
   launchWindow: number;                                  // seconds, 15–3600: abandon threshold (P-09) and executor deadline (X-04)
   extensionsMinRole: "guest" | "member" | "owner";       // lowest role that may append extension kinds (§5)
-  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[]; forceGuarded?: boolean };   // P-15: minimum roles (read, steer no wider than watch); modes limit what session.open may use, nothing else; forceGuarded (default false): every non-human target of an instruction (tasks, steers, executors alike, whatever actorKind it calls itself) is guarded for the operator in the profile pinned for that entry, session or not
+  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[]; forceGuarded?: boolean };   // P-15: minimum roles (read, steer no wider than watch); modes limit what session.open may use, nothing else; forceGuarded (default false): every non-human actor (whatever actorKind other than human it has) is guarded for the operator in the profile pinned for each entry, session or not
   servers: { deny: ServerName[] };
 }
 
@@ -178,12 +178,14 @@ export interface SpaceState {
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02): held at seq k iff a kept interval has from ≤ k < to (no `to` while it lasts); at most the 64 most recent per actor, older ones are dropped (seqs before the oldest kept `from` are then not readable for a former member)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number; seq: Seq;
+                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, plus the author if guarded when the task was created; fixed then, never shrinks
                      parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
+      guardedFor: ActorId[];                        // P-15: the task's guardedFor, plus the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect (P-08); a consumed one is removed once its claim settles
       claims: {
@@ -199,10 +201,8 @@ export interface SpaceState {
   budgetLeft: { unit: string; amount: SignedInt } | null;   // budget − committed; negative only after a cut (P-06)
   entries: { [id: EntryId]: { author: ActorId; kind: KindName } };   // R-05 resolution, P-04 redact
   sessions: { [id: EntryId]: { actor: ActorId; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId } };   // open sessions only, a closed one leaves the state
-  // P-15. A set of actors is a map whose every value is `true`. There is no other agent-guard state; the guard is never stored, it is the operator in the profile pinned for the entry (guardStatus)
-  held: { [agent: ActorId]: true };                             // agents waiting for their guard
-  guarded: { [agent: ActorId]: true };                          // agents that chose guarding (a `guarded` session); sticky, ended only by their guard's unguard (owners' forceGuarded is not stored)
-  lastOutside: { [agent: ActorId]: Seq };                       // seq of the newest outside instruction received while the agent was guarded or forced, or of the newest proposal it made while held (raised on becoming guarded to the newest unfinished outside instruction newer than it); never lowered; a release signed with `seen` below it is denied
+  // P-15. A set of actors is a map whose every value is `true`. Besides the guardedFor of tasks and effects there is no other agent-guard state; the guard is never stored, it is the operator in the profile pinned for the entry (guardStatus)
+  guarded: { [agent: ActorId]: true };                          // agents that chose guarding (a `guarded` session); sticky, ended only by their guard's agent.unguard (owners' forceGuarded is not stored)
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
@@ -231,19 +231,20 @@ export interface PolicyConstants {
   MAX_OPEN_APPROVALS: 16;      // open (unconsumed, unexpired) approvals by other authors a proposal may hold when a new one arrives (P-08)
   MAX_OPEN_SESSIONS: 64;       // open sessions per actor per space (P-15)
   MAX_ATTEMPTS: 64;            // claims per effect: the 65th effect.claim is `denied`, the executor proposes again (P-07 E5)
+  MAX_GUARDED_FOR: 19;         // derived, never checked: a guardedFor holds at most the authors of a task chain (maxDelegationDepth ≤ 16, so 17) plus a proposer and an executor (P-15)
   ROLE_INTERVALS: 64;          // role intervals kept per actor (P-02)
 }
 /** The maps of a state page, in the order of the cursor and of the fill (§3 state, H3). Every one is cut: a page holds at most Limits.maxStateItems items of each, and the reply as a frame
  *  at most Limits.maxFrameBytes. Only the scalar members and `policy` repeat on every page; every item of a paged map is sent on exactly one page. "profile.keys" is the `keys` map of `profile`. */
-export type PagedMap = "roles" | "roleHistory" | "tasks" | "effects" | "sessions" | "held" | "guarded" | "lastOutside" | "profile.keys";   // `held` and `guarded` are sets, sent as maps whose values are all `true`; `lastOutside` and the others are maps
+export type PagedMap = "roles" | "roleHistory" | "tasks" | "effects" | "sessions" | "guarded" | "profile.keys";   // `guarded` is a set, sent as a map whose values are all `true`; the others are maps
 export type StateView = Omit<SpaceState, "entries">;   // the wire state, one page: the PagedMap members are cut as above, each present (possibly `{}`) on every page; the others are repeated; never `limit`
-/** `state {space, effect}`: that one effect and nothing else that grows. Never cut, never paged: one effect is bounded (at most 20 approvals, 64 claims) and `policy` is bounded by the header limit. */
+/** `state {space, effect}`: that one effect and nothing else that grows. Never cut, never paged: one effect is bounded (at most 37 approvals, 64 claims, 19 guardedFor agents) and `policy` is bounded by the header limit. */
 export type EffectStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "effects">;
-/** `state {space, agent}` (K7, M5): the state's `held`, `guarded` and `lastOutside` cut to that one actor (each `{}` when it is not in it) and nothing else that grows. Never cut.
+/** `state {space, agent}` (K7, P8): the state's `guarded` cut to that one actor (`{}` when it is not in it) and nothing else that grows. Never cut.
  *  It is a GuardInput: a host passes it to guardStatus as is, with the profiles it pinned, instead of paging the whole state (R-24). */
-export type AgentStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "held" | "guarded" | "lastOutside">;
-/** What guardStatus reads of a state (M5). SpaceState and AgentStateView both satisfy it. */
-export type GuardInput = Pick<SpaceState, "policy" | "held" | "guarded">;
+export type AgentStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "guarded">;
+/** What guardStatus reads of a state. SpaceState and AgentStateView both satisfy it. */
+export type GuardInput = Pick<SpaceState, "policy" | "guarded">;
 /** The answer to `state`: one page. `next` is the cursor of the following page, absent on the last. A cursor is `<head>.<o1>.….<oN>` (decimal, no leading zeros), N = the number of PagedMap members in order, each
  *  the count of that map's items the earlier pages sent (§3). A client treats it as opaque; a server rejects anything else as `invalid`. */
 export type StateReply = { state: StateView | EffectStateView | AgentStateView; next?: string };
@@ -320,13 +321,13 @@ export interface Policy {                                // M2 — six pure func
   fold(state: SpaceState | undefined, record: LogRecord, ctx: PolicyCtx): SpaceState;   // the entry's id is record.receipt.id (R-25)
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
-  /** P-01, the whole pin rule: author, member.set target, the targets of an instruction (session actor, assignees, executor), a release's agent, approve/cancel/claim: proposer and executor;
+  /** P-01, the whole pin rule: author, member.set target, the targets of an instruction (session actor, assignees, executor), an unguard's agent, approve/cancel/claim: proposer, executor and guardedFor;
    *  for a claim then the guards from ctx.profiles (P-15) and the approval candidates in E3 order up to and including the first whose profile in ctx.profiles shows a valid key.
    *  The sequencer calls it with the profiles fetched so far until it names none it has not tried: three calls at most. */
   relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[];
   /** P-15, the one guard function hosts call (R-24) instead of re-deriving it. `guard`: the `operator` of ctx.profiles[agent] if it is confirmed and the agent is not human, else absent.
-   *  `held`, `guarded`: membership of the state's sets. `forced`: policy.sessions.forceGuarded is on and ctx.profiles[agent] is not human. */
-  guardStatus(state: GuardInput, ctx: PolicyCtx, agent: ActorId): { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean };
+   *  `forced`: policy.sessions.forceGuarded is on and ctx.profiles[agent] is not human. `guarded`: `forced`, or the agent is in the state's set `guarded` (its own choice). */
+  guardStatus(state: GuardInput, ctx: PolicyCtx, agent: ActorId): { guard?: ActorId; guarded: boolean; forced: boolean };
 }
 export interface Identity {                              // M3
   profile(actor: ActorId, minSeq?: Seq): Promise<ProfileView>;

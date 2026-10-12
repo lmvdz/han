@@ -1,25 +1,26 @@
 """The agent host over a real han-seq: P-15, R-24, T-07/G-05 (docstrings name the rule)."""
-import asyncio, pytest
-from conftest import S, say, Collector
+import asyncio, hashlib, os, pytest
+from conftest import S, say, member, Collector
 from fixtures_host import (world, start_host, until, records, state, session_id, steer, ALICE, CAROL, DAVE, BOT, EXEC)
 from han.core import P, WireError
 from han.host import ScriptedAgent
 from han.host.host import CONTEXT_REQUEST
 
-async def test_member_steers_guarded_agent_holds_it_and_proposal_waits(env):
-    """P-15, R-24: a member's steer of a guarded agent holds it for its operator; the turn runs strict; the world action is an
-    effect.propose with guards [operator] awaiting approval; the executor's claim is denied until the operator approves."""
+async def test_member_steers_guarded_agent_and_proposal_waits(env):
+    """P-15, R-24: a member's steer of a guarded agent is allowed; the turn runs strict; the world action is an effect.propose whose
+    `guardedFor` records the agent and whose guard is its operator; the executor's claim is denied until the operator approves."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
-    host, task = start_host(env, botc, "guarded", agent, executor=BOT)      # M2: a held agent proposes only for itself
+    host, task = start_host(env, botc, "guarded", agent, executor=BOT)
     sid = await session_id(host)
     r = await steer(cl["carol"], sid, "push release")
     props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
     assert [m for _, m in agent.calls] == ["strict"]
     st = await state(cl["alice"])
     eff = st["effects"][props[0]["receipt"]["id"]]
-    assert st["held"] == {BOT: True} and eff["phase"] == "open" and P.guards_of(st, {"profiles": {BOT: (await cl["alice"].read_state("profile:" + BOT))["profile"]}}, eff) == [ALICE]
-    assert eff["executor"] == BOT and host.held and host.guarded_now
+    assert st["guarded"] == {BOT: True} and eff["phase"] == "open" and eff["guardedFor"] == [BOT]
+    assert P.guards_of(st, {"profiles": {BOT: (await cl["alice"].read_state("profile:" + BOT))["profile"]}}, eff) == [ALICE]
+    assert eff["executor"] == BOT and host.guarded_now
     assert props[0]["entry"]["seen"] == r["seq"] and props[0]["entry"]["refs"] == [r["id"]]        # R-17
     # the executor's (here the agent's own) claim is denied; after the operator approves it is allowed
     ex, pid, digest = botc, props[0]["receipt"]["id"], props[0]["entry"]["body"]["planDigest"]
@@ -31,49 +32,83 @@ async def test_member_steers_guarded_agent_holds_it_and_proposal_waits(env):
     task.cancel()
 
 async def test_auto_agent_steered_by_member_runs_auto_and_still_proposes(env):
-    """P-15, R-24: an auto session has no guard rule: the member's steer runs in auto mode and is not held; HAN still executes
-    world actions only as effects (no guards, so the proposal is ready)."""
+    """P-15, R-24: an auto session has no guard rule: the member's steer runs in auto mode, and a later steer by the guard does too;
+    HAN still executes world actions only as effects (nobody is guarded, so `guardedFor` is empty and the proposal is ready)."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
     host, task = start_host(env, botc, "auto", agent)
     sid = await session_id(host)
     await steer(cl["carol"], sid, "push build")
     props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
+    await steer(cl["alice"], sid, "hello")
+    await until(lambda: len(agent.calls) == 2)
     st = await state(cl["alice"])
-    assert [m for _, m in agent.calls] == ["auto"] and st["held"] == {}
-    assert st["effects"][props[0]["receipt"]["id"]]["phase"] == "open"
+    eff = st["effects"][props[0]["receipt"]["id"]]
+    assert [m for _, m in agent.calls] == ["auto", "auto"] and st["guarded"] == {} and not host.tainted(sid)
+    assert eff["phase"] == "open" and eff["guardedFor"] == []
     task.cancel()
 
-async def test_held_agent_cannot_delegate_and_reports_it_as_data(env):
-    """P-15, R-24: a held agent's Task is not appended (Policy would deny it); the host reports the refusal in the session stream
-    and the world action still becomes a proposal."""
+async def test_guarded_agent_may_delegate_and_the_assignees_effect_needs_the_delegators_guard(env):
+    """P-15, R-24: a guarded agent's Task is appended (no refusal); the task records the agent in `guardedFor`; the assignee's effect
+    that names the task carries it, so the executor's claim needs the agent's guard (alice) even though the assignee is not guarded."""
     cl, botc = await world(env)
     host, task = start_host(env, botc, "guarded", executor=BOT)
     sid = await session_id(host)
+    await steer(cl["carol"], sid, f"delegate to {DAVE} fix it")
+    tasks = await until(lambda: records(cl["alice"], "task", BOT))
+    tid = tasks[0]["receipt"]["id"]
+    st = await state(cl["alice"])
+    assert st["tasks"][tid]["guardedFor"] == [BOT] and host.refused == []
+    d = cl["dave"]
+    plan = {"action": "http.post", "target": "http://example.invalid/x", "args": {}}
+    digest = hashlib.sha256(P.jcs(plan)).hexdigest()
+    e, c = d.make_entry("effect.propose", S, {"executor": EXEC, "action": "http.post", "planDigest": digest, "repeatable": False, "task": tid}, {"plan": plan})
+    pid = (await d.append(e, c))["id"]
+    eff = (await state(cl["alice"]))["effects"][pid]
+    assert eff["guardedFor"] == [BOT]                                       # dave and exec are not guarded; the task carries the delegator
+    ex = cl["exec"]
+    claim = lambda: ex.make_entry("effect.claim", S, {"proposal": pid, "attempt": 1, "instance": ex.key.key_id, "window": 30})
+    with pytest.raises(WireError) as exc: await ex.append(*claim())
+    assert exc.value.code == "denied"
+    await cl["alice"].append(*cl["alice"].make_entry("effect.approve", S, {"proposal": pid, "planDigest": digest}))
+    assert (await ex.append(*claim()))["seq"] > 0
+    task.cancel()
+
+async def test_guarded_agent_does_not_steer_others_and_reports_it_as_data(env):
+    """P-15, R-24: a guarded agent's Steer into a session that is not its own is not appended; the host reports the refusal in the
+    session stream, and Policy itself denies what the host would not send (a steer of another's session, an approval)."""
+    cl, botc = await world(env)
+    host, task = start_host(env, botc, "guarded", executor=BOT)
+    sid = await session_id(host)
+    dsid = (await cl["dave"].append(*cl["dave"].make_entry("session.open", S, {"steerMode": "auto"})))["id"]
     seen = Collector(cl["carol"].watch(S, sid)); await asyncio.sleep(0.2)
-    await steer(cl["carol"], sid, f"delegate to {DAVE} fix it; push x")
-    await until(lambda: records(cl["alice"], "effect.propose", BOT))
-    await seen.wait_for(lambda i: i["type"] == "output" and i["text"].startswith("refused: held"))
-    assert await records(cl["alice"], "task") == [] and any("delegate" in r for r in host.refused)
-    # and Policy itself refuses what the host would not send (a stale view of the hold)
-    e, c = botc.make_entry("task", S, {"to": [DAVE]}, {"ask": "x"})
-    with pytest.raises(WireError) as ex: await botc.append(e, c)
+    await steer(cl["carol"], sid, f"steer {dsid} do it; push x")
+    props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
+    await seen.wait_for(lambda i: i["type"] == "output" and i["text"].startswith("refused: guarded: cannot steer"))
+    assert await records(cl["alice"], "session.input", BOT) == [] and any("cannot steer" in r for r in host.refused)
+    with pytest.raises(WireError) as ex: await steer(botc, dsid, "x")
     assert ex.value.code == "denied"
+    pid, digest = props[0]["receipt"]["id"], props[0]["entry"]["body"]["planDigest"]
+    with pytest.raises(WireError) as ex: await botc.append(*botc.make_entry("effect.approve", S, {"proposal": pid, "planDigest": digest}))
+    assert ex.value.code == "denied"
+    await steer(botc, sid, "my own session is fine")                           # its own session is allowed
     seen.stop(); task.cancel()
 
 async def test_guard_steering_its_guarded_agent_is_not_outside_input(env):
-    """P-15, R-24: the guard's own steer neither holds the agent nor needs the stricter mode; the agent may delegate."""
+    """P-15, R-24: the guard's own steer does not need the stricter mode; the agent may delegate, and the task records it."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
     host, task = start_host(env, botc, "guarded", agent)
     sid = await session_id(host)
     await steer(cl["alice"], sid, f"delegate to {DAVE} please")
     await until(lambda: records(cl["alice"], "task", BOT))
-    assert [m for _, m in agent.calls] == ["auto"] and (await state(cl["alice"]))["held"] == {}
+    st = await state(cl["alice"])
+    assert [m for _, m in agent.calls] == ["auto"] and not host.tainted(sid)
+    assert [t["guardedFor"] for t in st["tasks"].values()] == [[BOT]]
     task.cancel()
 
 async def test_task_naming_a_guarded_agent_is_an_outside_turn(env):
-    """P-15, R-24: a task naming a guarded agent from a member becomes a strict turn (the agent is held, settle_holds)."""
+    """P-15, R-24: a task naming a guarded agent from a member becomes a strict turn, and the proposal made in it names the task."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
     host, task = start_host(env, botc, "guarded", agent, executor=BOT)
@@ -125,30 +160,86 @@ async def test_watchers_and_context_only_for_readers(env):
     assert ctx["what"] == "transcript"
     carol.stop(); alice.stop(); task.cancel()
 
-async def _two(c): return len(await records(c, "effect.propose", BOT)) == 2
-
-async def test_release_ends_hold_and_stale_release_is_refused(env):
-    """P-15: only the guard's release (seen = head) ends the hold; a release that has not seen a later outside instruction is
-    refused as stale. The host sees the state change and runs the next turn per the new state."""
+async def test_unguard_frees_nothing_recorded_and_only_the_guard_unguards(env):
+    """P-15: only the guard's `agent.unguard` ends the choice; a proposal recorded before it keeps its `guardedFor`, so its claim still
+    needs the guard's approval afterwards."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
     host, task = start_host(env, botc, "guarded", agent, executor=BOT)
     sid = await session_id(host)
     await steer(cl["carol"], sid, "push one")
-    await until(lambda: records(cl["alice"], "effect.propose", BOT))
-    seen_then = (await state(cl["alice"]))["head"]
-    await steer(cl["carol"], sid, "push two")
-    await until(lambda: len(agent.calls) == 2)
-    await until(lambda: _two(cl["alice"]))                                             # M1: its own proposals raise the bound too; the release must have seen both
-    rel = lambda seen: cl["alice"].make_entry("agent.release", S, {"agent": BOT}, seen=seen)
-    with pytest.raises(WireError) as ex: await cl["alice"].append(*rel(seen_then))
-    assert ex.value.code == "denied" and "stale" in ex.value.message
-    with pytest.raises(WireError) as ex: await cl["carol"].append(*cl["carol"].make_entry("agent.release", S, {"agent": BOT}))
-    assert ex.value.code == "denied"                                                   # only the guard releases
-    head = (await state(cl["alice"]))["head"]
-    await cl["alice"].append(*rel(head))
-    assert (await state(cl["alice"]))["held"] == {}
-    await until(lambda: not host.held)
+    props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
+    pid, digest = props[0]["receipt"]["id"], props[0]["entry"]["body"]["planDigest"]
+    with pytest.raises(WireError) as ex: await cl["carol"].append(*cl["carol"].make_entry("agent.unguard", S, {"agent": BOT}))
+    assert ex.value.code == "denied"                                                   # only the guard unguards
+    await cl["alice"].append(*cl["alice"].make_entry("agent.unguard", S, {"agent": BOT}))
+    st = await state(cl["alice"])
+    assert st["guarded"] == {} and st["effects"][pid]["guardedFor"] == [BOT]
+    await until(lambda: not host.guarded_now)
+    claim = lambda: botc.make_entry("effect.claim", S, {"proposal": pid, "attempt": 1, "instance": botc.key.key_id, "window": 30})
+    with pytest.raises(WireError) as ex: await botc.append(*claim())
+    assert ex.value.code == "denied"                                                   # recorded work is not freed
+    await cl["alice"].append(*cl["alice"].make_entry("effect.approve", S, {"proposal": pid, "planDigest": digest}))
+    assert (await botc.append(*claim()))["seq"] > 0
+    with pytest.raises(WireError) as ex: await cl["alice"].append(*cl["alice"].make_entry("agent.unguard", S, {"agent": BOT}))
+    assert ex.value.code == "denied"                                                   # no longer guarded
+    task.cancel()
+
+async def test_taint_survives_a_restart_and_an_unguard(env):
+    """R-24: once an outside instruction has entered a guarded agent's session, every later turn of that session runs strict: after the
+    host restarts (the taint is in its local store, not the log), after the agent is unguarded, and for the guard's own steer."""
+    cl, botc = await world(env)
+    agent1 = ScriptedAgent()
+    host, task = start_host(env, botc, "guarded", agent1)
+    sid = await session_id(host)
+    await steer(cl["carol"], sid, "hello")
+    await until(lambda: agent1.calls)
+    assert [m for _, m in agent1.calls] == ["strict"] and host.tainted(sid)
+    task.cancel(); host.stop(); await botc.close()                                     # the process is gone
+    await cl["alice"].append(*cl["alice"].make_entry("agent.unguard", S, {"agent": BOT}))
+    botc2 = await env.client("bot")
+    agent2 = ScriptedAgent()
+    host2, task2 = start_host(env, botc2, "auto", agent2)
+    await until(lambda: host2.state and host2.session)
+    assert host2.session == sid and host2.tainted(sid) and not host2.tainted("other") and not host2.guarded_now
+    await steer(cl["alice"], sid, "hello again")                                       # the guard's own steer, the agent no longer guarded
+    await until(lambda: agent2.calls)
+    assert [m for _, m in agent2.calls] == ["strict"]
+    task2.cancel()
+
+async def test_untainted_session_of_a_guarded_agent_stays_auto_for_the_guard_after_a_restart(env):
+    """R-24: without an outside instruction there is no taint; a restart does not invent one."""
+    cl, botc = await world(env)
+    host, task = start_host(env, botc, "guarded", ScriptedAgent())
+    sid = await session_id(host)
+    task.cancel(); host.stop(); await botc.close()
+    botc2 = await env.client("bot")
+    agent2 = ScriptedAgent()
+    host2, task2 = start_host(env, botc2, "guarded", agent2)
+    await steer(cl["alice"], sid, "hello")
+    await until(lambda: agent2.calls)
+    assert [m for _, m in agent2.calls] == ["auto"] and not host2.tainted(sid)
+    task2.cancel()
+
+async def test_proposal_in_a_task_driven_turn_names_its_task_and_carries_the_delegators_guard(env):
+    """R-24 MUST: every effect.propose a host makes in a task-driven turn names the driving task, so the task's `guardedFor` (here the
+    guarded delegator, which is neither the proposer nor the executor) carries to the effect."""
+    cl, botc = await world(env)
+    BOT2 = env.actor("bot2", "agent", operator=ALICE)
+    await cl["alice"].append(*cl["alice"].make_entry("member.set", "profile:" + BOT2, {"actor": ALICE, "role": "owner"}))
+    await member(cl["alice"], BOT2)
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))      # bot chooses guarding
+    b2 = await env.client("bot2")
+    agent = ScriptedAgent()
+    host, task = start_host(env, b2, "auto", agent, state=os.path.join(env.tmp, "bot2.state.db"))
+    await session_id(host)
+    e, c = botc.make_entry("task", S, {"to": [BOT2]}, {"ask": "push deploy"})
+    tid = (await botc.append(e, c))["id"]
+    props = await until(lambda: records(cl["alice"], "effect.propose", BOT2))
+    assert props[0]["entry"]["body"]["task"] == tid
+    st = await state(cl["alice"])
+    assert st["tasks"][tid]["guardedFor"] == [BOT] and st["effects"][props[0]["receipt"]["id"]]["guardedFor"] == [BOT]
+    assert [m for _, m in agent.calls] == ["auto"]                                      # bot2 itself is not guarded
     task.cancel()
 
 async def test_guarded_status_says_it_is_advisory_without_a_sandbox(env):

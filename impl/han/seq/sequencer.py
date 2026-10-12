@@ -10,7 +10,7 @@ from .store import Store, BlobStore
 
 log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
-PAGED, CURSOR, EFFECT_VIEW = W.PAGED, W.CURSOR, W.EFFECT_VIEW    # H3: every map of a state page, in cursor and fill order; the cursor `<head>.<o1>.….<o9>`; what `state {effect}` and `state {agent}` hold besides the effect
+PAGED, CURSOR, EFFECT_VIEW = W.PAGED, W.CURSOR, W.EFFECT_VIEW    # H3: every map of a state page, in cursor and fill order; the cursor `<head>.<o1>.….<o7>`; what `state {effect}` and `state {agent}` hold besides the effect
 MAX_OPEN_UPLOADS = 16        # E11: unfinished blob uploads one actor may hold at a time
 OWN_BLOB_SECONDS = 86400      # G-01 / D3: an uploader may read its own unreferenced blob this long
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)

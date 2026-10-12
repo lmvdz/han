@@ -592,6 +592,28 @@ def _():
     code, r = h.append(e, c, pf())
     return code == "ok" and Z in r["profiles"], f"{code} {sorted(r['profiles']) if code == 'ok' else r}"
 
+@scenario("a claim pins the agents its effect was guarded for, and their guards", "P-01, P-15, E3", "a forced service X (operator Z) delegates a task to M; with forcing then off, M's effect for that task (M its own executor) still carries X in guardedFor, so its claim is refused until Z approves, then pins M, X and Z, and a mirror accepts the pins")
+def _():
+    h = base_home()
+    def pf():
+        p = profiles(); p[X] = dict(p[X], operator=Z); return p
+    forced = dict(POLICY, sessions=dict(POLICY["sessions"], forceGuarded=True))
+    for kind, author, body, content in [("policy.set", O, {"policy": forced}, None), ("member.set", O, {"actor": Z, "role": "member"}, None),
+                                        ("task", X, {"to": [M]}, {"ask": "fix it"}), ("policy.set", O, {"policy": POLICY}, None)]:
+        e, c = entry(kind, author, body, content); code, r = h.append(e, c, pf()); assert code == "ok", (kind, code, r)
+        if kind == "task": tid = W.entry_id(e)
+    plan = {"action": "git.push", "target": "repo"}
+    body = {"executor": M, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False, "task": tid}
+    e, c = entry("effect.propose", M, body, {"plan": plan}); assert h.append(e, c, pf())[0] == "ok"
+    pid = W.entry_id(e)
+    recorded = h.spaces[S]["state"]["effects"][pid]["guardedFor"]
+    e, c = entry("effect.claim", M, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30}); early = h.append(e, c, pf())[0]
+    e, c = entry("effect.approve", Z, {"proposal": pid, "planDigest": body["planDigest"]}); assert h.append(e, c, pf())[0] == "ok"
+    e, c = entry("effect.claim", M, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30}); code, r = h.append(e, c, pf())
+    m = W.Mirror(SERVER_KEYS, lambda a, n: dict(view(a, n), operator=Z) if a == X else view(a, n))
+    mirrored = all(m.ingest(rec)[0] for rec in h.spaces[S]["records"])
+    return (recorded == [X] and early == "denied" and code == "ok" and sorted(r["profiles"]) == sorted([M, X, Z]) and mirrored), f"recorded={recorded} early={early} {code} {sorted(r['profiles']) if code == 'ok' else r} mirror={mirrored}"
+
 @scenario("a mirror checks the pins are exactly relevantActors", "P-01, R-14, E3", "a claim receipt that also pins a later approver (over-pinning: every actor tried; Policy would still allow the entry), or leaves out a named actor, is a fault at the mirror; the honest receipt passes")
 def _():
     h, pid = approved_home()
@@ -742,13 +764,10 @@ def _joined(h, reader, **kw):
         W._put_map(merged, k, {a: b for m in parts for a, b in m.items()} if isinstance(parts[0], dict) else [x for m in parts for x in m])      # a map, or a set sent as an array
     return pages, merged
 
-def _guard_facts(st, a, held=False, guarded=False, last=0):
-    """Fill the per-actor members of P-15 directly: these scenarios are about the wire, not about how an actor gets into them. `held` and `guarded` are sets (arrays in the view)."""
-    for name, on in (("held", held), ("guarded", guarded)):
-        if not on: continue
-        if isinstance(st[name], dict): st[name][a] = True
-        else: st[name].append(a); st[name].sort()
-    if last: st.setdefault("lastOutside", {})[a] = last
+def _guard_facts(st, a):
+    """Fill the one per-actor member of P-15, the set `guarded`, directly: these scenarios are about the wire, not about how an actor gets into it."""
+    if isinstance(st["guarded"], dict): st["guarded"][a] = True
+    else: st["guarded"].append(a); st["guarded"].sort()
 
 def _fill(h, effects=0, tasks=0, sessions=0):
     plan = {"action": "git.push", "target": "repo"}
@@ -785,17 +804,16 @@ def _():
     effect_ok = ce == "ok" and "next" not in ci and len(P.jcs({"id": 1, "ok": ci})) <= 1300 and list(ci["state"]["effects"]) == [pid]
     return (len(pages) > 3 and max(sizes) <= 2500 and merged == dict(full["state"]) and once and repeated and order_ok and effect_ok), f"pages={len(pages)} max={max(sizes)} once={once} repeated={repeated} order={order_ok} effect={ce}"
 
-@scenario("every map of a state is paged", "§3 state, H3", "roles, roleHistory, tasks, effects, sessions, held, guarded, lastOutside and a profile's keys are cut like effects and tasks, at most maxStateItems each per page, and join to the full state; a map in the state that is not in PAGED (apart from policy) is a bug")
+@scenario("every map of a state is paged", "§3 state, H3", "roles, roleHistory, tasks, effects, sessions, guarded and a profile's keys are cut like effects and tasks, at most maxStateItems each per page, and join to the full state; a map in the state that is not in PAGED (apart from policy) is a bug")
 def _():
     h = base_home(); h.max_state_items = 2; _fill(h, sessions=4)
     st = h.spaces[S]["state"]
-    for i in range(5):        # the per-actor maps of P-15, filled directly: this scenario is about paging, not about how an actor gets into them
-        a = f"@a{i}:a.example"
-        _guard_facts(st, a, held=True, guarded=True, last=i + 1)
+    for i in range(5):        # the per-actor set of P-15, filled directly: this scenario is about paging, not about how an actor gets into it
+        _guard_facts(st, f"@a{i}:a.example")
     unpaged = sorted(k for k, v in st.items() if isinstance(v, dict) and k not in W.PAGED and k not in ("policy", "entries"))
     pages, merged = _joined(h, O)
     h.max_state_items = 1000; full = h.state(S, O)[1]
-    shape = [(len(pg["state"]["roleHistory"]), len(pg["state"]["sessions"]), len(pg["state"]["held"])) for pg in pages]
+    shape = [(len(pg["state"]["roleHistory"]), len(pg["state"]["sessions"]), len(pg["state"]["guarded"])) for pg in pages]
     pk = W.Home("a.example", HOME_A)
     pstate = P.fold(None, {"entry": {"v": 1, "space": "profile:" + M, "kind": "space.create", "author": "@:a.example", "keyId": "h1", "refs": [], "seen": 0,
                                      "body": {"policy": POLICY, "profile": {"actorKind": "human", "key": {"keyId": "k1", "publicKey": KEYS[M].pub}}}, "id": "0" * 64},
@@ -807,7 +825,7 @@ def _():
     code, first = pk.state("profile:" + M, Z); pp = [first]
     while pp[-1].get("next") and len(pp) < 50: pp.append(pk.state("profile:" + M, Z, cursor=pp[-1]["next"])[1])      # bounded: a server that never ends the pages fails the scenario, it does not hang it
     pjoined = {a: b for pg in pp for a, b in pg["state"]["profile"]["keys"].items()}
-    return (not unpaged and merged == full["state"] and len(pages) > 1 and max(len(pg["state"]["held"]) for pg in pages) <= 2
+    return (not unpaged and merged == full["state"] and len(pages) > 1 and max(len(pg["state"]["guarded"]) for pg in pages) <= 2
             and pjoined == pstate["profile"]["keys"] and [len(pg["state"]["profile"]["keys"]) for pg in pp] == [2, 2, 2]
             and all(pg["state"]["profile"]["actorKind"] == "human" for pg in pp)), f"unpaged={unpaged} shape={shape} profile pages={[len(pg['state']['profile']['keys']) for pg in pp]}"
 
@@ -821,14 +839,14 @@ def _():
     try: h.state(S, O); item = "answered"
     except AssertionError: item = "asserts"
     h.max_frame_bytes = W.MAX_FRAME_BYTES
-    # the largest legal items: a task with 64 assignees, an effect with 18 approvals and 64 claims, 64 role intervals: each is far below the frame
+    # the largest legal items: a task with 64 assignees and 17 guardedFor agents, an effect with 37 approvals, 19 guardedFor agents and 64 claims, 64 role intervals: each is far below the frame
     actor = f"@{'a' * 64}:{'b' * 61}.example"
-    biggest = {"author": actor, "to": [actor] * 64, "open": True, "state": "pending", "cancelRequested": False, "depth": 4, "seq": 2 ** 53 - 1}
-    claim = {"id": "0" * 64, "attempt": 64, "instance": "k" * 64, "time": T0, "window": 3600, "approval": "0" * 64, "guardApprovals": ["0" * 64] * 2,
+    biggest = {"author": actor, "to": [actor] * 64, "open": True, "state": "pending", "cancelRequested": False, "depth": 16, "seq": 2 ** 53 - 1, "guardedFor": [actor] * (P.MAX_GUARDED_FOR - 2)}
+    claim = {"id": "0" * 64, "attempt": 64, "instance": "k" * 64, "time": T0, "window": 3600, "approval": "0" * 64, "guardApprovals": ["0" * 64] * P.MAX_GUARDED_FOR,
              "reserved": {"unit": "u" * 32, "amount": 2 ** 53 - 1}, "source": ["task", "0" * 64], "settled": True, "outcome": "unknown", "started": "unknown"}
     appr = {"id": "0" * 64, "author": actor, "keyId": "k" * 64, "expiresAt": T0, "consumedBy": "0" * 64}
     eff = {"proposer": actor, "proposerKey": "k" * 64, "executor": actor, "action": "a" * 128, "planDigest": "0" * 64, "seq": 2 ** 53 - 1, "repeatable": True,
-           "phase": "claimed", "cancelRequested": True, "guards": [actor] * 2, "approvals": [appr] * 18, "claims": [claim] * 64}
+           "phase": "claimed", "cancelRequested": True, "guardedFor": [actor] * P.MAX_GUARDED_FOR, "approvals": [appr] * (P.MAX_OPEN_APPROVALS + 2 + P.MAX_GUARDED_FOR), "claims": [claim] * 64}
     interval = {"from": 2 ** 53 - 1, "to": 2 ** 53 - 1}
     room = {n: len(P.jcs({"id": W.MAX_INT, "ok": {"state": {"x": v}}})) for n, v in (("task", biggest), ("effect", eff), ("roleHistory", [interval] * 64))}
     fits = all(v < W.MAX_FRAME_BYTES - W.FRAME_RESERVE - 20000 for v in room.values())       # 20,000: a generous allowance for the 16 KiB policy and the scalars
@@ -849,23 +867,20 @@ def _():
                    "effect": "ok", "cursor": "ok", "at": "ok", "none": "ok", "follow": "ok",
                    "agent+effect": "invalid", "agent+cursor": "invalid", "agent+at+effect": "invalid", "agent+at": "ok", "agent": "ok"}, str(got)
 
-@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7, M5", "`agent` (an ActorId) gives `{space, head, home, policy, held, guarded, lastOutside}` with the three maps cut to that actor and nothing that grows, in one reply whatever maxStateItems is, without `next`; an actor in none of them gets `{}` three times; `at` gives the facts after that record; the reply is guardStatus's input as is; a non-ActorId is `invalid`, a stranger `not_found`")
+@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7, P8", "`agent` (an ActorId) gives `{space, head, home, policy, guarded}` with `guarded` cut to that actor and nothing that grows, in one reply whatever maxStateItems is, without `next`; an actor not in it gets `{}`; `at` gives the facts after that record; the reply is guardStatus's input as is; a non-ActorId is `invalid`, a stranger `not_found`")
 def _():
     h = base_home(); h.max_state_items = 1; _fill(h, tasks=2)
     st = h.spaces[S]["state"]
-    for i in range(4): _guard_facts(st, f"@a{i}:a.example", held=True, guarded=True, last=i + 1)
-    _guard_facts(st, "@g:a.example", guarded=True)
-    ca, a = h.state(S, O, agent="@a2:a.example"); cg, g = h.state(S, O, agent="@g:a.example"); cn, n = h.state(S, O, agent="@nobody:a.example")
+    for i in range(4): _guard_facts(st, f"@a{i}:a.example")
+    ca, a = h.state(S, O, agent="@a2:a.example"); cn, n = h.state(S, O, agent="@nobody:a.example")
     ct, early = h.state(S, O, agent="@a2:a.example", at=2)
     bad = (h.state(S, O, agent=5)[0], h.state(S, O, agent="a2")[0], h.state(S, O, agent="@a2:a.example", effect="0" * 64)[0], h.state(S, O, agent="@a2:a.example", at=99)[0], h.state(S, Z, agent="@a2:a.example")[0])
-    facts = lambda r: {k: r["state"][k] for k in ("held", "guarded", "lastOutside")}
-    shape = lambda r, f: set(r["state"]) == {"space", "head", "home", "policy", "held", "guarded", "lastOutside"} and "next" not in r and facts(r) == f
-    none = {"held": {}, "guarded": {}, "lastOutside": {}}
-    ctx = {"time": "2026-10-10T12:00:00Z", "profiles": {}}
-    return (ca == cg == cn == ct == "ok" and shape(a, {"held": {"@a2:a.example": True}, "guarded": {"@a2:a.example": True}, "lastOutside": {"@a2:a.example": 3}})
-            and shape(g, {"held": {}, "guarded": {"@g:a.example": True}, "lastOutside": {}}) and shape(n, none) and early["state"]["head"] == 2 and facts(early) == none
-            and P.guard_status(a["state"], ctx, "@a2:a.example") == {"held": True, "guarded": True, "forced": False}
-            and bad == ("invalid", "invalid", "invalid", "invalid", "not_found")), f"{a} {g} {n} {early} {bad}"
+    shape = lambda r, f: set(r["state"]) == {"space", "head", "home", "policy", "guarded"} and "next" not in r and r["state"]["guarded"] == f
+    agent = {"actor": "@a2:a.example", "seq": 1, "actorKind": "agent", "operator": O, "operatorConfirmed": True, "keys": {}}
+    ctx = {"time": "2026-10-10T12:00:00Z", "profiles": {"@a2:a.example": agent}}
+    return (ca == cn == ct == "ok" and shape(a, {"@a2:a.example": True}) and shape(n, {}) and early["state"]["head"] == 2 and early["state"]["guarded"] == {}
+            and P.guard_status(a["state"], ctx, "@a2:a.example") == {"guard": O, "guarded": True, "forced": False}
+            and bad == ("invalid", "invalid", "invalid", "invalid", "not_found")), f"{a} {n} {early} {bad}"
 
 @scenario("a notice is never replayed", "G-03, G-09, F4", "a notice for an actor with no live subscription to its profile is dropped; one that subscribes later sees none of it; a live subscription gets its notices once; after it ends, notices are dropped again")
 def _():

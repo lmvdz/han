@@ -1,4 +1,4 @@
-"""Real Claude Code behind HAN: a guarded agent, a member's steer, a held proposal, an operator's approval, an executor's outcome.
+"""Real Claude Code behind HAN: a guarded agent, a member's steer, a proposal that waits for the guard, the operator's approval, an executor's outcome.
 
     cd H:\\HAN\\v1\\impl
     .venv\\Scripts\\python.exe demo\\claude_demo.py [--model MODEL] [--keep DIR]
@@ -18,7 +18,7 @@ from han.seq import Sequencer, SeqServer
 SERVER, SPACE = "a.localhost", "demo:a.localhost"
 ALICE, CAROL, BOT, EXEC = (f"@{n}:{SERVER}" for n in ("alice", "carol", "bot", "exec"))
 STEER_DEPLOY = "Create a file hello.txt in the shared output directory containing 'hi from HAN', using the deploy tool"
-STEER_LOCAL = "In your workspace, create notes.txt containing 'local only'. Do not use the deploy tool. Then say done."
+STEER_LOCAL = "In your workspace, create notes.txt containing 'local only'. Do not use the deploy tool. Then say done."      # the session is tainted by carol's steer (R-24): this turn runs strict too, so the write is refused
 
 async def until(pred, timeout=120.0, what=""):
     async def poll():
@@ -76,7 +76,7 @@ async def run(root: str, say=print, model: str | None = None, max_turns: int = 4
         pid, digest = prop["receipt"]["id"], prop["entry"]["body"]["planDigest"]
         st = await state()
         n(f"claude called the world tool; the host proposed {prop['entry']['body']['action']} as {pid[:12]}: phase {st['effects'][pid]['phase']}, "
-          f"guards {st['effects'][pid]['guards']}, agent held for {st['held'].get(BOT)}")
+          f"guardedFor {st['effects'][pid]['guardedFor']}")
         n(f"the file is not there yet: {os.path.exists(os.path.join(out_dir, 'hello.txt'))}; the plan is {prop['content']['plan']}")
         await until(lambda: len(agent.results) >= 1 and items[-1]["type"] == "status" and items[-1].get("state") == "idle", what="turn end")
         for t in await outputs(): n(f"  session output: {t}")
@@ -87,10 +87,7 @@ async def run(root: str, say=print, model: str | None = None, max_turns: int = 4
         written = open(os.path.join(out_dir, "hello.txt"), encoding="utf-8").read()
         n(f"executor wrote hello.txt = {written!r} (phase succeeded after {time.time() - t_wait:.1f}s)")
 
-        await alice.read_all(SPACE, 0)                                     # so alice's `seen` covers the instruction
-        await send(alice, "agent.release", SPACE, {"agent": BOT})
-        n("alice releases the hold")
-        n(f"alice steers (the guard's own steer is not outside input, so the turn is auto): {STEER_LOCAL!r}")
+        n(f"alice steers (the guard's own steer is not outside input, but carol's steer has entered this session's context, so the turn is strict, R-24): {STEER_LOCAL!r}")
         before = len(await outputs()); effects_before = len((await state())["effects"])
         await send(alice, "session.input", SPACE, {"session": sid}, {"text": STEER_LOCAL})
         await until(lambda: len(agent.results) >= 2 and items[-1]["type"] == "status" and items[-1].get("state") == "idle", 120, "second turn")
@@ -99,10 +96,10 @@ async def run(root: str, say=print, model: str | None = None, max_turns: int = 4
         notes = os.path.join(ws, "notes.txt")
         local = open(notes, encoding="utf-8").read() if os.path.exists(notes) else None
         st = await state()
-        n(f"notes.txt in the workspace = {local!r}; effects proposed in this turn: {len(st['effects']) - effects_before}; held: {st['held']}")
+        n(f"notes.txt in the workspace = {local!r}; effects proposed in this turn: {len(st['effects']) - effects_before}")
         usage = [{"turns": r.num_turns, "usd": round(r.total_cost_usd or 0, 4), "in": sum((r.usage or {}).get(k, 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")), "out": (r.usage or {}).get("output_tokens")} for r in agent.results]
         n(f"claude turns/cost per HAN turn: {usage}; tool decisions: {agent.trace}")
-        return {"proposal": pid, "phase": st["effects"][pid]["phase"], "written": written, "local": local, "held_after": st["held"],
+        return {"proposal": pid, "phase": st["effects"][pid]["phase"], "written": written, "local": local,
                 "effects": len(st["effects"]), "trace": list(agent.trace), "usage": usage, "seconds": time.time() - t0,
                 "outputs": await outputs(), "modes": list(agent.modes)}
     finally:
