@@ -286,3 +286,7 @@ M0's spec round, M1 and T0 run in parallel. T1 runs alongside M2–M4, and its i
 | Versioning | the protocol version (`han/1`, bumped only by spec changes and negotiated through ALPN and hello) is separate from one shared workspace version (0.x) for all crates and apps |
 | Clean room | §9's process plus CI guards: `crates/han-timeline` may not import or mention the reference model or the studied product; Team B commits carry a `Clean-Room: B` trailer; `spec/timeline.md` changes need the reviewer's sign-off (CODEOWNERS) |
 | Contributions | DCO sign-off; spec changes go through written proposals (DECISIONS-style RFCs) |
+| Node runtime | managed: `han` downloads a pinned Node build and pinned ACP adapter versions into its data folder and runs adapters from there; updates are deliberate |
+| Bulk format | CBOR (`minicbor`) with integer field keys, batched runs compressed with zstd; each batch signed over its exact bytes (no canonical CBOR needed). Chosen for implementers in other languages; the speed and size gap to postcard is irrelevant at HAN's rates (open: a scratch benchmark on real op shapes if wanted) |
+| Platforms (MVP) | Windows 11, macOS, Linux, and WSL2 as a Linux target |
+| Observability | `tracing` plus OpenTelemetry **on by default**, exporting only to a collector the team configures, never to the project. Session content (prompts, code, stream text) stays out of exported spans unless a space allows it |
