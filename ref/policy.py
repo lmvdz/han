@@ -27,11 +27,16 @@ def abandon_after(window: int, drift_ppm: int = None) -> int:
 READ_ROLES = ("owner", "member", "guest")
 FINAL = ("succeeded", "failed", "cancelled")
 TASK_FINAL = ("done", "failed", "declined", "cancelled")
-MAX_OPEN_APPROVALS = 16       # unconsumed approvals per proposal (bounds receipt.profiles, P-01)
+MAX_OPEN_APPROVALS = 16       # P-08: open approvals by other authors, none of them a guard of the effect, when a non-guard approves
 MAX_OPEN_SESSIONS = 64        # open sessions per actor per space (P-15)
 MAX_ATTEMPTS = 64             # claims per effect (P-07 E5): the 65th is denied, propose again
 ROLE_INTERVALS = 64           # P-02: role intervals kept per actor (the most recent)
 MAX_GUARDED_FOR = 16 + 3      # P-15, derived and never checked: the authors of a task chain (maxDelegationDepth <= 16, so 17), a proposer, an executor
+# P-08, derived and never checked. Each author has at most one unconsumed and one consumed approval on an effect. Authors that are never
+# its guards hold at most MAX_OPEN_APPROVALS + 1 approvals in all (the cap, plus one a not-started outcome returns); its possible guards
+# (the operators of guardedFor, proposer and executor; operators never change, §4.3) are at most MAX_GUARDED_FOR, two approvals each.
+MAX_UNCONSUMED_APPROVALS = MAX_OPEN_APPROVALS + 1 + MAX_GUARDED_FOR       # 36: bounds an effect's E3 candidates and so receipt.profiles (P-01)
+MAX_APPROVALS = MAX_OPEN_APPROVALS + 1 + 2 * MAX_GUARDED_FOR              # 55: bounds an effect's state item (§3)
 
 # ───────────────────────── encoding ─────────────────────────
 def _jcs_str(s: str) -> str:
@@ -245,7 +250,8 @@ def find_claim(state, claim_id):
     return None, None, None
 
 def approval_candidates(state, eff, time):
-    """E3 order: unconsumed, unexpired approvals whose author satisfies the rule now (no profiles needed)."""
+    """E3 order: unconsumed, unexpired approvals whose author satisfies the rule now (no profiles needed). Whether a candidate counts
+    also needs its pinned profile: its key must be valid and its author not guarded at the claim (`usable`)."""
     rule = approval_rule(state["policy"], eff["action"])
     out = []
     for a in eff["approvals"]:
@@ -255,6 +261,10 @@ def approval_candidates(state, eff, time):
         if state["policy"]["separateApprover"] and a["author"] == eff["proposer"]: continue
         out.append(a)
     return out
+
+def usable(state, ctx, a) -> bool:
+    """E3: a candidate counts if its key is valid and its author isn't guarded at the claim (a guarded agent's approval never counts, P-15)."""
+    return key_status(ctx, a["author"], a["keyId"]) == "valid" and not guard_status(state, ctx, a["author"])["guarded"]
 
 def named_actors(state, entry) -> list[str]:
     """P-01, the actors an entry names, which `decide` needs pinned: the author; the target of member.set; the targets of an instruction
@@ -281,7 +291,7 @@ def named_actors(state, entry) -> list[str]:
 def relevant_actors(state, entry, ctx) -> list[str]:
     """P-01, the complete pin list given the profiles pinned so far (`ctx.profiles`): the named actors; for a claim, then the guards
     (the operators, in the profiles in `ctx`, of the agents whose guard must approve it, P-15) and the E3 candidates in order up to
-    and including the first whose profile in `ctx` shows a valid key (every candidate before it, unknown or revoked, included). The
+    and including the first that is usable by the profiles in `ctx` (every candidate before it, unknown, revoked or guarded, included). The
     sequencer calls it again with what it fetched until it names nothing new: at most three calls (P-01)."""
     out = named_actors(state, entry)
     eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
@@ -289,7 +299,7 @@ def relevant_actors(state, entry, ctx) -> list[str]:
         out.extend(g for g in guards_of(state, ctx, eff) if g)
         for a in approval_candidates(state, eff, ctx["time"]):
             out.append(a["author"])
-            if key_status(ctx, a["author"], a["keyId"]) == "valid": break
+            if usable(state, ctx, a): break
     return list(dict.fromkeys(out))
 
 
@@ -512,11 +522,12 @@ def _approve(state, entry, ctx, role):
     if eff["phase"] not in ("open", "claimed"): return deny(f"cannot approve in {eff['phase']}")
     rule = approval_rule(state["policy"], eff["action"])
     if b.get("expiresAt") and ts(b["expiresAt"]) <= ts(ctx["time"]): return deny("approval already expired")
-    if not (author in guards_of(state, ctx, eff) and role in READ_ROLES):
+    guards = guards_of(state, ctx, eff)
+    if not (author in guards and role in READ_ROLES):                    # a guard approves as a guard (P-15): no rule, no cap
         if not rule or not may_approve(state, rule, author): return deny("not an approver for this action")
         if state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")
-    if sum(1 for a in open_approvals(eff, ctx["time"]) if a["author"] != author) >= MAX_OPEN_APPROVALS:
-        return deny("too many open approvals")           # a new one supersedes the author's own
+        if sum(1 for a in open_approvals(eff, ctx["time"]) if a["author"] != author and a["author"] not in guards) >= MAX_OPEN_APPROVALS:
+            return deny("too many open approvals")       # a new one supersedes the author's own; the guards' never count (P-08)
     return ALLOW
 
 def open_approvals(eff, time):
@@ -528,11 +539,10 @@ def reopen(eff):
     return "cancelled" if eff["cancelRequested"] else "open"
 
 def pick_approval(state, eff, ctx):
-    """E3: the first candidate whose signing key is valid. A candidate reached with no pinned profile → invalid."""
+    """E3: the first usable candidate (a valid key, an author not guarded now). A candidate reached with no pinned profile → invalid."""
     for a in approval_candidates(state, eff, ctx["time"]):
-        st = key_status(ctx, a["author"], a["keyId"])
-        if st is None: return "unpinned", a
-        if st == "valid": return "ok", a
+        if key_status(ctx, a["author"], a["keyId"]) is None: return "unpinned", a
+        if usable(state, ctx, a): return "ok", a
     return "none", None
 
 def _claim(state, entry, ctx, role):
@@ -635,10 +645,11 @@ def is_human(ctx, actor):
     return ctx["profiles"].get(actor, {}).get("actorKind") == "human"
 
 def guarded_may_not(state, entry) -> bool:
-    """P-15: a guarded author may not approve, govern or steer others: `effect.approve`, `member.set`, and a `session.input` into a
-    session that isn't its own. (`policy.set`, `agent.unguard` and redacting another's entry need an owner or a guard, who are human,
-    so a guarded author never has them.) A session that isn't there is left to the kind's own checks (`invalid`)."""
+    """P-15: a guarded author may not approve, govern or steer others: `effect.approve`, `member.set` other than leaving (its own role
+    to none), and a `session.input` into a session that isn't its own. (`policy.set`, `agent.unguard` and redacting another's entry need
+    an owner or a guard, who are human, so a guarded author never has them.) A session that isn't there is left to the kind's own checks."""
     k, b = entry["kind"], entry["body"]
+    if k == "member.set" and b == {"actor": entry["author"], "role": "none"}: return False        # leaving is not governing
     if k in ("effect.approve", "member.set"): return True
     if k == "session.input": return b["session"] in state["sessions"] and state["sessions"][b["session"]]["actor"] != entry["author"]
     return False

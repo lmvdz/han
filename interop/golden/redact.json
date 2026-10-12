@@ -1137,16 +1137,16 @@
     {
      "event": {
       "ev": "close",
-      "conn": 0,
-      "by": "server",
+      "conn": 1,
+      "by": "client",
       "code": 1005
      }
     },
     {
      "event": {
       "ev": "close",
-      "conn": 1,
-      "by": "client",
+      "conn": 0,
+      "by": "server",
       "code": 1005
      }
     },

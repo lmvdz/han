@@ -4,7 +4,7 @@
   "P-08",
   "P-01"
  ],
- "description": "an author's new approval supersedes its old one; at most 16 unconsumed approvals by other authors per proposal, guards' included; expired ones don't count",
+ "description": "an author's new approval supersedes its old one; at most 16 open approvals by other authors per proposal, guards' not counted (R3); expired ones don't count",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -58,6 +58,16 @@
    }
   },
   "@m14:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@m15:a.example": {
    "actorKind": "human",
    "operatorConfirmed": false,
    "keys": {
@@ -501,7 +511,7 @@
    },
    "time": "2026-10-10T12:00:12Z",
    "expect": "allow",
-   "note": "the guard's approval is one of the open ones"
+   "note": "the guard's approval is open, and never counted toward the cap"
   },
   {
    "entry": {
@@ -1107,6 +1117,49 @@
   },
   {
    "entry": {
+    "id": "8bbe79c7933fc6b80308c1235cd02e75e8d2a061e2b9e80bb6847c3568663766",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m15:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-mm14",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:41Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "62b6ddcca7ac8e508176a0e90a0ba738dfc6bc2bf1d9c887973035551edf9cbb",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@m15:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "expiresAt": "2026-10-10T13:00:00Z"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a15",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:42Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
     "id": "4f35c8bdd32644614d05e48530d26115f7b07fe219a3c965f4716b3969735445",
     "v": 1,
     "space": "s1:a.example",
@@ -1123,9 +1176,9 @@
     "nonce": "n-a16",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:41Z",
+   "time": "2026-10-10T12:00:43Z",
    "expect": "denied",
-   "note": "16 others are open, the guard's among them: the cap"
+   "note": "16 others that aren't guards are open: the cap"
   },
   {
    "entry": {
@@ -1166,7 +1219,7 @@
      }
     ]
    },
-   "note": "14 of them expired: they no longer count, and the touch dropped them"
+   "note": "15 of them expired: they no longer count, and the touch dropped them"
   }
  ],
  "ids": {
@@ -1179,6 +1232,7 @@
   "a12": "9ace4b284010d00f69134e7426e2c8ea054b687582a989d7352459c0101eb045",
   "a13": "3fc496f891266e5cef9221e66be6f0030f7be1ab4c118799c05b39874728b7c9",
   "a14": "f665a238b4e777d27ca1ca23df649d259bd1a886910932f7f1b67c6d1da066ee",
+  "a15": "62b6ddcca7ac8e508176a0e90a0ba738dfc6bc2bf1d9c887973035551edf9cbb",
   "a16": "4f35c8bdd32644614d05e48530d26115f7b07fe219a3c965f4716b3969735445",
   "a17": "53eed196daa7ad35e6528ad8a7a028ae8041a6a20f8ac2951c96ca4bd04eb17e",
   "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
@@ -1201,6 +1255,7 @@
   "mm11": "7cb8ea95d062313b931c19b99f7cea98139b78908289d85ae8d57177eeecb8d4",
   "mm12": "6e1480e47be24bffd50e2290827e4c6e25cb83b1edb84855c47b025ae184873e",
   "mm13": "6364d5db4d705cb4bb982c76ed2a90035e12ac199ae338fc2b02f8cc824d09d4",
+  "mm14": "8bbe79c7933fc6b80308c1235cd02e75e8d2a061e2b9e80bb6847c3568663766",
   "mm2": "45f6abc08f9ebdcf177c911332fd03c51b84de0c771bb009af183bd8138b018d",
   "mm3": "089046307491e2a8275637644fcb58f7584fe2b3c12f7ea192cfd3215ac50ab5",
   "mm4": "126aa531f5a9ecedc6900fd9819af99cff6283823fc0e5615f4b613b37d07a7f",

@@ -50,11 +50,20 @@ class Host:
     def guarded_now(self) -> bool:
         return bool(self.state) and self._status(self.state, self.profile)["guarded"]
 
-    # R-24: once an outside instruction has entered a session's context, every later turn of that session is strict. The log holds no
-    # state for it; the host's own store does (the journal's meta), so it survives a restart.
+    # R-24: a session that has taken an outside instruction (author neither the agent nor its guard), whether or not the agent was guarded
+    # then, runs every turn strict from the moment the agent is guarded. The log holds no state for it; the host's own store does (the
+    # journal's meta), so it survives a restart. `taint` is the sessions that took one; `armed` the tainted sessions seen with the agent
+    # guarded (strict from then on, also after an unguard).
     def tainted(self, session: str | None) -> bool: return session in self.j.get("taint", [])
     def _taint(self, session: str | None):
         if session and not self.tainted(session): self.j.put("taint", self.j.get("taint", []) + [session])
+    def _armed(self, session: str | None) -> bool:
+        """True when `session` is tainted and the agent is guarded now or was when this was last looked at (arming is recorded)."""
+        if not self.tainted(session): return False
+        if session in self.j.get("armed", []): return True
+        if self.guarded_now:
+            self.j.put("armed", self.j.get("armed", []) + [session]); return True
+        return False
 
     def _guarded_session(self) -> bool:
         return self.steer_mode == "guarded" or self.guarded_now
@@ -67,6 +76,7 @@ class Host:
         self.full = None
         try: self.profile = (await self.client.read_state("profile:" + self.me))["profile"]
         except WireError: pass                                   # keep the last one
+        for t in self.j.get("taint", []): self._armed(t)         # R-24: a tainted session is strict from the moment the agent is guarded, even if it is unguarded again before a turn
 
     async def _full(self) -> dict:
         """The whole StateView at the head, read once per refresh and only when sessions or tasks are looked at."""
@@ -86,15 +96,32 @@ class Host:
     def _my_sessions(self) -> list[str]:
         return [i for i, s in self.full["sessions"].items() if s["actor"] == self.me]
 
-    def _mode_for(self, author: str, from_sessions: bool, session: str | None, at: dict, profile: dict | None) -> str:
-        """R-24: `strict` for an outside instruction, one by someone other than the agent and its guard, when `guard_status` on the state at
-        the instruction's seq (with the profile its receipt pinned) says guarded; for every later turn of a session such an instruction has
-        entered (`tainted`, which this call sets); and when the turn carries another session's stream or context as data."""
+    async def _author_guarded(self, author: str, seq: int, pins: dict | None) -> bool:
+        """R-24: is the instruction's author guarded at its seq (`state {agent: <author>, at: seq}`, then `guard_status`)? Unreadable: yes."""
+        if author == self.me: return False
+        try:
+            at = (await self.client.state(self.space, agent=author, at=seq))["state"]
+            n = (pins or {}).get(author)
+            prof = (await self.client.read_state("profile:" + author, at=n))["profile"] if n else None
+        except WireError: return True
+        return P.guard_status(at, {"time": "", "profiles": {author: prof} if prof else {}}, author)["guarded"]
+
+    def _mode_for(self, author: str, from_sessions: bool, session: str | None, at: dict, profile: dict | None,
+                  delegated: bool = False) -> str:
+        """R-24: `strict` for an outside instruction (by someone other than the agent and its guard) when `guard_status` on the state at the
+        instruction's seq (with the profile its receipt pinned) says guarded; for every later turn of a session such an instruction has
+        entered, once the agent is guarded (`_armed`; the taint is recorded here whether or not the agent is guarded); for a turn driven
+        by a guarded author or a task with a `guardedFor` (`delegated`), whatever the agent's own guarding; and when the turn carries
+        another session's stream or context as data."""
         gs = self._status(at, profile)
-        if gs["guarded"] and author not in (self.me, gs.get("guard")): self._taint(session)
-        if self.tainted(session): return "strict"
+        if author not in (self.me, gs.get("guard")): self._taint(session)
+        if delegated or self._armed(session): return "strict"
+        if gs["guarded"] and author not in (self.me, gs.get("guard")): self._arm(session); return "strict"
         if from_sessions: return "strict"              # SHOULD for any agent, MUST when guarded (R-24)
         return "auto"
+
+    def _arm(self, session: str | None):
+        if session and session not in self.j.get("armed", []): self.j.put("armed", self.j.get("armed", []) + [session])
 
     # ── life cycle ──
     async def run(self):
@@ -167,8 +194,9 @@ class Host:
     async def _turn(self, inp: TurnInput, pins: dict | None = None):
         from_sessions = any(s == "session" for s, _, _ in self.data)
         at = await self._state_at(inp.seq, pins)
-        if at: mode = self._mode_for(inp.author, from_sessions, inp.session, *at)
-        else: self._taint(inp.session); mode = "strict"      # no state at the receipt: be strict, and stay so (it may have been an outside instruction)
+        delegated = bool(inp.task and (self.full or {"tasks": {}})["tasks"].get(inp.task, {}).get("guardedFor")) or await self._author_guarded(inp.author, inp.seq, pins)
+        if at: mode = self._mode_for(inp.author, from_sessions, inp.session, *at, delegated=delegated)
+        else: self._taint(inp.session); self._arm(inp.session); mode = "strict"      # no state at the receipt: be strict, and stay so (it may have been an outside instruction)
         data, self.data = self.data, []
         inp.data = [t for _, t, _ in data]
         refs = [inp.trigger] + [r for _, _, r in data if r][-(MAX_REFS - 1):]
