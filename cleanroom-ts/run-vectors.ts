@@ -89,7 +89,8 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).sort()) {
       } else if (st.relevantActors) {
         const { id, ...entry } = clone(st.relevantActors);
         const s = states[entry.space];
-        const got = relevantActors(s && clone(s), entry, lastTime);
+        const known = Object.fromEntries(Object.entries(profiles).filter(([a]) => !st.pinned || st.pinned.includes(a)));
+        const got = relevantActors(s && clone(s), entry, { time: st.time, profiles: clone(known) } as any);
         if (!same(got, st.expect)) return bad(`relevantActors: expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(got)}`);
         pass++;
       } else if (st.sessionAccess) {
@@ -99,7 +100,7 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).sort()) {
         pass++;
       } else if (st.guardStatus) {
         const q = st.guardStatus;
-        const got = guardStatus(clone(states[q.space]), { time: lastTime, profiles: clone(profiles) } as any, q.actor);
+        const got = guardStatus(clone("view" in q ? q.view : states[q.space]), { time: lastTime, profiles: clone(profiles) } as any, q.actor);
         if (!same(got, st.expect)) return bad(`guardStatus: expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(got)}`);
         pass++;
       } else bad("unknown step form");

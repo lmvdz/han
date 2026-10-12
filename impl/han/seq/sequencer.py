@@ -297,22 +297,20 @@ class Sequencer:
         return res
 
     def pin_actors(self, state, entry, fetch=None) -> list[str]:
-        """P-01: the actors whose profiles the receipt pins. For a claim: the author, the proposer, the approval candidates in
-        E3 order up to and including the first whose key is valid (later ones are never consulted, so an unreachable one
-        cannot block the claim), then the guards (the confirmed operators of the pinned proposer and executor, K1). `fetch(actor)` gives a ProfileView or None (default: self.profile)."""
+        """P-01 (M3): Policy's relevant_actors is the whole pin rule; this only fetches. Call it with the views fetched so far, fetch what
+        it names that was not tried yet, and call again until nothing new (three rounds at most). The last list is what the receipt pins;
+        an actor in it that could not be fetched makes the entry `unavailable` (the caller). `fetch(actor)` gives a ProfileView or None (default: self.profile)."""
         fetch = fetch or self.profile
-        eff = state["effects"].get(entry["body"].get("proposal")) if state and entry["kind"] == "effect.claim" else None
-        if not eff: return P.relevant_actors(state, entry, self.now_str())
         now = self.now_str()
-        out = [entry["author"], eff["proposer"], eff["executor"]]      # the proposer and the executor first: their pinned operators are the guards (K1)
-        views = {a: v for a in out if (v := fetch(a))}
-        guards = P.guards_of(state, {"time": now, "profiles": views}, eff)
-        for a in P.approval_candidates(state, eff, now):
-            out.append(a["author"])
-            v = fetch(a["author"])
-            if v is None or v["keys"].get(a["keyId"], {}).get("status") == "valid": break      # no view: the pipeline answers unavailable
-        out.extend(g for g in guards if g)
-        return list(dict.fromkeys(out))
+        fetched, tried = {}, set()
+        need = []
+        for _ in range(3):
+            need = P.relevant_actors(state, entry, {"time": now, "profiles": fetched})
+            new = [a for a in need if a not in tried]
+            if not new: break
+            tried.update(new)
+            fetched.update({a: v for a in new if (v := fetch(a))})
+        return need
 
     # ── read (§3) ──
     def _state_at(self, S, at):
@@ -384,7 +382,7 @@ class Sequencer:
             assert len(P.jcs({"id": W.MAX_INT, "ok": {"state": one}})) <= LIMITS["maxFrameBytes"], "one effect does not fit maxFrameBytes (H3)"
             return {"state": one}
         if "agent" in sel:
-            one = dict({k: view[k] for k in EFFECT_VIEW}, agent=W.agent_facts(view, agent))
+            one = dict({k: view[k] for k in EFFECT_VIEW}, **W.agent_facts(view, agent))
             assert len(P.jcs({"id": W.MAX_INT, "ok": {"state": one}})) <= LIMITS["maxFrameBytes"], "the agent view does not fit maxFrameBytes (H3)"
             return {"state": one}
         if any(offs[p] > len(W._items(view, p)) for p in PAGED): raise _invalid("cursor offset beyond the map")

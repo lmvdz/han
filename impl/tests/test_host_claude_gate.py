@@ -185,7 +185,7 @@ async def test_host_answers_the_model_with_the_proposal_id_and_guard(env, ws):
     cl, botc = await world(env)
     script = [("mcp__han__deploy", {"target": "hello.txt", "content": "hi from HAN"}), ("Write", {"file_path": "../evil.txt"})]
     agent, made = fake_agent(ws, script)
-    host, task = start_host(env, botc, "guarded", agent)
+    host, task = start_host(env, botc, "guarded", agent, executor=BOT)      # M2: a held agent proposes only for itself
     sid = await session_id(host)
     await steer(cl["carol"], sid, "deploy hello.txt")
     props = await until(lambda: records(cl["alice"], "effect.propose", BOT))

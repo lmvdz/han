@@ -1,5 +1,5 @@
 // Clean-room HAN v1 Policy (§6): decide, fold, canRead, relevantActors, sessionAccess (+ guardStatus).
-import type { ActorId, Decision, Entry, EntryId, LogRecord, PolicyCtx, PolicyDoc, SpaceState, Seq, Time } from "./han.js";
+import type { ActorId, Decision, Entry, EntryId, GuardInput, LogRecord, PolicyCtx, PolicyDoc, SpaceState, Seq } from "./han.js";
 import {
   isActorId, isAction, isHex, isInt, isKeyId, isKind, isNonce, isPublicKey, isServerName, isSig, isSpaceId, isTime, isUnit,
   isProfileSpace, profileActorOf, serverOf, spaceServer, jcs, utf8len, jsonInts, isExtensionKind,
@@ -245,8 +245,8 @@ function live(s: SpaceState, sess: A): boolean {
   return holds(s, sess.actor);
 }
 /** P-15 guardStatus(state, ctx, agent): guard = the operator in the profile pinned for this entry if confirmed and the agent is not human; held, guarded =
- *  membership of the state's sets; forced = forceGuarded on and the pinned profile not human. */
-export function guardStatus(s: SpaceState, ctx: PolicyCtx, x: string): { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean } {
+ *  membership of the state's sets; forced = forceGuarded on and the pinned profile not human. `state` needs only `policy`, `held` and `guarded` (a `state {agent}` reply serves). */
+export function guardStatus(s: GuardInput, ctx: PolicyCtx, x: string): { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean } {
   const v = (ctx.profiles as A)?.[x];
   const agent = !!v && v.actorKind !== "human";
   const r: { guard?: ActorId; held: boolean; guarded: boolean; forced: boolean } = {
@@ -308,8 +308,8 @@ function candidates(s: SpaceState, e: A, time: string): A[] {
   if (!rule) return [];
   return e.approvals.filter((a: A) => openApproval(a, time) && satisfiesRule(s, rule, a.author) && !(s.policy.separateApprover && a.author === e.proposer));
 }
-export function relevantActors(state: SpaceState | undefined, entry: Entry, time: Time): ActorId[] {
-  const e = entry as A;
+/** P-01, the actors an entry names, which `decide` needs pinned. */
+function namedActors(state: SpaceState | undefined, e: A): string[] {
   const out: string[] = [e.author];
   const add = (a: string | undefined) => { if (a !== undefined && !out.includes(a)) out.push(a); };
   if (e.kind === "member.set") add(e.body?.actor);
@@ -319,11 +319,21 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, time
   if (e.kind === "agent.release") add(e.body?.agent);
   if ((e.kind === "effect.approve" || e.kind === "effect.cancel" || e.kind === "effect.claim") && state) {
     const ef = (state.effects as A)[e.body?.proposal];
-    if (ef) {
-      add(ef.proposer);
-      if (e.kind === "effect.claim") { for (const a of candidates(state, ef, time)) add(a.author); }
-      else add(ef.executor);
-    }
+    if (ef) { add(ef.proposer); add(ef.executor); }
+  }
+  return out;
+}
+/** P-01, the complete pin list given the profiles pinned so far (`ctx.profiles`): the named actors; for a claim then the guards (the operators in `ctx` of the
+ *  proposer and executor) and the E3 candidates in order up to and including the first whose profile in `ctx` shows a valid key (every one before it included).
+ *  The sequencer calls it again with what it fetched until it names nothing new: three calls at most. */
+export function relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[] {
+  const e = entry as A;
+  const out = namedActors(state, e);
+  const add = (a: string | undefined | null) => { if (a && !out.includes(a)) out.push(a); };
+  const ef = e.kind === "effect.claim" && state ? (state.effects as A)[e.body?.proposal] : undefined;
+  if (ef) {
+    for (const g of guardsOf(state!, ctx, ef)) add(g);
+    for (const a of candidates(state!, ef, ctx.time)) { add(a.author); if (keyValid(ctx, a.author, a.keyId)) break; }
   }
   return out as ActorId[];
 }
@@ -332,14 +342,6 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, time
 const HELD_OK = ["message", "session.open", "session.close", "session.input", "task.update", "effect.outcome", "effect.resolve", "effect.claim",
   "effect.cancel", "task.cancel", "effect.propose"];
 
-function pinsFor(state: SpaceState | undefined, e: A, time: string): string[] {
-  if (e.kind === "effect.claim" && state) {
-    const ef = (state.effects as A)[e.body?.proposal];
-    return ef ? [e.author, ef.proposer].filter((x, i, l) => l.indexOf(x) === i) : [e.author];
-  }
-  return relevantActors(state, e, time);
-}
-
 export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): Decision {
   const e = entry as A;
   // P-16 common step 1: shape of the header fields Policy reads, and of the body
@@ -347,8 +349,8 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
   const h = badHeader(e); if (h) return inv(h);
   const bb = badBody(e.kind, e.body); if (bb) return inv(bb);
   const b = e.body as A, a = e.author as string, time = ctx.time;
-  // step 2: pins
-  for (const x of pinsFor(state, e, time)) {
+  // step 2: pins of the actors the entry names
+  for (const x of namedActors(state, e)) {
     if (state?.profile !== undefined && x === profileActorOf(state.space) && x === a) continue; // own view is the space's state (§4.3)
     if (!(ctx.profiles as A)?.[x]) return inv("no pinned profile for " + x);
   }
@@ -377,6 +379,7 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
   // step 8: held
   if ((s.held as A)[a] === true) {
     if (!HELD_OK.includes(e.kind)) return deny("agent is on hold");
+    if (e.kind === "effect.propose" && b.executor !== a) return deny("a held agent can't instruct another agent");
     if (e.kind === "session.input") {
       const ts = (s.sessions as A)[b.session];
       if (ts && ts.actor !== a) return deny("held agent may only steer its own sessions");
@@ -848,6 +851,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (b.task !== undefined) ef.task = b.task;
       if (b.expiresAt !== undefined) ef.expiresAt = b.expiresAt;
       (s.effects as A)[id] = ef;
+      if ((s.held as A)[a] === true) (s.lastOutside as A)[a] = seq;   // M1: a held agent's own proposal waits for its guard too
       instruct(s, ctx, b.executor, a, seq);
       break;
     }
@@ -951,9 +955,10 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         const pending: number[] = [];
         for (const t of Object.values(s.tasks) as A[]) if (t.open && t.to.includes(a) && t.author !== a && t.author !== g) pending.push(t.seq);
         for (const ef of Object.values(s.effects) as A[]) if (!isFinalPhase(ef.phase) && ef.executor === a && ef.proposer !== a && ef.proposer !== g) pending.push(ef.seq);
-        if (pending.length) {   // becoming guarded with outside work unfinished holds at once
+        const fresh = pending.filter((q) => q > ((s.lastOutside as A)[a] ?? 0));   // M8: older work was covered by a release, or holds it still
+        if (fresh.length) {   // becoming guarded with outside work unfinished holds at once
           (s.held as A)[a] = true;
-          (s.lastOutside as A)[a] = Math.max(...pending, (s.lastOutside as A)[a] ?? 0);
+          (s.lastOutside as A)[a] = Math.max(...fresh);
         }
       }
       break;
@@ -976,32 +981,6 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     default: break;
   }
   return s;
-}
-
-/** A cheap, profile-free approximation of E3 for an executor deciding whether a claim is worth sending (§4.5): the action's rule has an open candidate, and for each of the
- *  proposer and the executor that the state says is held or guarded there is another open approval (its guard's). The sequencer's `decide` is the authority; a denied claim costs nothing. */
-export function approvalsInHand(state: SpaceState, proposal: string, time: Time): boolean {
-  const ef = (state.effects as A)[proposal];
-  if (!ef) return false;
-  if (ruleFor(state.policy, ef.action) && candidates(state, ef, time).length === 0) return false;
-  const agents = new Set<string>([ef.proposer, ef.executor]);
-  const need = [...agents].filter((x) => (state.held as A)[x] === true || (state.guarded as A)[x] === true).length;
-  if (need === 0) return true;
-  const others = new Set(openApprovals(ef, time).map((x: A) => x.author).filter((x: string) => !agents.has(x)));
-  return others.size >= need;
-}
-
-/** P-01 pinning plan for an `effect.claim`: the sequencer pins `base`, then `candidates` in order up to and including the first whose
- *  signing key is valid, and always `guards` (the operators in the pinned profiles of the proposer and executor, `guardsOf`).
- *  Returns null for any other entry or when the proposal is unknown. `ctx` must hold the profiles of the proposer and the executor (pinned first). */
-export function claimPinPlan(state: SpaceState | undefined, entry: Entry, time: Time, ctx?: PolicyCtx): { base: string[]; candidates: { author: string; keyId: string }[]; guards: string[] } | null {
-  const e = entry as A;
-  if (e.kind !== "effect.claim" || !state) return null;
-  const ef = (state.effects as A)[e.body?.proposal];
-  if (!ef) return null;
-  const base = [e.author as string, ef.proposer as string].filter((x, i, l) => l.indexOf(x) === i);
-  const guards = ctx ? guardsOf(state, ctx, ef).filter((g): g is string => g !== null) : [];
-  return { base, candidates: candidates(state, ef, time).map((a: A) => ({ author: a.author, keyId: a.keyId })), guards };
 }
 
 /** ProfileView of a profile space's state (§4.3). */

@@ -176,7 +176,7 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
       } else if (st.guardStatus) {
         // not observable on the wire: the pure function over the live server's folded state and the profiles in force at this step
         res.steps++;
-        const q = st.guardStatus, s = seq.stateOf(q.space);
+        const q = st.guardStatus, s = "view" in q ? q.view : seq.stateOf(q.space);   // a `state {agent}` reply is used as is (M5)
         const ctxProfiles: A = {}; for (const a of Object.keys(profiles)) ctxProfiles[a] = viewOf(a);
         const got = s ? guardStatus(clone(s), { time: timeString(clock.ms), profiles: ctxProfiles } as A, q.actor) : undefined;
         if (jcs(got ?? null) !== jcs(st.expect)) res.fail.push(`${f}#${i}: guardStatus(${q.actor}) expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(got)}`); else res.pass++;

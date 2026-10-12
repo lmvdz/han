@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { createHash } from "node:crypto";
 import { b64u, helloMessage, KeyPair, signBytes, unb64u } from "./keys.js";
 import { parseStrict } from "./wire.js";
+import type { AgentStateView } from "./han.js";
 
 type A = any;
 export class WireFault extends Error {
@@ -111,6 +112,10 @@ export class HanClient {
   }
   /** `state`: one page (`{state, next?}`); `sel` is one of `{at}`, `{cursor}`, `{effect}`, `{agent, at?}`. */
   state(space: string, sel: A = {}): Promise<A> { return this.call("state", { space, ...sel }); }
+  /** `state {agent}` (K7, M5): `held`, `guarded` and `lastOutside` cut to `agent`. It is a GuardInput: pass it to `guardStatus` as is, with the profiles pinned. */
+  async agentView(space: string, agent: string, at?: number): Promise<AgentStateView> {
+    return (await this.state(space, at === undefined ? { agent } : { agent, at })).state as AgentStateView;
+  }
   /** The whole StateView: follows `next` and unions the paged maps (§3). */
   async stateAll(space: string, sel: A = {}): Promise<A> {
     let r = await this.state(space, sel); const out = r.state;

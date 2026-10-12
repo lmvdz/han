@@ -1,7 +1,7 @@
 """HAN v1 reference Policy — executable form of architecture.md §6 (P-01…P-15) and the R-09 body schemas.
 
 Six pure functions (R-11): decide(state, entry, ctx), fold(state, record, ctx), can_read(state, reader, seq),
-relevant_actors(state, entry, time), session_access(state, actor, session), guard_status(state, ctx, actor). Entries and states are plain dicts shaped exactly like han.ts.
+relevant_actors(state, entry, ctx), session_access(state, actor, session), guard_status(state, ctx, actor). Entries and states are plain dicts shaped exactly like han.ts.
 Signatures, content and the exact wire header are checked by Log/Identity (ref/wire.py), not here; Policy reads
 only `kind`, `author`, `keyId`, `body`, `refs`, `seen`. Test vectors may carry an explicit "id" (see ref/README.md).
 """
@@ -255,12 +255,10 @@ def approval_candidates(state, eff, time):
         out.append(a)
     return out
 
-def relevant_actors(state, entry, time=None) -> list[str]:
-    """P-01: actors whose profiles the receipt must pin: the author; the target of member.set; the targets of an
-    instruction (the actor of the session a steer goes into, each assignee of a task, the executor of a proposal); the agent of
-    a release; for an approve or cancel, the proposer and the executor of the proposal (their operators are the guards, P-15); for
-    a claim, the proposer and the author of every approval candidate (E3 order, unexpired at `time`). The guards of a claim are
-    the operators in the pinned profiles of the proposer and the executor: the sequencer pins them with `guards_of`."""
+def named_actors(state, entry) -> list[str]:
+    """P-01, the actors an entry names, which `decide` needs pinned: the author; the target of member.set; the targets of an instruction
+    (the actor of the session a steer goes into, each assignee of a task, the executor of a proposal); the agent of a release; for an
+    approve, cancel or claim, the proposer and the executor of the proposal (their operators are the guards, P-15)."""
     out = [entry["author"]]
     b = entry["body"]
     if entry["kind"] == "member.set":
@@ -276,10 +274,21 @@ def relevant_actors(state, entry, time=None) -> list[str]:
         out.append(b["agent"])
     if entry["kind"] in ("effect.approve", "effect.cancel", "effect.claim") and state:
         eff = state["effects"].get(b["proposal"])
-        if eff:
-            out.append(eff["proposer"])
-            if entry["kind"] == "effect.claim": out.extend(a["author"] for a in approval_candidates(state, eff, time))
-            else: out.append(eff["executor"])
+        if eff: out.extend((eff["proposer"], eff["executor"]))
+    return list(dict.fromkeys(out))
+
+def relevant_actors(state, entry, ctx) -> list[str]:
+    """P-01, the complete pin list given the profiles pinned so far (`ctx.profiles`): the named actors; for a claim, then the guards
+    (the operators in the profiles in `ctx` of the proposer and executor, P-15) and the E3 candidates in order up to and including
+    the first whose profile in `ctx` shows a valid key (every candidate before it, unknown or revoked, included). The sequencer
+    calls it again with what it fetched until it names nothing new: at most three calls (P-01)."""
+    out = named_actors(state, entry)
+    eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
+    if eff:
+        out.extend(g for g in guards_of(state, ctx, eff) if g)
+        for a in approval_candidates(state, eff, ctx["time"]):
+            out.append(a["author"])
+            if key_status(ctx, a["author"], a["keyId"]) == "valid": break
     return list(dict.fromkeys(out))
 
 
@@ -328,8 +337,7 @@ def decide(state, entry, ctx) -> dict:
     err = validate(entry)
     if err: return invalid(err)
     kind, author = entry["kind"], entry["author"]
-    ra = relevant_actors(state, entry, ctx["time"])
-    for actor in (ra[:2] if kind == "effect.claim" else ra):
+    for actor in named_actors(state, entry):
         if actor not in ctx["profiles"]: return invalid(f"no pinned profile for {actor}")
     if key_status(ctx, author, entry["keyId"]) != "valid": return deny("author key not valid")
 
@@ -345,7 +353,7 @@ def decide(state, entry, ctx) -> dict:
 
     role = role_of(state, author)
     if author in state["held"] and not held_may(state, entry):
-        return deny("held: an outside steer is waiting for this agent's human")       # P-15
+        return deny("held: a held agent instructs no one and waits for its guard")     # P-15
     if is_extension(kind):
         need = state["policy"]["extensionsMinRole"]
         return ALLOW if role in READ_ROLES[:READ_ROLES.index(need) + 1] else deny(f"extensions need role {need} or higher")
@@ -632,15 +640,17 @@ HELD_KINDS = {"message", "effect.propose", "effect.claim", "effect.outcome", "ef
               "task.update", "task.cancel", "session.open", "session.close"}
 
 def held_may(state, entry):
-    """P-15: a held agent may talk, report and propose (its proposals wait for its guard), and work its own sessions; it
-    may not instruct anyone else (session.input into others' sessions, task), approve, or govern."""
+    """P-15: a held agent may talk, report, propose work for itself (it waits for its guard), and work its own sessions; it
+    may not instruct anyone else (session.input into others' sessions, a task, a proposal naming another executor), approve, or govern."""
+    if entry["kind"] == "effect.propose": return entry["body"]["executor"] == entry["author"]
     if entry["kind"] == "session.input":
         sess = state["sessions"].get(entry["body"]["session"])
         return not sess or sess["actor"] == entry["author"]        # a session that isn't there is `invalid`, whoever steers it
     return entry["kind"] in HELD_KINDS
 
 def guard_status(state, ctx, x) -> dict:
-    """P-15, the one guard function: `{guard?, held, guarded, forced}` for `x` at this entry. `guard` is the `operator` in the profile
+    """P-15, the one guard function: `{guard?, held, guarded, forced}` for `x` at this entry. `state` needs only `policy`, `held` and
+    `guarded` (han.ts GuardInput), so a `state {agent}` reply serves as is (R-24). `guard` is the `operator` in the profile
     pinned for this entry, if it is confirmed and `x` is not human. `guarded`: `x` chose it (sticky). `forced`: owners' `forceGuarded`
     is on and `x` is not human. `held`: `x` waits for its guard."""
     p = ctx["profiles"].get(x)
@@ -811,6 +821,7 @@ def fold(state, record, ctx) -> dict:
         if "cost" in b: eff["cost"] = dict(b["cost"])
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
+        if author in s["held"]: s["lastOutside"][author] = seq                  # M1: a held agent's own proposal waits for its guard too
         instruct(s, ctx, b["executor"], author, seq)
         s["effects"][eid] = eff
     elif kind == "effect.approve":
@@ -887,12 +898,13 @@ def fold(state, record, ctx) -> dict:
         s["sessions"][eid] = {"actor": author, "opened": rc["time"], "steers": 0, "steerMode": b["steerMode"]}
         if b["steerMode"] == "guarded" and not is_human(ctx, author) and author not in s["guarded"]:
             s["guarded"][author] = True                                          # sticky: only its guard unguards it
-            g = ctx["profiles"][author]["operator"]
+            g = guard_status(s, ctx, author).get("guard")                         # the same guard every P-15 rule uses
             pending = [t["seq"] for t in s["tasks"].values() if t["open"] and author in t["to"] and t["author"] not in (author, g)]
             pending += [x["seq"] for x in s["effects"].values() if x["phase"] not in FINAL and x["executor"] == author and x["proposer"] not in (author, g)]
+            pending = [q for q in pending if q > s["lastOutside"].get(author, 0)]   # M8: older work was covered by a release, or holds it still
             if pending:                                                           # becoming guarded with outside work unfinished holds at once
                 s["held"][author] = True
-                s["lastOutside"][author] = max(pending + [s["lastOutside"].get(author, 0)])
+                s["lastOutside"][author] = max(pending)
         if "task" in b: s["sessions"][eid]["task"] = b["task"]
     elif kind == "session.close":
         del s["sessions"][b["session"]]                                          # F3(b): closed sessions leave the state

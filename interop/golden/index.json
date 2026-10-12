@@ -142,7 +142,7 @@
    "vector": "ts-client",
    "agree": {
     "ts-client": true,
-    "py-client": false
+    "py-client": true
    }
   },
   {
@@ -150,7 +150,7 @@
    "vector": "ts-client",
    "agree": {
     "ts-client": true,
-    "py-client": false
+    "py-client": true
    }
   },
   {

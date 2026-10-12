@@ -347,9 +347,38 @@
     "nonce": "n-c1",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:10Z",
    "expect": [
     "@bot:b.example",
     "@m:a.example"
+   ],
+   "pinned": []
+  },
+  {
+   "relevantActors": {
+    "id": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": [
+    "@bot:b.example",
+    "@m:a.example",
+    "@op:b.example"
    ]
   },
   {

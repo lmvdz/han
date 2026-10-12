@@ -11,7 +11,7 @@ async def test_member_steers_guarded_agent_holds_it_and_proposal_waits(env):
     effect.propose with guards [operator] awaiting approval; the executor's claim is denied until the operator approves."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
-    host, task = start_host(env, botc, "guarded", agent)
+    host, task = start_host(env, botc, "guarded", agent, executor=BOT)      # M2: a held agent proposes only for itself
     sid = await session_id(host)
     r = await steer(cl["carol"], sid, "push release")
     props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
@@ -19,10 +19,10 @@ async def test_member_steers_guarded_agent_holds_it_and_proposal_waits(env):
     st = await state(cl["alice"])
     eff = st["effects"][props[0]["receipt"]["id"]]
     assert st["held"] == {BOT: True} and eff["phase"] == "open" and P.guards_of(st, {"profiles": {BOT: (await cl["alice"].read_state("profile:" + BOT))["profile"]}}, eff) == [ALICE]
-    assert eff["executor"] == EXEC and host.held and host.guarded_now
+    assert eff["executor"] == BOT and host.held and host.guarded_now
     assert props[0]["entry"]["seen"] == r["seq"] and props[0]["entry"]["refs"] == [r["id"]]        # R-17
-    # the executor's claim is denied; after the operator approves it is allowed
-    ex, pid, digest = cl["exec"], props[0]["receipt"]["id"], props[0]["entry"]["body"]["planDigest"]
+    # the executor's (here the agent's own) claim is denied; after the operator approves it is allowed
+    ex, pid, digest = botc, props[0]["receipt"]["id"], props[0]["entry"]["body"]["planDigest"]
     claim = lambda: ex.make_entry("effect.claim", S, {"proposal": pid, "attempt": 1, "instance": ex.key.key_id, "window": 30})
     with pytest.raises(WireError) as exc: await ex.append(*claim())
     assert exc.value.code == "denied"
@@ -48,7 +48,7 @@ async def test_held_agent_cannot_delegate_and_reports_it_as_data(env):
     """P-15, R-24: a held agent's Task is not appended (Policy would deny it); the host reports the refusal in the session stream
     and the world action still becomes a proposal."""
     cl, botc = await world(env)
-    host, task = start_host(env, botc, "guarded")
+    host, task = start_host(env, botc, "guarded", executor=BOT)
     sid = await session_id(host)
     seen = Collector(cl["carol"].watch(S, sid)); await asyncio.sleep(0.2)
     await steer(cl["carol"], sid, f"delegate to {DAVE} fix it; push x")
@@ -76,7 +76,7 @@ async def test_task_naming_a_guarded_agent_is_an_outside_turn(env):
     """P-15, R-24: a task naming a guarded agent from a member becomes a strict turn (the agent is held, settle_holds)."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
-    host, task = start_host(env, botc, "guarded", agent)
+    host, task = start_host(env, botc, "guarded", agent, executor=BOT)
     await session_id(host)
     e, c = cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})
     await cl["carol"].append(e, c)
@@ -125,18 +125,21 @@ async def test_watchers_and_context_only_for_readers(env):
     assert ctx["what"] == "transcript"
     carol.stop(); alice.stop(); task.cancel()
 
+async def _two(c): return len(await records(c, "effect.propose", BOT)) == 2
+
 async def test_release_ends_hold_and_stale_release_is_refused(env):
     """P-15: only the guard's release (seen = head) ends the hold; a release that has not seen a later outside instruction is
     refused as stale. The host sees the state change and runs the next turn per the new state."""
     cl, botc = await world(env)
     agent = ScriptedAgent()
-    host, task = start_host(env, botc, "guarded", agent)
+    host, task = start_host(env, botc, "guarded", agent, executor=BOT)
     sid = await session_id(host)
     await steer(cl["carol"], sid, "push one")
     await until(lambda: records(cl["alice"], "effect.propose", BOT))
     seen_then = (await state(cl["alice"]))["head"]
     await steer(cl["carol"], sid, "push two")
     await until(lambda: len(agent.calls) == 2)
+    await until(lambda: _two(cl["alice"]))                                             # M1: its own proposals raise the bound too; the release must have seen both
     rel = lambda seen: cl["alice"].make_entry("agent.release", S, {"agent": BOT}, seen=seen)
     with pytest.raises(WireError) as ex: await cl["alice"].append(*rel(seen_then))
     assert ex.value.code == "denied" and "stale" in ex.value.message

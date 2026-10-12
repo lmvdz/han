@@ -18,15 +18,21 @@ one less, or the first head of the run. Moves include the held agent finishing i
 it. Closed sessions leave the state, so steering or closing one is `invalid`.
 
 The ghost records, per agent, the seq of every outside instruction it saw (K5), from its own reading of who instructed whom
-while the agent was guarded, plus the open outside work it finds in the log when an agent becomes guarded; it never reads
-Policy's `lastOutside`. Properties: GuardedClaimsNeedTheirHuman (a claim of an effect whose proposer or executor is guarded,
-forced or held needs that agent's guard's unused approval, a role and a valid key, and is refused when the agent has no
-confirmed operator), HeldInstructNoOne, NeverLooser (no outside steer into a dead session; no instruction to a guarded agent
-without its operator), OneOpenApprovalPerAuthor, ReleaseCoversOnlyWhatWasSeen (a release is allowed exactly when its guard may
-release and no outside instruction newer than its `seen` was ever received) and ExactHolds (Policy holds and guards exactly the
-agents the invariant holds and guards). Not modelled, and covered by vectors instead (ref/mutate_vectors.py catches each): the
-attempt limit (`attempt-limit`; model_check has it as a property), cancel rights, expiry of approvals (`approvals-stay-bounded`),
-the `guard_status` result itself (`guard-status`), the shapes of `session.open`.
+while the agent was guarded, the seq of every proposal the agent made while held (M1: it waits for the guard like an outside
+instruction), the open outside work it finds in the log when an agent becomes guarded that is newer than all of those (M8:
+anything older was covered by a release or holds the agent still), and the `seen` of every release; it never reads Policy's
+`lastOutside`. A held agent may propose, but only work it executes itself (M2), and the agents propose to themselves too.
+Properties: HeldWorkWaitsForItsGuard (the literal invariant, not E3: a claim of an effect whose proposer or executor is held,
+or that an agent proposed while held and its guard has not released it since with `seen` at or after the proposal, needs that
+agent's guard's unused approval, a role and a valid key, and is refused when the agent has no confirmed operator),
+HeldInstructNoOne, NeverLooser (no outside steer into a dead session; no instruction to a guarded agent without its operator),
+OneOpenApprovalPerAuthor, ReleaseCoversOnlyWhatWasSeen (a release is allowed exactly when its guard may release and no outside
+instruction or held proposal newer than its `seen` was ever received) and ExactHolds (Policy holds and guards exactly the agents
+the invariant holds and guards). Not modelled, and covered by vectors instead (ref/mutate_vectors.py catches each): the attempt
+limit (`attempt-limit`; model_check has it as a property), cancel rights, expiry of approvals (`approvals-stay-bounded`), the
+`guard_status` result itself (`guard-status`), the shapes of `session.open`, and E3's stricter rule that a guarded or forced
+agent's effects need its guard even while it is not held (`guarded-effects-need-the-guard`, `force-guarded-*`: that rule goes
+beyond the invariant, so the invariant cannot judge it).
 States are deduplicated on content: a 32-byte SHA-256 of (Policy state minus history, plus the ghost) is stored per state,
 not a copy. A memory cap (default 6 GB of resident memory) ends the run cleanly: one line "NOT COMPLETED ..." and exit 3.
 
@@ -36,7 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import policy as POL
 
 SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy.py"), encoding="utf-8").read()
-DEPTH = 5                      # full runs (run_all, §10); --quick runs depth 4; mutations run at depth 4
+DEPTH = 4                      # run_all runs depth 4, and the mutations at depth 4; depth 5 is opt-in (run_all --depth5, with --max-mem-gb)
 MAX_MEM_GB = 6.0               # abort cleanly above this resident size (F7)
 SP = "sg:a.example"
 O, P, OP, OP2, X = "@o:a.example", "@p:a.example", "@op:b.example", "@op2:b.example", "@x:c.example"
@@ -68,20 +74,20 @@ def E(label, kind, author, body):
 S1, S2, S3, S4, S5, S7 = H("s1"), H("s2"), H("s3"), H("s4"), H("s5"), H("s7")
 SESS = {S1: ("s1", BOT, "guarded"), S2: ("s2", BOT2, "auto"), S3: ("s3", BOT, "auto"), S4: ("s4", BOT2, "guarded"), S5: ("s5", BOT3, "auto"), S7: ("s7", BOT, "guarded")}
 OPENED_AT_START = (S1, S2, S3)                                   # S4: BOT2 may open it later (becoming guarded); S5: session-less BOT3 may open an auto one
-PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT), "pr4": (BOT, BOT2), "pr5": (OP, BOT), "pr6": (P, BOT3), "pr7": (P, BOT2)}   # pr5: its own guard's; pr7: aimed at BOT2 before it is guarded (a settled hold records the guard)
-CLAIMABLE = ("pr0", "pr1", "pr2", "pr3", "pr4", "pr5", "pr6", "pr7")
+PROPS = {"pr1": (BOT, X), "pr2": (BOT2, X), "pr3": (P, BOT), "pr4": (BOT, BOT2), "pr5": (OP, BOT), "pr6": (P, BOT3), "pr7": (P, BOT2), "pr8": (BOT, BOT)}   # pr5: its own guard's; pr7: aimed at BOT2 before it is guarded (a settled hold records the guard); pr8: BOT's own work, which it may propose while held
+CLAIMABLE = ("pr0", "pr1", "pr2", "pr3", "pr4", "pr5", "pr6", "pr7", "pr8")
 TASKS = {"P tasks BOT": (P, [BOT]), "P tasks BOT2+BOT": (P, [BOT2, BOT]), "BOT tasks BOT2": (BOT, [BOT2]), "BOT2 tasks BOT": (BOT2, [BOT]),
          "P tasks BOT3": (P, [BOT3]), "OP2 tasks BOT2": (OP2, [BOT2]), "P tasks BOT+BOT2": (P, [BOT, BOT2]), "P tasks X": (P, [X]), "O tasks P": (O, [P])}      # P is human: never forced
 
 def fz(d): return tuple(sorted(d.items()))
 
 class M:
-    __slots__ = ("labels", "state", "oprev", "gd", "held", "covered", "used", "lastk", "closed", "unconf", "outs")
+    __slots__ = ("labels", "state", "oprev", "gd", "held", "covered", "used", "lastk", "closed", "unconf", "outs", "owed", "rel")
     def __init__(self, **kw):
         for k in self.__slots__: setattr(self, k, kw[k])
     def key(self):
         st = {k: v for k, v in self.state.items() if k not in ("entries", "head", "roleHistory")}
-        body = json.dumps([st, self.oprev, self.gd, self.held, self.covered, self.used, self.lastk, sorted(self.closed), sorted(self.unconf), self.outs], sort_keys=True)
+        body = json.dumps([st, self.oprev, self.gd, self.held, self.covered, self.used, self.lastk, sorted(self.closed), sorted(self.unconf), self.outs, self.owed, self.rel], sort_keys=True)
         return hashlib.sha256(body.encode()).digest()
     def with_(self, **kw):
         d = {k: getattr(self, k) for k in self.__slots__}; d.update(kw); return M(**d)
@@ -153,15 +159,23 @@ def open_outside_work(m, a):
              if e and e["phase"] not in POL.FINAL and e["executor"] == a and e["proposer"] not in (a, g)]
     return seqs
 
-def required(m, proposer, executor):
-    """Whose own approval a claim needs: the guard of the proposer and of the executor, each if guarded, forced or held. None = no confirmed operator."""
-    out = set()
-    for who in (proposer, executor):
-        if who in dict(m.held) or watched(m, who): out.add(guard_of(m, who))
+def waiting(m, pr, eff):
+    """The invariant's claim side, read from the ghost alone: the agents whose guard must approve `pr` before it runs. Its proposer and its
+    executor while held; and an agent that proposed it while held, until its guard released it with `seen` at or after the proposal (M1)."""
+    out = {who for who in (eff["proposer"], eff["executor"]) if who in dict(m.held)}
+    out |= {who for (p, who), seq in m.owed if p == pr and dict(m.rel).get(who, 0) < seq}
     return out
 
+def required(m, pr, eff):
+    """The guards whose own unused approval a claim of `pr` needs: those of the agents `waiting` on it. None = no confirmed operator."""
+    return {guard_of(m, x) for x in waiting(m, pr, eff)}
+
+def released(a, seen):
+    """After an allowed release of `a` signed with `seen`: note it (what a release covers) and end the hold."""
+    return lambda n: n.with_(held=fz({k: v for k, v in n.held if k != a}), rel=setk(n.rel, a, max(dict(n.rel).get(a, 0), seen)))
+
 def init(pol):
-    m = M(labels=(), state=None, oprev=False, gd=(), held=(), covered=(), used=(), lastk=(), closed=frozenset(), unconf=frozenset(), outs=())
+    m = M(labels=(), state=None, oprev=False, gd=(), held=(), covered=(), used=(), lastk=(), closed=frozenset(), unconf=frozenset(), outs=(), owed=(), rel=())
     m, d = apply(pol, m, E("C", "space.create", O, {"policy": policy()}), "C"); assert m, d
     for lab, a in (("m1", P), ("m2", X), ("m3", OP), ("m4", OP2), ("m5", BOT), ("m6", BOT2), ("m7", BOT3)):
         m, d = apply(pol, m, E(lab, "member.set", O, {"actor": a, "role": "member"}), lab); assert m, (lab, d)
@@ -196,13 +210,12 @@ def successors(pol, m):
     for author in (OP, OP2, O, BOT):
         for a in (BOT, BOT2, BOT3, X):                           # a release names the agent; no session is needed
             for seen in ((head, head - 1, FIRST, LATE) if FORCEMAP.get(a) == author else (head,)):   # stale releases, only where they could matter
-                go(f"{author} releases {a[1:].split(':')[0]}@{seen}", "agent.release", author, {"agent": a},
-                   lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a})), seen=seen)
+                go(f"{author} releases {a[1:].split(':')[0]}@{seen}", "agent.release", author, {"agent": a}, released(a, seen), seen=seen)
     for author in (OP, OP2, BOT):                                # only the guard unguards, with a release
         for a in (BOT, BOT2, BOT3):
             for seen in ((head, head - 1, FIRST, LATE) if GUARD.get(a) == author else (head,)):
                 go(f"{author} unguards {a[1:].split(':')[0]}@{seen}", "agent.release", author, {"agent": a, "unguard": True},
-                   lambda n, a=a: n.with_(held=fz({k: v for k, v in m.held if k != a}), gd=setk(m.gd, a, False)), seen=seen)
+                   lambda n, a=a, seen=seen: released(a, seen)(n).with_(gd=setk(m.gd, a, False)), seen=seen)
     for name, (author, to) in TASKS.items():
         go(name, "task", author, {"to": to}, lambda n, author=author, to=to: hold(m, n, author, [(a, "task") for a in to]))
     for tid, t in m.state["tasks"].items():                      # the assignee finishes its own work; the outsider cancels it
@@ -214,7 +227,7 @@ def successors(pol, m):
     for sid, a in ((S4, BOT2), (S7, BOT)):                      # becoming guarded: open outside work holds at once and is noted
         if sid in m.state["sessions"] or chosen(m, a): continue
         def opened(n, a=a):
-            seqs = open_outside_work(m, a)
+            seqs = [q for q in open_outside_work(m, a) if q > dict(m.outs).get(a, 0)]            # M8: older work was covered by a release, or holds it still
             held, outs = dict(n.held), dict(n.outs)
             if seqs: held[a] = True; outs[a] = max(seqs + [outs.get(a, 0)])
             return n.with_(gd=setk(m.gd, a, True), held=fz(held), outs=fz(outs))
@@ -226,7 +239,12 @@ def successors(pol, m):
     for pr, (author, executor) in PROPS.items():
         if H(pr) in m.state["effects"]: continue
         body = {"executor": executor, "action": "pay", "planDigest": DG, "repeatable": pr == "pr1"}
-        go(f"{author} proposes {pr}", "effect.propose", author, body, lambda n, a=author, x=executor: hold(m, n, a, [(x, "executor")]), label=pr)
+        def proposed(n, a=author, x=executor, pr=pr):
+            n = hold(m, n, a, [(x, "executor")])
+            if a not in dict(m.held): return n
+            seq = m.state["head"] + 1                                                    # M1: what a held agent proposes waits for its guard
+            return n.with_(outs=setk(n.outs, a, max(dict(n.outs).get(a, 0), seq)), owed=setk(n.owed, (pr, a), seq))
+        go(f"{author} proposes {pr}", "effect.propose", author, body, proposed, label=pr)
     for pr in CLAIMABLE:
         pid = H(pr); eff = m.state["effects"].get(pid)
         if not eff or eff["phase"] in POL.FINAL: continue
@@ -236,7 +254,7 @@ def successors(pol, m):
             go(f"{who} approves {pr}", "effect.approve", who, {"proposal": pid, "planDigest": DG},
                lambda n, who=who, pr=pr: n.with_(covered=setk(n.covered, (pr, who), cnt(n.used, (pr, who)) + 1)))
         a = len(eff["claims"]) + 1
-        req = tuple(sorted(g for g in required(m, eff["proposer"], eff["executor"]) if g))
+        req = tuple(sorted(g for g in required(m, pr, eff) if g))
         go(f"{eff['executor']} claims {pr}#{a}", "effect.claim", eff["executor"], {"proposal": pid, "attempt": a, "instance": "k1", "window": 30},
            lambda n, pr=pr, req=req: n.with_(used=fz({**dict(n.used), **{(pr, g): cnt(n.used, (pr, g)) + 1 for g in req}}), lastk=setk(n.lastk, pr, req)))
         if eff["phase"] == "claimed":
@@ -295,14 +313,16 @@ def check(m, name, kind, author, body, d, seen):
     if author in held:
         if kind in ("task", "effect.approve"): return f"held {author} allowed {kind}"
         if kind == "session.input" and SESS[body["session"]][1] != author: return f"held {author} allowed to steer another's session"
+        if kind == "effect.propose" and body["executor"] != author: return f"held {author} allowed to propose work for {body['executor']}"
     if kind == "effect.claim":
         pr = name.split()[2].split("#")[0]
         eff = m.state["effects"][H(pr)]
-        for g in required(m, eff["proposer"], eff["executor"]):
-            if g is None: return f"claim of {pr} allowed for a guarded agent with no confirmed operator"
-            if m.state["roles"].get(g) is None: return f"claim of {pr} allowed while {g}, whose approval it needs, holds no role"
-            if g == OP and m.oprev: return f"claim of {pr} allowed after {g}'s key was revoked"
-            if cnt(m.covered, (pr, g)) - cnt(m.used, (pr, g)) < 1: return f"claim of {pr} allowed without an unused approval by {g}"
+        for x in sorted(waiting(m, pr, eff)):
+            g = guard_of(m, x)
+            if g is None: return f"HeldWorkWaitsForItsGuard: claim of {pr} allowed while {x} waits, and {x} has no confirmed operator"
+            if m.state["roles"].get(g) is None: return f"HeldWorkWaitsForItsGuard: claim of {pr} allowed while {g}, whose approval {x} waits for, holds no role"
+            if g == OP and m.oprev: return f"HeldWorkWaitsForItsGuard: claim of {pr} allowed after {g}'s key was revoked"
+            if cnt(m.covered, (pr, g)) - cnt(m.used, (pr, g)) < 1: return f"HeldWorkWaitsForItsGuard: claim of {pr} allowed without an unused approval by {g}, though {x} waits for it"
     return None
 
 class OutOfMemory(Exception): pass
@@ -354,7 +374,7 @@ def explore(pol, depth, cap_bytes=None, progress=False):
                 if kind == "agent.release": saw_stale |= (not d["allow"] and "stale" in d.get("reason", ""))
                 if kind == "effect.claim":
                     pr = name.split()[2].split("#")[0]; eff = m.state["effects"][H(pr)]
-                    if required(m, eff["proposer"], eff["executor"]):
+                    if waiting(m, pr, eff):
                         saw_claim |= d["allow"]; saw_denial |= (not d["allow"] and "guard" in d.get("reason", ""))
                 if m2 is not None:
                     k = m2.key()
@@ -388,8 +408,6 @@ MUTATIONS = {
     "held-may-relay": ('        return not sess or sess["actor"] == entry["author"]', '        return True'),
     "held-may-delegate": ('HELD_KINDS = {"message",', 'HELD_KINDS = {"task", "message",'),
     "held-may-approve": ('HELD_KINDS = {"message",', 'HELD_KINDS = {"effect.approve", "message",'),
-    "guarded-effects-need-no-guard": (GUARDS, 'if g["held"] or g["forced"]: out.append(g.get("guard"))'),
-    "forced-effects-need-no-guard": (GUARDS, 'if g["held"] or g["guarded"]: out.append(g.get("guard"))'),
     "held-effects-need-no-guard": (GUARDS, 'if g["guarded"] or g["forced"]: out.append(g.get("guard"))'),
     "proposers-need-no-guard": ('for who in dict.fromkeys((eff["proposer"], eff["executor"])):', 'for who in (eff["executor"],):'),
     "executors-need-no-guard": ('for who in dict.fromkeys((eff["proposer"], eff["executor"])):', 'for who in (eff["proposer"],):'),
@@ -407,8 +425,10 @@ MUTATIONS = {
     "pending-counts-closed-tasks": ('if t["open"] and author in t["to"] and', 'if author in t["to"] and'),
     "pending-counts-finished-effects": ('if x["phase"] not in FINAL and x["executor"] == author', 'if x["executor"] == author'),
     "pending-tasks-first-assignee-only": ('author in t["to"] and t["author"] not in (author, g)]', 'author == t["to"][0] and t["author"] not in (author, g)]'),
-    "guarding-notes-no-bound": ('                s["lastOutside"][author] = max(pending + [s["lastOutside"].get(author, 0)])', '                pass'),
-    "guarding-lowers-the-bound": ('max(pending + [s["lastOutside"].get(author, 0)])', 'max(pending)'),
+    "guarding-notes-no-bound": ('                s["lastOutside"][author] = max(pending)', '                pass'),
+    "guarding-counts-covered-work": ('            pending = [q for q in pending if q > s["lastOutside"].get(author, 0)]', '            pass'),
+    "held-proposals-raise-no-bound": ('if author in s["held"]: s["lastOutside"][author] = seq', 'pass'),
+    "held-may-propose-for-others": ('if entry["kind"] == "effect.propose": return entry["body"]["executor"] == entry["author"]', 'if entry["kind"] == "effect.propose": return True'),
     "release-lowers-the-bound": ('        s["held"].pop(x, None)\n', '        s["held"].pop(x, None); s["lastOutside"].pop(x, None)\n'),
     "stale-releases-accepted": (STALE, '    if False:'),
     "releases-need-to-see-more": (STALE, '    if state["lastOutside"].get(b["agent"], 0) >= entry["seen"]:'),
@@ -443,6 +463,8 @@ MUTATIONS = {
 }
 
 def main():
+    try: sys.stdout.reconfigure(encoding="utf-8")       # the counterexample paths print arrows, also into a redirected log
+    except Exception: pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--depth", type=int, default=DEPTH)
     ap.add_argument("--all-mutations", action="store_true")
@@ -467,7 +489,7 @@ def main():
         sys.exit(3)
     if v: print(f"VIOLATION after {n} transitions: {v}\n  path: {' → '.join(path)}"); sys.exit(1)
     if not (g and gd and st): print(f"VACUOUS: guarded claim seen={g}, guard denial seen={gd}, stale release refused seen={st}"); sys.exit(1)
-    print(f"[guard] {n} transitions to depth {a.depth}; GuardedClaimsNeedTheirHuman, HeldInstructNoOne, NeverLooser, "
+    print(f"[guard] {n} transitions to depth {a.depth}; HeldWorkWaitsForItsGuard, HeldInstructNoOne, NeverLooser, "
           f"OneOpenApprovalPerAuthor, ReleaseCoversOnlyWhatWasSeen and ExactHolds HOLD (non-vacuous)")
 
 if __name__ == "__main__":

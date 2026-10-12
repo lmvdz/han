@@ -553,10 +553,10 @@ def approved_home(approvers=("owner", "member")):
         e, c = entry("effect.approve", who, {"proposal": pid, "planDigest": body["planDigest"]}); code, r = h.append(e, c, profiles()); assert code == "ok", (code, r)
     return h, pid
 
-@scenario("approvers are pinned up to the first valid key", "P-01, E3", "an unreachable later approver does not block a claim while an earlier candidate's key is valid; it does once every earlier candidate's key is revoked")
+@scenario("approvers are pinned up to the first valid key", "P-01, E3", "an unreachable later approver does not block a claim while an earlier candidate's key is valid, and a reachable one is fetched but not pinned; it does block once every earlier candidate's key is revoked")
 def _():
     out = {}
-    for name, revoked, with_z in [("first-valid", False, False), ("first-revoked-z-there", True, True), ("first-revoked-z-missing", True, False)]:
+    for name, revoked, with_z in [("first-valid", False, False), ("first-valid-z-there", False, True), ("first-revoked-z-there", True, True), ("first-revoked-z-missing", True, False)]:
         h, pid = approved_home()
         if revoked: REVOKED.add((O, 2))
         try:
@@ -570,7 +570,7 @@ def _():
                 m = mirror(); out["mirror"] = all(m.ingest(rec)[0] for rec in h.spaces[S]["records"])
         finally:
             REVOKED.discard((O, 2))
-    want = {"first-valid": ("ok", sorted([X, M, O])), "first-revoked-z-there": ("ok", sorted([X, M, O, Z])),
+    want = {"first-valid": ("ok", sorted([X, M, O])), "first-valid-z-there": ("ok", sorted([X, M, O])), "first-revoked-z-there": ("ok", sorted([X, M, O, Z])),
             "first-revoked-z-missing": ("unavailable", "profile"), "mirror": True}
     return out == want, str(out)
 
@@ -732,7 +732,7 @@ def _guard_facts(st, a, held=False, guarded=False, last=0):
     """Fill the per-actor members of P-15 directly: these scenarios are about the wire, not about how an actor gets into them. `held` and `guarded` are sets (arrays in the view)."""
     for name, on in (("held", held), ("guarded", guarded)):
         if not on: continue
-        if isinstance(st[name], dict): st[name][a] = O
+        if isinstance(st[name], dict): st[name][a] = True
         else: st[name].append(a); st[name].sort()
     if last: st.setdefault("lastOutside", {})[a] = last
 
@@ -835,7 +835,7 @@ def _():
                    "effect": "ok", "cursor": "ok", "at": "ok", "none": "ok", "follow": "ok",
                    "agent+effect": "invalid", "agent+cursor": "invalid", "agent+at+effect": "invalid", "agent+at": "ok", "agent": "ok"}, str(got)
 
-@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7", "`agent` (an ActorId) gives `{space, head, home, policy, agent: {held, guarded, lastOutside}}` for that actor and nothing that grows, in one reply whatever maxStateItems is, without `next`; an actor in neither set gets false, false, 0; `at` gives the facts after that record; a non-ActorId is `invalid`, a stranger `not_found`")
+@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7, M5", "`agent` (an ActorId) gives `{space, head, home, policy, held, guarded, lastOutside}` with the three maps cut to that actor and nothing that grows, in one reply whatever maxStateItems is, without `next`; an actor in none of them gets `{}` three times; `at` gives the facts after that record; the reply is guardStatus's input as is; a non-ActorId is `invalid`, a stranger `not_found`")
 def _():
     h = base_home(); h.max_state_items = 1; _fill(h, tasks=2)
     st = h.spaces[S]["state"]
@@ -844,9 +844,13 @@ def _():
     ca, a = h.state(S, O, agent="@a2:a.example"); cg, g = h.state(S, O, agent="@g:a.example"); cn, n = h.state(S, O, agent="@nobody:a.example")
     ct, early = h.state(S, O, agent="@a2:a.example", at=2)
     bad = (h.state(S, O, agent=5)[0], h.state(S, O, agent="a2")[0], h.state(S, O, agent="@a2:a.example", effect="0" * 64)[0], h.state(S, O, agent="@a2:a.example", at=99)[0], h.state(S, Z, agent="@a2:a.example")[0])
-    shape = lambda r, f: set(r["state"]) == {"space", "head", "home", "policy", "agent"} and "next" not in r and r["state"]["agent"] == f
-    return (ca == cg == cn == ct == "ok" and shape(a, {"held": True, "guarded": True, "lastOutside": 3}) and shape(g, {"held": False, "guarded": True, "lastOutside": 0})
-            and shape(n, {"held": False, "guarded": False, "lastOutside": 0}) and early["state"]["head"] == 2 and early["state"]["agent"] == {"held": False, "guarded": False, "lastOutside": 0}
+    facts = lambda r: {k: r["state"][k] for k in ("held", "guarded", "lastOutside")}
+    shape = lambda r, f: set(r["state"]) == {"space", "head", "home", "policy", "held", "guarded", "lastOutside"} and "next" not in r and facts(r) == f
+    none = {"held": {}, "guarded": {}, "lastOutside": {}}
+    ctx = {"time": "2026-10-10T12:00:00Z", "profiles": {}}
+    return (ca == cg == cn == ct == "ok" and shape(a, {"held": {"@a2:a.example": True}, "guarded": {"@a2:a.example": True}, "lastOutside": {"@a2:a.example": 3}})
+            and shape(g, {"held": {}, "guarded": {"@g:a.example": True}, "lastOutside": {}}) and shape(n, none) and early["state"]["head"] == 2 and facts(early) == none
+            and P.guard_status(a["state"], ctx, "@a2:a.example") == {"held": True, "guarded": True, "forced": False}
             and bad == ("invalid", "invalid", "invalid", "invalid", "not_found")), f"{a} {g} {n} {early} {bad}"
 
 @scenario("a notice is never replayed", "G-03, G-09, F4", "a notice for an actor with no live subscription to its profile is dropped; one that subscribes later sees none of it; a live subscription gets its notices once; after it ends, notices are dropped again")

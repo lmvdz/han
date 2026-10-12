@@ -289,9 +289,9 @@ def _add(m, key, val):
 def _empty_like(view, path): return {} if isinstance(_get_map(view, path), dict) else []
 
 def agent_facts(state, actor) -> dict:
-    """K7: what a host needs of one agent besides its profile: `{held, guarded, lastOutside}` (P-15). `held` and `guarded` are whether the agent is in the set;
-    `lastOutside` is the seq of the newest outside instruction since it became guarded or forced, 0 if none."""
-    return {"held": actor in state["held"], "guarded": actor in state["guarded"], "lastOutside": state.get("lastOutside", {}).get(actor, 0)}
+    """K7, M5: what a host needs of one agent besides its profile: the state's `held`, `guarded` and `lastOutside` cut to that one actor (each `{}` when
+    the actor is not in it), so the reply is a GuardInput that `guard_status` takes as is (R-24)."""
+    return {k: {actor: state[k][actor]} if actor in state.get(k, {}) else {} for k in ("held", "guarded", "lastOutside")}
 
 # ── a reference home ──
 class Home:
@@ -391,22 +391,20 @@ class Home:
         self.claim_steady = {}
 
     def pin(self, state, entry, profiles, now):
-        """P-01: pin the author, the target, the proposer and the guards, and the approval candidates in E3 order up to and
-        including the first whose signing key is valid. Later candidates are not required. None if a required view is missing."""
-        need = P.relevant_actors(state, entry, now)
-        required, cand = {entry["author"]}, {}
-        if entry["kind"] == "member.set": required.add(entry["body"]["actor"])
-        eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
-        if eff:
-            required |= {eff["proposer"], *(g for g in P.guards_of(state, {"time": now, "profiles": profiles}, eff) if g)}      # P-15: the guards are the operators in the views we would pin
-            cand = {a["author"]: a["keyId"] for a in P.approval_candidates(state, eff, now)}
-        pinned, found_valid = {}, False
-        for a in list(need) + sorted(required - set(need)):       # guards that are not candidates still get pinned (P-01)
-            if found_valid and a not in required: continue
-            if a not in profiles: return None
-            pinned[a] = profiles[a]
-            if a in cand and P.key_status({"profiles": profiles}, a, cand[a]) == "valid": found_valid = True
-        return pinned
+        """P-01: Policy's relevantActors is the whole pin rule; this only fetches. Call it with the views fetched so far, fetch what it
+        names that was not tried yet, and call again until it names nothing new (three calls at most: the first names the actors the
+        entry names and every candidate, the second adds the guards from the proposer's and executor's views, the third nothing).
+        `profiles` is every view this home could fetch now. None (`unavailable`) if the final list names an actor it could not fetch."""
+        fetched, tried = {}, set()
+        for _ in range(3):
+            need = P.relevant_actors(state, entry, {"time": now, "profiles": fetched})
+            new = [a for a in need if a not in tried]
+            if not new: break
+            tried.update(new)
+            fetched.update({a: profiles[a] for a in new if a in profiles})
+        else:
+            raise AssertionError("relevantActors still growing after three calls")
+        return {a: fetched[a] for a in need} if all(a in fetched for a in need) else None
 
     def abandon_wait(self, state, entry, eid, pinned, now):
         """R-16, P-09: seconds an owner's abandon must still wait. Non-zero only if Policy would allow the entry at claim.time + A
@@ -470,7 +468,7 @@ class Home:
         """§3 state: one StateView page as `{state, next?}`. At most one of `cursor`, `effect`, `agent` is present, and `at` may join `agent` only (None here means absent;
         on the wire presence decides, whatever the value): any other two or more is `invalid`, judged before any of them is looked at. `at` gives the state after record `at`
         and needs read rights at `at` (P-02), not at the head. `cursor` (the `next` of an earlier page) gives the page it names, from its own head. `effect` gives the one
-        effect. `agent` (an ActorId) gives that actor's `{held, guarded, lastOutside}` (K7).
+        effect. `agent` (an ActorId) gives `held`, `guarded` and `lastOutside` cut to that actor (K7, M5).
         Every item of a paged map is bounded, so a page always has room for at least one (H3): a violation is a bug in the server and raises."""
         S = self.spaces.get(space)
         if not S: return "not_found", None
@@ -499,7 +497,7 @@ class Home:
             assert len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) <= self.max_frame_bytes, "one effect does not fit maxFrameBytes: impossible by construction (H3)"
             return "ok", {"state": one}
         if agent is not None:
-            one = dict({k: view[k] for k in EFFECT_VIEW}, agent=agent_facts(view, agent))
+            one = dict({k: view[k] for k in EFFECT_VIEW}, **agent_facts(view, agent))
             assert len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) <= self.max_frame_bytes, "the agent view does not fit maxFrameBytes: impossible by construction (H3)"
             return "ok", {"state": one}
         if cursor is not None and any(offs[p] > len(_items(view, p)) for p in PAGED): return "invalid", "cursor offset beyond the map"

@@ -3,7 +3,7 @@
  "rules": [
   "P-01"
  ],
- "description": "the receipt must pin profiles for these actors",
+ "description": "the receipt must pin profiles for these actors: with nothing pinned yet every approval candidate, with the profiles pinned the candidates up to the first valid key",
  "profiles": {
   "@m:a.example": {
    "actorKind": "human",
@@ -257,11 +257,40 @@
     "nonce": "n-c",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:07Z",
    "expect": [
     "@x:c.example",
     "@p:b.example",
     "@o:a.example",
     "@m:a.example"
+   ],
+   "pinned": []
+  },
+  {
+   "relevantActors": {
+    "id": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": [
+    "@x:c.example",
+    "@p:b.example",
+    "@o:a.example"
    ]
   },
   {
@@ -282,6 +311,7 @@
     "nonce": "n-z",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:07Z",
    "expect": [
     "@o:a.example",
     "@z:d.example"

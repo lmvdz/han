@@ -3,7 +3,7 @@
  "rules": [
   "P-01"
  ],
- "description": "relevantActors lists the targets of an instruction (the session's actor, each assignee, the executor), the agent of a release, the proposer and executor of an approve or cancel, the proposer and candidates of a claim",
+ "description": "relevantActors lists the targets of an instruction (the session's actor, each assignee, the executor), the agent of a release, the proposer and executor of an approve, cancel or claim, and a claim's candidates",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -294,6 +294,7 @@
     "nonce": "n-in",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:08Z",
    "expect": [
     "@m:a.example",
     "@bot:b.example"
@@ -316,6 +317,7 @@
     "nonce": "n-in2",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:08Z",
    "expect": [
     "@m:a.example"
    ]
@@ -341,6 +343,7 @@
     "nonce": "n-t",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:08Z",
    "expect": [
     "@m:a.example",
     "@bot2:b.example",
@@ -367,6 +370,7 @@
     "nonce": "n-d",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:08Z",
    "expect": [
     "@m:a.example",
     "@bot:b.example"
@@ -389,6 +393,7 @@
     "nonce": "n-r",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:08Z",
    "expect": [
     "@op:b.example",
     "@bot:b.example"
@@ -456,6 +461,7 @@
     "nonce": "n-a2",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:10Z",
    "expect": [
     "@o:a.example",
     "@m:a.example",
@@ -479,6 +485,7 @@
     "nonce": "n-x",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:10Z",
    "expect": [
     "@o:a.example",
     "@m:a.example",
@@ -505,6 +512,7 @@
     "nonce": "n-c",
     "time": "2026-10-10T12:00:00Z"
    },
+   "time": "2026-10-10T12:00:10Z",
    "expect": [
     "@bot:b.example",
     "@m:a.example",

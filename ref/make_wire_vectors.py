@@ -870,8 +870,8 @@ for k, a in enumerate(({"agent": 5}, {"agent": "bob"}, {"agent": None}, {"agent"
     steps += [sx(al, k, BC, **a), {"conn": al, "expect": err(k, "invalid")}]
 steps += [sx(al, 14, BC, agent=A("bob"), at=0), {"conn": al, "expect": err(14, "invalid")}, sx(ca, 15, BC, agent=A("bob")), {"conn": ca, "expect": err(15, "not_found")}]
 assert ORC.state(BC, A("carol"), agent=A("bob"))[0] == "not_found"
-r25.append(vec("K7a", "`state {agent}` (an ActorId) is `{space, head, home, policy, agent: {held, guarded, lastOutside}}` for that actor: one frame, no `next`, nothing that grows, false, false, 0 for an actor in neither set; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found",
-               steps, ["§3", "G-09", "K7"], "ok x5 (incl. at 3, head 3), invalid x8, not_found", source="maker (oracle: ref/wire.py Home)"))
+r25.append(vec("K7a", "`state {agent}` (an ActorId) is `{space, head, home, policy, held, guarded, lastOutside}` with each map cut to that actor (a GuardInput, M5): one frame, no `next`, nothing that grows, empty maps for an actor in none of them; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found",
+               steps, ["§3", "G-09", "K7", "M5"], "ok x5 (incl. at 3, head 3), invalid x8, not_found", source="maker (oracle: ref/wire.py Home)"))
 
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""

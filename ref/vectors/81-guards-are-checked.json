@@ -302,7 +302,7 @@
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "executor": "@x:c.example",
+     "executor": "@bot:b.example",
      "action": "git.push",
      "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
      "repeatable": false
@@ -343,7 +343,7 @@
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.claim",
-    "author": "@x:c.example",
+    "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
@@ -400,7 +400,7 @@
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.claim",
-    "author": "@x:c.example",
+    "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
      "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
@@ -439,7 +439,7 @@
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "executor": "@x:c.example",
+     "executor": "@bot:b.example",
      "action": "git.push",
      "planDigest": "2643a1a94d4368298136dda4adf5dc70a06ccee8c30dfa191398122785c7d781",
      "repeatable": false
