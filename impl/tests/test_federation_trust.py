@@ -121,9 +121,10 @@ async def test_a_remote_profile_is_readable_from_the_server_that_verified_it(pai
     pair.actor("alice", A); bob = pair.actor("bob", B)
     a, bt = await pair.client("alice", A), await pair.client("bob", B, dial=A)
     await mkspace(a); await member(a, bob)
-    items = await a.read_all("profile:" + bob, 0, state=True)
-    assert items[0]["type"] == "state" and items[0]["state"]["profile"]["keys"]["k1"]["status"] == "valid"
-    assert [i["record"]["receipt"]["seq"] for i in items[1:]] == [1] and items[1]["record"]["receipt"]["home"] == B
+    items = await a.read_all("profile:" + bob, 0)
+    st = await a.read_state("profile:" + bob)
+    assert st["profile"]["keys"]["k1"]["status"] == "valid"
+    assert [i["record"]["receipt"]["seq"] for i in items] == [1] and items[0]["record"]["receipt"]["home"] == B
 
 def test_han_peers_file(tmp_path):
     """han-peers: a JSON map of server name → URL; anything else is rejected."""

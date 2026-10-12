@@ -23,9 +23,9 @@ const err = (code: ErrorCode, m: string, extra?: { retryAfterMs?: number; movedT
 
 export const LIMITS: Limits = {
   maxFrameBytes: 1310720, maxHeaderBytes: 16384, maxContentBytes: 65536, maxBlobBytes: 4294967296, maxBlobPartBytes: 786432,
-  maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60, maxStateItems: 1000,
+  maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60, maxStateItems: 1000, maxAttempts: 64,
 };
-const CALLS = ["hello", "append", "read", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
+const CALLS = ["hello", "append", "read", "state", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
 const READABLE = ["owner", "member", "guest"];
 const HEADER_FIELDS = ["v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig"];
 
@@ -45,6 +45,7 @@ export interface SeqOptions {
   testClock?: { ms: number; base: number };
   peerUrls?: Record<string, string>;                // served in /.well-known/han-peers; default https://<server>/.well-known/han
   /** G-06: does this server take over hosting this space (a move handover)? Default yes. */
+  maxFrameBytes?: number;                           // test mode (G-11 test.limits): the frame limit hello reports and state pages are cut to (default 1,310,720; the receive limit stays)
   maxStateItems?: number;                           // test hook: `effects` and `tasks` per state page (default 1000)
   acceptHosting?: (space: string, from: string) => boolean;
 }
@@ -503,6 +504,7 @@ export class Sequencer {
       });
       case "host": return this.reply(conn, id, () => this.doHost(conn, args));
       case "read": return this.doRead(conn, id, args);
+      case "state": return this.reply(conn, id, () => this.doState(conn.who!, args));
       case "subscribe": return this.doSubscribe(conn, id, args);
       case "signal": return this.reply(conn, id, () => this.doSignal(conn, args));
       case "blobPut": return this.reply(conn, id, () => this.blobs.put(conn.who!, args));
@@ -535,7 +537,8 @@ export class Sequencer {
     if (!verifyBytes(k.publicKey, helloMessage(conn.challenge, this.server), a.proof)) throw err("denied", "bad proof");
     const heads = this.headsFor(a.who, a.knownHeads);
     conn.who = a.who;
-    return { limits: this.opts.maxStateItems === undefined ? LIMITS : { ...LIMITS, maxStateItems: this.opts.maxStateItems }, durability: "local", time: this.now(), knownHeads: heads };
+    const { maxAttempts, ...wireLimits } = LIMITS; void maxAttempts;   // hello carries the ten members of §3; maxAttempts (P-07) is a Policy constant
+    return { limits: { ...wireLimits, maxFrameBytes: this.frameLimit(), maxStateItems: this.opts.maxStateItems ?? LIMITS.maxStateItems }, durability: "local", time: this.now(), knownHeads: heads };
   }
 
   /** D1: a server with no record of a space answers `moved` (to the server in the space id) for every call naming it, unless it is that server (`not_found`). */
@@ -555,126 +558,102 @@ export class Sequencer {
   private doRead(conn: Conn, id: number, a: A) {
     try {
       const keys = Object.keys(a);
-      if (!("space" in a) || !("after" in a) || !keys.every((k) => ["space", "after", "follow", "state", "at", "limit", "knownHeads", "cursor", "effect"].includes(k))) throw err("invalid", "read args");
+      if (!("space" in a) || !("after" in a) || !keys.every((k) => ["space", "after", "follow", "limit", "knownHeads"].includes(k))) throw err("invalid", "read args");
       if (!isInt(a.after)) throw err("invalid", "after");
       if (a.follow !== undefined && typeof a.follow !== "boolean") throw err("invalid", "follow");
-      if (a.state !== undefined && typeof a.state !== "boolean") throw err("invalid", "state");
       let limit = 1000;
       if (a.limit !== undefined) { if (!isInt(a.limit) || a.limit < 1 || a.limit > 1000) throw err("invalid", "limit"); limit = a.limit; }
       const who = conn.who!;
       const sp = this.spaceFor(who, a.space);
-      const st = sp.state!;
-      // "A reader who may read no seq gets not_found, the same as for a missing space."
-      let any = false;
-      for (let s = 1; s <= st.head && !any; s++) if (canRead(st, who, s)) any = true;
-      if (!any) throw err("not_found", "no such space");
-      // F4, G-09: `cursor` and `effect` need state:true and exclude `at`, `follow` and each other, whatever the values; judged before either is looked at
-      if ((a.cursor !== undefined || a.effect !== undefined) && a.state !== true) throw err("invalid", "`cursor` and `effect` need state:true");
-      if ((a.cursor !== undefined || a.effect !== undefined) && (a.at !== undefined || a.follow !== undefined)) throw err("invalid", "`cursor` and `effect` exclude `at` and `follow`");
-      if (a.cursor !== undefined && a.effect !== undefined) throw err("invalid", "`cursor` excludes `effect`");
-      if (a.effect !== undefined && !isHex(a.effect)) throw err("invalid", "`effect` must be an effect id");
-      if (a.cursor !== undefined && typeof a.cursor !== "string") throw err("invalid", "cursor");
-      if (a.at !== undefined && (!a.state || !isInt(a.at) || a.at < 1 || a.at > st.head)) throw err("invalid", "`at` needs state:true and a seq in 1…head");
+      this.requireReadable(sp, who);
       const items: A[] = [];
-      if (a.state && (a.cursor !== undefined || a.effect !== undefined)) {
-        // one state item as the only item: a later page of the four cut maps, or one effect with the members a host needs
-        let head = st.head, cur: A | undefined;
-        if (a.cursor !== undefined) {
-          try { cur = JSON.parse(Buffer.from(a.cursor, "base64url").toString("utf8")); } catch { throw err("invalid", "malformed cursor"); }
-          const okc = typeof cur === "object" && cur !== null && isInt(cur.h) && cur.h >= 1 && cur.h <= st.head &&
-            (cur.x === undefined ? ["e", "t", "s", "r"].every((k) => isInt(cur![k])) && Object.keys(cur).length === 5 : isHex(cur.x) && isInt(cur.s) && Object.keys(cur).length === 3);
-          if (!okc || Buffer.from(JSON.stringify(cur)).toString("base64url") !== a.cursor) throw err("invalid", "malformed cursor");
-          head = cur!.h;
-        }
-        if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + (a.cursor === undefined ? "the head" : "the cursor's head"));
-        const full = (head === st.head ? st : this.stateAt(sp, head)) as A;
-        if (a.effect !== undefined) {
-          if (!(a.effect in full.effects)) throw err("not_found", "no such effect");
-          conn.send({ id, item: this.effectPage(id, full, a.effect, 0, true) });
-        } else if (cur!.x !== undefined) {
-          if (!(cur!.x in full.effects)) throw err("invalid", "malformed cursor");
-          conn.send({ id, item: this.effectPage(id, full, cur!.x, cur!.s, false) });
-        } else conn.send({ id, item: this.statePage(id, full, { e: cur!.e, t: cur!.t, s: cur!.s, r: cur!.r }) });
-        conn.send({ id, end: true });
-        return;
-      }
-      if (a.state) {
-        const at = a.at ?? st.head;       // with `at`: the StateView after record `at`, readable by whoever may read seq `at` (P-02)
-        if (!canRead(st, who, at)) throw err("denied", "state needs read rights at " + (a.at === undefined ? "the head" : "`at`"));
-        const { entries, ...view } = (at === st.head ? st : this.stateAt(sp, at)) as A;
-        items.push(this.statePage(id, view, { e: 0, t: 0, s: 0, r: 0 }));
-      }
       const heads = this.headsFor(who, a.knownHeads);
       if (a.knownHeads !== undefined) items.push({ type: "heads", heads });
       const probe = this.readableUpTo(sp, who, a.after, limit + 1);
-      const recs = probe.slice(0, limit), more = probe.length > limit;
+      const recs = probe.slice(0, limit);
       for (const it of items) {
         const text = JSON.stringify({ id, item: it });
-        if (text.length > LIMITS.maxFrameBytes && it.type !== "state") throw err("limit", "item too large for one frame");
+        if (text.length > LIMITS.maxFrameBytes) throw err("limit", "item too large for one frame");
         conn.send({ id, item: it });
       }
       for (const r of recs) conn.send({ id, item: { type: "record", record: r } });
       // without follow the stream ends here; with follow a longer backlog leaves a visible gap in seq (the client re-reads it)
       if (!a.follow) { conn.send({ id, end: true }); return; }
-      void more;
       this.addSub(conn, id, sp.id, who, false);       // G-09: `read` with `follow` never carries signals
     } catch (e) { conn.send({ id, error: this.toWire(e) }); }
   }
-  /** One page of a StateView (§3, F3 c): `effects`, `tasks`, `sessions` and `roleHistory` are cut (each in its own order, from the offsets in `off`) to at most
-   *  maxStateItems entries each, and so that the frame `{id, item}` fits maxFrameBytes; the maps are filled in that order, so a page is full of effects before it
-   *  takes a task. `next` is a cursor while anything remains; every other member is repeated on every page. */
-  private statePage(id: number, view: A, off: { e: number; t: number; s: number; r: number }): A {
+  /** "A reader who may read no seq gets not_found, the same as for a missing space." */
+  private requireReadable(sp: Space, who: string) {
+    const st = sp.state!;
+    for (let s = 1; s <= st.head; s++) if (canRead(st, who, s)) return;
+    throw err("not_found", "no such space");
+  }
+  /** `state {space, at? | cursor? | effect?}` (§3, G-09): one page of the StateView, or one effect. */
+  private doState(who: string, a: A): A {
+    const keys = Object.keys(a);
+    if (!("space" in a) || !keys.every((k) => ["space", "at", "cursor", "effect"].includes(k))) throw err("invalid", "state args");
+    const sp = this.spaceFor(who, a.space);
+    const st = sp.state!;
+    this.requireReadable(sp, who);
+    // two or more selectors: `invalid` by presence, whatever the values (null included)
+    if (["at", "cursor", "effect"].filter((k) => k in a).length > 1) throw err("invalid", "at most one of at, cursor, effect");
+    const view = (head: number): A => { const { entries, ...v } = (head === st.head ? st : this.stateAt(sp, head)) as A; void entries; return v; };
+    if ("effect" in a) {
+      if (typeof a.effect !== "string" || !isHex(a.effect)) throw err("invalid", "`effect` must be an effect id");
+      if (!canRead(st, who, st.head)) throw err("denied", "state needs read rights at the head");
+      const full = view(st.head);
+      if (!(a.effect in full.effects)) throw err("not_found", "no such effect");
+      return { state: withSettled({ space: full.space, head: full.head, home: full.home, policy: full.policy, effects: { [a.effect]: full.effects[a.effect] } }) };
+    }
+    if ("cursor" in a) {
+      if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){10}$/.test(a.cursor)) throw err("invalid", "malformed cursor");
+      const nums = a.cursor.split(".").map(Number);
+      if (!nums.every(Number.isSafeInteger) || nums[0] < 1 || nums[0] > st.head) throw err("invalid", "malformed cursor");
+      if (!canRead(st, who, nums[0])) throw err("denied", "state needs read rights at the cursor's head");
+      const full = view(nums[0]);
+      const offs = nums.slice(1);
+      PAGED.forEach((m, k) => { if (offs[k] > pagedItems(full, m).length) throw err("invalid", "cursor offset beyond the map"); });
+      return this.statePage(full, offs);
+    }
+    let head = st.head;
+    if ("at" in a) {
+      if (!isInt(a.at) || a.at < 1 || a.at > st.head) throw err("invalid", "`at` must be a seq in 1…head");
+      head = a.at;
+    }
+    if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + ("at" in a ? "`at`" : "the head"));
+    return this.statePage(view(head), PAGED.map(() => 0));
+  }
+  /** One page of a StateView (§3 state, H3): the PagedMap members are cut (taken in PAGED order, one item at a time while the map has added fewer than maxStateItems and the frame
+   *  `{"id": <16 digits>, "ok": {"state": …}}` stays within maxFrameBytes less 256; an item costs its key's JCS bytes plus its value's plus 2; the first item that does not fit closes the page for
+   *  every later map). `next` is `<head>.<offsets>` while anything remains. */
+  private statePage(full: A, offs: number[]): A {
     const n = this.opts.maxStateItems ?? LIMITS.maxStateItems;
-    const full = withSettled(view);
-    delete full.entries;
-    const maps: [string, number][] = [["effects", off.e], ["tasks", off.t], ["sessions", off.s], ["roleHistory", off.r]];
-    const v: A = { ...full };
-    for (const [k] of maps) v[k] = {};
-    const item: A = { type: "state", state: v, next: "x".repeat(CURSOR_ROOM) };
-    let room = LIMITS.maxFrameBytes - Buffer.byteLength(JSON.stringify({ id, item }));
-    if (room < 0) throw err("unavailable", "the members repeated on every page do not fit one frame");
-    const taken: number[] = [];
-    let progressed = false, more = false;
-    for (const [k, from] of maps) {
-      const ents = Object.entries(full[k] ?? {}) as [string, unknown][];
-      let c = 0;
-      for (let q = from; q < ents.length && c < n; q++) {
-        const cost = Buffer.byteLength(JSON.stringify(ents[q][0])) + Buffer.byteLength(JSON.stringify(ents[q][1])) + 2;
-        if (cost > room) break;
-        room -= cost; v[k][ents[q][0]] = ents[q][1]; c++;
+    const v = withSettled(full);
+    delete v.entries;
+    const targets: Record<string, A>[] = [];
+    for (const m of PAGED) {
+      if (m === "profile.keys") { if (v.profile !== undefined) { v.profile.keys = {}; targets.push(v.profile.keys); } else targets.push({}); }
+      else { v[m] = {}; targets.push(v[m]); }
+    }
+    const src = PAGED.map((m) => pagedItems(full, m));
+    let room = this.frameLimit() - 256 - utf8len(jcs({ id: 1000000000000000, ok: { state: v } }));
+    const taken = PAGED.map(() => 0);
+    let closed = false;
+    for (let k = 0; k < PAGED.length && !closed; k++) {
+      for (let q = offs[k]; q < src[k].length && taken[k] < n; q++) {
+        const [key, val] = src[k][q];
+        const cost = utf8len(jcs(key)) + utf8len(jcs(val)) + 2;
+        if (cost > room) { closed = true; break; }
+        room -= cost; targets[k][key] = val; taken[k]++;
       }
-      taken.push(c); if (c > 0) progressed = true;
-      if (from + c < ents.length) more = true;
     }
-    if (more && !progressed) throw err("unavailable", "an entry of the state does not fit one frame by itself");
-    if (!more) delete item.next;
-    else item.next = Buffer.from(JSON.stringify({ h: v.head, e: off.e + taken[0], t: off.t + taken[1], s: off.s + taken[2], r: off.r + taken[3] })).toString("base64url");
-    return item;
+    const more = PAGED.some((_, k) => offs[k] + taken[k] < src[k].length);
+    if (more && taken.every((t) => t === 0)) throw new Error("assert: an item of the state does not fit one page by itself");
+    const out: A = { state: v };
+    if (more) out.next = [full.head, ...PAGED.map((_, k) => offs[k] + taken[k])].join(".");
+    return out;
   }
-  /** The answer to `read {state, effect}` (EffectStateView): the one effect is never cut (else `unavailable`); `sessions` are cut to fit, `next` is a cursor for the rest of them alone
-   *  (a later page repeats the other members and holds no effect). */
-  private effectPage(id: number, full: A, effect: string, from: number, first: boolean): A {
-    const v: A = {};
-    for (const k of ["space", "head", "home", "policy", "roles", "held", "guarded"]) v[k] = full[k];
-    v.effects = first ? { [effect]: full.effects[effect] } : {};
-    v.sessions = {};
-    const view = withSettled(v);
-    const item: A = { type: "state", state: view, next: "x".repeat(CURSOR_ROOM) };
-    let room = LIMITS.maxFrameBytes - Buffer.byteLength(JSON.stringify({ id, item }));
-    if (room < 0) throw err("unavailable", "the effect and the members repeated on every page do not fit one frame");
-    const n = this.opts.maxStateItems ?? LIMITS.maxStateItems;
-    const ents = Object.entries(full.sessions ?? {}) as [string, unknown][];
-    let c = 0;
-    for (let q = from; q < ents.length && c < n; q++) {
-      const cost = Buffer.byteLength(JSON.stringify(ents[q][0])) + Buffer.byteLength(JSON.stringify(ents[q][1])) + 2;
-      if (cost > room) break;
-      room -= cost; view.sessions[ents[q][0]] = ents[q][1]; c++;
-    }
-    if (from + c < ents.length && c === 0) throw err("unavailable", "a session does not fit one frame by itself");
-    if (from + c >= ents.length) delete item.next;
-    else item.next = Buffer.from(JSON.stringify({ h: v.head, x: effect, s: from + c })).toString("base64url");
-    return item;
-  }
+  private frameLimit(): number { return this.opts.maxFrameBytes ?? LIMITS.maxFrameBytes; }
   /** the SpaceState after record `at`, by replay */
   private stateAt(sp: Space, at: number): SpaceState {
     let st: SpaceState | undefined;
@@ -995,7 +974,9 @@ function withSettled(view: A): A {
   for (const ef of Object.values(v.effects ?? {}) as A[]) for (const c of ef.claims ?? []) c.settled = c.settled === true;
   return v;
 }
-const CURSOR_ROOM = 160;   // a cursor is far shorter than this; the byte budget of a page reserves it
+/** han.ts PagedMap, in the order of the cursor and of the fill */
+const PAGED = ["roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "cleared", "outside", "profile.keys"];
+const pagedItems = (st: A, m: string): [string, unknown][] => Object.entries(m === "profile.keys" ? (st.profile?.keys ?? {}) : (st[m] ?? {}));
 const sha256Bytes = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 void parseTimeMs; void isServerName; void JsonError;
 

@@ -5,6 +5,7 @@ For every entry decide() allows, fold() must not raise, must not mutate its inpu
   · the space remainder never exceeds the space budget, a task's remainder never exceeds its budget
   · only allowed phases occur, and a final phase never changes
   · decide() never raises
+  · no effect has more than MAX_ATTEMPTS claims, `cleared` never shrinks, and guard_status never raises and agrees with `held`
 Usage: python ref/fuzz_fold.py [seeds] [steps]      (default 2000 seeds × 200 steps)
 """
 import copy, hashlib, os, random, sys
@@ -84,14 +85,20 @@ def random_entry(r, state, n):
         "agent.release": lambda: dict({"agent": r.choice(ACTORS)}, **({"unguard": True} if r.random() < .3 else {})),
     }[kind]()
     author = r.choice(ACTORS + [O, O, X, X])
+    head = state["head"] if state else 0
     return {"id": H(f"e{n}"), "v": 1, "space": S, "kind": kind, "author": author, "keyId": "k1", "body": body,
-            "contentHash": "", "refs": [], "seen": 0, "nonce": f"n{n}", "time": "2026-10-10T12:00:00Z"}
+            "contentHash": "", "refs": [], "seen": r.choice([0, head, head, r.randint(0, head)]), "nonce": f"n{n}", "time": "2026-10-10T12:00:00Z"}
 
 def policy_cut(s, prev):
     return prev and prev["policy"]["budget"] and s["policy"]["budget"] and s["policy"]["budget"]["amount"] < prev["policy"]["budget"]["amount"]
 
-def check_state(s, prev):
+def check_state(s, prev, ctx):
     errs = []
+    for x, c in (prev["cleared"] if prev else {}).items():
+        if s["cleared"].get(x, 0) < c: errs.append(f"cleared[{x}] shrank")
+    for a in ACTORS:
+        st = P.guard_status(s, ctx, a)
+        if st["held"] != (a in s["held"]) or (a in s["held"] and not st.get("guard") and a not in s["guarded"] and not st["forced"]): errs.append(f"guard_status disagrees with held for {a}: {st}")
     if s["budgetLeft"] is not None:
         if s["budgetLeft"]["amount"] < 0 and not (prev and prev["budgetLeft"] is not None and prev["budgetLeft"]["amount"] < 0) and not policy_cut(s, prev):
             errs.append("space remainder went negative without a budget cut")
@@ -102,6 +109,7 @@ def check_state(s, prev):
             if t["left"]["amount"] > t["budget"]["amount"]: errs.append(f"task {tid[:6]} remainder > budget")
     for pid, e in s["effects"].items():
         if e["phase"] not in PHASES: errs.append(f"bad phase {e['phase']}")
+        if len(e["claims"]) > P.MAX_ATTEMPTS: errs.append("more claims than MAX_ATTEMPTS")
         old = prev["effects"].get(pid) if prev else None
         if old and old["phase"] in P.FINAL and e["phase"] != old["phase"]: errs.append(f"final phase changed {old['phase']}→{e['phase']}")
     return errs
@@ -141,7 +149,7 @@ def run(seed, steps):
         except Exception as ex:
             return f"seed {seed} step {n}: fold raised {type(ex).__name__}: {ex} on allowed {e['kind']} {e['body']}", allowed
         if state != before: return f"seed {seed} step {n}: fold mutated input", allowed
-        errs = check_state(new, state)
+        errs = check_state(new, state, ctx)
         if errs: return f"seed {seed} step {n}: after {e['kind']} {e['body']}: {errs}", allowed
         state = new; allowed += 1
         if e["kind"] == "effect.claim": CLAIMS[0] += 1

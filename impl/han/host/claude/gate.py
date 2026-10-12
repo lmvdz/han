@@ -5,6 +5,7 @@ import os, re
 from dataclasses import dataclass, field
 
 FILE_TOOLS = ("Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep")
+WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")      # H11: refused in a strict turn like Bash writes; a change then goes out as a proposal
 WEB_TOOLS = {"WebFetch": ("web.fetch", "url"), "WebSearch": ("web.search", "query")}
 MCP_PREFIX = "mcp__han__"            # the one in-process MCP server; external servers are disabled
 
@@ -40,7 +41,8 @@ NOGLOB = "set -f; "
 # E7: Bash is default-deny. A command runs only if it is in COMMANDS and EVERY argument is accounted for: a flag must be one the command
 # lists (an unknown flag is refused), a flag's value is checked by its kind, and every other word is a path, a number or plain text as
 # the command says. Kinds: "bool" (no value), "num" (digits), "text" (a pattern or key; never a path), "path" (read), "wpath" (written).
-# Commands and flags that write are for auto turns only: a strict turn (guarded outside input, or held; R-24) may only read.
+# Commands and flags that write are for auto turns only: a strict turn (guarded outside input, or held; R-24) may only read, and so
+# may the file tools (H11: Write, Edit and NotebookEdit are refused there).
 @dataclass(frozen=True)
 class Cmd:
     short: dict = field(default_factory=dict)        # letter -> kind
@@ -89,7 +91,7 @@ class Gate:
     def decide(self, tool: str, inp: dict, mode: str) -> Decision:
         """`mode` is "auto" or "strict" (the harness mode of this turn, R-24)."""
         inp = inp or {}
-        if tool in FILE_TOOLS: return self._file(tool, inp)
+        if tool in FILE_TOOLS: return self._file(tool, inp, mode)
         if tool in WEB_TOOLS:                                # world reads leak context through URLs: effects, not calls (§8.4)
             action, key = WEB_TOOLS[tool]
             return Decision("world", action=action, args={key: str(inp.get(key, ""))[:2000]})
@@ -99,13 +101,15 @@ class Gate:
             return Decision("world", action=wt.action, args={k: v for k, v in inp.items() if k in wt.params})
         return Decision("deny", f"{tool} is not available in this session")
 
-    def _file(self, tool: str, inp: dict) -> Decision:
+    def _file(self, tool: str, inp: dict, mode: str) -> Decision:
         paths = [inp[k] for k in ("file_path", "notebook_path", "path") if inp.get(k)]
         if any(not isinstance(p, str) or not inside(self.cwd, p) for p in paths):
             return Decision("deny", f"{tool}: path is outside the workspace")
         pat = inp.get("pattern") if tool == "Glob" else None       # a glob can climb out with .. or an absolute prefix
         if isinstance(pat, str) and (os.path.isabs(pat) or re.match(r"^[A-Za-z]:", pat) or ".." in re.split(r"[\\/]", pat)):
             return Decision("deny", "Glob: pattern leaves the workspace")
+        if mode == "strict" and tool in WRITE_TOOLS:                 # H11: guarded (outside input) or held: nothing is written locally, it is proposed
+            return Decision("deny", f"{tool}: writing is not available in a strict turn; propose the change as an effect (the deploy tool)")
         return Decision("allow")
 
     def _bash(self, cmd: str, mode: str) -> Decision:

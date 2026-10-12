@@ -1,6 +1,6 @@
 """han.core: the reference Policy and wire layer, imported from ref/ (never copied), so the conformance vectors
-test the running code. `policy` is the five pure functions (decide, fold, can_read, relevant_actors, session_access,
-guarded_now); `wire` holds ids, JCS, signatures, receipts, validation, Home and Mirror."""
+test the running code. `policy` is the six pure functions (decide, fold, can_read, relevant_actors, session_access,
+guard_status); `wire` holds ids, JCS, signatures, receipts, validation, Home and Mirror."""
 import os, sys
 
 REF = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ref"))
@@ -14,7 +14,7 @@ P, W = policy, wire
 LIMITS = {"maxFrameBytes": 1310720, "maxHeaderBytes": 16384, "maxContentBytes": 65536, "maxBlobBytes": 4294967296,
           "maxBlobPartBytes": 786432, "maxBlobRangeBytes": 786432, "maxStreamItemBytes": 65536, "maxFollows": 256,
           "maxClockSkewSeconds": W.MAX_CLOCK_SKEW,
-          "maxStateItems": getattr(W, "MAX_STATE_ITEMS", 1000)}   # han.ts Limits (D9, E8): effects and tasks per page of a state read
+          "maxStateItems": getattr(W, "MAX_STATE_ITEMS", 1000)}   # han.ts Limits (D9, E8, H3): items of each paged map per page of a state; read at call time, test mode lowers maxFrameBytes
 
 
 class WireError(Exception):

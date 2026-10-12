@@ -68,6 +68,31 @@ def steps_of(frames):
         out.append({"conn": f["conn"], "send" if f["dir"] == "c2s" else "expect": fr})
     return out
 
+def split_state_reads(steps):
+    """H10 (a): the golden transcripts were recorded with `read {space, after, state: true}`, which answered the state item and then the records. `read` is now
+    entries only and `state` is its own call, so each such step becomes a `state {space}` with the state wrapped as `{ok: {state}}`, then the same `read` without
+    `state`, with the records and the `end` the servers sent. The state bytes are the servers' own; the checks below (`_gold.state`) compare them with the oracle."""
+    out, i = [], 0
+    while i < len(steps):
+        st = steps[i]; f = st.get("send")
+        if not (f and f.get("call") == "read" and f["args"].get("state")):
+            out.append(st); i += 1; continue
+        conn, rid = st["conn"], f["id"]
+        assert set(f["args"]) == {"space", "after", "state"}, f
+        out.append({"conn": conn, "send": {"id": rid, "call": "state", "args": {"space": f["args"]["space"]}}})
+        rest, j = [], i + 1
+        while True:
+            e = steps[j]; assert e["conn"] == conn and "expect" in e, (i, j)
+            rest.append(e); j += 1
+            if e["expect"].get("end"): break
+        first = rest[0]["expect"]
+        assert first["id"] == rid and first["item"]["type"] == "state" and "next" not in first["item"], first
+        out.append({"conn": conn, "expect": {"id": rid, "ok": {"state": first["item"]["state"]}}})
+        out.append({"conn": conn, "send": {"id": rid, "call": "read", "args": {"space": f["args"]["space"], "after": f["args"]["after"]}}})
+        out += rest[1:]
+        i = j
+    return out
+
 # ───────────── the 21 operations ─────────────
 RULES = {
     "hello": ["G-07", "G-08", "W-01", "W-02", "D9", "D12"], "space.create": ["§4.1", "§2"], "member.set": ["§4.1", "P-03"], "message": ["§2", "R-09"],
@@ -88,7 +113,7 @@ for op in load("index")["ops"]:
             {"conn": A("alice"), "expect": {"id": 1, "ok": {"limits": LIMITS, "durability": "local", "time": T0, "knownHeads": []}}},
         ]
     else:
-        steps = steps_of(d["clients"][d["vectorFrom"]]["frames"])
+        steps = split_state_reads(steps_of(d["clients"][d["vectorFrom"]]["frames"]))
     vec = {"format": "han-wire-vector/1", "name": name, "description": d["description"], "rules": RULES[name], "steps": steps}
     dump(os.path.join(OUT, fname), vec)
     index["files"].append(fname)
@@ -381,6 +406,9 @@ for fn in index["files"][:n]:
         if f and f.get("call") == "append":
             code, r = _gold.append(f["args"]["entry"], f["args"].get("content"), PROF)
             assert code == "ok" and r == _st[i + 1]["expect"]["ok"], f"the oracle does not reproduce the golden receipt {fn} step {i}: {code} {r}"
+        if f and f.get("call") == "state":
+            code, r = _gold.state(f["args"]["space"], st_["conn"])
+            assert code == "ok" and r == _st[i + 1]["expect"]["ok"], f"the oracle's state differs from the golden state {fn} step {i}"
 _gread = [x["expect"] for x in json.load(open(os.path.join(OUT, "05-read.json"), encoding="utf-8"))["steps"] if "expect" in x]
 _gitems = [g["item"] for g in _gread if "item" in g]
 assert _gitems == _gold.read("s1:" + SERVER, 0, A("alice"))[1][:len(_gitems)], "the oracle's read of s1 differs from the golden read"
@@ -412,15 +440,17 @@ def put(conn, i, e, c, r):
 def rec(space, seq): return ORC.spaces[space]["records"][seq - 1]
 def ritem(i, space, seq): return {"id": i, "item": {"type": "record", "record": rec(space, seq)}}
 def read_expect(conn, i, space, after, as_, **kw):
-    """The frames a server must answer `read` with, from the oracle: the items, then the end (or the error). `next` of a state page is the matcher <cursor>."""
+    """The frames a server must answer `read` with, from the oracle: the records, then the end (or the error)."""
     code, items = ORC.read(space, after, A(as_), **kw)
     if code != "ok": return [{"conn": conn, "expect": err(i, code)}]
-    out = []
-    for it in items:
-        it = dict(it)
-        if "next" in it: it["next"] = "<cursor>"
-        out.append({"conn": conn, "expect": {"id": i, "item": it}})
-    return out + [{"conn": conn, "expect": {"id": i, "end": True}}]
+    return [{"conn": conn, "expect": {"id": i, "item": it}} for it in items] + [{"conn": conn, "expect": {"id": i, "end": True}}]
+def sx(conn, i, space, **args):
+    """A `state` call (H10): `args` are the selector (at, cursor or effect) and anything else the vector wants to send."""
+    return {"conn": conn, "send": {"id": i, "call": "state", "args": dict({"space": space}, **args)}}
+def state_expect(conn, i, space, as_, **sel):
+    """The one frame a server must answer `state` with, from the oracle: the page `{state, next?}` (the cursor is exact: its format is §3's), or the error."""
+    code, rep = ORC.state(space, A(as_), **sel)
+    return [{"conn": conn, "expect": err(i, code)}] if code != "ok" else [{"conn": conn, "expect": {"id": i, "ok": rep}}]
 def rd(conn, i, space, after=0, **args): return {"conn": conn, "send": {"id": i, "call": "read", "args": dict({"space": space, "after": after}, **args)}}
 def create_space(conn, space, name, actor="alice", i0=2):
     e, c, r = oa(actor, "space.create", {"policy": SP_POLICY}, {"name": name}, space=space, tag=space + "-create")
@@ -442,29 +472,31 @@ for k in range(NTASK):
     oa("alice", "task", {"to": [bo]}, {"ask": f"task {k}"}, space=PG, tag=f"pg-task-{k}")
 steps += [{"conn": al, "generate": PG_GEN}]       # the runner signs and sends the 1,001 tasks itself and checks each receipt; none is an expectation (README: generate)
 r22.append(vec("E8-setup", f"setup: alice creates `{PG}`, adds bob and generates {NTASK} tasks (one more than maxStateItems, 1,000)", steps, ["§3", "E8"], source="maker"))
-page1 = read_expect(al, 2, PG, 0, "alice", state=True, limit=1)          # limit 1 bounds the records, never the state
-assert len(page1) == 3 and len(page1[0]["expect"]["item"]["state"]["tasks"]) == 1000 and page1[0]["expect"]["item"]["next"] == "<cursor>"
-_p1 = ORC.read(PG, 0, A("alice"), state=True, limit=1)[1][0]
-last_page = ORC.read(PG, 0, A("alice"), state=True, cursor=_p1["next"])[1][0]["state"]       # F3 c: the next slice of tasks only; sessions and roleHistory were sent with page 1
-assert len(last_page["tasks"]) == 1 and last_page["sessions"] == {} and last_page["roleHistory"] == {} and "next" not in ORC.read(PG, 0, A("alice"), state=True, cursor=_p1["next"])[1][0]
-assert len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["tasks"]) == 1000
-steps = [rd(al, 2, PG, 0, state=True, limit=1)] + page1
-steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>"}}},
-          {"conn": al, "expect": {"id": 3, "item": {"type": "state", "state": last_page}}}, {"conn": al, "expect": {"id": 3, "end": True}},
-          {"conn": al, "send": {"id": 4, "call": "read", "args": {"space": PG, "after": 999999, "state": True, "cursor": "<cursor>"}}},      # `after` is ignored with a cursor
-          {"conn": al, "expect": {"id": 4, "item": {"type": "state", "state": last_page}}}, {"conn": al, "expect": {"id": 4, "end": True}},
-          {"conn": al, "send": {"id": 5, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "at": 2}}}, {"conn": al, "expect": err(5, "invalid")},
-          {"conn": al, "send": {"id": 6, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "effect": "0" * 64}}}, {"conn": al, "expect": err(6, "invalid")}]
-r22.append(vec("E8a", f"read {{state, limit: 1}} returns the oldest 1,000 of {NTASK} tasks with a cursor; the cursor returns the rest (the same head, the same policy and roles, no `next`; the other paged members were all sent with page 1, so they are empty); a cursor excludes `at` and `effect`; `after` is ignored with a cursor",
-               steps, ["§3", "G-09", "E8"], "page 1: 1,000 tasks + next, 1 record; page 2: 1 task, no next", source="maker (oracle: ref/wire.py Home)"))
-steps = [rd(al, 2, PG, 0, state=True, limit=1)] + page1
-steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "after": 0, "cursor": "<cursor>"}}}, {"conn": al, "expect": err(3, "invalid")},
-          {"conn": al, "send": {"id": 4, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "junk"}}}, {"conn": al, "expect": err(4, "invalid")},
-          {"conn": al, "send": {"id": 5, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": 5}}}, {"conn": al, "expect": err(5, "invalid")},
-          {"conn": ca, "send": {"id": 6, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>"}}}, {"conn": ca, "expect": err(6, "not_found")}]
-r22.append(vec("E8b", "a cursor needs state: true; a malformed cursor is invalid; a reader who may read nothing of the space gets not_found for a valid cursor", steps,
-               ["§3", "G-09", "E8"], "invalid, invalid, invalid, not_found", source="maker"))
-del last_page, page1
+page1 = state_expect(al, 2, PG, "alice")          # roles, roleHistory and the first 1,000 tasks, with the cursor of the rest
+_p1 = ORC.state(PG, A("alice"))[1]
+c1 = _p1["next"]
+assert len(_p1["state"]["tasks"]) == 1000 and len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["roles"]) == 2 and c1 == f"{ORC.spaces[PG]['state']['head']}.2.2.1000.0.0.0.0.0.0.0", c1
+last_page = ORC.state(PG, A("alice"), cursor=c1)[1]      # the rest: one task; every other paged map was complete on page 1
+assert len(last_page["state"]["tasks"]) == 1 and last_page["state"]["roles"] == {} and last_page["state"]["roleHistory"] == {} and "next" not in last_page
+steps = [sx(al, 2, PG)] + page1
+steps += [sx(al, 3, PG, cursor=c1), {"conn": al, "expect": {"id": 3, "ok": last_page}},
+          sx(al, 5, PG, cursor=c1, at=2), {"conn": al, "expect": err(5, "invalid")},
+          sx(al, 6, PG, cursor=c1, effect="0" * 64), {"conn": al, "expect": err(6, "invalid")},
+          sx(al, 7, PG, cursor=c1, after=0), {"conn": al, "expect": err(7, "invalid")}]       # `state` has no `after`: an unknown member
+r22.append(vec("E8a", f"state returns the maps in pages: page 1 holds roles, roleHistory and the oldest 1,000 of {NTASK} tasks, with next `{c1}` (head, then one offset per paged map); the cursor returns the last task (every other member was complete); a cursor excludes `at` and `effect`; `state` takes no `after`",
+               steps, ["§3", "G-09", "E8", "H3"], "page 1: 1,000 tasks + next; page 2: 1 task, no next", source="maker (oracle: ref/wire.py Home)"))
+steps = [sx(al, 2, PG)] + page1
+hd = ORC.spaces[PG]["state"]["head"]; npg = len(W.PAGED)
+steps += [sx(al, 3, PG, cursor="junk"), {"conn": al, "expect": err(3, "invalid")},
+          sx(al, 4, PG, cursor=5), {"conn": al, "expect": err(4, "invalid")},
+          sx(al, 5, PG, cursor=f"{hd + 5}." + ".".join("0" * npg)), {"conn": al, "expect": err(5, "invalid")},
+          sx(al, 6, PG, cursor=f"{hd}.99" + ".0" * (npg - 1)), {"conn": al, "expect": err(6, "invalid")},
+          sx(al, 7, PG, cursor=f"{hd}.0"), {"conn": al, "expect": err(7, "invalid")},
+          sx(al, 8, PG, cursor=f"{hd}.02" + ".0" * (npg - 1)), {"conn": al, "expect": err(8, "invalid")},
+          {"conn": ca, "send": {"id": 9, "call": "state", "args": {"space": PG, "cursor": c1}}}, {"conn": ca, "expect": err(9, "not_found")}]
+r22.append(vec("E8b", "a malformed cursor is invalid (not a string, not the format of §3, a head beyond the current head, an offset beyond its map, a leading zero, too few offsets); a reader who may read nothing of the space gets not_found for a valid cursor", steps,
+               ["§3", "G-09", "E8", "H12"], "invalid x6, not_found", source="maker"))
+del last_page, page1, _p1
 
 EF = "ef:" + SERVER
 steps = create_space(al, EF, "effects") + member(al, EF, "bob", "member", 3) + member(al, EF, "x", "member", 4)
@@ -472,16 +504,15 @@ plan = {"action": "file.write", "target": "out/e8.txt", "args": {"content": "eff
 e, c, r = oa("bob", "effect.propose", {"executor": A("x"), "action": "file.write", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}, {"plan": plan}, space=EF, tag="ef-propose")
 pid = r["id"]
 steps += put(bo, 2, e, c, r)
-steps += [rd(al, 5, EF, 0, state=True, effect=pid)] + read_expect(al, 5, EF, 0, "alice", state=True, effect=pid)
-steps += [rd(al, 6, EF, 999999, state=True, effect=pid, limit=1)] + read_expect(al, 6, EF, 0, "alice", state=True, effect=pid)      # `after` and `limit` do not matter
-steps += [rd(al, 7, EF, 0, state=True, effect="0" * 64), {"conn": al, "expect": err(7, "not_found")},
-          rd(al, 8, EF, 0, effect=pid), {"conn": al, "expect": err(8, "invalid")},
-          rd(al, 9, EF, 0, state=True, effect=5), {"conn": al, "expect": err(9, "invalid")},
-          rd(ca, 10, EF, 0, state=True, effect=pid), {"conn": ca, "expect": err(10, "not_found")}]
-one = read_expect(al, 5, EF, 0, "alice", state=True, effect=pid)[0]["expect"]["item"]["state"]
-assert set(one) <= {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"} and {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"} <= set(one) and list(one["effects"]) == [pid], sorted(one)
-r22.append(vec("E8c", "read {state, effect}: one state item holding only that effect, with policy, roles, sessions, held, guarded and agents; an unknown effect is not_found; effect needs state", steps,
-               ["§3", "G-09", "E8"], "the EffectStateView, then end", source="maker (oracle: ref/wire.py Home)"))
+steps += [sx(al, 5, EF, effect=pid)] + state_expect(al, 5, EF, "alice", effect=pid)
+steps += [sx(al, 7, EF, effect="0" * 64), {"conn": al, "expect": err(7, "not_found")},
+          sx(al, 9, EF, effect=5), {"conn": al, "expect": err(9, "invalid")},
+          sx(al, 8, EF, effect=pid, limit=1), {"conn": al, "expect": err(8, "invalid")},
+          sx(ca, 10, EF, effect=pid), {"conn": ca, "expect": err(10, "not_found")}]
+one = ORC.state(EF, A("alice"), effect=pid)[1]
+assert set(one["state"]) == {"space", "head", "home", "policy", "effects"} and list(one["state"]["effects"]) == [pid] and "next" not in one, sorted(one["state"])
+r22.append(vec("E8c", "state {effect}: one state holding only that effect with space, head, home and policy, and no next; an unknown effect is not_found, a non-string effect invalid, `limit` is no member of `state`; a stranger gets not_found", steps,
+               ["§3", "G-09", "E8", "H10"], "the EffectStateView, once", source="maker (oracle: ref/wire.py Home)"))
 
 # ── G-07 (1a): an integer of 2^53 or more anywhere in a frame ──
 VO = "vo:" + SERVER
@@ -552,16 +583,18 @@ AT = "at:" + SERVER
 steps = create_space(al, AT, "history") + member(al, AT, "bob", "member", 3)
 mm, _ = message(bo, AT, "bob", "from bob", 2); steps += mm
 steps += member(al, AT, "vera", "member", 4) + member(al, AT, "bob", "none", 5)
-steps += [rd(al, 6, AT, 3, state=True, at=2)] + read_expect(al, 6, AT, 3, "alice", state=True, at=2)
-steps += [rd(bo, 3, AT, 5, state=True, at=3)] + read_expect(bo, 3, AT, 5, "bob", state=True, at=3)
-steps += [rd(bo, 4, AT, 5, state=True), {"conn": bo, "expect": err(4, "denied")}]
-steps += [rd(va, 2, AT, 5, state=True, at=2)] + read_expect(va, 2, AT, 5, "vera", state=True, at=2)
-steps += [rd(al, 7, AT, 5, state=True, at=5)] + read_expect(al, 7, AT, 5, "alice", state=True, at=5)
-steps += [rd(al, 8, AT, 0, at=2), {"conn": al, "expect": err(8, "invalid")}, rd(al, 9, AT, 0, state=True, at=0), {"conn": al, "expect": err(9, "invalid")},
-          rd(al, 10, AT, 0, state=True, at=6), {"conn": al, "expect": err(10, "invalid")}, rd(al, 11, AT, 0, state=True, at="2"), {"conn": al, "expect": err(11, "invalid")}]
-assert read_expect(al, 6, AT, 3, "alice", state=True, at=2)[0]["expect"]["item"]["state"]["head"] == 2
-r22.append(vec("E9a", "read {state, at}: the state after record `at` (head = at); a former member reads it while they were in, but not the head; a member who joined later reads an earlier state; at without state, 0, past the head or a string is invalid", steps,
-               ["§3", "P-02", "G-09"], "state at `at` (+ records after `after`), denied for the former member at the head", source="maker (oracle: ref/wire.py Home)"))
+steps += [sx(al, 6, AT, at=2)] + state_expect(al, 6, AT, "alice", at=2)
+steps += [sx(bo, 3, AT, at=3)] + state_expect(bo, 3, AT, "bob", at=3)
+steps += [sx(bo, 4, AT), {"conn": bo, "expect": err(4, "denied")}]
+steps += [sx(va, 2, AT, at=2)] + state_expect(va, 2, AT, "vera", at=2)
+steps += [sx(al, 7, AT, at=5)] + state_expect(al, 7, AT, "alice", at=5)
+steps += [sx(al, 9, AT, at=0), {"conn": al, "expect": err(9, "invalid")},
+          sx(al, 10, AT, at=6), {"conn": al, "expect": err(10, "invalid")}, sx(al, 11, AT, at="2"), {"conn": al, "expect": err(11, "invalid")},
+          sx(al, 12, AT, at=True), {"conn": al, "expect": err(12, "invalid")},
+          rd(al, 8, AT, 0, at=2), {"conn": al, "expect": err(8, "invalid")}]       # `read` has no `at` any more
+assert ORC.state(AT, A("alice"), at=2)[1]["state"]["head"] == 2
+r22.append(vec("E9a", "state {at}: the state after record `at` (head = at); a former member reads it while they were in, but not the head; a member who joined later reads an earlier state; at as 0, past the head, a string or a boolean is invalid; `read` has no `at`", steps,
+               ["§3", "P-02", "G-09", "H10"], "state at `at`, denied for the former member at the head", source="maker (oracle: ref/wire.py Home)"))
 
 # ── follow + limit: the gap ──
 FG = "fg:" + SERVER
@@ -712,18 +745,18 @@ r23.append(vec("V57", "verdict pair 5/7 (Policy before the moment-dependent unav
                steps, ["§4.1", "R-03a", "G-11"], "denied, unavailable, denied, invalid, unavailable, then the receipt", source="maker (oracle: ref/wire.py Home)"))
 
 # ── F4: read combinations ──
-page1 = read_expect(al, 6, PG, 0, "alice", state=True, limit=1)
-steps = [rd(al, 2, EF, 0, state=True, effect=pid, at=2), {"conn": al, "expect": err(2, "invalid")},
-         rd(al, 3, EF, 0, state=True, effect=pid, follow=True), {"conn": al, "expect": err(3, "invalid")},
-         rd(al, 4, EF, 0, state=True, effect=pid, at=2, follow=True), {"conn": al, "expect": err(4, "invalid")},
-         rd(al, 5, EF, 0, state=True, effect=pid)] + read_expect(al, 5, EF, 0, "alice", state=True, effect=pid) + [
-         rd(al, 6, PG, 0, state=True, limit=1)] + page1
-steps += [{"conn": al, "send": {"id": 7, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "follow": True}}}, {"conn": al, "expect": err(7, "invalid")},
-          {"conn": al, "send": {"id": 8, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "effect": pid}}}, {"conn": al, "expect": err(8, "invalid")},
-          {"conn": al, "send": {"id": 9, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "at": 2, "follow": True}}}, {"conn": al, "expect": err(9, "invalid")},
-          {"conn": al, "send": {"id": 10, "call": "cancel", "args": {"target": 3}}}, {"conn": al, "expect": OKNULL(10)}]
-r23.append(vec("F4a", "read combinations: effect with at, with follow, with both; cursor with follow, with effect, with at and follow are invalid (no stream is opened, the connection stays usable); each alone still works", steps,
-               ["§3", "G-09", "F4"], "invalid x6, then the plain effect read", source="maker (oracle: ref/wire.py Home)"))
+c1 = ORC.state(PG, A("alice"))[1]["next"]
+steps = [sx(al, 2, EF, effect=pid, at=2), {"conn": al, "expect": err(2, "invalid")},
+         sx(al, 3, EF, effect=pid, cursor=c1), {"conn": al, "expect": err(3, "invalid")},
+         sx(al, 4, PG, cursor=c1, at=2), {"conn": al, "expect": err(4, "invalid")},
+         sx(al, 5, PG, at=2, cursor=c1, effect=pid), {"conn": al, "expect": err(5, "invalid")},
+         sx(al, 6, EF, effect=pid, cursor=None), {"conn": al, "expect": err(6, "invalid")},      # presence decides, not the value
+         sx(al, 7, EF, at=None, effect=pid), {"conn": al, "expect": err(7, "invalid")}]
+for k, call_args in enumerate(({"state": True}, {"at": 2}, {"cursor": c1}, {"effect": pid}), start=8):
+    steps += [{"conn": al, "send": {"id": k, "call": "read", "args": dict({"space": EF, "after": 0}, **call_args)}}, {"conn": al, "expect": err(k, "invalid")}]
+steps += [sx(al, 12, EF, effect=pid)] + state_expect(al, 12, EF, "alice", effect=pid) + [sx(al, 13, PG, cursor=c1)] + state_expect(al, 13, PG, "alice", cursor=c1) + [sx(al, 14, EF, at=2)] + state_expect(al, 14, EF, "alice", at=2)
+r23.append(vec("F4a", "the selectors of `state` exclude each other by shape (H10): effect with at, effect with cursor, cursor with at, all three, and a null value beside another selector are invalid (the connection stays usable); `read` takes none of state, at, cursor, effect; each selector alone still works", steps,
+               ["§3", "G-09", "F4", "H10"], "invalid x10, then the three plain state reads", source="maker (oracle: ref/wire.py Home)"))
 
 # ── F4: a notice is dropped when its actor has no live subscription ──
 NR = "nr:" + SERVER
@@ -755,7 +788,72 @@ steps += [{"conn": "raw:5", "send_raw": '{"call":"cancel","args":{"target":%d}}'
           {"conn": "raw:5", "send": {"id": 2, "call": "cancel", "args": {"target": 1}}}, {"conn": "raw:5", "expect": err(2, "denied")}]            # -(2^53-1) is not big: invalid on id 0 as a malformed frame, and the connection stays open
 r23.append(vec("N3", "a negative integer below -(2^53-1) with no usable request id (absent, itself -2^53, 0, a string): id 0, invalid, and the server closes the connection, before authentication; -(2^53-1) is not big, so the same frame without an id is an ordinary invalid frame and the connection stays open", steps,
                ["§2", "G-07", "F4"], "id 0, invalid, close", source="maker"))
-del page1
+
+
+# ───────────── probes-r24.json: DECISIONS-r24.md H3 (the byte cut of a state page) and H10 (a) (`state` is its own call) ─────────────
+r24 = []
+LIM = 2048
+def limits_step(n=None):
+    """A `limits` step (G-11 `test.limits`); the oracle's own limit moves with it."""
+    if n is not None: ORC.max_frame_bytes = n
+    return {"limits": {} if n is None else {"maxFrameBytes": n}}
+
+# ── test.limits itself (G-11) ──
+steps = [{"conn": "raw:1", "send": {"id": 2, "call": "test.limits", "args": {}}}, {"conn": "raw:1", "expect": err(2, "denied")}]
+for i, a in enumerate(({"maxFrameBytes": 1023}, {"maxFrameBytes": 1310721}, {"maxFrameBytes": "4096"}, {"maxFrameBytes": True}, {"maxFrameBytes": -4096}, {"extra": 1}), start=2):
+    steps += [{"conn": al, "send": {"id": i, "call": "test.limits", "args": a}}, {"conn": al, "expect": err(i, "invalid")}]
+steps += [{"limits": {}}, {"limits": {"maxFrameBytes": 1024}}, {"limits": {"maxFrameBytes": 1310720}}]
+r24.append(vec("T2", "test.limits (test mode only): before hello it is denied; a value below 1,024 or above 1,310,720, a string, a boolean, a negative number and an unknown member are invalid (a fraction is not I-JSON: G-07 (1), vector D2a); {} reads the limit, a value sets it, and 1,310,720 puts it back", steps,
+               ["G-11"], "denied; invalid x6; ok {maxFrameBytes} x3", source="maker"))
+
+# ── H3: the byte cut of a state page, the same on every server ──
+BC = "bc:" + SERVER
+steps = create_space(al, BC, "byte cut") + member(al, BC, "bob", "member", 3) + member(al, BC, "x", "member", 4)
+planb = {"action": "file.write", "target": "out/bc.txt", "args": {"content": "byte cut"}}
+e, c, r = oa("bob", "effect.propose", {"executor": xc, "action": "file.write", "planDigest": hashlib.sha256(P.jcs(planb)).hexdigest(), "repeatable": False}, {"plan": planb}, space=BC, tag="bc-propose")
+steps += put(bo, 2, e, c, r)
+e, c, r = oa("alice", "session.open", {"steerMode": "auto"}, {"title": "byte cut session"}, space=BC, tag="bc-session")
+steps += put(al, 5, e, c, r)
+for k in range(24):
+    e, c, r = oa("alice", "task", {"to": [bo]}, {"ask": f"cut {k}"}, space=BC, tag=f"bc-task-{k}")
+    steps += put(al, 10 + k, e, c, r)
+r24.append(vec("H3-setup", "setup: alice creates `%s`, adds bob and x, bob proposes an effect, alice opens a session and assigns 24 tasks (state for H3a)" % BC, steps, ["§3", "H3"], source="maker"))
+
+steps = [limits_step(LIM)]
+pages, cur, k = [], None, 0
+while True:
+    k += 1
+    sel = {} if cur is None else {"cursor": cur}
+    steps += [sx(al, 1 + k, BC, **sel)] + state_expect(al, 1 + k, BC, "alice", **sel)
+    pg = ORC.state(BC, A("alice"), **sel)[1]
+    assert len(P.jcs({"id": W.MAX_INT, "ok": pg})) <= LIM, "a page over the lowered limit"
+    pages.append(pg)
+    cur = pg.get("next")
+    if not cur: break
+assert 4 <= len(pages) <= 9, len(pages)
+joined = {key: {a: b for pg in pages for a, b in pg["state"][key].items()} for key in ("roles", "roleHistory", "tasks", "effects", "sessions")}
+ORC.max_frame_bytes = W.MAX_FRAME_BYTES
+whole = ORC.state(BC, A("alice"))[1]["state"]; ORC.max_frame_bytes = LIM
+assert all(joined[key] == whole[key] for key in joined) and len(joined["tasks"]) == 24 and all(pg["state"]["policy"] == whole["policy"] for pg in pages)
+steps += [{"conn": "raw:1", "expect": {"challenge": "<challenge-shape>", "server": SERVER, "versions": [1], "time": T0}},
+          {"conn": "raw:1", "send": hello_send(1, al)}, {"conn": "raw:1", "expect": {"id": 1, "ok": {"limits": dict(LIMITS, maxFrameBytes=LIM), "durability": "local", "time": T0, "knownHeads": []}}}]
+steps += [sx(al, 20, BC, effect=rec(BC, 4)["receipt"]["id"])] + state_expect(al, 20, BC, "alice", effect=rec(BC, 4)["receipt"]["id"])
+steps += [limits_step(W.MAX_FRAME_BYTES)]
+steps += [sx(al, 30, BC)] + state_expect(al, 30, BC, "alice")
+assert "next" not in ORC.state(BC, A("alice"))[1]
+r24.append(vec("H3a", f"the byte cut of a state page, on every server: with maxFrameBytes lowered to {LIM}, `state` of `{BC}` is {len(pages)} pages (roles, roleHistory, the effect, the session and 24 tasks), each page as a frame `{{id, ok}}` within {LIM} bytes less 256 for `next`, the maps filled in the order of §3 with the first item that does not fit closing the page, the cursor `<head>.<offsets>` exact; hello reports the lowered limit; the effect reply is one page; with the limit restored the whole state is one page without `next`",
+               steps, ["§3", "G-09", "G-11", "H3"], f"{len(pages)} pages, then one", source="maker (oracle: ref/wire.py Home with max_frame_bytes lowered)"))
+print("H3a pages:", len(pages), [len(P.jcs({"id": W.MAX_INT, "ok": pg})) for pg in pages], [pg.get("next") for pg in pages])
+
+# ── H10 (a): `read` is entries only; `state` is its own call ──
+# the oracle holds BC (created above), not the golden s1: a vector built on a space the oracle lacks would pin `not_found`
+assert ORC.read(BC, 0, A("alice"), limit=1)[0] == "ok" and ORC.state(BC, A("alice"), at=3)[0] == "ok"
+steps = [rd(al, 2, BC, 0, limit=1)] + read_expect(al, 2, BC, 0, "alice", limit=1)
+for k, a in enumerate(({"state": True}, {"state": False}, {"at": 2}, {"cursor": "x"}, {"effect": "0" * 64}), start=3):
+    steps += [rd(al, k, BC, 0, **a), {"conn": al, "expect": err(k, "invalid")}]
+steps += [sx(al, 9, BC, at=3)] + state_expect(al, 9, BC, "alice", at=3)
+r24.append(vec("H10a", "`read` is entries only: records and heads, and `state`, `at`, `cursor` and `effect` are unknown members (invalid); `state {at}` is the old `read {state, at}`", steps,
+               ["§3", "G-09", "H10"], "one record, invalid x5, a state page", source="maker (oracle: ref/wire.py Home)"))
 
 
 def dump_vectors(path, doc):
@@ -769,10 +867,11 @@ def dump_vectors(path, doc):
 dump_vectors(os.path.join(OUT, "probes-r22.json"), {"format": "han-wire-vectors/1", "kind": "r22", "note": "Round-22 coverage (DECISIONS-r22.md E5, E8, E10; architecture.md §3, §4.1, §4.3, G-03, G-07, R-15). Every expected value is from ref/wire.py (W.Home) driven with the same entries. Run after probes-decided.json, in this order: E8-setup builds the paging space, E5-setup the space E5a-E5d and E7a use.", "vectors": r22})
 
 dump_vectors(os.path.join(OUT, "probes-r23.json"), {"format": "han-wire-vectors/1", "kind": "r23", "note": "Round-23 coverage (DECISIONS-r23.md F4, F8; architecture.md G-11 test.clock, G-03, G-07 (1a), G-09, R-03a, R-16, section 4.1). Run last: they move the test clock. Every expected value is from ref/wire.py (W.Home) driven with the same entries and the same clock moves. Each vector that moves the wall clock puts it back before it ends.", "vectors": r23})
+dump_vectors(os.path.join(OUT, "probes-r24.json"), {"format": "han-wire-vectors/1", "kind": "r24", "note": "Round-24 coverage (DECISIONS-r24.md H3, H10 a; architecture.md section 3 state, G-09, G-11 test.limits). Run last: they lower and restore maxFrameBytes (test.limits). Every expected value is from ref/wire.py (W.Home) driven with the same entries; the cursor of a state page is exact.", "vectors": r24})
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})
-index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json"]
+index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json"]
 
 import run_wire_vectors as RV     # the runner's generated entries must be byte for byte the oracle's: check three of them
 _cfg = RV.Cfg()
@@ -781,4 +880,4 @@ for _k in (0, 500, NTASK - 1):
     _o = ORC.spaces[PG]["records"][PG_GEN["head"] + _k]
     assert _o["entry"] == _e and _o["content"] == _c, f"the runner's generated task {_k} differs from the oracle's"
 dump(os.path.join(OUT, "index.json"), index)
-print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "head after agreed:", HEAD_AFTER_AGREED)
+print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "head after agreed:", HEAD_AFTER_AGREED)

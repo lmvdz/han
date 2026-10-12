@@ -242,18 +242,20 @@ async function protocol() {
     await scenario("read: P-02 rights, state, limit, follow, heads", async () => {
       ok(await code(nina.client.read(SP, 0)) === "not_found", "no rights -> not_found, as for a missing space");
       ok(await code(ada.client.read("zz:" + SERVER, 0)) === "not_found", "missing space");
-      const all = await ada.client.read(SP, 0, { state: true, limit: 3, knownHeads: [created] });
-      ok(all[0].type === "state" && !("entries" in all[0].state) && all[0].state.head >= 5, "state first, without the entries index");
-      ok(all[1].type === "heads" && all[1].heads[0].space === SP, "then heads");
+      const all = await ada.client.read(SP, 0, { limit: 3, knownHeads: [created] });
+      const sv = (await ada.client.state(SP)).state;
+      ok(!("entries" in sv) && sv.head >= 5, "state: a StateView without the entries index");
+      ok(all[0].type === "heads" && all[0].heads[0].space === SP, "read: entries only, heads first");
       ok(all.filter((i: A) => i.type === "record").length === 3, "limit bounds the backlog");
-      ok(await code(eve.client.read(SP, 0, { state: true })) === "denied", "a banned author keeps old reads but not the state at the head");
+      ok(await code(eve.client.state(SP)) === "denied", "a banned author keeps old reads but not the state at the head");
       const evRecs = eve.client.records(await eve.client.read(SP, 0));
       const iv = (w.seq.stateOf(SP)!.roleHistory as A)[eve.id][0];
       ok(evRecs.length > 0 && evRecs.every((r: A) => r.receipt.seq >= iv.from && r.receipt.seq < iv.to!) && evRecs[evRecs.length - 1].receipt.seq === iv.to! - 1, "former members read exactly [from, to) (110)");
-      const stAt = await eve.client.read(SP, 0, { state: true, at: iv.to! - 1, limit: 1 });
-      ok(stAt[0].type === "state" && stAt[0].state.head === iv.to! - 1, "read with `at`: a former member reads the state as it was while in");
-      ok(await code(eve.client.read(SP, 0, { state: true, at: w.seq.stateOf(SP)!.head })) === "denied", "`at` needs read rights at `at`");
-      ok(await code(ada.client.read(SP, 0, { at: 2 })) === "invalid" && await code(ada.client.read(SP, 0, { state: true, at: 0 })) === "invalid", "`at` without state, or outside 1…head, is invalid");
+      const stAt = await eve.client.state(SP, { at: iv.to! - 1 });
+      ok(stAt.state.head === iv.to! - 1, "state with `at`: a former member reads the state as it was while in");
+      ok(await code(eve.client.state(SP, { at: w.seq.stateOf(SP)!.head })) === "denied", "`at` needs read rights at `at`");
+      ok(await code(ada.client.read(SP, 0, { at: 2 })) === "invalid" && await code(ada.client.read(SP, 0, { state: true } as A)) === "invalid" && await code(ada.client.state(SP, { at: 0 })) === "invalid", "`read` takes no state/at; `state` `at` outside 1…head is invalid");
+      ok(await code(ada.client.state(SP, { at: 2, cursor: null } as A)) === "invalid" && await code(ada.client.state(SP, { effect: "0".repeat(64), at: 1 } as A)) === "invalid", "two selectors are invalid by presence");
       const gap: A[] = []; const gs = ada.client.stream("read", { space: SP, after: 0, follow: true, limit: 2 }, (i) => gap.push(i));
       await sleep(80); ok(gap.length === 2, "follow with a long backlog sends `limit` records");
       await send(ada, SP, "message", {}, { text: "after gap" }); await until(() => gap.length === 3, 3000, "live record after the gap");
@@ -592,7 +594,7 @@ async function round21() {
       const wk = await (await fetch(base + "/.well-known/han")).json() as A;
       ok(wk.server === SERVER && /\/han$/.test(wk.sequencer) && Array.isArray(wk.keys) && wk.keys[0].from, "/.well-known/han shape (D13)");
       ok(Array.isArray((await (await fetch(base + "/.well-known/han-peers")).json() as A).peers), "/.well-known/han-peers shape (D13)");
-      const st = (await ada.client.read(SP, 0, { state: true })).find((i: A) => i.type === "state").state;
+      const st = (await ada.client.state(SP)).state;
       ok(typeof st === "object", "state view");
     });
     await scenario("D10: signal `from` only on a server-actor connection", async () => {
@@ -673,7 +675,7 @@ async function round22() {
     const SP = "p15:" + SERVER;
     await createSpace(ada, SP, POLICY({ sessions: { watch: "member", read: "owner", steer: "member", modes: ["auto", "guarded"] } }));
     for (const p of [ann, bob, bot]) await send(ada, SP, "member.set", { actor: p.id, role: "member" });
-    const st = async () => (await ada.client.read(SP, 0, { state: true }))[0].state;
+    const st = async () => (await ada.client.stateAll(SP));
     let sess = "";
     await scenario("P-15: only the guard unguards (agent.release + unguard); closing never does; a closed session is no session", async () => {
       sess = (await send(bot, SP, "session.open", { steerMode: "guarded" })).id;
@@ -702,18 +704,18 @@ async function round22() {
     });
     await scenario("E8: state pages (maxStateItems), cursor, effect", async () => {
       for (let i = 0; i < 7; i++) await send(ada, SP, "task", { to: [bob.id] }, { ask: "t" + i });
-      const first = (await ada.client.read(SP, 0, { state: true }))[0];
-      ok(Object.keys(first.state.tasks).length === 3 && typeof first.next === "string", "first page: 3 tasks and next");
+      const first = await ada.client.state(SP);
+      ok(Object.keys(first.state.tasks).length === 3 && typeof first.next === "string" && /^\d+(\.\d+){10}$/.test(first.next), "first page: 3 tasks and a dotted next");
       const all: A = { ...first.state.tasks }; let next = first.next, pages = 1;
-      while (next) { const it = await ada.client.read(SP, 0, { state: true, cursor: next }); ok(it.length === 1, "one item"); Object.assign(all, it[0].state.tasks); next = it[0].next; pages++; }
+      while (next) { const it = await ada.client.state(SP, { cursor: next }); Object.assign(all, it.state.tasks); next = it.next; pages++; }
       ok(Object.keys(all).length === 7 && pages === 3, "7 tasks in 3 pages");
-      ok(await code(ada.client.read(SP, 0, { state: true, cursor: "bogus" })) === "invalid", "a malformed cursor is invalid");
-      ok(await code(ada.client.read(SP, 0, { cursor: first.next })) === "invalid", "cursor needs state");
+      ok(await code(ada.client.state(SP, { cursor: "bogus" })) === "invalid" && await code(ada.client.state(SP, { cursor: first.next.replace(/\.0$/, ".00") })) === "invalid", "a malformed cursor is invalid");
+      ok(await code(ada.client.read(SP, 0, { cursor: first.next } as A)) === "invalid", "`cursor` is not a member of read");
       const ef = (await send(bob, SP, "effect.propose", { action: "file.write", planDigest: digestOf(planOf("file.write", "a.txt")), executor: bob.id } as A, { plan: planOf("file.write", "a.txt") }).catch((e) => e)) as A;
       if (ef.id) {
-        const one = await ada.client.read(SP, 0, { state: true, effect: ef.id });
-        ok(one.length === 1 && Object.keys(one[0].state.effects).length === 1 && one[0].state.tasks === undefined && "sessions" in one[0].state && !("agents" in one[0].state), "one effect + members");
-        ok(await code(ada.client.read(SP, 0, { state: true, effect: "0".repeat(64) })) === "not_found", "unknown effect");
+        const one = await ada.client.state(SP, { effect: ef.id });
+        ok(Object.keys(one.state.effects).length === 1 && one.next === undefined && JSON.stringify(Object.keys(one.state).sort()) === JSON.stringify(["effects", "head", "home", "policy", "space"]), "one effect: {space, head, home, policy, effects}, no next");
+        ok(await code(ada.client.state(SP, { effect: "0".repeat(64) })) === "not_found", "unknown effect");
       }
     });
     await scenario("integers >= 2^53: invalid on the request id, else id 0 + close", async () => {

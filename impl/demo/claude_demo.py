@@ -66,7 +66,7 @@ async def run(root: str, say=print, model: str | None = None, max_turns: int = 4
             async for it in alice.watch(SPACE, sid): items.append(it)
         watcher = asyncio.create_task(pump())
         async def outputs(): return [i["text"] for i in items if i["type"] == "output"]
-        async def state(): return (await alice.read_all(SPACE, 10 ** 9, state=True))[0]["state"]
+        async def state(): return (await alice.read_state(SPACE))
 
         n(f"carol steers: {STEER_DEPLOY!r}")
         await send(carol, "session.input", SPACE, {"session": sid}, {"text": STEER_DEPLOY})

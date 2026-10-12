@@ -38,7 +38,8 @@
      "publicKey": "pk",
      "status": "valid"
     }
-   }
+   },
+   "operator": "@op:b.example"
   },
   "@m:a.example": {
    "actorKind": "human",

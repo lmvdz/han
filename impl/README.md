@@ -68,7 +68,7 @@ async def main():
     await c.connect()                                   # authenticates, then finishes any unconfirmed outbox entries (R-07)
     e, content = c.make_entry("space.create", "s1:a.localhost", {"policy": default_policy()}, {"name": "room"})
     receipt = await c.append(e, content)                # outbox first, send, retry with the same entry (R-06)
-    async for item in c.read("s1:a.localhost", 0, follow=True, state=True): ...
+    async for item in c.read("s1:a.localhost", 0, follow=True): ...
     async for item in c.subscribe("s1:a.localhost"): ...          # records + signals, resumes after reconnects
     await c.signal("s1:a.localhost", {"typing": True})
     ref = await c.blob_put(b"bytes"); data = await c.blob_get(ref, "s1:a.localhost")
@@ -103,7 +103,7 @@ Options added in the fix round:
 
 - `han-exec --backoff-base SECONDS --backoff-cap SECONDS` (default 1 and 60): wait `base * 2^(n-1)` (at most `cap`) before re-claiming an effect after `failed`/`not started` (X-11). Effects it will not run (action not enabled, bad plan, outside the sandbox or allow-list) are never claimed; the proposer gets one `message` citing the proposal.
 - `han-host --cost UNIT:AMOUNT`: the cost attached to a world action that names none, in a budgeted space. The host also names its open budgeted task; with none it says in its stream that it cannot spend.
-- Wire/client: `read(space, after, {state: true, at: seq})` (`Client.read(..., state=True, at=seq)`) returns the state after record `seq`; `blobGet` serves a live session's `context` blob to actors with the read right; `Client.read(..., follow=True, limit=N)` re-reads gaps by itself.
+- Wire/client: the call `state {space, at? | cursor? | effect?}` (`Client.state(space, at=seq)`; `read_state` merges the pages) returns one page of the state, after record `seq` with `at`; `read` is entries only; `blobGet` serves a live session's `context` blob to actors with the read right; `Client.read(..., follow=True, limit=N)` re-reads gaps by itself.
 - Verifier: receipts may lead its clock by 60 s (`han.verify.MAX_CLOCK_SKEW_SECONDS`, the spec's `maxClockSkewSeconds`); in-space gossip is `{type: "heads", receipts}` and `{type: "fault", proof}`.
 
 Tests: `python -m pytest -q` from `impl/` runs everything (steps 1 and 2, the Matrix binding against Synapse, round 20): 143 passed, 1 skipped (the live Claude run) in about 2 minutes.

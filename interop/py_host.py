@@ -2,13 +2,13 @@
    python py_host.py --server a.localhost --port P --db PATH --key KEYFILE --actors actors.json --freeze 2026-01-01T00:00:00Z
 (The real, unmodified `python -m han.seq` is used for every other run; this only replaces the Clock.)
 
-Test mode (architecture.md G-11): the clock starts at --freeze and moves only by the control call `test.clock {wall?, steadyAdvance?}`, which this host adds
-to the server in process and the stock server does not have (outside test mode an unknown call is `invalid`)."""
+Test mode (architecture.md G-11): the clock starts at --freeze and moves only by the control call `test.clock {wall?, steadyAdvance?}`; `test.limits {maxFrameBytes?}`
+lowers the frame limit that hello reports and state pages are cut to. This host adds both to the server in process and the stock server has neither (outside test mode an unknown call is `invalid`)."""
 import argparse, asyncio, calendar, json, os, sys, time
 IMPL = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "impl"))
 sys.path.insert(0, IMPL)
 from han import keys
-from han.core import WireError
+from han.core import LIMITS, WireError
 from han.seq import server as srv_mod
 from han.seq.sequencer import Sequencer
 from han.seq.server import SeqServer
@@ -36,11 +36,19 @@ clock = Frozen(calendar.timegm(time.strptime(a.freeze, "%Y-%m-%dT%H:%M:%SZ"))) i
 seq = Sequencer(a.server, keys.load_or_generate(a.key, "h1"), a.db, clock=clock)
 if clock: seq.now = lambda: clock.t            # receipt and hello times are the test's wall reading, not the startup anchor plus elapsed steady time
 srv_mod.CALL_ARGS["test.clock"] = {"wall", "steadyAdvance"}
+srv_mod.CALL_ARGS["test.limits"] = {"maxFrameBytes"}
 for x in json.load(open(a.actors)):
     seq.register(x["actor"], x["kind"], x["keyId"], x["public"], x.get("operator"))
 
 class TestServer(SeqServer):
     async def _call(self, ws, conn, send, rid, call, args, challenge):
+        if call == "test.limits":                       # G-11: lowers (or restores) the maxFrameBytes that hello reports and state pages are cut to; the receive limit of the socket stays
+            if not conn["who"]: raise WireError("denied", "hello first")
+            if set(args) - {"maxFrameBytes"}: raise WireError("invalid", "unknown args for test.limits")
+            n = args.get("maxFrameBytes", LIMITS["maxFrameBytes"])
+            if isinstance(n, bool) or not isinstance(n, int) or not 1024 <= n <= 1310720: raise WireError("invalid", "maxFrameBytes is an integer from 1024 to 1310720")
+            LIMITS["maxFrameBytes"] = n
+            return await send({"id": rid, "ok": {"maxFrameBytes": n}})
         if call != "test.clock" or not clock: return await super()._call(ws, conn, send, rid, call, args, challenge)
         if not conn["who"]: raise WireError("denied", "hello first")
         if set(args) - {"wall", "steadyAdvance"}: raise WireError("invalid", "unknown args for test.clock")

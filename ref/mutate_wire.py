@@ -50,8 +50,8 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text a
     ("R-16", "an abandon that can never be allowed is still unavailable", '        if not P.decide(state, dict(entry, id=eid), {"time": fmt(due), "profiles": pinned})["allow"]: return 0', "        pass"),
     ("P-01", "all approval candidates are pinned", '            if found_valid and a not in required: continue', "            pass"),
     ("P-02", "state at judged on the state at `at`", 'if not P.can_read(st, as_, where):', 'if not P.can_read(self.state_at(space, where) or st, as_, where):'),
-    ("§3", "state at ignores `at`", 'view = st if at is None or at == st["head"] else self.state_at(space, at)', 'view = st'),
-    ("§3", "state at needs rights at the head", 'where = st["head"] if at is None else at', 'where = st["head"]'),
+    ("§3", "state at ignores `at`", 'view = st if where == st["head"] else self.state_at(space, where)', 'view = st'),
+    ("§3", "state at needs rights at the head", '            where = at\n', '            where = st["head"]\n'),
     ("§3", "follow ignores limit", 'if P.can_read(st, as_, r["receipt"]["seq"])][:limit]', 'if P.can_read(st, as_, r["receipt"]["seq"])]'),
     ("R-15", "fault adopted without checking its proof", 'if pr.get("kind") == "equivocation" and len(rs) == 2 and equivocation_proof(rs[0], rs[1], server_keys): return "adopted", "equivocation"',
               'if pr.get("kind") == "equivocation" and len(rs) == 2: return "adopted", "equivocation"'),
@@ -72,32 +72,77 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text a
     ("§4.1", "rate limit after the moment-dependent unavailable", (LIMIT6, RECEIPT7), ("", LIMIT6 + RECEIPT7)),
     ("§4.1", "durability judged before Policy", POLICY5, '        if (state or {}).get("policy", {}).get("minDurability") == "replicated" and self.durability != "replicated" and entry["kind"] not in ("policy.set", "space.move"): return "unavailable", "minDurability not reachable"\n' + POLICY5),
     ("§4.1", "slow clock judged before Policy", POLICY5, '        if S and now < S["records"][-1]["receipt"]["time"]: return "unavailable", {"reason": "clock behind the chain; wait (R-03a)", "retryAfterMs": (secs(S["records"][-1]["receipt"]["time"]) - secs(now) + 1) * 1000}\n' + POLICY5),
-    ("§3", "cursor pages restart from the first", 'at, offs = int(m[1]), dict(zip(PAGED, map(int, m.groups()[1:])))', 'at, offs = int(m[1]), dict.fromkeys(PAGED, 0)'),
-    ("§3", "cursor head not checked", 'if not m or not 1 <= int(m[1]) <= st["head"]: return "invalid", "cursor"', 'if not m: return "invalid", "cursor"'),
-    ("§3", "effect read returns every effect", 'dict(one, effects={effect: view["effects"][effect]})', 'dict(one, effects=view["effects"])'),
+    ("§3", "cursor pages restart from the first", 'where, offs = nums[0], dict(zip(PAGED, nums[1:]))', 'where, offs = nums[0], dict.fromkeys(PAGED, 0)'),
+    ("§3", "cursor head not checked", 'if not 1 <= nums[0] <= st["head"]: return "invalid", "cursor"', 'pass'),
+    ("§3", "cursor offset beyond its map accepted", 'if cursor is not None and any(offs[p] > len(_items(view, p)) for p in PAGED): return "invalid", "cursor offset beyond the map"', 'pass'),
+    ("§3", "cursor format not enforced", 'if not m: return "invalid", "cursor"', 'if not isinstance(cursor, str): return "invalid", "cursor"'),
+    ("§3", "effect read returns every effect", 'effects={effect: view["effects"][effect]})', 'effects=view["effects"])'),
+    ("§3", "effect read carries the roles too", 'EFFECT_VIEW = ("space", "head", "home", "policy")', 'EFFECT_VIEW = ("space", "head", "home", "policy", "roles")'),
     ("R-25", "a non-canonical public key is accepted", 'return "publicKey not canonical base64url"', 'pass'),
     ("R-25", "a public key of the wrong length is accepted", 'if len(unb64(k)) != 32: return "publicKey length"', 'pass'),
-    ("§3", "effect read of an unknown effect is empty", 'if not (isinstance(effect, str) and effect in view.get("effects", {})): return "not_found" if isinstance(effect, str) else "invalid", "no such effect"', 'pass'),
+    ("§3", "effect read of an unknown effect is empty", 'if effect not in view["effects"]: return "not_found", "no such effect"', 'pass'),
+    ("§3", "a reader who may read nothing gets an empty read", 'if not self.readable_any(st, as_): return "not_found", None', 'pass'),
+    ("§3", "a stranger's state is denied, not not_found", 'if self.readable_any(st, as_) else ("not_found", None)', 'if True else ("not_found", None)'),
+    ("H10", "state is not a call", '"read", "state", "subscribe"', '"read", "subscribe"'),
     # round 23: byte-bounded pages (F3 c), read combinations and notices (F4), negative big integers (G-07 1a)
-    ("F3 c", "state pages ignore the byte bound", '                if used + add > cap: continue', '                pass'),
-    ("F3 c", "state pages cut only effects and tasks", 'base, keys = {k: v for k, v in view.items() if k not in PAGED}, PAGED', 'base, keys = {k: v for k, v in view.items() if k not in ("effects", "tasks")}, ("effects", "tasks")'),
-    ("F3 c", "a page that cannot make progress is sent empty", '        if more and not any(taken.values()): return None', '        pass'),
-    ("F3 c", "the item-count bound is dropped", 'if taken[k] >= len(rest[k]) or taken[k] >= self.max_state_items: continue', 'if taken[k] >= len(rest[k]): continue'),
-    ("F3 c", "cursor forgets where sessions and roleHistory stopped", 'at, offs = int(m[1]), dict(zip(PAGED, map(int, m.groups()[1:])))', 'at, offs = int(m[1]), dict(zip(PAGED, (int(m[2]), int(m[3]), 0, 0)))'),
-    ("F3 c", "an effect reply is not cut", 'keys = ("sessions",) if "sessions" in view else ()', 'keys = ()'),
-    ("F4", "effect together with at is accepted", '(at is not None or follow or (cursor is not None and effect is not None))', '(follow or (cursor is not None and effect is not None))'),
-    ("F4", "cursor or effect together with follow is accepted", '(at is not None or follow or (cursor is not None and effect is not None))', '(at is not None or (cursor is not None and effect is not None))'),
-    ("F4", "cursor together with effect is accepted", '(at is not None or follow or (cursor is not None and effect is not None))', '(at is not None or follow)'),
-    ("F4", "a non-string effect is not_found", 'return "not_found" if isinstance(effect, str) else "invalid", "no such effect"', 'return "not_found", "no such effect"'),
+    ("F3 c", "state pages ignore the byte bound", '                if used + add > cap: closed = True; break', '                pass'),
+    ("H3", "state pages cut only effects and tasks", 'paths = [p for p in PAGED if _has(view, p)]', 'paths = [p for p in ("effects", "tasks") if _has(view, p)]'),
+    ("H3", "the per-actor maps repeat on every page", '"sessions", "held", "guarded", "cleared"', '"sessions", "cleared"'),
+    ("H3", "a profile's keys are not paged", '"outside", "profile.keys")', '"outside")'),
+    ("H3", "a page that cannot make progress is sent empty", 'assert not more or any(taken.values()), "a state item does not fit an empty page: impossible by construction (H3)"', 'pass'),
+    ("H3", "the item-count bound is dropped", 'if n >= self.max_state_items: break', 'pass'),
+    ("H3", "later maps keep filling after the page is full", '            if closed: break', '            pass'),
+    ("H3", "cursor forgets where the later maps stopped", 'where, offs = nums[0], dict(zip(PAGED, nums[1:]))', 'where, offs = nums[0], dict(zip(PAGED, nums[1:4] + [0] * 7))'),
+    ("H10", "effect together with at is accepted", 'if sum(x is not None for x in (at, cursor, effect)) > 1:', 'if (at is not None and cursor is not None) or (cursor is not None and effect is not None):'),
+    ("H10", "cursor together with at is accepted", 'if sum(x is not None for x in (at, cursor, effect)) > 1:', 'if (at is not None and effect is not None) or (cursor is not None and effect is not None):'),
+    ("H10", "cursor together with effect is accepted", 'if sum(x is not None for x in (at, cursor, effect)) > 1:', 'if (at is not None and effect is not None) or (at is not None and cursor is not None):'),
+    ("H10", "a non-string effect is not_found", 'if effect is not None and not isinstance(effect, str): return "invalid", "effect must be an EntryId"', 'pass'),
+    ("H10", "at must be an integer", 'if isinstance(at, bool) or not isinstance(at, int) or not 1 <= at <= st["head"]:', 'if not 1 <= int(at) <= st["head"]:'),
     ("F4", "notices are replayed to a later subscription", '        self.inbox = Inbox()      # actor', '        self.inbox = {}      # actor'),
     ("G-07", "negative integers beyond -(2^53-1) are not big", '    if isinstance(v, int): return abs(v) > MAX_INT', '    if isinstance(v, int): return v > MAX_INT'),
     ("G-07", "the integer bound is 2^53-1 exclusive", '    if isinstance(v, int): return abs(v) > MAX_INT', '    if isinstance(v, int): return abs(v) >= MAX_INT'),
-    ("G-11", "test.clock is a call outside test mode", 'calls = CALLS + (("test.clock",) if test_mode else ())', 'calls = CALLS + ("test.clock",)'),
+    ("G-11", "test.clock is a call outside test mode", 'calls = CALLS + (TEST_CALLS if test_mode else ())', 'calls = CALLS + ("test.clock",) + (("test.limits",) if test_mode else ())'),
+    ("G-11", "test.limits is a call outside test mode", 'calls = CALLS + (TEST_CALLS if test_mode else ())', 'calls = CALLS + ("test.limits",) + (("test.clock",) if test_mode else ())'),
 ]
+
+TIMEOUT_S, MEMORY_BYTES = 120, 2 * 2**30      # a mutant run that loops or balloons is killed; it counts as caught, and is reported as such
+
+def tree_rss(proc):
+    """Resident bytes of the process and its children (0 if psutil is missing: then only the timeout applies)."""
+    try:
+        import psutil
+        p = psutil.Process(proc.pid)
+        return sum(q.memory_info().rss for q in [p] + p.children(recursive=True))
+    except Exception:
+        return 0
+
+def kill_tree(proc):
+    try:
+        import psutil
+        p = psutil.Process(proc.pid)
+        for q in p.children(recursive=True): q.kill()
+        p.kill()
+    except Exception:
+        proc.kill()
+
+def run_limited(cmd):
+    """Runs one mutant under a hard timeout and a memory cap. -> (returncode, stdout, reason or None); a killed run has returncode -9 and a reason."""
+    import time, tempfile as tf
+    with tf.TemporaryFile() as out:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        start, why = time.time(), None
+        while proc.poll() is None:
+            if time.time() - start > TIMEOUT_S: why = f"timeout after {TIMEOUT_S} s"
+            elif tree_rss(proc) > MEMORY_BYTES: why = f"memory above {MEMORY_BYTES >> 30} GB"
+            if why: kill_tree(proc); proc.wait(); break
+            time.sleep(0.2)
+        out.seek(0)
+        text = out.read().decode("utf-8", "replace")
+    return (-9 if why else proc.returncode), text, ("(killed: " + why + ")" if why else None)
 
 def main():
     src = open(os.path.join(HERE, "wire.py"), encoding="utf-8").read()
-    missed = 0
+    missed = killed = 0
     for rule, desc, old, new in MUTATIONS:
         olds, news = (old, new) if isinstance(old, tuple) else ((old,), (new,))
         if any(src.count(o) != 1 for o in olds):
@@ -109,15 +154,14 @@ def main():
             for f in ("policy.py", "run_wire.py"):
                 shutil.copy(os.path.join(HERE, f), d)
             open(os.path.join(d, "wire.py"), "w", encoding="utf-8").write(mutated)
-            r = subprocess.run([sys.executable, os.path.join(d, "run_wire.py")], capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-            last = (r.stdout.strip().splitlines() or ["(no output)"])[-1]
-            caught = r.returncode != 0
-            missed += not caught
-            print(f"{'caught' if caught else 'MISSED'}  {rule:6} {desc:38} {last}")
+            returncode, out, why = run_limited([sys.executable, os.path.join(d, "run_wire.py")])
+            last = why or (out.strip().splitlines() or ["(no output)"])[-1]
+            caught = returncode != 0
+            missed += not caught; killed += returncode == -9
+            print(f"{('caught (timeout/memory)' if returncode == -9 else 'caught') if caught else 'MISSED'}  {rule:6} {desc:38} {last}")
         finally:
             shutil.rmtree(d, ignore_errors=True)
-    print(f"{len(MUTATIONS) - missed}/{len(MUTATIONS)} wire mutations caught by the scenarios")
+    print(f"{len(MUTATIONS) - missed}/{len(MUTATIONS)} wire mutations caught by the scenarios" + (f" ({killed} only by the timeout or memory cap: look at those)" if killed else ""))
     return 1 if missed else 0
 
 if __name__ == "__main__":

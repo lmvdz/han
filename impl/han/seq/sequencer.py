@@ -10,8 +10,7 @@ from .store import Store, BlobStore
 
 log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
-PAGED, CURSOR, FRAME_RESERVE = W.PAGED, W.CURSOR, W.FRAME_RESERVE    # F3(c): the four cut maps; the cursor `<seq>.<effects>.<tasks>.<sessions>.<roleHistory>`; room for `{id, item}`
-EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded")      # what `read {state, effect}` adds to the one effect
+PAGED, CURSOR, EFFECT_VIEW = W.PAGED, W.CURSOR, W.EFFECT_VIEW    # H3: every map of a state page, in cursor and fill order; the cursor `<head>.<o1>.….<o10>`; what `state {effect}` holds besides the effect
 MAX_OPEN_UPLOADS = 16        # E11: unfinished blob uploads one actor may hold at a time
 OWN_BLOB_SECONDS = 86400      # G-01 / D3: an uploader may read its own unreferenced blob this long
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)
@@ -62,30 +61,6 @@ class _Chains(Chains):
         if actor == "@:" + self.seq.server or (not actor.startswith("@:") and P.server_of(actor) == self.seq.server):
             return self.seq.profile(actor, seq) or {"actor": actor, "seq": seq, "actorKind": "human", "operatorConfirmed": False, "keys": {}}
         return super().profile(actor, seq)
-
-def state_page(view: dict, base: dict, keys: tuple, offs: dict):
-    """F3(c): `base` plus the next items of the maps `keys` of `view` from the offsets `offs`, taken one map at a time in turn while the
-    state item as a frame stays within maxFrameBytes (less FRAME_RESERVE) and each map within maxStateItems. -> (page, offsets after it,
-    more remain), or None when `base` alone does not fit or an item cannot be placed on a page by itself (the read is then `unavailable`)."""
-    size = lambda v: len(P.jcs(v))
-    keys = [k for k in keys if k in view]
-    page = dict(base, **{k: {} for k in keys})
-    used, cap = size({"type": "state", "state": page}), LIMITS["maxFrameBytes"] - FRAME_RESERVE
-    if used > cap: return None
-    rest = {k: list(view[k].items())[offs[k]:] for k in keys}
-    taken = dict.fromkeys(keys, 0)
-    progress = True
-    while progress:
-        progress = False
-        for k in keys:
-            if taken[k] >= len(rest[k]) or taken[k] >= LIMITS["maxStateItems"]: continue
-            key, val = rest[k][taken[k]]
-            add = size(key) + size(val) + 2
-            if used + add > cap: continue
-            page[k][key] = val; used += add; taken[k] += 1; progress = True
-    more = any(taken[k] < len(rest[k]) for k in keys)
-    if more and not any(taken.values()): return None
-    return page, dict(offs, **{k: offs[k] + taken[k] for k in keys}), more
 
 def wire_state(state: dict) -> dict:
     """The StateView as served (D14): `settled` is present on every claim (a copy; the sequencer's own state is untouched)."""
@@ -235,7 +210,7 @@ class Sequencer:
         k = view["keys"].get(key_id)
         if not k or k["status"] != "valid" or not W.verify_hello(k["publicKey"], proof, challenge, self.server):
             raise WireError("denied", "authentication failed")
-        return {"limits": LIMITS, "durability": self.home.durability, "time": self.now_str(), "knownHeads": self._heads_for(who, known_heads or [])}
+        return {"limits": dict(LIMITS), "durability": self.home.durability, "time": self.now_str(), "knownHeads": self._heads_for(who, known_heads or [])}
 
     def _heads_for(self, who, known):
         """R-15: the latest receipt of each space the asker named and may read."""
@@ -337,9 +312,6 @@ class Sequencer:
         return list(dict.fromkeys(out))
 
     # ── read (§3) ──
-    def _readable_somewhere(self, st, who):
-        return st["policy"]["visibility"] == "public" or any(P.can_read(st, who, s) for s in range(1, st["head"] + 1))
-
     def _state_at(self, S, at):
         """The SpaceState after record `at`: the chain folded through `at` with the profile views its receipts pinned."""
         st = None
@@ -349,60 +321,69 @@ class Sequencer:
             st = P.fold(st, {"entry": dict(rec["entry"], id=r["id"]), "content": None, "receipt": r}, {"time": r["time"], "profiles": pinned})
         return st
 
-    def read(self, who, space, after, follow=False, state=False, limit=None, known_heads=None, at=None, cursor=None, effect=None):
-        """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing.
-        `at` (with `state`): the state after record `at` instead of the head; the read right is judged on the CURRENT state (P-02).
-        The state item is paged (E8): `effects` and `tasks` beyond `maxStateItems` are left out and `next` is the cursor for
-        `read {state, cursor}`; `read {state, effect}` answers one effect with the rest of the state it needs. `limit` is never the
-        answer to a big state. Both alone answer the state item and nothing else."""
+    def read(self, who, space, after, follow=False, limit=None, known_heads=None):
+        """→ (items, sub or None). `sub` is registered atomically with the backlog, so a follower misses nothing. Entries only (§3, G-09):
+        the state is the call `state`. A reader who may read no seq of the space gets `not_found`, as for a missing space."""
         if not (isinstance(space, str) and P._space(space) and P._int(after)): raise _invalid("read args")
         self.route(space)
-        if at is not None and not (state and P._int(at) and at >= 1): raise _invalid("at needs state and a seq >= 1")
-        if (cursor is not None or effect is not None) and not state: raise _invalid("cursor and effect need state")
-        if cursor is not None and (effect is not None or at is not None or follow): raise _invalid("cursor excludes effect, at and follow")
-        if effect is not None and (follow or at is not None or not isinstance(effect, str)): raise _invalid("effect excludes at and follow")
         limit = 1000 if limit is None else limit
         if not (P._int(limit) and 1 <= limit <= 1000): raise _invalid("limit")
-        offs = dict.fromkeys(PAGED, 0)
-        if cursor is not None:
-            m = CURSOR.fullmatch(cursor) if isinstance(cursor, str) else None
-            if not m: raise _invalid("cursor")
-            at, offs = int(m[1]), dict(zip(PAGED, map(int, m.groups()[1:])))
-            if at < 1: raise _invalid("cursor")
         S = self.home.spaces.get(space)
         if not S and self.fed and space.startswith("profile:") and P.server_of(space) != self.server:
-            if cursor is not None or effect is not None: raise _invalid("cursor and effect are for spaces this server orders")
-            return self.fed.read_profile(space, after, state, limit), None             # another server's profile, as verified here (§4.3)
-        if not S or not self._readable_somewhere(S["state"], who): raise WireError("not_found", "no such space")
+            return self.fed.read_profile(space, after, limit), None                    # another server's profile, as verified here (§4.3)
+        if not S or not self.home.readable_any(S["state"], who): raise WireError("not_found", "no such space")
         st = S["state"]
-        if at is not None and at > st["head"]: raise _invalid("at is beyond the head" if cursor is None else "cursor")
-        out = []
-        if state:
-            where = st["head"] if at is None else at
-            if not P.can_read(st, who, where): raise WireError("denied", "state needs read rights at " + ("the head" if at is None else "that seq"))
-            view = wire_state(st if where == st["head"] else self._state_at(S, where))
-            view = {k: v for k, v in view.items() if k != "entries"}
-            if effect is not None:
-                if effect not in view["effects"]: raise WireError("not_found", "no such effect")
-                base = {k: view[k] for k in EFFECT_VIEW if k in view and k not in ("effects", "sessions")} | {"effects": {effect: view["effects"][effect]}}
-                keys = ("sessions",)             # F3(c): the one effect is never cut; sessions are, and `next` continues past everything else
-                offs = {"effects": len(view["effects"]), "tasks": len(view["tasks"]), "sessions": 0, "roleHistory": len(view["roleHistory"])}
-            else: base, keys = {k: v for k, v in view.items() if k not in PAGED}, PAGED
-            got = state_page(view, base, keys, offs)
-            if got is None: raise WireError("unavailable", "the state does not fit maxFrameBytes even paged")
-            page, offs, more = got
-            item = {"type": "state", "state": page}
-            if more: item["next"] = f"{where}." + ".".join(str(offs[k]) for k in PAGED)
-            if cursor is not None or effect is not None: return [item], None
-            out.append(item)
-        code, items = self.home.read(space, after, who, False)
+        code, items = self.home.read(space, after, who, limit)
         if code != "ok": raise WireError(code, items or "")
         recs = [i for i in items if i["type"] == "record"]
-        out += ([{"type": "heads", "heads": self._heads_for(who, known_heads)}] if known_heads is not None else []) + recs[:limit]
+        out = ([{"type": "heads", "heads": self._heads_for(who, known_heads)}] if known_heads is not None else []) + recs[:limit]
         sub = None
         if follow:
             sub = Sub(who, space, st["head"]); self.subs.setdefault(space, set()).add(sub)
         return out, sub
+
+    def state(self, who, space, sel: dict) -> dict:
+        """§3 `state`: one page of the StateView as `{state, next?}`. `sel` holds the selectors that are PRESENT in the request, whatever their
+        values (`at`, `cursor`, `effect`); two or more is `invalid` by presence. The paging (H3) is wire.Home's, whose limits are set from LIMITS
+        for this call (test mode lowers maxFrameBytes). A page that cannot be cut is impossible by construction, so it is asserted."""
+        if not (isinstance(space, str) and P._space(space)): raise _invalid("state args")
+        self.route(space)
+        S = self.home.spaces.get(space)
+        remote = not S and self.fed and space.startswith("profile:") and P.server_of(space) != self.server
+        if remote:                                                                     # another server's profile, as verified here (§4.3)
+            st, view_at = self.fed.profile_state(space), None
+        elif not S: raise WireError("not_found", "no such space")
+        else: st, view_at = S["state"], lambda n: self._state_at(S, n)
+        if len(sel) > 1: raise _invalid("at, cursor and effect exclude each other")        # by presence, before any value is looked at
+        at, cursor, effect = (sel.get(k) for k in ("at", "cursor", "effect"))
+        offs, where = dict.fromkeys(PAGED, 0), st["head"]
+        if "at" in sel:
+            if isinstance(at, bool) or not isinstance(at, int) or not 1 <= at <= st["head"]: raise _invalid("at must be 1 <= at <= head")
+            where = at
+        if "cursor" in sel:
+            if not (isinstance(cursor, str) and CURSOR.fullmatch(cursor)): raise _invalid("cursor")
+            nums = list(map(int, cursor.split(".")))
+            if not 1 <= nums[0] <= st["head"]: raise _invalid("cursor")
+            where, offs = nums[0], dict(zip(PAGED, nums[1:]))
+        if "effect" in sel and not isinstance(effect, str): raise _invalid("effect must be an EntryId")
+        if remote:
+            if where != st["head"]: raise _invalid("at and cursor are for spaces this server orders")
+        elif not P.can_read(st, who, where):
+            if self.home.readable_any(st, who): raise WireError("denied", "state needs read rights at " + ("the head" if where == st["head"] else "that seq"))
+            raise WireError("not_found", "no such space")
+        view = wire_state(st if where == st["head"] else view_at(where))
+        view = {k: v for k, v in view.items() if k != "entries"}
+        if "effect" in sel:
+            if effect not in view["effects"]: raise WireError("not_found", "no such effect")
+            one = dict({k: view[k] for k in EFFECT_VIEW}, effects={effect: view["effects"][effect]})
+            assert len(P.jcs({"id": W.MAX_INT, "ok": {"state": one}})) <= LIMITS["maxFrameBytes"], "one effect does not fit maxFrameBytes (H3)"
+            return {"state": one}
+        if any(offs[p] > len(W._items(view, p)) for p in PAGED): raise _invalid("cursor offset beyond the map")
+        self.home.max_frame_bytes, self.home.max_state_items = LIMITS["maxFrameBytes"], LIMITS["maxStateItems"]
+        page, offs, more = self.home._page(view, offs)
+        out = {"state": page}
+        if more: out["next"] = f"{where}." + ".".join(str(offs[p]) for p in PAGED)
+        return out
 
     def subscribe(self, who, space, after=None):
         """T-01/T-05 for `who`: records and signals of `space` (and, on one's own profile, notices, live only: F4). Live from the head,

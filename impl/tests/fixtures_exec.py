@@ -53,7 +53,7 @@ async def approve(c, pid, plan, space=S):
     return await c.append(*c.make_entry("effect.approve", space, {"proposal": pid, "planDigest": plan_digest(plan)}))
 
 async def state(c, space=S):
-    return (await c.read_all(space, 2 ** 31, state=True))[0]["state"]
+    return (await c.read_state(space))
 
 async def until(pred, timeout=8.0, what=""):
     """Poll an async or sync predicate."""

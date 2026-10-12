@@ -388,30 +388,30 @@ class MatrixClient(StateReads):
             if "error" in ex.body: raise WireError.from_wire(ex.body["error"]) from None
             raise
 
-    async def read_http(self, space: str, after: int = 0, state: bool = False, limit: int | None = None, at: int | None = None,
-                        cursor: str | None = None, effect: str | None = None) -> list[dict]:
+    async def read_http(self, space: str, after: int = 0, limit: int | None = None) -> list[dict]:
         """GET /_han/v1/read → `{items: [ReadItem]}`; P-02 is enforced by the service, so this is where content comes from."""
-        params = {"space": space, "after": str(after)} | ({"state": "true"} if state else {}) | ({} if limit is None else {"limit": str(limit)}) \
-            | ({} if at is None else {"at": str(at)})             | ({} if cursor is None else {"cursor": cursor}) | ({} if effect is None else {"effect": effect})
+        params = {"space": space, "after": str(after)} | ({} if limit is None else {"limit": str(limit)})
         return (await self._han("GET", "/_han/v1/read", params))["items"]
 
+    async def state(self, space: str, **sel) -> dict:
+        """GET /_han/v1/state → the `StateReply` `{state, next?}` of the call `state`; `sel` is at most one of `at`, `cursor`, `effect`."""
+        return await self._han("GET", "/_han/v1/state", {"space": space} | {k: str(v) for k, v in sel.items()})
+
     # ── ClientProtocol: read, subscribe (records through the HTTP read, signals from the room) ──
-    async def read(self, space, after=0, follow=False, state=False, limit=None, known_heads=None, at=None, cursor=None, effect=None):
+    async def read(self, space, after=0, follow=False, limit=None, known_heads=None):
         """ReadItems after `after`, as the generic binding gives them. With `follow`, waits for the room's receipts (polling once a
         second as a fallback) and reads what is new; a backlog cut by `limit` is read on at once. Ends only when closed."""
         if known_heads is not None: raise WireError("invalid", "knownHeads is not served by the HTTP read")
-        last, first = after, True
+        last = after
         while True:
             seen = self.heads.get(space, 0)
-            try: items = await self.read_http(space, last, state=state and first, limit=limit, at=at if first else None,
-                                             cursor=cursor if first else None, effect=effect if first else None)
+            try: items = await self.read_http(space, last, limit=limit)
             except (aiohttp.ClientError, OSError, asyncio.TimeoutError):
                 if not follow: raise
                 await asyncio.sleep(0.5); continue
             except WireError as ex:
                 if not follow or ex.code != "unavailable": raise
                 await asyncio.sleep(0.5); continue
-            first = False
             n = 0
             for it in items:
                 if it["type"] == "record":
@@ -436,7 +436,7 @@ class MatrixClient(StateReads):
         sig = asyncio.Queue()
         rv = self._view(room) if room else None
         if rv: rv.listeners.append(sig)
-        if after is None: after = (await self.read_http(space, 2 ** 31, state=True))[0]["state"]["head"]
+        if after is None: after = (await self.state(space))["state"]["head"]
         records = self.read(space, after, follow=True)
         nxt, nsig = asyncio.ensure_future(records.__anext__()), asyncio.ensure_future(sig.get())
         try:

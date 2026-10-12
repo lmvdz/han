@@ -19,14 +19,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 import policy as P
 
-CURSOR = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)\.(\d+)", re.ASCII)      # head.effects.tasks.sessions.roleHistory: where the next page of each paged map starts
-EFFECT_VIEW = ("space", "head", "home", "policy", "roles", "sessions", "held", "guarded")   # §3: what `read {state, effect}` adds to the one effect
-PAGED = ("effects", "tasks", "sessions", "roleHistory")    # §3 (F3 c): the members of a state page that are cut, in cursor order; everything else is repeated on every page
+PAGED = ("roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "cleared", "outside", "profile.keys")   # §3 (H3): every map of a state page, in cursor and fill order. Only the scalars and `policy` repeat on every page
+CURSOR = re.compile(r"(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*)){%d}" % len(PAGED), re.ASCII)      # §3: head.o1.….oN, one offset per PAGED map: how many of its items the earlier pages sent
+EFFECT_VIEW = ("space", "head", "home", "policy")   # §3: what `state {effect}` holds besides the one effect
 MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: items of each paged map per page of a state read (E8)
 MAX_FRAME_BYTES = 1310720  # han.ts Limits.maxFrameBytes
-FRAME_RESERVE = 128        # bytes kept for the `{"id": <16 digits>, "item": …}` wrapper and the `next` cursor around a state item
+FRAME_RESERVE = 256        # bytes kept for the `next` member of a state reply: `,"next":"` + a cursor of at most 10 offsets of 16 digits and the head (§3)
 MAX_INT = 2 ** 53 - 1      # G-07 (1a): an integer outside [-MAX_INT, MAX_INT] anywhere in a frame
-CALLS = ("hello", "append", "read", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel")     # the 3 + 8 calls of §3 and §8.3
+CALLS = ("hello", "append", "read", "state", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel")     # the 4 + 8 calls of §3 and §8.3
+TEST_CALLS = ("test.clock", "test.limits")     # G-11: control calls of test mode, and of nothing else
+MIN_TEST_FRAME_BYTES = 1024     # G-11 test.limits: the lowest maxFrameBytes a test may set
 MAX_CLOCK_SKEW = 60        # han.ts Limits.maxClockSkewSeconds: the one future-time tolerance (R-03a)
 
 def secs(t: str) -> int:
@@ -241,7 +243,7 @@ def has_big_int(v) -> bool:
 
 def frame_verdict(text: str, test_mode: bool = False):
     """G-07 cases (1), (1a), (2) for one text message. None: it is a request frame, go on to authentication and args. Else (id, closes):
-    the id of the `invalid` error to send and whether the connection is closed after it. `test.clock` is a call only in test mode (G-11)."""
+    the id of the `invalid` error to send and whether the connection is closed after it. `test.clock` and `test.limits` are calls only in test mode (G-11)."""
     try:
         v = json.loads(text, object_pairs_hook=_pairs, parse_float=_bad, parse_constant=_bad)
     except (ValueError, RecursionError):
@@ -250,7 +252,7 @@ def frame_verdict(text: str, test_mode: bool = False):
     rid = v.get("id")
     usable = isinstance(rid, int) and not isinstance(rid, bool) and 1 <= rid <= MAX_INT
     if has_big_int(v): return (rid, False) if usable else (0, True)             # (1a)
-    calls = CALLS + (("test.clock",) if test_mode else ())
+    calls = CALLS + (TEST_CALLS if test_mode else ())
     if set(v) != {"id", "call", "args"} or not usable or v["call"] not in calls or not isinstance(v["args"], dict):          # (2)
         return (rid if usable else 0), False
     return None
@@ -260,6 +262,19 @@ class Inbox(dict):
     `setdefault`, which `Home.signal` uses, never creates an entry, so a notice for an actor that is not subscribed goes to a list nobody keeps.
     An implementation may supply its own inbox with the same `setdefault` contract (impl/han/seq/sequencer.py does)."""
     def setdefault(self, actor, default=None): return self[actor] if actor in self else ([] if default is None else default)
+
+def _has(view, path) -> bool:
+    """Whether the state has the paged map `path` ("profile.keys" exists in profile spaces only)."""
+    if path == "profile.keys": return "profile" in view and "keys" in view["profile"]
+    return path in view
+
+def _get_map(view, path) -> dict: return view["profile"]["keys"] if path == "profile.keys" else view[path]
+
+def _put_map(view, path, value):
+    if path == "profile.keys": view["profile"] = dict(view["profile"], keys=value)
+    else: view[path] = value
+
+def _items(view, path) -> list: return list(_get_map(view, path).items()) if _has(view, path) else []
 
 # ── a reference home ──
 class Home:
@@ -420,72 +435,81 @@ class Home:
             st = P.fold(st, {"entry": e, "content": None, "receipt": rec["receipt"]}, {"time": rec["receipt"]["time"], "profiles": pin})
         return st
 
-    def read(self, space, after, as_, state=False, at=None, limit=1000, cursor=None, effect=None, follow=False):
-        """§3 read. `at` (with `state`) gives the state after record `at`, and needs read rights at `at` (P-02), not at the head.
-        The state item is paged (E8, F3 c): `effects`, `tasks`, `sessions` and `roleHistory` are cut so that at most `max_state_items`
-        of each, and the item as a frame at most `max_frame_bytes`, are sent; the rest is left for `read {state, cursor}`. `limit`
-        never applies to it. `cursor` and `effect` (both need `state`, and exclude `at`, `follow` and each other) answer the state item alone."""
+    def readable_any(self, st, as_) -> bool:
+        """§3: a reader who may read no seq at all gets `not_found`, as for a missing space."""
+        return any(P.can_read(st, as_, q) for q in range(1, st["head"] + 1))
+
+    def read(self, space, after, as_, limit=1000, follow=False):
+        """§3 read: the records after `after` that the reader may read (P-02), at most `limit`. A reader who may read none of the space is `not_found`.
+        The state is the call `state`, not part of `read`."""
         S = self.spaces.get(space)
         if not S: return "not_found", None
         st = S["state"]
-        if not (isinstance(limit, int) and 1 <= limit <= 1000): return "invalid", "limit"
-        if at is not None and (not state or not isinstance(at, int) or not 1 <= at <= st["head"]): return "invalid", "at needs state and 1 <= at <= head"
-        if (cursor is not None or effect is not None) and not state: return "invalid", "cursor and effect need state"
-        if (cursor is not None or effect is not None) and (at is not None or follow or (cursor is not None and effect is not None)):      # F4
-            return "invalid", "cursor and effect exclude at, follow and each other"
+        if not (isinstance(limit, int) and not isinstance(limit, bool) and 1 <= limit <= 1000): return "invalid", "limit"
+        if not self.readable_any(st, as_): return "not_found", None
+        return "ok", [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])][:limit]
+
+    def state(self, space, as_, at=None, cursor=None, effect=None):
+        """§3 state: one StateView page as `{state, next?}`. At most one of `at`, `cursor`, `effect` is present (None here means absent; on the wire presence
+        decides, whatever the value): two or more is `invalid`, judged before any of them is looked at. `at` gives the state after record `at` and needs read
+        rights at `at` (P-02), not at the head. `cursor` (the `next` of an earlier page) gives the page it names, from its own head. `effect` gives the one effect.
+        Every item of a paged map is bounded, so a page always has room for at least one (H3): a violation is a bug in the server and raises."""
+        S = self.spaces.get(space)
+        if not S: return "not_found", None
+        st = S["state"]
+        if sum(x is not None for x in (at, cursor, effect)) > 1: return "invalid", "at, cursor and effect exclude each other"
         offs = dict.fromkeys(PAGED, 0)
+        where = st["head"]
+        if at is not None:
+            if isinstance(at, bool) or not isinstance(at, int) or not 1 <= at <= st["head"]: return "invalid", "at must be 1 <= at <= head"
+            where = at
         if cursor is not None:
             m = CURSOR.fullmatch(cursor) if isinstance(cursor, str) else None
-            if not m or not 1 <= int(m[1]) <= st["head"]: return "invalid", "cursor"
-            at, offs = int(m[1]), dict(zip(PAGED, map(int, m.groups()[1:])))
-        items = []
-        if state:
-            where = st["head"] if at is None else at
-            if not P.can_read(st, as_, where): return "denied", "state needs read rights at " + ("head" if at is None else "at")
-            view = st if at is None or at == st["head"] else self.state_at(space, at)
-            if view is None: return "unavailable", "no stored profile pins for this seq"
-            view = {k: v for k, v in view.items() if k != "entries"}
-            if effect is not None:
-                if not (isinstance(effect, str) and effect in view.get("effects", {})): return "not_found" if isinstance(effect, str) else "invalid", "no such effect"
-                one = {k: view[k] for k in EFFECT_VIEW if k in view and k not in ("effects", "sessions")}
-                base = dict(one, effects={effect: view["effects"][effect]})
-                keys = ("sessions",) if "sessions" in view else ()
-                offs = {"effects": len(view["effects"]), "tasks": len(view["tasks"]), "sessions": 0, "roleHistory": len(view["roleHistory"])}     # the cursor of the rest continues past everything else
-            else:
-                base, keys = {k: v for k, v in view.items() if k not in PAGED}, PAGED
-            got = self._page(view, base, keys, offs)
-            if got is None: return "unavailable", "the state does not fit maxFrameBytes even without its paged members"
-            page, offs, more = got
-            item = {"type": "state", "state": page}
-            if more: item["next"] = f"{where}." + ".".join(str(offs[k]) for k in PAGED)
-            if cursor is not None or effect is not None: return "ok", [item]
-            items.append(item)
-        items += [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])][:limit]
-        return "ok", items
+            if not m: return "invalid", "cursor"
+            nums = list(map(int, cursor.split(".")))
+            if not 1 <= nums[0] <= st["head"]: return "invalid", "cursor"
+            where, offs = nums[0], dict(zip(PAGED, nums[1:]))
+        if effect is not None and not isinstance(effect, str): return "invalid", "effect must be an EntryId"
+        if not P.can_read(st, as_, where): return ("denied", "state needs read rights at " + ("head" if where == st["head"] else "that seq")) if self.readable_any(st, as_) else ("not_found", None)
+        view = st if where == st["head"] else self.state_at(space, where)
+        if view is None: return "unavailable", "no stored profile pins for this seq"
+        view = {k: v for k, v in view.items() if k != "entries"}
+        if effect is not None:
+            if effect not in view["effects"]: return "not_found", "no such effect"
+            one = dict({k: view[k] for k in EFFECT_VIEW}, effects={effect: view["effects"][effect]})
+            assert len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) <= self.max_frame_bytes, "one effect does not fit maxFrameBytes: impossible by construction (H3)"
+            return "ok", {"state": one}
+        if cursor is not None and any(offs[p] > len(_items(view, p)) for p in PAGED): return "invalid", "cursor offset beyond the map"
+        page, offs, more = self._page(view, offs)
+        out = {"state": page}
+        if more: out["next"] = f"{where}." + ".".join(str(offs[p]) for p in PAGED)
+        return "ok", out
 
-    def _page(self, view, base, keys, offs):
-        """F3 (c): `base` plus the next items of the maps `keys`, taken one map at a time in turn while the item as a frame stays within
-        `max_frame_bytes` and each map within `max_state_items`. Returns (page, offsets after it, more remain), or None if `base` alone
-        does not fit or nothing at all could be added although items remain."""
+    def _page(self, view, offs):
+        """H3: every map of PAGED is cut; only the scalars and `policy` repeat. Fill order: the maps in PAGED order, each taking its next items one by one
+        while it has taken fewer than `max_state_items` on this page and the reply as a frame, `{"id": <16 digits>, "ok": {"state": …}}` plus the
+        reserve for `next`, stays within `max_frame_bytes`. The first item that does not fit closes the page: no later map takes anything. An item
+        costs the JCS bytes of its key and of its value plus 2. Returns (page, offsets after it, more remain)."""
         size = lambda v: len(P.jcs(v))
-        keys = [k for k in keys if k in view]
-        page = dict(base, **{k: {} for k in keys})
-        used, cap = size({"type": "state", "state": page}), self.max_frame_bytes - FRAME_RESERVE
-        if used > cap: return None
-        rest = {k: list(view[k].items())[offs[k]:] for k in keys}
-        taken = dict.fromkeys(keys, 0)
-        progress = True
-        while progress:
-            progress = False
-            for k in keys:
-                if taken[k] >= len(rest[k]) or taken[k] >= self.max_state_items: continue
-                key, val = rest[k][taken[k]]
+        paths = [p for p in PAGED if _has(view, p)]
+        page = {k: v for k, v in view.items() if k not in PAGED and k != "profile"}
+        if "profile" in view: page["profile"] = {k: v for k, v in view["profile"].items() if k != "keys"}
+        for p in paths: _put_map(page, p, {})
+        used, cap = size({"id": MAX_INT, "ok": {"state": page}}), self.max_frame_bytes - FRAME_RESERVE
+        assert used <= cap, "the repeated members of a state page do not fit maxFrameBytes: impossible by construction (H3)"
+        taken, closed = dict.fromkeys(PAGED, 0), False
+        for p in paths:
+            n = 0
+            for key, val in _items(view, p)[offs[p]:]:
+                if n >= self.max_state_items: break
                 add = size(key) + size(val) + 2
-                if used + add > cap: continue
-                page[k][key] = val; used += add; taken[k] += 1; progress = True
-        more = any(taken[k] < len(rest[k]) for k in keys)
-        if more and not any(taken.values()): return None
-        return page, dict(offs, **{k: offs[k] + taken[k] for k in keys}), more
+                if used + add > cap: closed = True; break
+                _get_map(page, p)[key] = val; used += add; n += 1
+            taken[p] = n
+            if closed: break
+        more = any(offs[p] + taken[p] < len(_items(view, p)) for p in paths)
+        assert not more or any(taken.values()), "a state item does not fit an empty page: impossible by construction (H3)"
+        return page, {p: offs[p] + taken[p] for p in PAGED}, more
 
     def read_follow(self, space, after, as_, limit=1000, **kw):
         """§3 read with follow: `limit` backlog records, then the live records from the head at registration. If the backlog was

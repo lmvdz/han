@@ -58,11 +58,11 @@ def wire_vectors():
     return out
 
 FAMILIES = (("operations (golden)", lambda fn: fn[:2].isdigit()), ("agreed probes", lambda fn: fn == "probes.json"), ("decided probes", lambda fn: fn == "probes-decided.json"),
-            ("round-22 probes", lambda fn: fn == "probes-r22.json"), ("round-23 probes", lambda fn: fn == "probes-r23.json"))
+            ("round-22 probes", lambda fn: fn == "probes-r22.json"), ("round-23 probes", lambda fn: fn == "probes-r23.json"), ("round-24 probes", lambda fn: fn == "probes-r24.json"))
 
 def wire_expectations():
     """Per vector family: (name, files, vectors, expectations, steps, generated appends). An expectation is what the runner counts as one: an `expect`, `expect_close`,
-    `expect_silence`, `http_get` or `clock` step. A `generate` step is one step, its `count` appends are checked by the runner and are not expectations."""
+    `expect_silence`, `http_get`, `clock` or `limits` step. A `generate` step is one step, its `count` appends are checked by the runner and are not expectations."""
     d = os.path.join(HERE, "wire-vectors")
     if not os.path.exists(os.path.join(d, "index.json")): return []
     rows = {name: [name, 0, 0, 0, 0, 0] for name, _ in FAMILIES}
@@ -75,7 +75,7 @@ def wire_expectations():
             rows[fam][2] += 1
             for st in v["steps"]:
                 rows[fam][4] += 1
-                rows[fam][3] += any(k in st for k in ("expect", "expect_close", "expect_silence", "http_get", "clock"))
+                rows[fam][3] += any(k in st for k in ("expect", "expect_close", "expect_silence", "http_get", "clock", "limits"))
                 rows[fam][5] += st["generate"]["count"] if "generate" in st else 0
     return [tuple(r) for r in rows.values() if r[2]]
 

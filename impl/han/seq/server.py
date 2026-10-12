@@ -16,7 +16,7 @@ CHALLENGE_SECONDS = 60         # D12: a challenge is single use and good for thi
 # D2: a request frame is exactly {id, call, args}; each call's `args` is closed
 CALL_ARGS = {"hello": {"who", "keyId", "proof", "version", "knownHeads"}, "cancel": {"target"}, "append": {"entry", "content"},
              "signal": {"space", "body", "from"}, "blobPut": {"ref", "offset", "data"}, "blobGet": {"ref", "space", "offset", "length"},
-             "stream": {"item"}, "read": {"space", "after", "follow", "state", "limit", "knownHeads", "at", "cursor", "effect"},
+             "stream": {"item"}, "read": {"space", "after", "follow", "limit", "knownHeads"}, "state": {"space", "at", "cursor", "effect"},
              "subscribe": {"space", "after"}, "watch": {"space", "session"}, "host": {"space", "records", "head"}}
 
 
@@ -173,14 +173,16 @@ class SeqServer:
         if call == "blobGet":
             r = await self._blob_get(who, args)
             return await send({"id": rid, "ok": {"data": W.b64(r["data"]), "size": r["size"], "offset": r["offset"]}})
+        if call == "state":
+            if fed: await fed.prepare_read(args.get("space"))
+            return await send({"id": rid, "ok": S.state(who, args.get("space"), {k: args[k] for k in ("at", "cursor", "effect") if k in args})})
         if call == "stream":
             S.stream(who, args.get("item"))
             return await send({"id": rid, "ok": None})
         if call == "read":
             self._room(conn, rid, bool(args.get("follow")))
             if fed: await fed.prepare_read(args.get("space"))
-            items, sub = S.read(who, args.get("space"), args.get("after"), args.get("follow", False), args.get("state", False),
-                                args.get("limit"), args.get("knownHeads"), args.get("at"), args.get("cursor"), args.get("effect"))
+            items, sub = S.read(who, args.get("space"), args.get("after"), args.get("follow", False), args.get("limit"), args.get("knownHeads"))
         elif call == "subscribe":
             self._room(conn, rid)
             items, sub = S.subscribe(who, args.get("space"), args.get("after"))

@@ -77,8 +77,8 @@ async function scenario() {
   });
   await op("read.state", ["message"], async () => {
     const c = await login("alice");
-    const items = await readAll(c, SPACE, 0, { state: true }), st = items[0];
-    ok(st?.type === "state", "first item is state"); ok(st.state.head === heads[SPACE], "state head");
+    const st = await c.state(SPACE);
+    ok(st && typeof st.state === "object", "state reply"); ok(st.state.head === heads[SPACE], "state head");
     ok(st.state.roles?.[actorId("bob")] === "member", "bob is a member in roles");
     return { stateKeys: Object.keys(st.state).sort() };
   });
@@ -108,7 +108,7 @@ async function scenario() {
   await op("propose", ["member.set"], async () => { await send("propose"); });
   await op("approve", ["propose"], async () => {
     await send("approve");
-    const c = await login("alice"); const st = (await readAll(c, SPACE, 0, { state: true }))[0].state;
+    const c = await login("alice"); const st = (await c.state(SPACE)).state;
     ok(st.effects?.[ids.propose]?.phase === "ready", "effect phase ready after approval, got " + st.effects?.[ids.propose]?.phase);
   });
   await op("blobPut", ["member.set"], async () => { const c = await login("alice"); blobs.b1 = await c.blobPut(blobBytes("b1"), "application/octet-stream"); ok(blobs.b1.hash === sha(blobBytes("b1")), "ref hash"); });
@@ -168,7 +168,7 @@ async function execSetup() {
   const t = Date.now(); let st;
   await mark("exec:wait");
   while (Date.now() - t < 60000) {
-    st = (await readAll(c, SC.space, 0, { state: true }))[0].state;
+    st = (await c.state(SC.space)).state;
     const ph = st.effects?.[ids.propose]?.phase;
     if (ph === "succeeded" || ph === "failed") break;
     await sleep(500);
@@ -181,7 +181,7 @@ async function execSetup() {
 
 let out;
 try {
-  if (MODE === "exec") out = await execSetup(); else { await scenario(); out = { ops: results }; try { out.finalState = (await readAll(await login("alice"), SPACE, 0, { state: true }))[0].state; } catch (e) { out.finalStateError = String(e?.message ?? e); } }
+  if (MODE === "exec") out = await execSetup(); else { await scenario(); out = { ops: results }; try { out.finalState = (await (await login("alice")).state(SPACE)).state; } catch (e) { out.finalStateError = String(e?.message ?? e); } }
 } catch (e) { out = { fatal: String(e?.stack ?? e), ops: results }; }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 1));
 for (const c of Object.values(conns)) try { c.close(); } catch { /* */ }

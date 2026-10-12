@@ -1,7 +1,7 @@
 # HAN v1 — coverage of v0.4
 
-Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–<!--s:round-->22<!--/s-->): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
-v1 structure referred to below: 3 sequencer calls (`hello`, `append`, `read`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-12, T-01…T-07, G-01…G-11 (the generic binding, §8.3: G-07…G-11 are its frames, `hello`, reads, server-to-server and wire conformance).
+Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–<!--s:round-->24<!--/s-->): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
+v1 structure referred to below: 4 sequencer calls (`hello`, `append`, `read`, `state`); modules M1 Log, M2 Policy (5 pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-12, T-01…T-07, G-01…G-11 (the generic binding, §8.3: G-07…G-11 are its frames, `hello`, reads, server-to-server and wire conformance).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
 ## Invariants (12/12 accounted for: 10 kept, 2 weakened with a stated qualification)
@@ -21,12 +21,12 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | INV-11 | no global order; ordering only per stream | §7.2: total order per space only | by construction |
 | INV-12 | missing capability → explicit failure | R-08 (version, durability). **Weakened:** v0.4's per-provider capability negotiation (`ProviderCapabilities`, `STALE_CAPABILITY`) is gone from the protocol, because providers are executor-private. An executor that lacks a capability a plan needs **declines**: per X-11 it does not claim the effect and tells the proposer with a `message` naming the proposal, which is the explicit failure (no claim, so nothing is reserved or charged). `{result: "failed", started: "no"}` is for an attempt that was claimed and then couldn't start (a broken environment, an expired window), and X-11 makes the executor back off before the next claim | impl `test_exec_backoff.py::test_unsupported_and_unsafe_effects_are_declined_once`; wire "no silent downgrade" (R-08) |
 
-## Wire methods (26 → 3 sequencer calls, plus the transport binding's 7 operations)
+## Wire methods (26 → 4 sequencer calls, plus the transport binding's 7 operations)
 
 | v0.4 method | v1 | Status |
 |---|---|---|
 | directory.resolve | `read(profile:@x:server)` (M3 Identity) | kept |
-| context.describe | `read(space, 0, {state:true})`; the state as it was after record n: `{state:true, at:n}` | kept |
+| context.describe | `state(space)`; the state as it was after record n: `state(space, {at:n})` | kept |
 | command.submit | `append(entry)` | kept |
 | command.get | resend the same entry (R-01 returns its receipt) or `read` | kept |
 | run.get | `read`: the `task` and its `task.update`s | kept |
@@ -36,7 +36,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | events.read / events.subscribe | `read(space, after[, follow])` | kept |
 | events.ack | **dropped:** the client keeps its own cursor; resume = `read(after)`. Nothing on the server depends on acks. | dropped |
 | events.unsubscribe | close the stream | kept |
-| events.snapshot | `read(…, {state:true[, at]})` | kept, **paged:** the state is never refused for its size. `effects` and `tasks` come in pages of `maxStateItems` (1,000) with `next`; `read {state:true, cursor}` continues, `read {state:true, effect}` reads one effect; `limit` bounds records only (§3) |
+| events.snapshot | `state(…[, {at}])` | kept, **paged:** the state is never refused for its size. Every map of it (`roles`, `roleHistory`, `tasks`, `effects`, `sessions`, `held`, `guarded`, `cleared`, `outside`, a profile's keys) comes in pages of at most `maxStateItems` (1,000) and `maxFrameBytes` with `next`; `state {cursor}` continues, `state {effect}` reads one effect; `read` carries entries only (§3) |
 | view.get / subscribe / resync / unsubscribe | live sessions: the session stream rides the transport (T-07, G-05) and what it may show is `sessionAccess` (P-15); truth stays in `read`. No view-reset protocol: a stream carries no state to resync. | moved to transport |
 | document.open / sync.exchange | **dropped from the v1 core:** shared documents are the transport's (T-03 files, e.g. Matrix rooms) or a future extension | dropped |
 | presence.update / subscribe / unsubscribe | transport `signal` + `subscribe` (T-05, G-04, G-09: signals ride `subscribe`, never `read`) | moved to transport |
@@ -91,7 +91,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | RecoveryCoverageVerifier.verify | **moved:** whether a snapshot covers what it must is the executor's judgement, reported as the outcome of its snapshot/restore effect (with evidence); no protocol-level verifier | moved |
 | PublicationVerifier.verify | **moved, and weakened:** publication is an effect (`action: publish`); validation receipts are the executor's evidence. v0.4's protocol-enforced *stale-target compare-and-swap* is **no longer enforced by the protocol**: the plan carries the expected target version, and only the executor checks it | weakened |
 | LiveViewAdapter / LiveViewAttachment | live sessions: `session.open` and `sessionAccess` (P-15), session streams (T-07, G-05), steering by `session.input` (P-15, R-24). The log holds the authority, the transport the stream. | moved to transport |
-| ContextQueries, RunIndex, ProjectionQueries | `read(…, {state:true})` | kept |
+| ContextQueries, RunIndex, ProjectionQueries | `state(…)` | kept |
 | EventSubscriptions | `read` with `follow` (M1) | kept |
 | PresenceRegistry | transport signals (T-05, G-04) | moved to transport |
 | UploadSessions | transport files (T-03, G-01, G-02) | moved to transport |
