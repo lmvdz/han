@@ -4,7 +4,7 @@
   "P-09",
   "P-10"
  ],
- "description": "after a repeatable attempt ends without success the effect is ready only if its approvals are in hand",
+ "description": "after a repeatable attempt ends without success the effect is open again, and a claim needs approvals in hand (E3), not a stored phase",
  "profiles": {
   "@m:a.example": {
    "actorKind": "human",
@@ -251,9 +251,33 @@
    "time": "2026-10-10T12:00:08Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "awaiting-approval"
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open"
    },
    "note": "a1 is consumed"
+  },
+  {
+   "entry": {
+    "id": "6e4f403cf498d529e422237af547798d943043ae7e1d07e7562d49b62d45ce73",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+     "attempt": 2,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c1x",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "denied",
+   "note": "E3: no approval in hand"
   },
   {
    "entry": {
@@ -273,10 +297,10 @@
     "nonce": "n-a2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:09Z",
+   "time": "2026-10-10T12:00:10Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "ready"
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open"
    }
   },
   {
@@ -299,7 +323,7 @@
     "nonce": "n-c2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:10Z",
+   "time": "2026-10-10T12:00:11Z",
    "expect": "allow"
   },
   {
@@ -321,10 +345,10 @@
     "nonce": "n-o2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:11Z",
+   "time": "2026-10-10T12:00:12Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "awaiting-approval"
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open"
    }
   },
   {
@@ -345,7 +369,7 @@
     "nonce": "n-a3",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:12Z",
+   "time": "2026-10-10T12:00:13Z",
    "expect": "allow"
   },
   {
@@ -368,7 +392,7 @@
     "nonce": "n-c3",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:13Z",
+   "time": "2026-10-10T12:00:14Z",
    "expect": "allow"
   },
   {
@@ -390,10 +414,10 @@
     "nonce": "n-o3",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:14Z",
+   "time": "2026-10-10T12:00:15Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "ready"
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "open"
    },
    "note": "not started: a3 returned"
   },
@@ -417,7 +441,7 @@
     "nonce": "n-c4",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:15Z",
+   "time": "2026-10-10T12:00:16Z",
    "expect": "allow"
   },
   {
@@ -437,7 +461,7 @@
     "nonce": "n-x",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:16Z",
+   "time": "2026-10-10T12:00:17Z",
    "expect": "allow"
   },
   {
@@ -459,7 +483,7 @@
     "nonce": "n-o4",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:17Z",
+   "time": "2026-10-10T12:00:18Z",
    "expect": "allow",
    "check": {
     "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "failed"
@@ -473,6 +497,7 @@
   "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
   "a3": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
   "c1": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+  "c1x": "6e4f403cf498d529e422237af547798d943043ae7e1d07e7562d49b62d45ce73",
   "c2": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
   "c3": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
   "c4": "6e58ebd48c8582f4e2c49cae178f7ce8eb545d1aedbd376b6724288e849a8ec2",

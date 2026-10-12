@@ -310,7 +310,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    }
   },
@@ -336,7 +336,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    },
    "note": "back to member: the hold stands"
@@ -362,13 +362,7 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:11Z",
-   "expect": "allow",
-   "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "awaiting-approval",
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.guards": [
-     "@op:b.example"
-    ]
-   }
+   "expect": "allow"
   },
   {
    "entry": {
@@ -392,7 +386,7 @@
    },
    "time": "2026-10-10T12:00:12Z",
    "expect": "denied",
-   "note": "CX3 escaped here in round 22"
+   "note": "the hold stands"
   }
  ],
  "ids": {

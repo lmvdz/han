@@ -1,0 +1,17 @@
+[timing] 1555218 states explored; ALL PROPERTIES HOLD (attempts<=1, crashes<=1, ticks<=4 of +0.9s/+9.1s; executor clock offsets [0.0, -10.0] s, arbitrary claim delay, stall<=10s on the executor clock, whole-second receipts, launchWindow changed 20→15 or 30 s at any time, abandon)
+[drift] 246464 states explored; ALL PROPERTIES HOLD (attempts<=1, crashes<=1, ticks<=4 of +0.9s/+9.1s/+10.9s; clocks ((0, (6, 5), (4, 5)),) (home 1.2x fast, executor 0.8x slow: drift exaggerated to ±20%), arbitrary claim delay, stall<=10s on the executor clock, whole-second receipts, abandon)
+[single] 1324239 states explored; ALL PROPERTIES HOLD (attempts<=2, crashes<=1, ticks<=2 of +5s/+25s; revocation of membership and key, cancel, abandon)
+[limit] 221 states explored; ALL PROPERTIES HOLD (attempts<=3, crashes<=2, ticks<=0 of ; MAX_ATTEMPTS lowered to 2; a crash after each claim re-opens the effect)
+caught  abandon-anytime              VIOLATION [single] after 40274 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  deadline-from-receipt-time   VIOLATION [timing] after 446576 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  executor-uses-current-window VIOLATION [timing] after 567312 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  launch-after-restart         VIOLATION [single] after 15517 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  no-E2                        VIOLATION [single] after 32301 states: RevokedBeforeClaimNeverLaunches: sa:a.example#1 (membership)
+caught  no-launch-journal            VIOLATION [single] after 8219 states: AtMostOneLaunchPerClaim: sa:a.example#1 launched 2×
+caught  no-quantization-margin       VIOLATION [timing] after 543374 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  no-window-check              VIOLATION [timing] after 368382 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  one-sided-drift-margin       VIOLATION [drift] after 69625 states: NoLaunchAfterAbandon: sa:a.example#1
+caught  unbounded-attempts           VIOLATION [limit] after 92 states: AttemptLimit: sa:a.example holds more than 2 claims of one effect
+caught  window-not-pinned            VIOLATION [timing] after 394193 states: NoLaunchAfterAbandon: sa:a.example#1
+all mutations caught
+DONE

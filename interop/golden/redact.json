@@ -49,7 +49,7 @@
        "space": "s1:a.localhost",
        "seq": 18,
        "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
-       "prev": "42591c09a24d8b43885bb5a0405b44c145d8f268cdeb1143f963816f62147380",
+       "prev": "6a1c15999a26b986ab07f3dcd53556cecebee21063062fc83b3c205f6ae76c9a",
        "home": "a.localhost",
        "homeKey": "h1",
        "time": "2026-01-01T00:00:00Z",
@@ -57,7 +57,7 @@
        "profiles": {
         "@alice:a.localhost": 1
        },
-       "homeSig": "rRRb7lueO9UA12Kh6xerY8gfYmuxOxKfXzG4cjKKvg3QcyI3JJD4iKoFv_4yLywWlefYxOX4hPYTNrbGwBwpBw"
+       "homeSig": "nvvYfWqn_68idkB18GtRFxBHLg45yxq__wK_Gepd6qpcA19APKiAvkp-TM1WN8AX6fQAk9hD-t5dSIRf4lAnAw"
       }
      }
     },
@@ -439,7 +439,7 @@
           "space": "s1:a.localhost",
           "seq": 18,
           "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
-          "prev": "42591c09a24d8b43885bb5a0405b44c145d8f268cdeb1143f963816f62147380",
+          "prev": "6a1c15999a26b986ab07f3dcd53556cecebee21063062fc83b3c205f6ae76c9a",
           "home": "a.localhost",
           "homeKey": "h1",
           "time": "2026-01-01T00:00:00Z",
@@ -447,7 +447,7 @@
           "profiles": {
            "@alice:a.localhost": 1
           },
-          "homeSig": "rRRb7lueO9UA12Kh6xerY8gfYmuxOxKfXzG4cjKKvg3QcyI3JJD4iKoFv_4yLywWlefYxOX4hPYTNrbGwBwpBw"
+          "homeSig": "nvvYfWqn_68idkB18GtRFxBHLg45yxq__wK_Gepd6qpcA19APKiAvkp-TM1WN8AX6fQAk9hD-t5dSIRf4lAnAw"
          }
         }
        }
@@ -604,9 +604,11 @@
          "time": "2026-01-01T00:00:00Z",
          "durability": "local",
          "profiles": {
-          "@alice:a.localhost": 1
+          "@alice:a.localhost": 1,
+          "@bob:a.localhost": 1,
+          "@x:a.localhost": 1
          },
-         "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
+         "homeSig": "KAn02o5UQQvZcea3AdQiTg1t2-4gwIr2rEMDY6LOsds0CQc9sJ7SISpFDVDS9EwPooizfRtn4wghASRWI0Y_Bw"
         }
        }
       }
@@ -649,7 +651,7 @@
          "space": "s1:a.localhost",
          "seq": 11,
          "id": "291af395b85cb033d6b8c8c82dbb74e8f0e4078fccecf6deb1b62cfd708b6824",
-         "prev": "1203a500075cfb05ee6b642754a38258c87fc92e6bfc1555c6d0dd6b2e3c9670",
+         "prev": "7e6c8f604c40f8f2ab2e9db1f72cf020ae23bd7a07b6c2beba11ccfbf76eabd2",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -657,7 +659,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "pWIxoIEImMpmox9QRIi60viDRSVrIYjg7pLDdx4rHGjj14tlASd9INJwbfeyInhHGNCbyeqY0Ku-oFAqHOtpDg"
+         "homeSig": "kEEllRub1xl1Syx3-h0YE8elmVOgQYudYKtJuCDMALGIUVtQbaArIHowdFbHwpUAG-DYaAx6Y1fTfshbFSBzDw"
         }
        }
       }
@@ -700,7 +702,7 @@
          "space": "s1:a.localhost",
          "seq": 12,
          "id": "f0f021821773808eead28aaf38b5b68e7881ee3d2c699b17b037daa883a48bba",
-         "prev": "75985a08d4816f4123a629dda61538d2a787a1d5f980a3bfa2ab33e8b5e741b9",
+         "prev": "8d00da68097988279562193ac58cd1ae757ae17a673b03c15bd54ac6b38f980f",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -708,7 +710,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "bKBAR5SpZRPRWcQovr6zxUEh_x9NFozm-LKM8OwYRa6WanDNGFr12EwPwleI9achb9oG3p46Om-NGpoVmmkuAg"
+         "homeSig": "6mR5PP6aOj5YBCPp5F9N3qfBjsipl4QJ_NdJw6301Gfe3Je2MzSDb3xZwkm2biHJq6nxScjb3Nfz5hP5FRO6AA"
         }
        }
       }
@@ -746,7 +748,7 @@
          "space": "s1:a.localhost",
          "seq": 13,
          "id": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-         "prev": "f90308095346b65f99174bfe8725018ce882d47dcf2e4a9d7ddf42aa44138783",
+         "prev": "b57730406f62b2c761a783bd4e7a25d94e50bacbc3d4b3d6189454add4f95c26",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -754,7 +756,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "vUAkw1sg0L6TWRPf02iylqY9GoQiTxk1I0TDHvijzAKtjxMF9oF1at_xIWhul6JfwFz-Lzrjw7v69T47vuWbBQ"
+         "homeSig": "Y-g-7x-usu3T8Z1YrDykbzSBpSoHxqOx0wjlyguqmB59cJotjhe5ijMZ8mdmiNvqIvKch4-_CDV7u71i9IXqAg"
         }
        }
       }
@@ -792,7 +794,7 @@
          "space": "s1:a.localhost",
          "seq": 14,
          "id": "6e05ac0672b7ad60151115549cb8ee3b0e4452b0922358aa3bc67d007ca1bdbe",
-         "prev": "990ff52ab610a8a627f917cb2aca98fc74994a0df86c0e66e51f8a8279b139ce",
+         "prev": "937d72eeb7d47a34e674b95d4839a6e1f310b58f73d5159773f6cce04c4db55d",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -800,7 +802,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "xwouQyfpjwOpXG7It_BUgQhkAkJLLbiSbXEqTfuYUdchA6Du5EyB8iHqTXNEuRIeKuOEelwVFPYIEGIDMwsgCQ"
+         "homeSig": "tOERF8khv2ufE3VxblBlXhTw8rRYXgODZqIKcaE9wLC7kRoRUKJzdG_28w-9unnQNBkBiVso3Lefh0sEn31YCQ"
         }
        }
       }
@@ -836,7 +838,7 @@
          "space": "s1:a.localhost",
          "seq": 15,
          "id": "5ab331f25c003e4af361ea66070820a1c538302a66674a2d2169ff67a588c86d",
-         "prev": "1ad276d5bdfebb6876d11554861c839598ef06f165568aa1d63b934a49a4435d",
+         "prev": "a89d17d39cc1e6d8cd59895ca7319cb96b31366af88fe790d34461737189587b",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -844,7 +846,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "QiVCKBIQfFZYu7_BS9TvqNPu8dOpWi2eMTtQ2etmGwSJM-e7HtQAc0kYV9BZhlP9BLCqSSqXgKPHfOAmuI73AQ"
+         "homeSig": "wGRYoItNAe-itthje06ppAGY0Z2Z702thZPMa95aEHN8KbJ4Z7LTrXnySOxhIPo0R837SdEklwsWuzy6xTMWCg"
         }
        }
       }
@@ -884,7 +886,7 @@
          "space": "s1:a.localhost",
          "seq": 16,
          "id": "3bd993b5a8d8e745288be0af7c5367a0de837498b5083ca9cb4dce39aa7775e2",
-         "prev": "d1484c398641b884f0b8da5eb820239f4f8cb947db5d6dcd4e36d01a5029fc49",
+         "prev": "8feb4357ca2c403a4002f904745939a1082d8671524fa1774624c8b65d33404c",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -893,7 +895,7 @@
           "@alice:a.localhost": 1,
           "@bob:a.localhost": 1
          },
-         "homeSig": "Dn-DtT3T8r-r1HEyfGndeYLg7T0yG1B_Qh2ilcSheTBcupwQ2M3m4HzManotrP-sTuYIF3reMWTUMFPR3sPMCw"
+         "homeSig": "sO7Tg9y-WuCLa2dsV8LBfeJ6iwQ6YidhsGY6_nLnZy1VP1qmIy8WXYvyq3ICuxLXBpg79CdA8MLNu1AKSOLtBw"
         }
        }
       }
@@ -932,7 +934,7 @@
          "space": "s1:a.localhost",
          "seq": 17,
          "id": "a1343d0f40ad10fc46b279587961c5faaba47f8494cfe5878581aea4a6c10205",
-         "prev": "e4e144e5c42fb957d67be07515779494532bed770c8b08f8023019dd4c9a002b",
+         "prev": "1a7fc41cdb32cac34486778695a58752baab341d509930ff7b0b0c965502147e",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -940,7 +942,7 @@
          "profiles": {
           "@bob:a.localhost": 1
          },
-         "homeSig": "opRq4LDaimpJ4dCivBNriCd9Y__e_YYz_PxCS_5yYbous3V63jEi7VhqCHXWmyrBoe7byRZP-cw8lUK8fA4WCg"
+         "homeSig": "1e9_ZFVgeADQwVex3Rekel_posfFCoNDRQ3bl1nBL0l25-NLpJaxU7M6DgmAKiLKoETyokQE5NTt0noCuIjPAw"
         }
        }
       }
@@ -978,7 +980,7 @@
          "space": "s1:a.localhost",
          "seq": 18,
          "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
-         "prev": "42591c09a24d8b43885bb5a0405b44c145d8f268cdeb1143f963816f62147380",
+         "prev": "6a1c15999a26b986ab07f3dcd53556cecebee21063062fc83b3c205f6ae76c9a",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -986,7 +988,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "rRRb7lueO9UA12Kh6xerY8gfYmuxOxKfXzG4cjKKvg3QcyI3JJD4iKoFv_4yLywWlefYxOX4hPYTNrbGwBwpBw"
+         "homeSig": "nvvYfWqn_68idkB18GtRFxBHLg45yxq__wK_Gepd6qpcA19APKiAvkp-TM1WN8AX6fQAk9hD-t5dSIRf4lAnAw"
         }
        }
       }
@@ -1113,14 +1115,13 @@
           ],
           "claims": [],
           "seq": 9,
-          "phase": "ready"
+          "phase": "open"
          }
         },
         "sessions": {},
         "held": {},
         "guarded": {},
-        "cleared": {},
-        "outside": {}
+        "lastOutside": {}
        }
       }
      }
@@ -1200,7 +1201,7 @@
        "space": "s1:a.localhost",
        "seq": 18,
        "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
-       "prev": "42591c09a24d8b43885bb5a0405b44c145d8f268cdeb1143f963816f62147380",
+       "prev": "6a1c15999a26b986ab07f3dcd53556cecebee21063062fc83b3c205f6ae76c9a",
        "home": "a.localhost",
        "homeKey": "h1",
        "time": "2026-01-01T00:00:00Z",
@@ -1208,7 +1209,7 @@
        "profiles": {
         "@alice:a.localhost": 1
        },
-       "homeSig": "rRRb7lueO9UA12Kh6xerY8gfYmuxOxKfXzG4cjKKvg3QcyI3JJD4iKoFv_4yLywWlefYxOX4hPYTNrbGwBwpBw"
+       "homeSig": "nvvYfWqn_68idkB18GtRFxBHLg45yxq__wK_Gepd6qpcA19APKiAvkp-TM1WN8AX6fQAk9hD-t5dSIRf4lAnAw"
       }
      }
     },
@@ -1590,7 +1591,7 @@
           "space": "s1:a.localhost",
           "seq": 18,
           "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
-          "prev": "42591c09a24d8b43885bb5a0405b44c145d8f268cdeb1143f963816f62147380",
+          "prev": "6a1c15999a26b986ab07f3dcd53556cecebee21063062fc83b3c205f6ae76c9a",
           "home": "a.localhost",
           "homeKey": "h1",
           "time": "2026-01-01T00:00:00Z",
@@ -1598,7 +1599,7 @@
           "profiles": {
            "@alice:a.localhost": 1
           },
-          "homeSig": "rRRb7lueO9UA12Kh6xerY8gfYmuxOxKfXzG4cjKKvg3QcyI3JJD4iKoFv_4yLywWlefYxOX4hPYTNrbGwBwpBw"
+          "homeSig": "nvvYfWqn_68idkB18GtRFxBHLg45yxq__wK_Gepd6qpcA19APKiAvkp-TM1WN8AX6fQAk9hD-t5dSIRf4lAnAw"
          }
         }
        }
@@ -1755,9 +1756,11 @@
          "time": "2026-01-01T00:00:00Z",
          "durability": "local",
          "profiles": {
-          "@alice:a.localhost": 1
+          "@alice:a.localhost": 1,
+          "@bob:a.localhost": 1,
+          "@x:a.localhost": 1
          },
-         "homeSig": "BmQ6iuuI-lG3t1-fZrlgFwLDBu_2vWvMlcesHNfLaoqO21tU0JNj0Z8G27AM0kc2LE6TFFzMQhaCgSRr7AhwCw"
+         "homeSig": "KAn02o5UQQvZcea3AdQiTg1t2-4gwIr2rEMDY6LOsds0CQc9sJ7SISpFDVDS9EwPooizfRtn4wghASRWI0Y_Bw"
         }
        }
       }
@@ -1800,7 +1803,7 @@
          "space": "s1:a.localhost",
          "seq": 11,
          "id": "291af395b85cb033d6b8c8c82dbb74e8f0e4078fccecf6deb1b62cfd708b6824",
-         "prev": "1203a500075cfb05ee6b642754a38258c87fc92e6bfc1555c6d0dd6b2e3c9670",
+         "prev": "7e6c8f604c40f8f2ab2e9db1f72cf020ae23bd7a07b6c2beba11ccfbf76eabd2",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -1808,7 +1811,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "pWIxoIEImMpmox9QRIi60viDRSVrIYjg7pLDdx4rHGjj14tlASd9INJwbfeyInhHGNCbyeqY0Ku-oFAqHOtpDg"
+         "homeSig": "kEEllRub1xl1Syx3-h0YE8elmVOgQYudYKtJuCDMALGIUVtQbaArIHowdFbHwpUAG-DYaAx6Y1fTfshbFSBzDw"
         }
        }
       }
@@ -1851,7 +1854,7 @@
          "space": "s1:a.localhost",
          "seq": 12,
          "id": "f0f021821773808eead28aaf38b5b68e7881ee3d2c699b17b037daa883a48bba",
-         "prev": "75985a08d4816f4123a629dda61538d2a787a1d5f980a3bfa2ab33e8b5e741b9",
+         "prev": "8d00da68097988279562193ac58cd1ae757ae17a673b03c15bd54ac6b38f980f",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -1859,7 +1862,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "bKBAR5SpZRPRWcQovr6zxUEh_x9NFozm-LKM8OwYRa6WanDNGFr12EwPwleI9achb9oG3p46Om-NGpoVmmkuAg"
+         "homeSig": "6mR5PP6aOj5YBCPp5F9N3qfBjsipl4QJ_NdJw6301Gfe3Je2MzSDb3xZwkm2biHJq6nxScjb3Nfz5hP5FRO6AA"
         }
        }
       }
@@ -1897,7 +1900,7 @@
          "space": "s1:a.localhost",
          "seq": 13,
          "id": "627111e94e2088f7a46a615cbb9790f137372335e3b7c80111e2ee1c596e0dd4",
-         "prev": "f90308095346b65f99174bfe8725018ce882d47dcf2e4a9d7ddf42aa44138783",
+         "prev": "b57730406f62b2c761a783bd4e7a25d94e50bacbc3d4b3d6189454add4f95c26",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -1905,7 +1908,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "vUAkw1sg0L6TWRPf02iylqY9GoQiTxk1I0TDHvijzAKtjxMF9oF1at_xIWhul6JfwFz-Lzrjw7v69T47vuWbBQ"
+         "homeSig": "Y-g-7x-usu3T8Z1YrDykbzSBpSoHxqOx0wjlyguqmB59cJotjhe5ijMZ8mdmiNvqIvKch4-_CDV7u71i9IXqAg"
         }
        }
       }
@@ -1943,7 +1946,7 @@
          "space": "s1:a.localhost",
          "seq": 14,
          "id": "6e05ac0672b7ad60151115549cb8ee3b0e4452b0922358aa3bc67d007ca1bdbe",
-         "prev": "990ff52ab610a8a627f917cb2aca98fc74994a0df86c0e66e51f8a8279b139ce",
+         "prev": "937d72eeb7d47a34e674b95d4839a6e1f310b58f73d5159773f6cce04c4db55d",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -1951,7 +1954,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "xwouQyfpjwOpXG7It_BUgQhkAkJLLbiSbXEqTfuYUdchA6Du5EyB8iHqTXNEuRIeKuOEelwVFPYIEGIDMwsgCQ"
+         "homeSig": "tOERF8khv2ufE3VxblBlXhTw8rRYXgODZqIKcaE9wLC7kRoRUKJzdG_28w-9unnQNBkBiVso3Lefh0sEn31YCQ"
         }
        }
       }
@@ -1987,7 +1990,7 @@
          "space": "s1:a.localhost",
          "seq": 15,
          "id": "5ab331f25c003e4af361ea66070820a1c538302a66674a2d2169ff67a588c86d",
-         "prev": "1ad276d5bdfebb6876d11554861c839598ef06f165568aa1d63b934a49a4435d",
+         "prev": "a89d17d39cc1e6d8cd59895ca7319cb96b31366af88fe790d34461737189587b",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -1995,7 +1998,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "QiVCKBIQfFZYu7_BS9TvqNPu8dOpWi2eMTtQ2etmGwSJM-e7HtQAc0kYV9BZhlP9BLCqSSqXgKPHfOAmuI73AQ"
+         "homeSig": "wGRYoItNAe-itthje06ppAGY0Z2Z702thZPMa95aEHN8KbJ4Z7LTrXnySOxhIPo0R837SdEklwsWuzy6xTMWCg"
         }
        }
       }
@@ -2035,7 +2038,7 @@
          "space": "s1:a.localhost",
          "seq": 16,
          "id": "3bd993b5a8d8e745288be0af7c5367a0de837498b5083ca9cb4dce39aa7775e2",
-         "prev": "d1484c398641b884f0b8da5eb820239f4f8cb947db5d6dcd4e36d01a5029fc49",
+         "prev": "8feb4357ca2c403a4002f904745939a1082d8671524fa1774624c8b65d33404c",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -2044,7 +2047,7 @@
           "@alice:a.localhost": 1,
           "@bob:a.localhost": 1
          },
-         "homeSig": "Dn-DtT3T8r-r1HEyfGndeYLg7T0yG1B_Qh2ilcSheTBcupwQ2M3m4HzManotrP-sTuYIF3reMWTUMFPR3sPMCw"
+         "homeSig": "sO7Tg9y-WuCLa2dsV8LBfeJ6iwQ6YidhsGY6_nLnZy1VP1qmIy8WXYvyq3ICuxLXBpg79CdA8MLNu1AKSOLtBw"
         }
        }
       }
@@ -2083,7 +2086,7 @@
          "space": "s1:a.localhost",
          "seq": 17,
          "id": "a1343d0f40ad10fc46b279587961c5faaba47f8494cfe5878581aea4a6c10205",
-         "prev": "e4e144e5c42fb957d67be07515779494532bed770c8b08f8023019dd4c9a002b",
+         "prev": "1a7fc41cdb32cac34486778695a58752baab341d509930ff7b0b0c965502147e",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -2091,7 +2094,7 @@
          "profiles": {
           "@bob:a.localhost": 1
          },
-         "homeSig": "opRq4LDaimpJ4dCivBNriCd9Y__e_YYz_PxCS_5yYbous3V63jEi7VhqCHXWmyrBoe7byRZP-cw8lUK8fA4WCg"
+         "homeSig": "1e9_ZFVgeADQwVex3Rekel_posfFCoNDRQ3bl1nBL0l25-NLpJaxU7M6DgmAKiLKoETyokQE5NTt0noCuIjPAw"
         }
        }
       }
@@ -2129,7 +2132,7 @@
          "space": "s1:a.localhost",
          "seq": 18,
          "id": "50dbdb0f20c3f5bcda1f3d7d53d27d20fe865d894ec1693bdaa5de67b3d30d7c",
-         "prev": "42591c09a24d8b43885bb5a0405b44c145d8f268cdeb1143f963816f62147380",
+         "prev": "6a1c15999a26b986ab07f3dcd53556cecebee21063062fc83b3c205f6ae76c9a",
          "home": "a.localhost",
          "homeKey": "h1",
          "time": "2026-01-01T00:00:00Z",
@@ -2137,7 +2140,7 @@
          "profiles": {
           "@alice:a.localhost": 1
          },
-         "homeSig": "rRRb7lueO9UA12Kh6xerY8gfYmuxOxKfXzG4cjKKvg3QcyI3JJD4iKoFv_4yLywWlefYxOX4hPYTNrbGwBwpBw"
+         "homeSig": "nvvYfWqn_68idkB18GtRFxBHLg45yxq__wK_Gepd6qpcA19APKiAvkp-TM1WN8AX6fQAk9hD-t5dSIRf4lAnAw"
         }
        }
       }
@@ -2283,14 +2286,13 @@
           ],
           "claims": [],
           "seq": 9,
-          "phase": "ready"
+          "phase": "open"
          }
         },
         "sessions": {},
         "held": {},
         "guarded": {},
-        "cleared": {},
-        "outside": {}
+        "lastOutside": {}
        }
       }
      }

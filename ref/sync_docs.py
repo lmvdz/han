@@ -52,10 +52,36 @@ def facts_exist(F):
     F["wv_generated"] = f"{sum(f[5] for f in fam):,}"
     F["wv_families"] = "; ".join(f"{f[2]} {f[0]}: {f[3]:,} expectations" + (f" (and {f[5]:,} generated appends the runner checks, not counted)" if f[5] else "") for f in fam)
     F["wv_family_ops"], F["wv_family_ops_exp"] = next((f[1], f[3]) for f in fam if f[0].startswith("operations"))
-    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes"), ("r24", "round-24 probes")):
+    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes"), ("r24", "round-24 probes"), ("r25", "round-25 probes")):
         row = next((f for f in fam if f[0] == name), None)
         F[f"wv_{key}_vec"], F[f"wv_{key}_exp"] = (row[2], row[3]) if row else (0, 0)
     return {t[1] for t in tests}, {n.split("::", 1)[1] for n, _ in wires}
+
+# ── han.ts: how many calls, functions and kinds the interfaces declare (K8) ──
+WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+def word(n): return WORDS.get(n, str(n))
+
+def facts_interfaces(F):
+    ts = read("han.ts")
+    def body(head):
+        i = ts.find(head + " {")
+        if i < 0: raise Underivable(f"han.ts: {head!r} is missing")
+        j = ts.index("\n}", i)
+        return ts[i:j]
+    def members(head):
+        """Names declared at the first level of an interface body (two spaces of indent; comment and continuation lines start otherwise)."""
+        return re.findall(r'^  "?([A-Za-z_.]+)"?\??[(:]', body(head), re.M)
+    F["kinds_n"] = len(members("export interface Bodies"))
+    core = members("export interface Calls")
+    F["calls_core"] = len(core)
+    F["calls_core_w"] = word(len(core))
+    log, pol, ident, ver, tb = (members(f"export interface {n}") for n in ("Log", "Policy", "Identity", "Verifier", "TransportBinding"))
+    F["log_fns"], F["policy_fns"], F["policy_fns_w"], F["identity_fns"], F["verifier_fns"], F["binding_fns"], F["binding_fns_w"] = len(log), len(pol), word(len(pol)), len(ident), len(ver), len(tb), word(len(tb))
+    F["limits_w"] = word(len(re.findall(r"(?<![\w/])max[A-Za-z]+\s*:", body("export interface Limits"))))
+    actor = len(members("export interface Actor"))
+    F["actor_fns"] = actor
+    F["ledger_total"] = len(log) + len(pol) + len(ident) + len(ver) + 2 * actor + len(tb)
+    F["ports_total"] = F["ledger_total"]
 
 # ── what the last run measured (ref/RESULTS.md) ──
 def facts_results(F):
@@ -83,9 +109,7 @@ def facts_results(F):
     m = num("Signed layer", r"(\d+)/(\d+) wire scenarios")
     if m[1] != m[2]: raise Underivable("ref/RESULTS.md: a wire scenario fails")
     F["wire_scen"] = int(m[2])
-    m = num("Guard model mutations", r"(\d+)/(\d+) guard mutations")
-    if m[1] != m[2]: raise Underivable("ref/RESULTS.md: a guard mutation was missed")
-    F["guard_mut"] = int(m[2])
+    num("Guard model mutations", r"(\d+)/(\d+) guard mutations")      # must be PASS; the counts come from the newest guard log (facts_models)
     m = num("Wire conformance vectors", r"(\d+) vectors, (\d+) steps, (\d+) receipts")
     F["wv_steps"], F["wv_receipts"] = int(m[2]), int(m[3])
     if int(m[1]) != F["wv_n"]: raise Underivable(f"ref/RESULTS.md says {m[1]} wire vectors, list_tests.py finds {F['wv_n']}: RESULTS.md is stale, run python ref/run_all.py --quick")
@@ -128,9 +152,9 @@ def facts_interop(F):
     a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", py)
     F["wv_latest_note"] = ("These are the vectors of the current files." if (int(a[2]), int(a[4])) == (F["wv_n"], F["wv_exp"]) else
                            f"The vector files have changed since: {F['wv_n']} vectors and {F['wv_exp']} expectations now, {a[2]} and {a[4]} when that run was recorded (round {latest}). Vectors that read the state were rewritten for the call `state` and others were added in round {F['round']}; none of that has been run against either server yet, so a server that does not implement the rules they pin fails them.")
-    m = re.search(r"^### 6\.1 What the round-(\d+) refresh", text, re.M)
-    if not m: raise Underivable("interop/RESULTS.md: section 6.1 'What the round-NN refresh changed and found' is missing; the round of the last matrix run cannot be derived")
-    F["interop_round"] = int(m[1])
+    rounds = [int(a or b) for a, b in re.findall(r"^### 6\.\d+ (?:What the round-(\d+) refresh|Round (\d+))", text, re.M)]
+    if not rounds: raise Underivable("interop/RESULTS.md: no section '6.N Round NN' or 'What the round-NN refresh changed and found'; the round of the last matrix run cannot be derived")
+    F["interop_round"] = max(rounds)
     b = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_py"])
     F["wv_r22_py_fails"] = int(b[2]) - int(b[1])
     for who, s_ in (("py", py), ("ts", ts)):
@@ -182,18 +206,30 @@ def facts_models(F):
     if not done: raise Underivable("ref/logs has no complete model_guard log")
     r, d, n, m = done[0]
     F["guard_round"], F["guard_depth"], F["guard_trans"] = r, d, f"{int(m[1]):,}"
-    F["guard_props"] = len(re.split(r", | and ", m[3]))
     for plain in (False, True):
         later = [f"round {r2}'s depth-{d2} run did not complete ({link(n2, plain)})" for r2, d2, n2 in undone if r2 >= r]
         F["guard_deep_plain" if plain else "guard_deep"] = (f"the newest complete deep run is depth {d}, {F['guard_trans']} transitions, on the round-{r} Policy ({link(n, plain)})"
                        + ("; " + "; ".join(later) if later else "") + (f"; the current Policy (round {F['round']}) has not been explored to depth {d}" if r < F["round"] else ""))
-    # depth 4 is a row of every run_all.py run (ref/RESULTS.md)
-    res = {r_[0]: r_ for r_ in table_rows(read("ref", "RESULTS.md")) if len(r_) == 3}
-    hit = [r_ for k, r_ in res.items() if k.startswith("Guard model (P-15), depth 4")]
-    if len(hit) != 1 or hit[0][1] != "PASS": raise Underivable("ref/RESULTS.md: the guard model depth-4 row is missing or not PASS; run python ref/run_all.py --quick")
-    m4 = re.search(r"\[guard\] (\d+) transitions to depth 4; (.*) HOLD", hit[0][2])
-    if not m4: raise Underivable("ref/RESULTS.md: cannot read the guard model depth-4 line")
-    F["guard4_trans"], F["guard4_props"] = f"{int(m4[1]):,}", len(re.split(r", | and ", m4[2]))
+    # depth 4 and the mutation count come from the newest log that completed depth 4 (K8): the guard model is too slow to be re-derived from a quick run
+    LEVEL = re.compile(r"^\s*depth (\d+): (\d+) transitions", re.M)
+    MUT = re.compile(r"(\d+)/(\d+) mutations caught")
+    best = None
+    for r2, d2, n2, t2 in logs("model_guard"):
+        levels = {int(a_): int(b_) for a_, b_ in LEVEL.findall(t2)}
+        g2 = GUARD.search(t2)
+        if g2: levels[int(re.search(r"to depth (\d+)", g2[0])[1])] = int(g2[1])
+        if 4 in levels and best is None: best = (r2, n2, levels[4], MUT.search(t2))
+    if best is None: raise Underivable("ref/logs has no model_guard log that completed depth 4")
+    r4, n4, t4, mm = best
+    if not mm or mm[1] != mm[2]: raise Underivable(f"ref/logs/{n4}: the mutation count (N/N mutations caught) is missing or not all caught")
+    src = read("ref", "model_guard.py")
+    tail = src[src.index('print(f"[guard]'):]
+    names = re.findall(r"[A-Z][A-Za-z]+", tail[:tail.index("HOLD")].split("depth {a.depth}; ", 1)[1])
+    F["guard4_round"], F["guard4_trans"], F["guard4_props"], F["guard_mut"] = r4, f"{t4:,}", len(names), int(mm[2])
+    F["guard4_log"], F["guard4_log_plain"] = link(n4), link(n4, True)
+    import model_guard                                        # the log must describe the mutations the code has now
+    if len(model_guard.MUTATIONS) != int(mm[2]): raise Underivable(f"ref/model_guard.py has {len(model_guard.MUTATIONS)} mutations, ref/logs/{n4} says {mm[2]}: re-run python ref/model_guard.py --all-mutations --depth 4")
+    F["guard_props"] = F["guard4_props"]
     # the timing model
     MC = [(r, d, n, t) for r, d, n, t in logs("model_check") if "all mutations caught" in t and all(f"[{k}]" in t and "ALL PROPERTIES HOLD" in t for k in ("timing", "drift", "single"))]
     if not MC: raise Underivable("ref/logs has no complete model_check log")
@@ -201,6 +237,7 @@ def facts_models(F):
     states = {k: int(re.search(r"\[%s\] (\d+) states explored; ALL PROPERTIES HOLD" % k, t)[1]) for k in ("timing", "drift", "single")}
     muts = len(re.findall(r"^caught ", t, re.M))
     F["timing_round"] = r
+    F["timing_muts"], F["timing_muts_w"] = muts, word(muts)
     F["timing_log"] = link(n)
     F["timing_counts"] = f"timing ({states['timing']:,} states), drift ({states['drift']:,}), single ({states['single']:,}), all properties hold; {muts}/{muts} mutations caught"
     F["timing_status"] = (f"The log is by the round in its name: `ref/policy.py` has been edited since (the current round is {F['round']}), the model has not been re-run on it, and this is a round-{r} result, not a statement about the current Policy" if r < F["round"]
@@ -237,7 +274,7 @@ def check_vector_names(arch, vector_ids):
 def derive():
     F = {}
     names, vector_ids = facts_exist(F)
-    facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names)
+    facts_interfaces(F); facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names)
     check_vector_names(read("architecture.md"), vector_ids)
     return F
 

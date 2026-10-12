@@ -19,9 +19,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 import policy as P
 
-PAGED = ("roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "cleared", "outside", "profile.keys")   # §3 (H3): every map of a state page, in cursor and fill order. Only the scalars and `policy` repeat on every page
+PAGED = ("roles", "roleHistory", "tasks", "effects", "sessions", "held", "guarded", "lastOutside", "profile.keys")   # §3 (H3): every map (`held` and `guarded` are sets, sent as `{actor: true}` maps) of a state page, in cursor and fill order. Only the scalars and `policy` repeat on every page
 CURSOR = re.compile(r"(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*)){%d}" % len(PAGED), re.ASCII)      # §3: head.o1.….oN, one offset per PAGED map: how many of its items the earlier pages sent
-EFFECT_VIEW = ("space", "head", "home", "policy")   # §3: what `state {effect}` holds besides the one effect
+EFFECT_VIEW = ("space", "head", "home", "policy")   # §3: what `state {effect}` and `state {agent}` hold besides the one effect or the agent's guard facts
 MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: items of each paged map per page of a state read (E8)
 MAX_FRAME_BYTES = 1310720  # han.ts Limits.maxFrameBytes
 FRAME_RESERVE = 256        # bytes kept for the `next` member of a state reply: `,"next":"` + a cursor of at most 10 offsets of 16 digits and the head (§3)
@@ -268,13 +268,30 @@ def _has(view, path) -> bool:
     if path == "profile.keys": return "profile" in view and "keys" in view["profile"]
     return path in view
 
-def _get_map(view, path) -> dict: return view["profile"]["keys"] if path == "profile.keys" else view[path]
+def _get_map(view, path):
+    """The paged member `path`: a map, or (`held`, `guarded`) a set held as a sorted array."""
+    return view["profile"]["keys"] if path == "profile.keys" else view[path]
 
 def _put_map(view, path, value):
     if path == "profile.keys": view["profile"] = dict(view["profile"], keys=value)
     else: view[path] = value
 
-def _items(view, path) -> list: return list(_get_map(view, path).items()) if _has(view, path) else []
+def _items(view, path) -> list:
+    """The items of a paged member in the order they are sent: (key, value) of a map; (element, None) of a set, which has no value to cost."""
+    if not _has(view, path): return []
+    m = _get_map(view, path)
+    return list(m.items()) if isinstance(m, dict) else [(x, None) for x in m]
+
+def _add(m, key, val):
+    if isinstance(m, dict): m[key] = val
+    else: m.append(key)
+
+def _empty_like(view, path): return {} if isinstance(_get_map(view, path), dict) else []
+
+def agent_facts(state, actor) -> dict:
+    """K7: what a host needs of one agent besides its profile: `{held, guarded, lastOutside}` (P-15). `held` and `guarded` are whether the agent is in the set;
+    `lastOutside` is the seq of the newest outside instruction since it became guarded or forced, 0 if none."""
+    return {"held": actor in state["held"], "guarded": actor in state["guarded"], "lastOutside": state.get("lastOutside", {}).get(actor, 0)}
 
 # ── a reference home ──
 class Home:
@@ -381,10 +398,10 @@ class Home:
         if entry["kind"] == "member.set": required.add(entry["body"]["actor"])
         eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
         if eff:
-            required |= {eff["proposer"], *P.guards_of(state, eff)}
+            required |= {eff["proposer"], *(g for g in P.guards_of(state, {"time": now, "profiles": profiles}, eff) if g)}      # P-15: the guards are the operators in the views we would pin
             cand = {a["author"]: a["keyId"] for a in P.approval_candidates(state, eff, now)}
         pinned, found_valid = {}, False
-        for a in need:
+        for a in list(need) + sorted(required - set(need)):       # guards that are not candidates still get pinned (P-01)
             if found_valid and a not in required: continue
             if a not in profiles: return None
             pinned[a] = profiles[a]
@@ -449,15 +466,16 @@ class Home:
         if not self.readable_any(st, as_): return "not_found", None
         return "ok", [{"type": "record", "record": r} for r in S["records"][after:] if P.can_read(st, as_, r["receipt"]["seq"])][:limit]
 
-    def state(self, space, as_, at=None, cursor=None, effect=None):
-        """§3 state: one StateView page as `{state, next?}`. At most one of `at`, `cursor`, `effect` is present (None here means absent; on the wire presence
-        decides, whatever the value): two or more is `invalid`, judged before any of them is looked at. `at` gives the state after record `at` and needs read
-        rights at `at` (P-02), not at the head. `cursor` (the `next` of an earlier page) gives the page it names, from its own head. `effect` gives the one effect.
+    def state(self, space, as_, at=None, cursor=None, effect=None, agent=None):
+        """§3 state: one StateView page as `{state, next?}`. At most one of `cursor`, `effect`, `agent` is present, and `at` may join `agent` only (None here means absent;
+        on the wire presence decides, whatever the value): any other two or more is `invalid`, judged before any of them is looked at. `at` gives the state after record `at`
+        and needs read rights at `at` (P-02), not at the head. `cursor` (the `next` of an earlier page) gives the page it names, from its own head. `effect` gives the one
+        effect. `agent` (an ActorId) gives that actor's `{held, guarded, lastOutside}` (K7).
         Every item of a paged map is bounded, so a page always has room for at least one (H3): a violation is a bug in the server and raises."""
         S = self.spaces.get(space)
         if not S: return "not_found", None
         st = S["state"]
-        if sum(x is not None for x in (at, cursor, effect)) > 1: return "invalid", "at, cursor and effect exclude each other"
+        if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)): return "invalid", "at, cursor, effect and agent exclude each other (at may join agent)"
         offs = dict.fromkeys(PAGED, 0)
         where = st["head"]
         if at is not None:
@@ -470,6 +488,7 @@ class Home:
             if not 1 <= nums[0] <= st["head"]: return "invalid", "cursor"
             where, offs = nums[0], dict(zip(PAGED, nums[1:]))
         if effect is not None and not isinstance(effect, str): return "invalid", "effect must be an EntryId"
+        if agent is not None and not P._actor(agent): return "invalid", "agent must be an ActorId"
         if not P.can_read(st, as_, where): return ("denied", "state needs read rights at " + ("head" if where == st["head"] else "that seq")) if self.readable_any(st, as_) else ("not_found", None)
         view = st if where == st["head"] else self.state_at(space, where)
         if view is None: return "unavailable", "no stored profile pins for this seq"
@@ -478,6 +497,10 @@ class Home:
             if effect not in view["effects"]: return "not_found", "no such effect"
             one = dict({k: view[k] for k in EFFECT_VIEW}, effects={effect: view["effects"][effect]})
             assert len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) <= self.max_frame_bytes, "one effect does not fit maxFrameBytes: impossible by construction (H3)"
+            return "ok", {"state": one}
+        if agent is not None:
+            one = dict({k: view[k] for k in EFFECT_VIEW}, agent=agent_facts(view, agent))
+            assert len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) <= self.max_frame_bytes, "the agent view does not fit maxFrameBytes: impossible by construction (H3)"
             return "ok", {"state": one}
         if cursor is not None and any(offs[p] > len(_items(view, p)) for p in PAGED): return "invalid", "cursor offset beyond the map"
         page, offs, more = self._page(view, offs)
@@ -494,7 +517,7 @@ class Home:
         paths = [p for p in PAGED if _has(view, p)]
         page = {k: v for k, v in view.items() if k not in PAGED and k != "profile"}
         if "profile" in view: page["profile"] = {k: v for k, v in view["profile"].items() if k != "keys"}
-        for p in paths: _put_map(page, p, {})
+        for p in paths: _put_map(page, p, _empty_like(view, p))
         used, cap = size({"id": MAX_INT, "ok": {"state": page}}), self.max_frame_bytes - FRAME_RESERVE
         assert used <= cap, "the repeated members of a state page do not fit maxFrameBytes: impossible by construction (H3)"
         taken, closed = dict.fromkeys(PAGED, 0), False
@@ -502,9 +525,9 @@ class Home:
             n = 0
             for key, val in _items(view, p)[offs[p]:]:
                 if n >= self.max_state_items: break
-                add = size(key) + size(val) + 2
+                add = size(key) + (size(val) if val is not None else 0) + 2      # a set's element costs its own JCS bytes plus 2
                 if used + add > cap: closed = True; break
-                _get_map(page, p)[key] = val; used += add; n += 1
+                _add(_get_map(page, p), key, val); used += add; n += 1
             taken[p] = n
             if closed: break
         more = any(offs[p] + taken[p] < len(_items(view, p)) for p in paths)

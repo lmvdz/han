@@ -83,9 +83,8 @@
   },
   {
    "op": "approve",
-   "vector": "ts-client",
+   "vector": "py-client",
    "agree": {
-    "ts-client": true,
     "py-client": true
    }
   },

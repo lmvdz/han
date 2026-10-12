@@ -6,9 +6,12 @@ verdict and a `check` of the WHOLE state (path "", which the TS runner resolves 
 `guardStatus` steps. The TS runner (cleanroom-ts/dist/run-vectors.js) is then run over the generated directories in a
 few batches. The first divergence per seed is reported with the step before it and, for a state divergence, the
 top-level state keys that differ. Each divergent seed's history up to the divergence is saved as a minimal vector.
-Usage: python ref/fuzz_diff.py [--seeds N] [--steps N] [--keep DIR]      (default 2000 seeds × 100 steps)
+The generator (fuzz_fold's) has several operators separate from the owner, operator confirm/withdraw, forced spaces, stale `seen`
+and held agents finishing their own work; histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
+The run prints the generator's statistics so a reader can see what was exercised.
+Usage: python ref/fuzz_diff.py [--seeds N] [--steps N] [--keep DIR] [--workers N]      (default 2000 seeds × 250 steps)
 """
-import argparse, copy, json, os, random, re, shutil, subprocess, sys, time
+import argparse, collections, copy, json, multiprocessing, os, random, re, shutil, subprocess, sys, time
 from datetime import timedelta
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -18,19 +21,19 @@ import fuzz_fold as F
 TS = os.path.join(os.path.dirname(HERE), "cleanroom-ts")
 RUNNER = os.path.join(TS, "dist", "run-vectors.js")
 WORK = r"H:\agentic\temp\claude\H--HAN\5c1257e4-8c11-4fbf-80b1-3b3209de9c9f\scratchpad\fuzzdiff"
-BATCH = 500
-fmt = lambda t: (F.BASE + timedelta(seconds=t)).strftime("%Y-%m-%dT%H:%M:%SZ")
+BATCH = 1000
+fmt = F.fmt
 
-def view(a, revoked=False):
-    p = F.profile(a, revoked)
+def view(a, revoked=False, unconfirmed=False):
+    p = F.profile(a, revoked, unconfirmed)
     return {k: v for k, v in p.items() if k not in ("actor", "seq")}
 
 def history(seed, steps):
-    """One random history as a vector: ref verdicts, whole folded states, guardStatus probes."""
+    """One random history as a vector: ref verdicts, whole folded states, guardStatus probes; also the generator's statistics."""
     r = random.Random(seed)
-    revoked, t = set(), 0
+    revoked, unconf, t = set(), set(), 0
     profiles = {a: view(a) for a in F.ACTORS}
-    out = []
+    out, stats = [], collections.Counter()
     def ctx_of(time_):
         return {"time": time_, "profiles": {a: dict(v, actor=a, seq=1) for a, v in profiles.items()}}
     state = None
@@ -41,33 +44,56 @@ def history(seed, steps):
         verdict = "allow" if d["allow"] else d["code"]
         st = {"entry": e, "time": time_, "expect": verdict}
         if override: st["profiles"] = override
+        stats[f"{e['kind']} {verdict}"] += 1
         if d["allow"]:
+            prev = state
             state = P.fold(state, {"entry": e, "content": None, "receipt": {"space": F.S, "seq": (state["head"] if state else 0) + 1, "id": e["id"], "time": time_}}, ctx)
             st["check"] = {"": state}
+            if e["kind"] == "agent.release" and e["body"]["agent"] in prev["held"]: stats["* release of a held agent allowed"] += 1
+            if state["held"]: stats["* steps with an agent held"] += 1
+            if state["policy"]["sessions"].get("forceGuarded"): stats["* steps in a forced space"] += 1
+        elif e["kind"] == "agent.release" and "stale" in d.get("reason", ""): stats["* stale release refused"] += 1
+        elif "needs its operator" in d.get("reason", ""): stats["* instruction refused for lack of an operator"] += 1
+        elif e["kind"] == "effect.claim" and "guard" in d.get("reason", ""): stats["* claim refused for a guard"] += 1
         out.append(st)
         return ctx
     create = {"id": F.H("create"), "v": 1, "space": F.S, "kind": "space.create", "author": F.O, "keyId": "k1",
               "body": {"policy": F.policy(r)}, "contentHash": "", "refs": [], "seen": 0, "nonce": "c", "time": "2026-10-10T12:00:00Z"}
     step(create, fmt(0))
-    for i, a in enumerate([F.M, F.PR, F.X, F.BOT, F.G]):
-        step({"id": F.H(f"setup{i}"), "v": 1, "space": F.S, "kind": "member.set", "author": F.O, "keyId": "k1",
-              "body": {"actor": a, "role": "guest" if a == F.G else "member"}, "contentHash": "", "refs": [], "seen": 0,
-              "nonce": f"s{i}", "time": "2026-10-10T12:00:00Z"}, fmt(0))
+    for ms in F.setup(r, None, None): step(ms, fmt(0))
     for n in range(steps):
         t += r.choice([0, 1, 5, 20, 45])
-        override = None
-        if r.random() < .03:
-            a = r.choice(F.ACTORS); revoked ^= {a}
-            profiles[a] = view(a, a in revoked); override = {a: profiles[a]}
+        changed = F.flip(r, revoked, unconf)
+        for a in changed: profiles[a] = view(a, a in revoked, a in unconf)
+        override = {a: profiles[a] for a in changed} if changed else None
         e = F.random_entry(r, state, n)
         ctx = step(e, fmt(t), override)
         if r.random() < .15:
             a = r.choice(F.ACTORS)
             out.append({"guardStatus": {"space": F.S, "actor": a}, "expect": P.guard_status(state, ctx, a)})
-    return {"name": f"fuzz-diff seed {seed}", "profiles": {a: view(a) for a in F.ACTORS}, "steps": out}
+            stats["* guardStatus probes"] += 1
+    return {"name": f"fuzz-diff seed {seed}", "profiles": {a: view(a) for a in F.ACTORS}, "steps": out}, stats
+
+def build(job):
+    seed, steps, d = job
+    v, stats = history(seed, steps)
+    write(d, f"seed{seed}", v)
+    return seed, len(v["steps"]), sum(1 for s in v["steps"] if s.get("expect") == "allow"), stats, v
 
 def write(d, name, vec):
     with open(os.path.join(d, name + ".json"), "w", encoding="utf-8") as f: json.dump(vec, f)
+
+def node_all(d):
+    """node(d); when a runner out of step with the reference fails every step, its report outgrows a string, so the directory is run in chunks of 100."""
+    try:
+        return node(d)
+    except RuntimeError:
+        files = sorted(os.listdir(d)); first = {}
+        for k in range(0, len(files), 100):
+            sub = os.path.join(d, f"chunk{k}"); os.makedirs(sub)
+            for f in files[k:k + 100]: shutil.move(os.path.join(d, f), sub)
+            first.update(node(sub)[0])
+        return first, None
 
 def node(d):
     p = subprocess.run(["node", RUNNER, d], capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -128,22 +154,22 @@ def repro_of(v, i):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=2000)
-    ap.add_argument("--steps", type=int, default=100)
+    ap.add_argument("--steps", type=int, default=250)
+    ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--keep", default=WORK)
     a = ap.parse_args()
     if shutil.which("node") is None or not os.path.exists(RUNNER):
         print("SKIP differential fuzz: node or cleanroom-ts/dist/run-vectors.js is missing"); return 0
     t0 = time.time()
     shutil.rmtree(a.keep, ignore_errors=True); os.makedirs(a.keep)
-    steps_n = allowed = 0; divergences = []
+    steps_n = allowed = 0; divergences = []; stats = collections.Counter()
+    pool = multiprocessing.Pool(a.workers)
     for lo in range(0, a.seeds, BATCH):
         d = os.path.join(a.keep, f"batch{lo // BATCH}"); os.makedirs(d)
         vecs = {}
-        for seed in range(lo, min(lo + BATCH, a.seeds)):
-            v = history(seed, a.steps); vecs[f"seed{seed}"] = v
-            write(d, f"seed{seed}", v)
-            steps_n += len(v["steps"]); allowed += sum(1 for s in v["steps"] if s.get("expect") == "allow")
-        first, _ = node(d)
+        for seed, n, al, st_, v in pool.imap_unordered(build, [(s, a.steps, d) for s in range(lo, min(lo + BATCH, a.seeds))], 8):
+            vecs[f"seed{seed}"] = v; steps_n += n; allowed += al; stats.update(st_)
+        first, _ = node_all(d)
         for name, (i, msg) in sorted(first.items(), key=lambda kv: int(kv[0][4:])):
             v = vecs[name]
             os.makedirs(os.path.join(a.keep, "divergences"), exist_ok=True)
@@ -168,6 +194,9 @@ def main():
         print(f"DIVERGE x{len(L)} on {what}: {cause}")
         print(f"    e.g. {name} step {i} {body}")
         print(f"    seeds: {seeds}")
+    pool.close()
+    print("generator statistics, entries by kind and verdict: " + "; ".join(f"{k} {n}" for k, n in sorted(stats.items()) if not k.startswith("*")))
+    print("generator statistics, guard paths: " + "; ".join(f"{k[2:]} {n}" for k, n in sorted(stats.items()) if k.startswith("*")))
     print(f"{a.seeds} seeds × {a.steps} steps: {steps_n} vector steps ({allowed} allowed, whole state compared after each); "
           f"{len(divergences)} seeds diverge; {time.time() - t0:.0f}s")
     if divergences: print(f"minimal repro vectors: {os.path.join(a.keep, 'divergences')}")

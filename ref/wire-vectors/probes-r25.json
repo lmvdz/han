@@ -1,0 +1,32 @@
+{"format": "han-wire-vectors/1", "kind": "r25", "note": "Round-25 coverage (DECISIONS-r25.md K7; architecture.md section 3 state, G-09). Run after probes-r24.json: they use its space `bc:a.localhost`. Every expected value is from ref/wire.py (W.Home) driven with the same entries.","vectors":[
+{"id": "K7a", "title": "`state {agent}` (an ActorId) is `{space, head, home, policy, agent: {held, guarded, lastOutside}}` for that actor: one frame, no `next`, nothing that grows, false, false, 0 for an actor in neither set; `at` may join it and gives the head of that seq; a non-ActorId (a number, a name without a server, null) is invalid; `agent` with `effect` or `cursor` is invalid, with `at` and `effect` too (presence decides, null included); `at` 0 is invalid; a stranger gets not_found", "expect": "ok x5 (incl. at 3, head 3), invalid x8, not_found", "rules": ["§3", "G-09", "K7"], "source": "maker (oracle: ref/wire.py Home)","steps":[
+{"conn":"@alice:a.localhost","send":{"id":2,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost"}}},
+{"conn":"@alice:a.localhost","expect":{"id":2,"ok":{"state":{"space":"bc:a.localhost","head":29,"home":"a.localhost","policy":{"visibility":"members","join":"invite","membersMayInvite":false,"allowAgents":"any","approvals":[{"action":"file.write","approvers":["owner"]}],"separateApprover":true,"budget":null,"maxDelegationDepth":2,"minDurability":"local","launchWindow":15,"extensionsMinRole":"member","sessions":{"watch":"member","read":"member","steer":"owner","modes":["auto","guarded"]},"servers":{"deny":[]}},"agent":{"held":false,"guarded":false,"lastOutside":0}}}}},
+{"conn":"@alice:a.localhost","send":{"id":3,"call":"state","args":{"space":"bc:a.localhost","agent":"@x:a.localhost"}}},
+{"conn":"@alice:a.localhost","expect":{"id":3,"ok":{"state":{"space":"bc:a.localhost","head":29,"home":"a.localhost","policy":{"visibility":"members","join":"invite","membersMayInvite":false,"allowAgents":"any","approvals":[{"action":"file.write","approvers":["owner"]}],"separateApprover":true,"budget":null,"maxDelegationDepth":2,"minDurability":"local","launchWindow":15,"extensionsMinRole":"member","sessions":{"watch":"member","read":"member","steer":"owner","modes":["auto","guarded"]},"servers":{"deny":[]}},"agent":{"held":false,"guarded":false,"lastOutside":0}}}}},
+{"conn":"@alice:a.localhost","send":{"id":4,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost","at":3}}},
+{"conn":"@alice:a.localhost","expect":{"id":4,"ok":{"state":{"space":"bc:a.localhost","head":3,"home":"a.localhost","policy":{"visibility":"members","join":"invite","membersMayInvite":false,"allowAgents":"any","approvals":[{"action":"file.write","approvers":["owner"]}],"separateApprover":true,"budget":null,"maxDelegationDepth":2,"minDurability":"local","launchWindow":15,"extensionsMinRole":"member","sessions":{"watch":"member","read":"member","steer":"owner","modes":["auto","guarded"]},"servers":{"deny":[]}},"agent":{"held":false,"guarded":false,"lastOutside":0}}}}},
+{"conn":"@alice:a.localhost","send":{"id":5,"call":"state","args":{"space":"bc:a.localhost","agent":"@carol:a.localhost"}}},
+{"conn":"@alice:a.localhost","expect":{"id":5,"ok":{"state":{"space":"bc:a.localhost","head":29,"home":"a.localhost","policy":{"visibility":"members","join":"invite","membersMayInvite":false,"allowAgents":"any","approvals":[{"action":"file.write","approvers":["owner"]}],"separateApprover":true,"budget":null,"maxDelegationDepth":2,"minDurability":"local","launchWindow":15,"extensionsMinRole":"member","sessions":{"watch":"member","read":"member","steer":"owner","modes":["auto","guarded"]},"servers":{"deny":[]}},"agent":{"held":false,"guarded":false,"lastOutside":0}}}}},
+{"conn":"@alice:a.localhost","send":{"id":6,"call":"state","args":{"space":"bc:a.localhost","agent":"@nobody:a.localhost"}}},
+{"conn":"@alice:a.localhost","expect":{"id":6,"ok":{"state":{"space":"bc:a.localhost","head":29,"home":"a.localhost","policy":{"visibility":"members","join":"invite","membersMayInvite":false,"allowAgents":"any","approvals":[{"action":"file.write","approvers":["owner"]}],"separateApprover":true,"budget":null,"maxDelegationDepth":2,"minDurability":"local","launchWindow":15,"extensionsMinRole":"member","sessions":{"watch":"member","read":"member","steer":"owner","modes":["auto","guarded"]},"servers":{"deny":[]}},"agent":{"held":false,"guarded":false,"lastOutside":0}}}}},
+{"conn":"@alice:a.localhost","send":{"id":7,"call":"state","args":{"space":"bc:a.localhost","agent":5}}},
+{"conn":"@alice:a.localhost","expect":{"id":7,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":8,"call":"state","args":{"space":"bc:a.localhost","agent":"bob"}}},
+{"conn":"@alice:a.localhost","expect":{"id":8,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":9,"call":"state","args":{"space":"bc:a.localhost","agent":null}}},
+{"conn":"@alice:a.localhost","expect":{"id":9,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":10,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost","effect":"0000000000000000000000000000000000000000000000000000000000000000"}}},
+{"conn":"@alice:a.localhost","expect":{"id":10,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":11,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost","cursor":"1.0.0.0.0.0.0.0.0.0"}}},
+{"conn":"@alice:a.localhost","expect":{"id":11,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":12,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost","at":3,"effect":"0000000000000000000000000000000000000000000000000000000000000000"}}},
+{"conn":"@alice:a.localhost","expect":{"id":12,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":13,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost","at":3,"cursor":null}}},
+{"conn":"@alice:a.localhost","expect":{"id":13,"error":{"code":"invalid"}}},
+{"conn":"@alice:a.localhost","send":{"id":14,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost","at":0}}},
+{"conn":"@alice:a.localhost","expect":{"id":14,"error":{"code":"invalid"}}},
+{"conn":"@carol:a.localhost","send":{"id":15,"call":"state","args":{"space":"bc:a.localhost","agent":"@bob:a.localhost"}}},
+{"conn":"@carol:a.localhost","expect":{"id":15,"error":{"code":"not_found"}}}
+]}
+]}

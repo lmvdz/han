@@ -34,13 +34,13 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     plan = tmp_path / "plan.json"; plan.write_text(json.dumps({"action": "fs.write", "target": "out/report.txt", "args": {"text": "hi"}}))
     pid = last_id(await han(env, "bob", "propose", S, "--executor", "@exec:a.localhost", "--plan", str(plan)))
     st = await han(env, "bob", "status", S)
-    assert "awaiting-approval" in st and "fs.write" in st and "@bob:a.localhost member" in st
+    assert " open " in st and "fs.write" in st and "@bob:a.localhost member" in st
     code, _, err = await han(env, "bob", "approve", S, pid[:10], ok=False)       # a member is not an approver here
     assert code == 1 and "denied" in err
     out = await han(env, "ana", "approve", S, pid[:10], "--note", "ok")
     assert "out/report.txt" in out                                               # the plan was displayed before signing
     st = await han(env, "ana", "status", S)
-    assert f"{pid[:8]} ready" in st and "approvals 1" in st
+    assert f"{pid[:8]} open" in st and "approvals 1" in st
     listing = await han(env, "bob", "read", S)
     assert "effect.propose" in listing and "ship the report" in listing and "effect.approve" in listing
     pid2 = last_id(await han(env, "bob", "propose", S, "--executor", "@exec:a.localhost", "--plan", str(plan)))
@@ -71,16 +71,16 @@ async def test_session_steer_hold_and_release(env):
     await c_ana.append(*c_ana.make_entry("member.set", "profile:" + bot, {"actor": ana, "role": "owner"}))     # the operator confirms
     sid = last_id(await han(env, "bot", "session", "open", S, "--mode", "guarded", "--title", "work"))
     st = await han(env, "ana", "status", S)
-    assert f"{sid[:8]} {bot}  open  guarded  guard {ana}" in st and "held agents: none" in st
+    assert f"{sid[:8]} {bot}  open  guarded" in st and "held agents: none" in st
     out = await han(env, "carol", "session", "steer", S, sid[:8], "push to prod")
     st = await han(env, "ana", "status", S)
-    assert f"held agents: {bot} (for {ana})" in st
+    assert f"held agents: {bot}" in st
     assert f"{bot}  guarded (guard {ana})  held" in st                                   # F1: per agent, from the current state
     code, _, err = await han(env, "carol", "agent", "release", S, bot, ok=False)       # only the guard releases
     assert code == 1 and "denied" in err
     await han(env, "ana", "agent", "release", S, bot)
     st = await han(env, "ana", "status", S)
-    assert "held agents: none" in st and f"guarded agents: {bot} (guard {ana})" in st    # released, still guarded (sticky)
+    assert "held agents: none" in st and f"guarded agents: {bot}" in st    # released, still guarded (sticky)
     code, _, err = await han(env, "carol", "agent", "release", S, bot, "--unguard", ok=False)       # E1: only the guard loosens
     assert code == 1 and "denied" in err
     await han(env, "ana", "agent", "release", S, bot, "--unguard")
@@ -107,4 +107,4 @@ async def test_status_shows_forced_agents_per_agent_f1(env):
     await c_ana.append(*c_ana.make_entry("member.set", "profile:" + bot, {"actor": ana, "role": "owner"}))     # the operator confirms, after bot joined
     await han(env, "carol", "task", S, "deploy", "--to", bot); await han(env, "carol", "task", S, "chat", "--to", ana)
     st = await han(env, "ana", "status", S)
-    assert f"{bot}  forced (operator {ana})  held" in st and f"{ana}  forced" not in st and "agents:" in st
+    assert f"{bot}  forced (guard {ana})  held" in st and f"{ana}  forced" not in st and "agents:" in st

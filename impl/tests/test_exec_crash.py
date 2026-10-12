@@ -108,7 +108,7 @@ async def test_key_without_its_journal_refuses(env, execs):
     await make_exec(env, execs).start()
 
 async def test_held_agent_effect_waits_for_its_guard(env, execs):
-    """P-15, E3: an effect naming a guarded agent as executor is held (awaiting-approval) and is not claimed; once the guard (its
+    """P-15, E3: an effect naming a guarded agent as executor stays open and is not claimed; once the guard (its
     operator) approves, the agent's executor claims and runs it. Proposed by another member, no approval rule in the policy."""
     alice, bob = env.actor("alice"), env.actor("bob")
     bot = env.actor("bot", "agent", operator=alice)
@@ -121,7 +121,7 @@ async def test_held_agent_effect_waits_for_its_guard(env, execs):
     await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))   # sticky guarded
     plan = file_plan("held.txt", "x")
     pid, _ = await propose(b, plan, bot)
-    assert (await state(a))["effects"][pid]["phase"] == "awaiting-approval" and (await state(a))["held"] == {bot: alice}
+    assert (await state(a))["effects"][pid]["phase"] == "open" and (await state(a))["held"] == {bot: True}
     ex = make_exec(env, execs, name="bot"); await ex.start()
     await asyncio.sleep(0.5)
     assert not [k for k, _ in await kinds(a) if k == "effect.claim"] and not ex.launched

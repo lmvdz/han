@@ -141,8 +141,9 @@ class Executor:
 
     def _start_jobs(self, space, st):
         for pid, eff in st["effects"].items():
-            if (eff["executor"] != self.actor or eff["phase"] != "ready" or pid in self._jobs or pid in self._skip
+            if (eff["executor"] != self.actor or eff["phase"] != "open" or pid in self._jobs or pid in self._skip
                     or self._denied.get(pid, -1) >= st["head"]): continue
+            if P.approval_rule(st["policy"], eff["action"]) and not any(not x.get("consumedBy") and not (x.get("expiresAt") and P.ts(x["expiresAt"]) <= time.time()) for x in eff["approvals"]): continue     # K3: `open` does not mean approved; E3 decides at claim, this is only its cheap first half (roles are paged, so no author check here; a denied claim is cheap)
             if eff["action"] not in self.actions.enabled:                       # never claimed; the proposer is told once
                 self._skip.add(pid)
                 self._jobs[pid] = asyncio.create_task(self._guard(self._decline, space, pid, eff, f"action {eff['action']} is not enabled here"))

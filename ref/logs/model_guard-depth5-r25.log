@@ -1,0 +1,5 @@
+  depth 1: 102 transitions, 40 states, frontier 39, rss 22 MB
+  depth 2: 4145 transitions, 1277 states, frontier 1237, rss 26 MB
+  depth 3: 135207 transitions, 37828 states, frontier 36551, rss 109 MB
+  depth 4: 4097317 transitions, 1076717 states, frontier 1038889, rss 2547 MB
+NOT COMPLETED: depth 5 on the round-25 Policy was stopped by hand while expanding the 1,038,889-state depth-4 frontier (about 4,100,000 transitions per level now, so some 100,000,000 for depth 5, hours of Python); depth 4 completed (4,097,317 transitions, all properties hold, 55/55 mutations caught). Memory stayed under the 6 GB cap (2.5 GB at the end of depth 4).

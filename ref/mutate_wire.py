@@ -15,6 +15,7 @@ LIMIT6 = """        if self.limiter:                                            
 """
 RECEIPT7 = '        prev = S["records"][-1]["receipt"] if S else None                    # 7'
 MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text and replacement may both be tuples of several edits
+    ("P-01", "guards pinned only when relevant", "for a in list(need) + sorted(required - set(need)):", "for a in need:"),
     ("R-01", "dedupe after validation", '''        if S:                                                               # 1 dedupe first (R-01)
             for rec in S["records"]:
                 if rec["receipt"]["id"] == eid: return "ok", rec["receipt"]''', '''        pass'''),
@@ -87,15 +88,23 @@ MUTATIONS = [  # (rule, description, exact text in wire.py, replacement); text a
     # round 23: byte-bounded pages (F3 c), read combinations and notices (F4), negative big integers (G-07 1a)
     ("F3 c", "state pages ignore the byte bound", '                if used + add > cap: closed = True; break', '                pass'),
     ("H3", "state pages cut only effects and tasks", 'paths = [p for p in PAGED if _has(view, p)]', 'paths = [p for p in ("effects", "tasks") if _has(view, p)]'),
-    ("H3", "the per-actor maps repeat on every page", '"sessions", "held", "guarded", "cleared"', '"sessions", "cleared"'),
-    ("H3", "a profile's keys are not paged", '"outside", "profile.keys")', '"outside")'),
+    ("H3", "the per-actor maps repeat on every page", '"sessions", "held", "guarded", "lastOutside"', '"sessions", "lastOutside"'),
+    ("H3", "a profile's keys are not paged", '"lastOutside", "profile.keys")', '"lastOutside")'),
     ("H3", "a page that cannot make progress is sent empty", 'assert not more or any(taken.values()), "a state item does not fit an empty page: impossible by construction (H3)"', 'pass'),
     ("H3", "the item-count bound is dropped", 'if n >= self.max_state_items: break', 'pass'),
     ("H3", "later maps keep filling after the page is full", '            if closed: break', '            pass'),
-    ("H3", "cursor forgets where the later maps stopped", 'where, offs = nums[0], dict(zip(PAGED, nums[1:]))', 'where, offs = nums[0], dict(zip(PAGED, nums[1:4] + [0] * 7))'),
-    ("H10", "effect together with at is accepted", 'if sum(x is not None for x in (at, cursor, effect)) > 1:', 'if (at is not None and cursor is not None) or (cursor is not None and effect is not None):'),
-    ("H10", "cursor together with at is accepted", 'if sum(x is not None for x in (at, cursor, effect)) > 1:', 'if (at is not None and effect is not None) or (cursor is not None and effect is not None):'),
-    ("H10", "cursor together with effect is accepted", 'if sum(x is not None for x in (at, cursor, effect)) > 1:', 'if (at is not None and effect is not None) or (at is not None and cursor is not None):'),
+    ("H3", "cursor forgets where the later maps stopped", 'where, offs = nums[0], dict(zip(PAGED, nums[1:]))', 'where, offs = nums[0], dict(zip(PAGED, nums[1:4] + [0] * 5))'),
+    ("H10", "effect together with at is accepted", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and cursor is not None):'),
+    ("H10", "cursor together with at is accepted", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and effect is not None):'),
+    ("H10", "cursor together with effect is accepted", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if (agent is not None and (cursor is not None or effect is not None)) or (at is not None and (cursor is not None or effect is not None)):'),
+    ("K7", "agent together with effect is accepted", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if (cursor is not None and (effect is not None or agent is not None)) or (at is not None and (cursor is not None or effect is not None)):'),
+    ("K7", "agent together with cursor is accepted", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if (effect is not None and (cursor is not None or agent is not None)) or (at is not None and (cursor is not None or effect is not None)):'),
+    ("K7", "agent together with at is refused", 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None)):', 'if sum(x is not None for x in (cursor, effect, agent)) > 1 or (at is not None and (cursor is not None or effect is not None or agent is not None)):'),
+    ("K7", "a non-ActorId agent is accepted", 'if agent is not None and not P._actor(agent): return "invalid", "agent must be an ActorId"', 'pass'),
+    ("K7", "the agent view carries the roles too", 'one = dict({k: view[k] for k in EFFECT_VIEW}, agent=agent_facts(view, agent))', 'one = dict({k: view[k] for k in EFFECT_VIEW + ("roles",)}, agent=agent_facts(view, agent))'),
+    ("K7", "the agent view ignores `at`", 'agent=agent_facts(view, agent))', 'agent=agent_facts(st, agent))'),
+    ("K7", "guarded is read from the held set", '"guarded": actor in state["guarded"]', '"guarded": actor in state["held"]'),
+    ("K7", "lastOutside is not reported", '"lastOutside": state.get("lastOutside", {}).get(actor, 0)', '"lastOutside": 0'),
     ("H10", "a non-string effect is not_found", 'if effect is not None and not isinstance(effect, str): return "invalid", "effect must be an EntryId"', 'pass'),
     ("H10", "at must be an integer", 'if isinstance(at, bool) or not isinstance(at, int) or not 1 <= at <= st["head"]:', 'if not 1 <= int(at) <= st["head"]:'),
     ("F4", "notices are replayed to a later subscription", '        self.inbox = Inbox()      # actor', '        self.inbox = {}      # actor'),

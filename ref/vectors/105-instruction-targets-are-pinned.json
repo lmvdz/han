@@ -3,7 +3,7 @@
  "rules": [
   "P-01"
  ],
- "description": "relevantActors lists the targets of an instruction: the session's actor, each assignee, the executor",
+ "description": "relevantActors lists the targets of an instruction (the session's actor, each assignee, the executor), the agent of a release, the proposer and executor of an approve or cancel, the proposer and candidates of a claim",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -94,7 +94,14 @@
       "join": "invite",
       "membersMayInvite": false,
       "allowAgents": "any",
-      "approvals": [],
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "member"
+        ]
+       }
+      ],
       "separateApprover": false,
       "budget": null,
       "maxDelegationDepth": 4,
@@ -383,14 +390,135 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "expect": [
-    "@op:b.example"
+    "@op:b.example",
+    "@bot:b.example"
+   ]
+  },
+  {
+   "entry": {
+    "id": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@bot:b.example",
+     "action": "git.push",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-d",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow"
+  },
+  {
+   "relevantActors": {
+    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "expect": [
+    "@o:a.example",
+    "@m:a.example",
+    "@bot:b.example"
+   ]
+  },
+  {
+   "relevantActors": {
+    "id": "d9af79a0e7d5d36dab510bca5fec98a5f16d088e2e252e9c5f7c0eaeecbf5a9d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.cancel",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "expect": [
+    "@o:a.example",
+    "@m:a.example",
+    "@bot:b.example"
+   ]
+  },
+  {
+   "relevantActors": {
+    "id": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "expect": [
+    "@bot:b.example",
+    "@m:a.example",
+    "@p:b.example"
    ]
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
+  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
+  "c": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
   "d": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
   "in": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
   "in2": "075b423beef45fa9147d18a9a75cf5430830ff041110e2c38e426ca2d4a73d14",
@@ -400,6 +528,7 @@
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
   "r": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
-  "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815"
+  "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+  "x": "d9af79a0e7d5d36dab510bca5fec98a5f16d088e2e252e9c5f7c0eaeecbf5a9d"
  }
 }

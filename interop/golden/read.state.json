@@ -98,8 +98,7 @@
         "sessions": {},
         "held": {},
         "guarded": {},
-        "cleared": {},
-        "outside": {}
+        "lastOutside": {}
        }
       }
      }
@@ -196,8 +195,7 @@
         "sessions": {},
         "held": {},
         "guarded": {},
-        "cleared": {},
-        "outside": {}
+        "lastOutside": {}
        }
       }
      }

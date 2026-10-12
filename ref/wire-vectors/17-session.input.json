@@ -42,7 +42,7 @@
      "space": "s1:a.localhost",
      "seq": 14,
      "id": "6e05ac0672b7ad60151115549cb8ee3b0e4452b0922358aa3bc67d007ca1bdbe",
-     "prev": "990ff52ab610a8a627f917cb2aca98fc74994a0df86c0e66e51f8a8279b139ce",
+     "prev": "937d72eeb7d47a34e674b95d4839a6e1f310b58f73d5159773f6cce04c4db55d",
      "home": "a.localhost",
      "homeKey": "h1",
      "time": "2026-01-01T00:00:00Z",
@@ -50,7 +50,7 @@
      "profiles": {
       "@alice:a.localhost": 1
      },
-     "homeSig": "xwouQyfpjwOpXG7It_BUgQhkAkJLLbiSbXEqTfuYUdchA6Du5EyB8iHqTXNEuRIeKuOEelwVFPYIEGIDMwsgCQ"
+     "homeSig": "tOERF8khv2ufE3VxblBlXhTw8rRYXgODZqIKcaE9wLC7kRoRUKJzdG_28w-9unnQNBkBiVso3Lefh0sEn31YCQ"
     }
    }
   }

@@ -44,8 +44,11 @@ async def state(c):
     return (await c.read_state(S))
 
 async def session_id(host):
-    await until(lambda: host.session and host.state and host.session in host.state["sessions"])
-    return host.session
+    await until(lambda: host.session)
+    for _ in range(100):                           # the session.open is ordered once the space's state has the session
+        if host.session in (await state(host.client))["sessions"]: return host.session
+        await asyncio.sleep(0.05)
+    raise AssertionError("session never opened")
 
 async def steer(c, sid, text, **body):
     e, ct = c.make_entry("session.input", S, {"session": sid} | body, {"text": text})

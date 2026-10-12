@@ -10,7 +10,7 @@ from .store import Store, BlobStore
 
 log = logging.getLogger("han.seq")
 EPOCH = "1970-01-01T00:00:00Z"
-PAGED, CURSOR, EFFECT_VIEW = W.PAGED, W.CURSOR, W.EFFECT_VIEW    # H3: every map of a state page, in cursor and fill order; the cursor `<head>.<o1>.….<o10>`; what `state {effect}` holds besides the effect
+PAGED, CURSOR, EFFECT_VIEW = W.PAGED, W.CURSOR, W.EFFECT_VIEW    # H3: every map of a state page, in cursor and fill order; the cursor `<head>.<o1>.….<o9>`; what `state {effect}` and `state {agent}` hold besides the effect
 MAX_OPEN_UPLOADS = 16        # E11: unfinished blob uploads one actor may hold at a time
 OWN_BLOB_SECONDS = 86400      # G-01 / D3: an uploader may read its own unreferenced blob this long
 STREAM_FIELDS = {"output": {"text"}, "status": {"state"}, "context": {"blob", "what"}}      # + space, session, n, time, type (+ status.detail)
@@ -299,16 +299,19 @@ class Sequencer:
     def pin_actors(self, state, entry, fetch=None) -> list[str]:
         """P-01: the actors whose profiles the receipt pins. For a claim: the author, the proposer, the approval candidates in
         E3 order up to and including the first whose key is valid (later ones are never consulted, so an unreachable one
-        cannot block the claim), then the guards. `fetch(actor)` gives a ProfileView or None (default: self.profile)."""
+        cannot block the claim), then the guards (the confirmed operators of the pinned proposer and executor, K1). `fetch(actor)` gives a ProfileView or None (default: self.profile)."""
         fetch = fetch or self.profile
         eff = state["effects"].get(entry["body"].get("proposal")) if state and entry["kind"] == "effect.claim" else None
-        if not eff: return P.relevant_actors(state, entry)
-        out = [entry["author"], eff["proposer"]]
-        for a in P.approval_candidates(state, eff, self.now_str()):
+        if not eff: return P.relevant_actors(state, entry, self.now_str())
+        now = self.now_str()
+        out = [entry["author"], eff["proposer"], eff["executor"]]      # the proposer and the executor first: their pinned operators are the guards (K1)
+        views = {a: v for a in out if (v := fetch(a))}
+        guards = P.guards_of(state, {"time": now, "profiles": views}, eff)
+        for a in P.approval_candidates(state, eff, now):
             out.append(a["author"])
             v = fetch(a["author"])
             if v is None or v["keys"].get(a["keyId"], {}).get("status") == "valid": break      # no view: the pipeline answers unavailable
-        out.extend(P.guards_of(state, eff))
+        out.extend(g for g in guards if g)
         return list(dict.fromkeys(out))
 
     # ── read (§3) ──
@@ -344,7 +347,7 @@ class Sequencer:
 
     def state(self, who, space, sel: dict) -> dict:
         """§3 `state`: one page of the StateView as `{state, next?}`. `sel` holds the selectors that are PRESENT in the request, whatever their
-        values (`at`, `cursor`, `effect`); two or more is `invalid` by presence. The paging (H3) is wire.Home's, whose limits are set from LIMITS
+        values (`at`, `cursor`, `effect`, `agent`); `at` may join `agent` only, any other two or more is `invalid` by presence. The paging (H3) is wire.Home's, whose limits are set from LIMITS
         for this call (test mode lowers maxFrameBytes). A page that cannot be cut is impossible by construction, so it is asserted."""
         if not (isinstance(space, str) and P._space(space)): raise _invalid("state args")
         self.route(space)
@@ -354,8 +357,9 @@ class Sequencer:
             st, view_at = self.fed.profile_state(space), None
         elif not S: raise WireError("not_found", "no such space")
         else: st, view_at = S["state"], lambda n: self._state_at(S, n)
-        if len(sel) > 1: raise _invalid("at, cursor and effect exclude each other")        # by presence, before any value is looked at
-        at, cursor, effect = (sel.get(k) for k in ("at", "cursor", "effect"))
+        if sum(k in sel for k in ("cursor", "effect", "agent")) > 1 or ("at" in sel and ("cursor" in sel or "effect" in sel)):
+            raise _invalid("at, cursor, effect and agent exclude each other (at may join agent)")        # by presence, before any value is looked at
+        at, cursor, effect, agent = (sel.get(k) for k in ("at", "cursor", "effect", "agent"))
         offs, where = dict.fromkeys(PAGED, 0), st["head"]
         if "at" in sel:
             if isinstance(at, bool) or not isinstance(at, int) or not 1 <= at <= st["head"]: raise _invalid("at must be 1 <= at <= head")
@@ -366,6 +370,7 @@ class Sequencer:
             if not 1 <= nums[0] <= st["head"]: raise _invalid("cursor")
             where, offs = nums[0], dict(zip(PAGED, nums[1:]))
         if "effect" in sel and not isinstance(effect, str): raise _invalid("effect must be an EntryId")
+        if "agent" in sel and not P._actor(agent): raise _invalid("agent must be an ActorId")
         if remote:
             if where != st["head"]: raise _invalid("at and cursor are for spaces this server orders")
         elif not P.can_read(st, who, where):
@@ -377,6 +382,10 @@ class Sequencer:
             if effect not in view["effects"]: raise WireError("not_found", "no such effect")
             one = dict({k: view[k] for k in EFFECT_VIEW}, effects={effect: view["effects"][effect]})
             assert len(P.jcs({"id": W.MAX_INT, "ok": {"state": one}})) <= LIMITS["maxFrameBytes"], "one effect does not fit maxFrameBytes (H3)"
+            return {"state": one}
+        if "agent" in sel:
+            one = dict({k: view[k] for k in EFFECT_VIEW}, agent=W.agent_facts(view, agent))
+            assert len(P.jcs({"id": W.MAX_INT, "ok": {"state": one}})) <= LIMITS["maxFrameBytes"], "the agent view does not fit maxFrameBytes (H3)"
             return {"state": one}
         if any(offs[p] > len(W._items(view, p)) for p in PAGED): raise _invalid("cursor offset beyond the map")
         self.home.max_frame_bytes, self.home.max_state_items = LIMITS["maxFrameBytes"], LIMITS["maxStateItems"]

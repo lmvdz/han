@@ -16,7 +16,7 @@ CHALLENGE_SECONDS = 60         # D12: a challenge is single use and good for thi
 # D2: a request frame is exactly {id, call, args}; each call's `args` is closed
 CALL_ARGS = {"hello": {"who", "keyId", "proof", "version", "knownHeads"}, "cancel": {"target"}, "append": {"entry", "content"},
              "signal": {"space", "body", "from"}, "blobPut": {"ref", "offset", "data"}, "blobGet": {"ref", "space", "offset", "length"},
-             "stream": {"item"}, "read": {"space", "after", "follow", "limit", "knownHeads"}, "state": {"space", "at", "cursor", "effect"},
+             "stream": {"item"}, "read": {"space", "after", "follow", "limit", "knownHeads"}, "state": {"space", "at", "cursor", "effect", "agent"},
              "subscribe": {"space", "after"}, "watch": {"space", "session"}, "host": {"space", "records", "head"}}
 
 
@@ -175,7 +175,7 @@ class SeqServer:
             return await send({"id": rid, "ok": {"data": W.b64(r["data"]), "size": r["size"], "offset": r["offset"]}})
         if call == "state":
             if fed: await fed.prepare_read(args.get("space"))
-            return await send({"id": rid, "ok": S.state(who, args.get("space"), {k: args[k] for k in ("at", "cursor", "effect") if k in args})})
+            return await send({"id": rid, "ok": S.state(who, args.get("space"), {k: args[k] for k in ("at", "cursor", "effect", "agent") if k in args})})
         if call == "stream":
             S.stream(who, args.get("item"))
             return await send({"id": rid, "ok": None})

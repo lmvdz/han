@@ -321,7 +321,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    },
    "note": "A4"

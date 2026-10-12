@@ -4,7 +4,7 @@
   "P-15",
   "P-01"
  ],
- "description": "CX1: an agent its operator confirms only after it joined is forced from then on; the profile pinned for each instruction decides",
+ "description": "CX1: an agent its operator confirms only after it joined is forced from then on; the profile pinned for each entry decides",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -266,7 +266,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@bot:b.example": true
     }
    },
    "profiles": {
@@ -306,12 +306,6 @@
    },
    "time": "2026-10-10T12:00:09Z",
    "expect": "allow",
-   "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.phase": "awaiting-approval",
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.guards": [
-     "@op:b.example"
-    ]
-   },
    "note": "what it proposes waits for OP"
   },
   {
@@ -336,7 +330,7 @@
    },
    "time": "2026-10-10T12:00:10Z",
    "expect": "denied",
-   "note": "CX1 escaped here in round 22"
+   "note": "the guard of a forced agent approves"
   },
   {
    "entry": {

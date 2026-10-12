@@ -295,7 +295,7 @@
       "keyId": "k1"
      }
     ],
-    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "ready"
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "open"
    },
    "note": "a1 consumed by a settled claim: gone"
   },
@@ -355,7 +355,7 @@
    "expect": "allow",
    "check": {
     "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.approvals": [],
-    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "awaiting-approval"
+    "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "open"
    },
    "note": "a repeatable unknown is settled and retried"
   },
@@ -622,7 +622,7 @@
       "keyId": "k1"
      }
     ],
-    "effects.64c2dc76a86e3ddc8dda927c82bcc1e1936d08a78956eb894090f7c8afa55ba5.phase": "ready"
+    "effects.64c2dc76a86e3ddc8dda927c82bcc1e1936d08a78956eb894090f7c8afa55ba5.phase": "open"
    },
    "note": "not started: the approval is returned, not pruned"
   },

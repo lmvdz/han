@@ -574,6 +574,24 @@ def _():
             "first-revoked-z-missing": ("unavailable", "profile"), "mirror": True}
     return out == want, str(out)
 
+@scenario("a guard that is not an approval candidate is pinned", "P-01, P-15, E3", "a claim by a forced agent whose operator approved but is not a rule candidate pins the operator's profile and is allowed; without the fix it was `invalid` (guard profile not pinned)")
+def _():
+    h = base_home()
+    for kind, author, body in [("policy.set", O, {"policy": dict(POLICY, approvals=[{"action": "git.push", "approvers": ["owner"]}], sessions=dict(POLICY["sessions"], forceGuarded=True))}),
+                               ("member.set", O, {"actor": Z, "role": "member"})]:
+        e, c = entry(kind, author, body); assert h.append(e, c, profiles())[0] == "ok"
+    def pf():
+        p = profiles(); p[X] = dict(p[X], operator=Z); return p
+    plan = {"action": "git.push", "target": "repo"}
+    body = {"executor": X, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}
+    e, c = entry("effect.propose", M, body, {"plan": plan}); code, r = h.append(e, c, pf()); assert code == "ok", (code, r)
+    pid = W.entry_id(e)
+    for who in (O, Z):
+        e, c = entry("effect.approve", who, {"proposal": pid, "planDigest": body["planDigest"]}); code, r = h.append(e, c, pf()); assert code == "ok", (who, code, r)
+    e, c = entry("effect.claim", X, {"proposal": pid, "attempt": 1, "instance": "k1", "window": 30})
+    code, r = h.append(e, c, pf())
+    return code == "ok" and Z in r["profiles"], f"{code} {sorted(r['profiles']) if code == 'ok' else r}"
+
 @scenario("a role held now reads the state at an earlier seq", "P-02, §3 state", "a member who joined at seq 3 reads the state after seq 2 (rights are judged on the current state); a stranger does not")
 def _():
     h = base_home()                                               # 1 create, 2 member M, 3 member X
@@ -706,8 +724,17 @@ def _joined(h, reader, **kw):
     merged = dict(pages[-1]["state"])
     for k in W.PAGED:
         if not W._has(merged, k): continue
-        W._put_map(merged, k, {a: b for pg in pages for a, b in W._get_map(pg["state"], k).items()})
+        parts = [W._get_map(pg["state"], k) for pg in pages]
+        W._put_map(merged, k, {a: b for m in parts for a, b in m.items()} if isinstance(parts[0], dict) else [x for m in parts for x in m])      # a map, or a set sent as an array
     return pages, merged
+
+def _guard_facts(st, a, held=False, guarded=False, last=0):
+    """Fill the per-actor members of P-15 directly: these scenarios are about the wire, not about how an actor gets into them. `held` and `guarded` are sets (arrays in the view)."""
+    for name, on in (("held", held), ("guarded", guarded)):
+        if not on: continue
+        if isinstance(st[name], dict): st[name][a] = O
+        else: st[name].append(a); st[name].sort()
+    if last: st.setdefault("lastOutside", {})[a] = last
 
 def _fill(h, effects=0, tasks=0, sessions=0):
     plan = {"action": "git.push", "target": "repo"}
@@ -744,13 +771,13 @@ def _():
     effect_ok = ce == "ok" and "next" not in ci and len(P.jcs({"id": 1, "ok": ci})) <= 1300 and list(ci["state"]["effects"]) == [pid]
     return (len(pages) > 3 and max(sizes) <= 2500 and merged == dict(full["state"]) and once and repeated and order_ok and effect_ok), f"pages={len(pages)} max={max(sizes)} once={once} repeated={repeated} order={order_ok} effect={ce}"
 
-@scenario("every map of a state is paged", "§3 state, H3", "roles, roleHistory, tasks, effects, sessions, held, guarded, cleared, outside and a profile's keys are cut like effects and tasks, at most maxStateItems each per page, and join to the full state; a map in the state that is not in PAGED (apart from policy) is a bug")
+@scenario("every map of a state is paged", "§3 state, H3", "roles, roleHistory, tasks, effects, sessions, held, guarded, lastOutside and a profile's keys are cut like effects and tasks, at most maxStateItems each per page, and join to the full state; a map in the state that is not in PAGED (apart from policy) is a bug")
 def _():
     h = base_home(); h.max_state_items = 2; _fill(h, sessions=4)
     st = h.spaces[S]["state"]
     for i in range(5):        # the per-actor maps of P-15, filled directly: this scenario is about paging, not about how an actor gets into them
         a = f"@a{i}:a.example"
-        st["held"][a] = O; st["guarded"][a] = O; st["cleared"][a] = i; st["outside"][a] = i
+        _guard_facts(st, a, held=True, guarded=True, last=i + 1)
     unpaged = sorted(k for k, v in st.items() if isinstance(v, dict) and k not in W.PAGED and k not in ("policy", "entries"))
     pages, merged = _joined(h, O)
     h.max_state_items = 1000; full = h.state(S, O)[1]
@@ -793,7 +820,7 @@ def _():
     fits = all(v < W.MAX_FRAME_BYTES - W.FRAME_RESERVE - 20000 for v in room.values())       # 20,000: a generous allowance for the 16 KiB policy and the scalars
     return base == "asserts" and item == "asserts" and fits, f"base={base} item={item} {room}"
 
-@scenario("state selectors exclude each other by shape", "§3 state, G-09, H10", "at, cursor and effect are the three selectors of `state`: any two present are `invalid` (judged first, whatever the values), each alone works")
+@scenario("state selectors exclude each other by shape", "§3 state, G-09, H10, K7", "cursor, effect and agent are exclusive selectors of `state`, and `at` may join `agent` only: any other two present are `invalid` (judged first, whatever the values), each alone works")
 def _():
     h = base_home(); h.max_state_items = 1; _fill(h, effects=1)
     pid = next(iter(h.spaces[S]["state"]["effects"]))
@@ -801,9 +828,26 @@ def _():
     got = {"effect+at": h.state(S, O, effect=pid, at=2)[0], "effect+cursor": h.state(S, O, effect=pid, cursor=cur)[0], "cursor+at": h.state(S, O, cursor=cur, at=2)[0],
            "all three": h.state(S, O, at=2, cursor=cur, effect=pid)[0], "effect=5": h.state(S, O, effect=5)[0],
            "effect": h.state(S, O, effect=pid)[0], "cursor": h.state(S, O, cursor=cur)[0], "at": h.state(S, O, at=2)[0], "none": h.state(S, O)[0],
-           "follow": h.read_follow(S, 0, O)[0]}
+           "follow": h.read_follow(S, 0, O)[0],
+           "agent+effect": h.state(S, O, agent=O, effect=pid)[0], "agent+cursor": h.state(S, O, agent=O, cursor=cur)[0], "agent+at+effect": h.state(S, O, agent=O, at=2, effect=pid)[0],
+           "agent+at": h.state(S, O, agent=O, at=2)[0], "agent": h.state(S, O, agent=O)[0]}
     return got == {"effect+at": "invalid", "effect+cursor": "invalid", "cursor+at": "invalid", "all three": "invalid", "effect=5": "invalid",
-                   "effect": "ok", "cursor": "ok", "at": "ok", "none": "ok", "follow": "ok"}, str(got)
+                   "effect": "ok", "cursor": "ok", "at": "ok", "none": "ok", "follow": "ok",
+                   "agent+effect": "invalid", "agent+cursor": "invalid", "agent+at+effect": "invalid", "agent+at": "ok", "agent": "ok"}, str(got)
+
+@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7", "`agent` (an ActorId) gives `{space, head, home, policy, agent: {held, guarded, lastOutside}}` for that actor and nothing that grows, in one reply whatever maxStateItems is, without `next`; an actor in neither set gets false, false, 0; `at` gives the facts after that record; a non-ActorId is `invalid`, a stranger `not_found`")
+def _():
+    h = base_home(); h.max_state_items = 1; _fill(h, tasks=2)
+    st = h.spaces[S]["state"]
+    for i in range(4): _guard_facts(st, f"@a{i}:a.example", held=True, guarded=True, last=i + 1)
+    _guard_facts(st, "@g:a.example", guarded=True)
+    ca, a = h.state(S, O, agent="@a2:a.example"); cg, g = h.state(S, O, agent="@g:a.example"); cn, n = h.state(S, O, agent="@nobody:a.example")
+    ct, early = h.state(S, O, agent="@a2:a.example", at=2)
+    bad = (h.state(S, O, agent=5)[0], h.state(S, O, agent="a2")[0], h.state(S, O, agent="@a2:a.example", effect="0" * 64)[0], h.state(S, O, agent="@a2:a.example", at=99)[0], h.state(S, Z, agent="@a2:a.example")[0])
+    shape = lambda r, f: set(r["state"]) == {"space", "head", "home", "policy", "agent"} and "next" not in r and r["state"]["agent"] == f
+    return (ca == cg == cn == ct == "ok" and shape(a, {"held": True, "guarded": True, "lastOutside": 3}) and shape(g, {"held": False, "guarded": True, "lastOutside": 0})
+            and shape(n, {"held": False, "guarded": False, "lastOutside": 0}) and early["state"]["head"] == 2 and early["state"]["agent"] == {"held": False, "guarded": False, "lastOutside": 0}
+            and bad == ("invalid", "invalid", "invalid", "invalid", "not_found")), f"{a} {g} {n} {early} {bad}"
 
 @scenario("a notice is never replayed", "G-03, G-09, F4", "a notice for an actor with no live subscription to its profile is dropped; one that subscribes later sees none of it; a live subscription gets its notices once; after it ends, notices are dropped again")
 def _():

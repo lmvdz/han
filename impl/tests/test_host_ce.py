@@ -21,14 +21,16 @@ async def test_mode_comes_from_the_state_at_the_steer_not_the_head(env):
     task.cancel(); host.stop(); await botc.close()                                  # the host is down while it all happens
     a = cl["alice"]
     r = await steer(cl["carol"], sid, "push release")
-    assert (await state(a))["held"] == {BOT: ALICE}
+    assert (await state(a))["held"] == {BOT: True}
     head = (await state(a))["head"]
     await a.append(*a.make_entry("agent.release", S, {"agent": BOT, "unguard": True}, seen=head))
     st = await state(a)
-    assert st["held"] == {} and st["guarded"] == {} and P.guard_status(st, {"profiles": {}}, BOT) == {"held": False, "forced": False}      # the head alone would say auto
+    assert st["held"] == {} and st["guarded"] == {} and P.guard_status(st, {"profiles": {}}, BOT) == {"held": False, "guarded": False, "forced": False}      # the head alone would say auto
     past = await a.read_state(S, at=r["seq"])
-    assert past["held"] == {BOT: ALICE} and past["head"] == r["seq"]
-    assert P.guard_status(past, {"profiles": {}}, BOT) == {"guard": ALICE, "held": True, "forced": False}
+    assert past["held"] == {BOT: True} and past["head"] == r["seq"]
+    assert P.guard_status(past, {"profiles": {}}, BOT) == {"held": True, "guarded": True, "forced": False}      # no pinned profile here, so no guard named
+    prof = (await a.read_state("profile:" + BOT))["profile"]
+    assert P.guard_status(past, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "held": True, "guarded": True, "forced": False}      # K1: the guard is the pinned operator
     agent = ScriptedAgent()
     botc2 = await env.client("bot")
     host2, task2 = start_host(env, botc2, "auto", agent)
@@ -60,7 +62,7 @@ async def test_host_charges_its_budgeted_task_with_a_cost(env):
     bodies = [p["entry"]["body"] for p in props]
     assert [b["cost"]["amount"] for b in bodies] == [50, 70] and all(b["task"] == tid and b["cost"]["unit"] == "usd-cents" for b in bodies)
     st = await state(a)
-    assert all(st["effects"][p["receipt"]["id"]]["phase"] == "ready" for p in props)
+    assert all(st["effects"][p["receipt"]["id"]]["phase"] == "open" for p in props)
     task.cancel()
 
 async def _two(a):

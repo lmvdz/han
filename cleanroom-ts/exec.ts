@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import type { LogRecord, ReadItem, SpaceState } from "./han.js";
 import { HanClient, WireFault } from "./client.js";
 import { exportPrivate, importKey, KeyPair, makeEntry, newKey } from "./keys.js";
-import { fold } from "./policy.js";
+import { approvalsInHand, fold } from "./policy.js";
 import { jcs, sha256 } from "./wire.js";
 
 type A = any;
@@ -180,7 +180,7 @@ export class Executor {
     if (!st) return;
     for (const [pid, ef] of Object.entries(st.effects) as Array<[string, A]>) {
       if (this.dead) return;
-      if (ef.executor === this.o.actor && ef.phase === "ready" && !this.claimed.has(pid)) {
+      if (ef.executor === this.o.actor && ef.phase === "open" && !this.claimed.has(pid) && approvalsInHand(st, pid, new Date().toISOString().replace(/\.\d+Z$/, "Z"))) {
         this.claimed.add(pid);
         try { await this.claim(space, pid); } catch (x) { if (x instanceof Crash) { this.crash(); this.ev("crashed at " + x.message); return; } throw x; }
       }

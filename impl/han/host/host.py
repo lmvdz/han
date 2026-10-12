@@ -28,7 +28,8 @@ class Host:
         self.me = client.actor
         self.j = Journal(state_path)
         self.crash = crash                                    # test hook: crash(point, intent key) may raise HostCrash
-        self.state: dict | None = None
+        self.state: dict | None = None                        # the light state (K7): `state {agent}` made into what `guard_status` reads: policy, head, held, guarded
+        self.full: dict | None = None                         # the whole StateView, read only when sessions or tasks are needed
         self.profile: dict | None = None                      # this agent's current ProfileView (guard_status wants it in ctx.profiles)
         self.session: str | None = None
         self.data: list[tuple[str, str, str | None]] = []     # (source, text, record id): data, never instruction
@@ -42,46 +43,60 @@ class Host:
 
     # ── what the state says ──
     @property
-    def held(self) -> bool: return bool(self.state) and self.me in self.state["held"]
+    def held(self) -> bool: return bool(self.state) and self._status(self.state, self.profile)["held"]
     def _status(self, state: dict, profile: dict | None, time: str = "") -> dict:
-        """P-15, the one guard function, for this agent: `{guard?, held, forced}`. The host derives nothing else from the state (R-24)."""
+        """P-15, the one guard function, for this agent: `{guard?, held, guarded, forced}`. The host derives nothing else from the state (R-24)."""
         return P.guard_status(state, {"time": time, "profiles": {self.me: profile} if profile else {}}, self.me)
 
+    def _light(self, view: dict) -> dict:
+        """K7: the reply of `state {agent}` as a state `guard_status` can read (`held` and `guarded` are sets of actors)."""
+        a = view["agent"]
+        return {"head": view["head"], "policy": view["policy"], "held": {self.me: True} if a["held"] else {}, "guarded": {self.me: True} if a["guarded"] else {}}
+
     @property
-    def guarded_now(self) -> str | None: return self._status(self.state, self.profile).get("guard") if self.state else None
+    def guarded_now(self) -> bool:
+        if not self.state: return False
+        gs = self._status(self.state, self.profile)
+        return gs["guarded"] or gs["forced"]
 
     def _guarded_session(self) -> bool:
-        return self.steer_mode == "guarded" or self.guarded_now is not None
+        return self.steer_mode == "guarded" or self.guarded_now
 
     def _crash(self, point, key=None):
         if self.crash: self.crash(point, key)
 
     async def _refresh(self):
-        self.state = await self.client.read_state(self.space)
+        self.state = self._light((await self.client.state(self.space, agent=self.me))["state"])
+        self.full = None
         try: self.profile = (await self.client.read_state("profile:" + self.me))["profile"]
         except WireError: pass                                   # keep the last one
 
+    async def _full(self) -> dict:
+        """The whole StateView at the head, read once per refresh and only when sessions or tasks are looked at."""
+        if self.full is None: self.full = await self.client.read_state(self.space)
+        return self.full
+
     async def _state_at(self, seq: int, pins: dict | None = None) -> tuple[dict, dict | None] | None:
-        """R-24: the state after record `seq` and this agent's profile as that record's receipt pinned it (`pins` = receipt.profiles), or None
-        when either cannot be read (the turn is then strict)."""
+        """R-24: the agent's guard facts after record `seq` (`state {agent, at}`) and this agent's profile as that record's receipt pinned it
+        (`pins` = receipt.profiles), or None when either cannot be read (the turn is then strict)."""
         try:
-            at = await self.client.read_state(self.space, at=seq)
+            at = self._light((await self.client.state(self.space, agent=self.me, at=seq))["state"])
             n = (pins or {}).get(self.me)
             prof = (await self.client.read_state("profile:" + self.me, at=n))["profile"] if n else self.profile
             return at, prof
         except WireError: return None
 
     def _my_sessions(self) -> list[str]:
-        return [i for i, s in self.state["sessions"].items() if s["actor"] == self.me]
+        return [i for i, s in self.full["sessions"].items() if s["actor"] == self.me]
 
     def _mode_for(self, author: str, from_sessions: bool, at: dict, profile: dict | None) -> str:
         """R-24: `strict` while held (every turn, judged at the head); for an outside instruction, one by someone other than the agent and its
-        guard, when `guardStatus` on the state at the instruction's seq (with the profile its receipt pinned) names a guard; and when the turn
-        carries another session's stream or context as data."""
+        guard, when `guard_status` on the state at the instruction's seq (with the profile its receipt pinned) says guarded or forced; and when
+        the turn carries another session's stream or context as data."""
         me = self.me
-        if me in self.state["held"]: return "strict"
-        g = self._status(at, profile).get("guard")
-        if g and author not in (me, g): return "strict"
+        if self.held: return "strict"
+        gs = self._status(at, profile)
+        if (gs["guarded"] or gs["forced"]) and author not in (me, gs.get("guard")): return "strict"
         if from_sessions: return "strict"              # SHOULD for any agent, MUST when guarded (R-24)
         return "auto"
 
@@ -125,9 +140,11 @@ class Host:
         content = rec.get("content") or {}
         text = content.get("text") or content.get("ask")
         if who != self.me:
+            if e["kind"] == "session.input":
+                await self._full()
             if e["kind"] == "session.input" and b["session"] in self._my_sessions():
                 return await self._turn(TurnInput("steer", who, text or "", eid, seq, b["session"]), rcpt["profiles"])
-            if e["kind"] == "task" and self.me in b["to"] and self.state["tasks"].get(eid, {}).get("open"):
+            if e["kind"] == "task" and self.me in b["to"] and (await self._full())["tasks"].get(eid, {}).get("open"):
                 return await self._turn(TurnInput("task", who, text or "", eid, seq, self.session, task=eid), rcpt["profiles"])
             if text:
                 self._data("record", f"{e['kind']} by {who}: {text}", eid)      # a message, a task.update, an outcome: data
@@ -158,6 +175,7 @@ class Host:
         data, self.data = self.data, []
         inp.data = [t for _, t, _ in data]
         refs = [inp.trigger] + [r for _, _, r in data if r][-(MAX_REFS - 1):]
+        if P.space_unit(self.state): await self._full()      # a budgeted space: `_budget_task` looks at the tasks while the turn runs
         self._ctx, self._made = (inp, refs), {}
         await self._emit({"type": "status", "state": "working"})
         self.turns += 1
@@ -170,6 +188,7 @@ class Host:
         self._ctx = None
         self._crash("decided")
         await self._refresh()                          # the state may have changed during the turn (a hold, a release)
+        if "Steer" in {type(a).__name__ for a in actions} or P.space_unit(self.state): await self._full()      # `_plan` looks at sessions and tasks
         intents = self._plan(actions, inp, refs)
         self.j.log(f"{mode} turn by {inp.author} at {inp.seq}: {inp.text}")
         for a in actions: self.j.log(f"  -> {a}")
@@ -229,12 +248,13 @@ class Host:
         made = self._world_entry(a, *self._ctx)
         if isinstance(made, str): return "refused: " + made
         self._made[id(a)] = made
-        guard = (self.state or {}).get("held", {}).get(self.me)
+        gs = self._status(self.state, self.profile) if self.state else {}
+        guard = gs.get("guard") if gs.get("held") else None
         return f"proposed as {P.entry_id(made[0])}" + (f", waiting for {guard}" if guard else "")
 
     def _budget_task(self, preferred: str | None, cost: dict | None) -> str | None:
         """An open budgeted task assigned to this agent: the one that drove the turn if it qualifies, else one with enough left."""
-        mine = {tid: t for tid, t in self.state["tasks"].items() if t["open"] and t.get("left") and self.me in t["to"]}
+        mine = {tid: t for tid, t in (self.full or {"tasks": {}})["tasks"].items() if t["open"] and t.get("left") and self.me in t["to"]}
         if preferred in mine: return preferred
         need = cost["amount"] if cost else 0
         return next((tid for tid, t in mine.items() if t["left"]["amount"] >= need), next(iter(mine), None))

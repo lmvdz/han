@@ -43,7 +43,7 @@ async def test_unsupported_and_unsafe_effects_are_declined_once(env, execs):
     assert len(ms) == 3 and sorted(m["entry"]["refs"][0] for m in ms) == sorted(pids)
     assert all(m["entry"]["body"]["to"] == [ALICE] and "declined" in m["content"]["text"] for m in ms)
     st = await state(a)
-    assert all(st["effects"][p]["phase"] == "ready" and not st["effects"][p]["claims"] for p in pids)     # never claimed
+    assert all(st["effects"][p]["phase"] == "open" and not st["effects"][p]["claims"] for p in pids)     # never claimed
     assert not [k for k, _ in await kinds(a) if k == "effect.claim"]
 
 def _count(msgs, n):

@@ -324,7 +324,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@svc:b.example": "@op:b.example"
+     "@svc:b.example": true
     }
    },
    "note": "steering an LLM labelled 'service' holds it"
@@ -375,7 +375,7 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@svc:b.example": "@op:b.example"
+     "@svc:b.example": true
     }
    },
    "note": "so does a task"
@@ -427,9 +427,8 @@
    "expect": "allow",
    "check": {
     "held": {
-     "@svc:b.example": "@op:b.example"
-    },
-    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.phase": "awaiting-approval"
+     "@svc:b.example": true
+    }
    },
    "note": "named as executor: forced too (H6)"
   }

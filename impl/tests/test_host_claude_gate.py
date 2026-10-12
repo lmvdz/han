@@ -194,7 +194,7 @@ async def test_host_answers_the_model_with_the_proposal_id_and_guard(env, ws):
     assert deploy.message == f"proposed as {pid}, waiting for {ALICE}" and "outside the workspace" in write.message
     assert made[0].modes == ["default"]
     st = await state(cl["alice"])
-    assert st["held"] == {BOT: ALICE} and st["effects"][pid]["phase"] == "awaiting-approval"
+    assert st["held"] == {BOT: True} and st["effects"][pid]["phase"] == "open"
     assert props[0]["entry"]["body"]["action"] == "file.write"
     task.cancel()
 

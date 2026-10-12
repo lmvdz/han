@@ -169,7 +169,7 @@ async def scenario():
         await send("approve")
         c = await login("alice"); st = await c.read_state(SPACE)
         ph = st["effects"].get(ids["propose"], {}).get("phase")
-        ok(ph == "ready", "effect phase ready after approval, got " + str(ph))
+        ok(ph == "open", "effect phase open after approval, got " + str(ph))
     await op("approve", ["propose"], approve)
     async def bput():
         c = await login("alice"); blobs["b1"] = await c.blob_put(blob_bytes("b1")); ok(blobs["b1"]["hash"] == sha(blob_bytes("b1")), "ref hash")

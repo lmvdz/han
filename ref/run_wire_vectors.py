@@ -553,12 +553,14 @@ def main():
     dc = [r for r in results if r["file"] == "probes-decided.json"]
     r22 = [r for r in results if r["file"] == "probes-r22.json"]
     r23 = [r for r in results if r["file"] == "probes-r23.json"]
+    r24 = [r for r in results if r["file"] == "probes-r24.json"]
+    r25 = [r for r in results if r["file"] == "probes-r25.json"]
     def line(name, rs):
         gen = sum(r.get("generated", 0) for r in rs)
         return (f"{name}: {sum(r['pass'] for r in rs)}/{len(rs)} vectors pass ({sum(r['expectations'] for r in rs if r['pass'])}/{sum(r['expectations'] for r in rs)} expectations"
                 + (f"; {gen} generated appends, not counted" if gen else "") + ")")
     print("---")
-    for name, rs in (("operations (golden)", ops), ("agreed probes", pr), ("decided probes", dc), ("round-22 probes", r22), ("round-23 probes", r23)):
+    for name, rs in (("operations (golden)", ops), ("agreed probes", pr), ("decided probes", dc), ("round-22 probes", r22), ("round-23 probes", r23), ("round-24 probes", r24), ("round-25 probes", r25)):
         if rs: print(line(name, rs))
     print(line("TOTAL", results))
     if a.json: json.dump({"url": url, "results": results}, open(a.json, "w", encoding="utf-8"), indent=1)

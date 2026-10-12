@@ -18,8 +18,8 @@ async def test_member_steers_guarded_agent_holds_it_and_proposal_waits(env):
     assert [m for _, m in agent.calls] == ["strict"]
     st = await state(cl["alice"])
     eff = st["effects"][props[0]["receipt"]["id"]]
-    assert st["held"] == {BOT: ALICE} and eff["phase"] == "awaiting-approval" and eff["guards"] == [ALICE]
-    assert eff["executor"] == EXEC and host.held and host.guarded_now == ALICE
+    assert st["held"] == {BOT: True} and eff["phase"] == "open" and P.guards_of(st, {"profiles": {BOT: (await cl["alice"].read_state("profile:" + BOT))["profile"]}}, eff) == [ALICE]
+    assert eff["executor"] == EXEC and host.held and host.guarded_now
     assert props[0]["entry"]["seen"] == r["seq"] and props[0]["entry"]["refs"] == [r["id"]]        # R-17
     # the executor's claim is denied; after the operator approves it is allowed
     ex, pid, digest = cl["exec"], props[0]["receipt"]["id"], props[0]["entry"]["body"]["planDigest"]
@@ -41,7 +41,7 @@ async def test_auto_agent_steered_by_member_runs_auto_and_still_proposes(env):
     props = await until(lambda: records(cl["alice"], "effect.propose", BOT))
     st = await state(cl["alice"])
     assert [m for _, m in agent.calls] == ["auto"] and st["held"] == {}
-    assert st["effects"][props[0]["receipt"]["id"]]["phase"] == "ready"
+    assert st["effects"][props[0]["receipt"]["id"]]["phase"] == "open"
     task.cancel()
 
 async def test_held_agent_cannot_delegate_and_reports_it_as_data(env):
