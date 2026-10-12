@@ -176,14 +176,14 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement); text
     # ── P-15 (round 25): the guard is the pinned operator ──
     ('P-15', 'dead sessions stay live', '    return bool(sess) and role_of(state, sess["actor"]) in READ_ROLES', '    return bool(sess)'),
     ('P-15', 'guards cannot refuse', ' or a in guards_of(state, ctx, eff)\n', '\n'),
-    ('P-15', 'guard approve without role', '    if not (author in guards_of(state, ctx, eff) and role in READ_ROLES):', '    if not (author in guards_of(state, ctx, eff)):'),
+    ('P-15', 'guard approve without role', '    if not (author in guards and role in READ_ROLES):', '    if not (author in guards):'),
     ('P-15', 'a guarded agent without an operator can be claimed', '        if g is None: return deny("E3 a guarded agent has no confirmed operator")', '        if g is None: continue'),
     ('P-15', 'guarded not sticky', '            s["guarded"][author] = True                                          # sticky: only its guard unguards it', '            pass'),
     # ── round 26: M3 relevantActors is the whole pin rule ──
     ('P-01', 'relevantActors names no guards', '        out.extend(g for g in guards_of(state, ctx, eff) if g)', '        pass'),
-    ('P-01', 'relevantActors names every candidate', '            if key_status(ctx, a["author"], a["keyId"]) == "valid": break', '            pass'),
-    ('P-01', 'relevantActors stops at an unknown candidate', '            if key_status(ctx, a["author"], a["keyId"]) == "valid": break', '            if key_status(ctx, a["author"], a["keyId"]) in ("valid", None): break'),
-    ('P-01', 'relevantActors skips revoked candidates', '            out.append(a["author"])\n            if key_status', '            if key_status(ctx, a["author"], a["keyId"]) == "revoked": continue\n            out.append(a["author"])\n            if key_status'),
+    ('P-01', 'relevantActors names every candidate', '            if usable(state, ctx, a): break', '            pass'),
+    ('P-01', 'relevantActors stops at an unknown candidate', '            if usable(state, ctx, a): break', '            if usable(state, ctx, a) or key_status(ctx, a["author"], a["keyId"]) is None: break'),
+    ('P-01', 'relevantActors skips revoked candidates', '            out.append(a["author"])\n            if usable', '            if key_status(ctx, a["author"], a["keyId"]) == "revoked": continue\n            out.append(a["author"])\n            if usable'),
     ('P-15', 'humans forced', '    agent = bool(p) and p["actorKind"] != "human"', '    agent = bool(p)'),
     ('P-15', 'services exempt from forcing', '    agent = bool(p) and p["actorKind"] != "human"', '    agent = bool(p) and p["actorKind"] == "agent"'),
     ('P-15', 'unconfirmed operators guard', 'if agent and p.get("operatorConfirmed") and p.get("operator"):', 'if agent and p.get("operator"):'),
@@ -195,7 +195,7 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement); text
     ('P-08', 'approvals while claimed are refused', 'if eff["phase"] not in ("open", "claimed")', 'if eff["phase"] not in ("open",)'),
     ('P-08', 'approvals while unknown are accepted', 'if eff["phase"] not in ("open", "claimed")', 'if eff["phase"] in FINAL'),
     ('P-08', 'unbounded open approvals', '        return deny("too many open approvals")', '        pass'),
-    ('P-08', 'guards are exempt from the cap', 'if a["author"] != author) >= MAX_OPEN_APPROVALS:', 'if a["author"] != author and a["author"] not in guards_of(state, ctx, eff)) >= MAX_OPEN_APPROVALS:'),
+    ('P-08', 'guards count toward the cap', 'if a["author"] != author and a["author"] not in guards) >= MAX_OPEN_APPROVALS:', 'if a["author"] != author) >= MAX_OPEN_APPROVALS:'),
     ('P-08', 'expired approvals count toward the cap', 'not (a.get("expiresAt") and ts(a["expiresAt"]) <= ts(time))]', 'True]'),
     ('P-08', 'expired approvals stay in the state', '        eff["approvals"] = [a for a in eff["approvals"] if a.get("consumedBy") or a in live_]', '        pass'),
     ('P-08', 'consumed approvals are dropped when the effect is touched', '        eff["approvals"] = [a for a in eff["approvals"] if a.get("consumedBy") or a in live_]', '        eff["approvals"] = [a for a in eff["approvals"] if a in live_]'),
@@ -237,6 +237,13 @@ MUTATIONS = [  # (rule, description, exact text in policy.py, replacement); text
     ('P-01', 'executor of an approve, cancel or claim not pinned', 'if eff: out.extend([eff["proposer"], eff["executor"]] + eff["guardedFor"])', 'if eff: out.extend([eff["proposer"]] + eff["guardedFor"])'),
     ('P-01', 'the agent of an unguard not pinned', '    if entry["kind"] == "agent.unguard":\n        out.append(b["agent"])\n', ''),
     ('P-15', 'a guarded agent without an operator is claimable for', '    return list(dict.fromkeys(guard_status(state, ctx, a).get("guard") for a in need))', '    return list(dict.fromkeys(g for g in (guard_status(state, ctx, a).get("guard") for a in need) if g))'),
+    # ── round 28 (R2, R3, R5) ──
+    ('P-07 E3', 'guarded approvers count (R2)', '    return key_status(ctx, a["author"], a["keyId"]) == "valid" and not guard_status(state, ctx, a["author"])["guarded"]', '    return key_status(ctx, a["author"], a["keyId"]) == "valid"'),
+    ('P-07 E3', 'only a chosen guarding stops an approver (R2)', '    return key_status(ctx, a["author"], a["keyId"]) == "valid" and not guard_status(state, ctx, a["author"])["guarded"]', '    return key_status(ctx, a["author"], a["keyId"]) == "valid" and a["author"] not in state["guarded"]'),
+    ('P-01', 'guarded candidates end the pins (R2)', '            if usable(state, ctx, a): break', '            if key_status(ctx, a["author"], a["keyId"]) == "valid": break'),
+    ('P-08', 'guards are capped when crowded (R3)', '    if not (author in guards and role in READ_ROLES):', '    if not (author in guards and role in READ_ROLES) or len(open_approvals(eff, ctx["time"])) > MAX_OPEN_APPROVALS:'),
+    ('P-15', 'guarded agents may not leave (R5)', '    if k == "member.set" and b == {"actor": entry["author"], "role": "none"}: return False        # leaving is not governing\n', ''),
+    ('P-15', 'guarded agents may set their own role (R5)', 'if k == "member.set" and b == {"actor": entry["author"], "role": "none"}: return False', 'if k == "member.set" and b["actor"] == entry["author"]: return False'),
 ]
 
 def load_mutant(old, new):

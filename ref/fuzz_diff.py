@@ -6,9 +6,11 @@ verdict and a `check` of the WHOLE state (path "", which the TS runner resolves 
 `guardStatus` steps. The TS runner (cleanroom-ts/dist/run-vectors.js) is then run over the generated directories in a
 few batches. The first divergence per seed is reported with the step before it and, for a state divergence, the
 top-level state keys that differ. Each divergent seed's history up to the divergence is saved as a minimal vector.
-The generator (fuzz_fold's) has several operators separate from the owner, operator confirm/withdraw and operator changes,
+The generator (fuzz_fold's) has several operators separate from the owner, operators withdrawing and confirming again (an
+operator never changes, §4.3),
 forcing switched on and off, unguards, delegation chains grown from guarded agents, and guarded agents trying the kinds they may
-not use (P9); one seed in four is a crowd of 23 actors (M9), so the 16-approval cap and the 64-assignee bound are reached. Histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
+not use (P9), guarded agents leaving, and approvals by agents that become guarded (R2); one seed in four is a crowd of 23
+actors (M9), so the 16-approval cap, a guard approving beyond it (R3) and the 64-assignee bound are reached. Histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
 The run prints the generator's statistics so a reader can see what was exercised, the caps included.
 Usage: python ref/fuzz_diff.py [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 1000 seeds from 0 x 250 steps, about 4 minutes; use --seed-offset for fresh seeds)
 --keep DIR: where the batches and the divergence repros go (default: a new directory under the system temp). Only the batch*/,
@@ -30,14 +32,14 @@ RUNNER = os.path.join(TS, "dist", "run-vectors.js")
 BATCH = 1000
 fmt = F.fmt
 
-def view(a, revoked=False, unconfirmed=False, swapped=False):
-    p = F.profile(a, revoked, unconfirmed, swapped)
+def view(a, revoked=False, unconfirmed=False):
+    p = F.profile(a, revoked, unconfirmed)
     return {k: v for k, v in p.items() if k not in ("actor", "seq")}
 
 def history(seed, steps):
     """One random history as a vector: ref verdicts, whole folded states, guardStatus probes; also the generator's statistics."""
     r = random.Random(seed)
-    revoked, unconf, swapped, t = set(), set(), set(), 0
+    revoked, unconf, t = set(), set(), 0
     actors = F.actors_of(seed)
     profiles = {a: view(a) for a in actors}
     out, stats = [], collections.Counter()
@@ -52,15 +54,15 @@ def history(seed, steps):
         st = {"entry": e, "time": time_, "expect": verdict}
         if override: st["profiles"] = override
         stats[f"{e['kind']} {verdict}"] += 1
-        F.count(stats, e, d)
+        F.count(stats, e, d, state, ctx)
         if d["allow"]:
             prev = state
             state = P.fold(state, {"entry": e, "content": None, "receipt": {"space": F.S, "seq": (state["head"] if state else 0) + 1, "id": e["id"], "time": time_}}, ctx)
             st["check"] = {"": state}
-            if prev: F.count_guard(stats, prev, state, e, d)
+            if prev: F.count_guard(stats, prev, state, e, d, ctx)
             if state["guarded"]: stats["* steps with an agent guarded by choice"] += 1
             if state["policy"]["sessions"].get("forceGuarded"): stats["* steps in a forced space"] += 1
-        elif state: F.count_guard(stats, state, None, e, d)
+        elif state: F.count_guard(stats, state, None, e, d, ctx)
         out.append(st)
         return ctx
     create = {"id": F.H("create"), "v": 1, "space": F.S, "kind": "space.create", "author": F.O, "keyId": "k1",
@@ -70,10 +72,10 @@ def history(seed, steps):
     for ms in F.setup(r, None, None, actors): step(ms, fmt(0))
     for n in range(steps):
         t += r.choice([0, 1, 5, 20, 45])
-        before = set(swapped)
-        changed = F.flip(r, revoked, unconf, actors, swapped)
-        for a in changed: profiles[a] = view(a, a in revoked, a in unconf, a in swapped)
-        if swapped != before: stats["* operator changed"] += 1
+        before = set(unconf)
+        changed = F.flip(r, revoked, unconf, actors)
+        for a in changed: profiles[a] = view(a, a in revoked, a in unconf)
+        if before - unconf: stats["* operator confirmed again"] += 1
         override = {a: profiles[a] for a in changed} if changed else None
         e = F.random_entry(r, state, n, actors)
         ctx = step(e, fmt(t), override)

@@ -180,10 +180,10 @@ async def cmd_status(c, a):
     for tid, t in st["tasks"].items(): out(f"  {tid[:8]} {'open' if t['open'] else 'closed'}  to {', '.join(t['to'])}" + (f"  guardedFor {', '.join(t['guardedFor'])}" if t["guardedFor"] else ""))
     out("effects:")
     live_effs = [e for e in st["effects"].values() if e["phase"] not in P.FINAL]
-    profs = await profiles_of(c, {x for e in live_effs for x in (e["proposer"], e["executor"])})
+    profs = await profiles_of(c, {x for e in live_effs for x in (e["proposer"], e["executor"]) + tuple(a["author"] for a in e["approvals"])})
     for eid, e in st["effects"].items():
         g = [x or "(no confirmed operator)" for x in P.guards_of(st, {"time": "", "profiles": profs}, e)] if e in live_effs else []
-        out(f"  {eid[:8]} {e['phase']}  {e['action']}  proposer {e['proposer']}  executor {e['executor']}  approvals {sum(1 for x in e['approvals'] if not x.get('dropped'))}"
+        out(f"  {eid[:8]} {e['phase']}  {e['action']}  proposer {e['proposer']}  executor {e['executor']}  approvals {sum(1 for x in e['approvals'] if not x.get('dropped') and not P.guard_status(st, {'time': '', 'profiles': profs}, x['author'])['guarded'])}"      # P-15: a guarded agent's approval counts toward no rule
             + (f"  guardedFor {', '.join(e['guardedFor'])}" if e["guardedFor"] else "") + (f"  guards {', '.join(g)}" if g else "") + ("  cancel-requested" if e["cancelRequested"] else ""))
     out("sessions:")
     for sid, s in st["sessions"].items():

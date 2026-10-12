@@ -12,7 +12,8 @@ and rewrites the marked values in architecture.md, README.md, coverage.md, ref/R
   python ref/sync_docs.py             rewrite the docs
   python ref/sync_docs.py --check     change nothing; list every value that drifted and exit 1 (run_all.py runs this)
   python ref/sync_docs.py --facts     print the derived facts
-A value that cannot be derived (a needed row of RESULTS.md is missing or not PASS, a figure disagrees with another source) is an error, not a guess."""
+A value that cannot be derived (a needed row of RESULTS.md is missing or not PASS, a figure disagrees with another source) is an error, not a guess.
+So is a test the docs cite as `test_*.py::test_*` that impl/tests does not have (R8): both modes fail and name it."""
 import glob, os, re, sys
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -271,11 +272,20 @@ def check_vector_names(arch, vector_ids):
     missing = sorted(c for c in cited if c not in vector_ids)
     if missing: raise Underivable(f"architecture.md §10 cites wire vectors that do not exist: {', '.join(missing)}")
 
+CITED_TEST = re.compile(r"\b(test_[A-Za-z0-9_]+\.py)::((?:Test[A-Za-z0-9_]+::)?test_[A-Za-z0-9_]+)")
+
+def check_test_names():
+    """R8: every `test_*.py::test_*` the docs name must be a test that exists (impl/tests, read by list_tests.py as pytest collects it)."""
+    have = {(f, n) for f, n, *_ in LT.py_tests()}
+    missing = sorted({f"{d}: {f}::{n}" for d in DOCS for f, n in CITED_TEST.findall(read(d)) if (f, n) not in have})
+    if missing: raise Underivable("the docs name tests that do not exist: " + "; ".join(missing))
+
 def derive():
     F = {}
     names, vector_ids = facts_exist(F)
     facts_interfaces(F); facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names)
     check_vector_names(read("architecture.md"), vector_ids)
+    check_test_names()
     return F
 
 def sync(F, check):

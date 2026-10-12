@@ -135,9 +135,9 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 
 ```json
 {"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"iXnDTthulwch_K_l3-h7lMN6OQFoE3WXw5OHzTB6cnw\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T16:57:59Z\"}"}
-{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"K4dTMO3dGmj1F4KJcYbv-MIaIHiy7KxkhCXrYw0raZE1OOpPhT9dRPB-eBs-tScjh2b-K5gZm5NdfuDlQG5HAQ\", \"version\": 1}}"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T16:57:59Z\",\"knownHeads\":[]}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"Bt7GMuP-dAGCSsMg7t5cYI3L5FRlTM6iISJsnFPBxt8\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T19:15:13Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"tcl4RB78bSiuTTaXhGN_O9xiiozeIcT8iOvZ9N6eDduLbX9ab3T9eV3M5nRtMNwFBjVh1fg-KWzD-NmPjZ65AQ\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T19:15:13Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
@@ -165,7 +165,7 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T16:59:12Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T19:16:17Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
@@ -175,7 +175,7 @@ TS executor started before the space exists, against the Python server (`exec-ts
 TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the entry signer `@:a.localhost` signed under `h1`, not `srv1` (in round 21 the TS verifier looked under `srv1` only and reported `seq 1: entry signature does not verify against the pinned key`, C21; it now uses the server's published keys, so the row passes):
 
 ```
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "kiM7TwICVwns7-Txt5w8v0RhL3GwEQtV6RhxwLWErogqv-ETYHzhabms3f9F9P6aaMXcZ4IYQpsg2jmMs4uuBw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "feosRTMhnLFst5_aEZ_O9GwKKFgSdf-HLPKX8TjvYsoGqBVzkmsh6ezZxaA3BGpBTG3Qc8qpKQuT_hVxx1mWCA"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked
@@ -325,6 +325,7 @@ Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` 
 | wire vectors, round 25 | 112/112 vectors, 446/446 expectations | 112/112 vectors, 446/446 expectations |
 | wire vectors, round 26 | 112/112 vectors, 446/446 expectations | 112/112 vectors, 446/446 expectations |
 | wire vectors, round 27 | 113/113 vectors, 454/454 expectations | 113/113 vectors, 454/454 expectations |
+| wire vectors, round 28 | 113/113 vectors, 454/454 expectations | 113/113 vectors, 454/454 expectations |
 
 ### 6.1 What the round-22 refresh changed and found
 
@@ -362,3 +363,13 @@ The Log calls `relevantActors(state, entry, ctx)` in a loop of at most three rou
 ### 6.6 Round 27
 
 Holds are gone (the user's choice: drop holds, keep delegation). Guarding is recorded on the work: each task and effect carries `guardedFor`, fixed at creation; a claim needs the guard of each of those agents and of a proposer or executor guarded now; `agent.unguard` replaces `agent.release`. State lost `held` and `lastOutside`, so a state page has seven maps and the cursor seven offsets; three golden transcripts carried the old members and were re-recorded. `interop/run.py` on the round-27 servers: every cell of section 1 passes in all four directions, executors included. The differential fuzz agreed on seeds 0–1999 and 500000–500999. The TS agent found that vector `forced-agents-without-an-operator-are-inert` named an operator with no profile, which a live sequencer answers `unavailable`; the vector now gives that operator a profile.
+
+### 6.7 Round 28
+
+Round 28 closed the edges the round-27 review found, without changing the wire:
+- E3 skips an approval whose author is guarded at the claim.
+- A required guard's approval doesn't count toward the cap of 16 open approvals; the derived bounds are now 36 unconsumed and 55 in all, in han.ts.
+- A guarded agent may leave a space.
+- Hosts run in the stricter mode every turn driven by a guarded author or by a task with a non-empty `guardedFor`, and taint a session on any outside instruction, so its later turns run strict once the agent is guarded.
+
+`interop/run.py` on the round-28 servers: every cell of section 1 passes in all four directions, executors included. One golden transcript (`redact.json`) was re-recorded. The differential fuzz agreed on seeds 0–999 and 500000–500999 (0 divergences each); before the TS Policy followed, 9 of 200 seeds diverged (8 on self-leave, 1 on a guard approving beyond the cap).

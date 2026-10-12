@@ -319,8 +319,11 @@ function namedActors(state: SpaceState | undefined, e: A): string[] {
   return out;
 }
 /** P-01, the complete pin list given the profiles pinned so far (`ctx.profiles`): the named actors; for a claim then the guards (the operators in `ctx` of the
- *  proposer and executor) and the E3 candidates in order up to and including the first whose profile in `ctx` shows a valid key (every one before it included).
+ *  proposer and executor) and the E3 candidates in order up to and including the first usable by the profiles in `ctx`: a valid key and an author not guarded at the claim (every one before it included, guarded ones too).
  *  The sequencer calls it again with what it fetched until it names nothing new: three calls at most. */
+/** E3: a candidate counts if its key is valid and its author is not guarded at the claim (a guarded agent's approval never counts, P-15). */
+function usable(s: SpaceState, ctx: PolicyCtx, x: A): boolean { return keyValid(ctx, x.author, x.keyId) && !guardStatus(s, ctx, x.author).guarded; }
+
 export function relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[] {
   const e = entry as A;
   const out = namedActors(state, e);
@@ -328,7 +331,7 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, ctx:
   const ef = e.kind === "effect.claim" && state ? (state.effects as A)[e.body?.proposal] : undefined;
   if (ef) {
     for (const g of guardsOf(state!, ctx, ef)) add(g);
-    for (const a of candidates(state!, ef, ctx.time)) { add(a.author); if (keyValid(ctx, a.author, a.keyId)) break; }
+    for (const a of candidates(state!, ef, ctx.time)) { add(a.author); if (usable(state!, ctx, a)) break; }
   }
   return out as ActorId[];
 }
@@ -371,7 +374,8 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
   // step 8: a guarded author may not approve, govern or steer others (P-15)
   if (guardStatus(s, ctx, a).guarded) {
     const own = e.kind === "session.input" ? ((s.sessions as A)[b.session] === undefined || (s.sessions as A)[b.session].actor === a) : true;
-    if (e.kind === "effect.approve" || e.kind === "member.set" || !own) return deny("a guarded author may not approve, govern or steer others");
+    const leaving = e.kind === "member.set" && b.actor === a && b.role === "none" && Object.keys(b).length === 2;   // leaving is not governing
+    if (!leaving && (e.kind === "effect.approve" || e.kind === "member.set" || !own)) return deny("a guarded author may not approve, govern or steer others");
   }
   // step 9: extension kinds
   if (isExtensionKind(e.kind)) {
@@ -573,11 +577,12 @@ function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (ef.phase !== "open" && ef.phase !== "claimed") return deny("phase does not take approvals");
   if (b.expiresAt !== undefined && !(b.expiresAt > ctx.time)) return deny("approval already expired");
   const rule = ruleFor(s.policy, ef.action);
-  if (!(guardsOf(s, ctx, ef).includes(a) && holds(s, a))) {
+  const guards = guardsOf(s, ctx, ef);
+  if (!(guards.includes(a) && holds(s, a))) {   // a guard approves as a guard (P-15): no rule, no cap
     if (!rule || !satisfiesRule(s, rule, a)) return deny("not an approver");
     if (s.policy.separateApprover && a === ef.proposer) return deny("proposer cannot approve");
+    if (openApprovals(ef, ctx.time).filter((x: A) => x.author !== a && !guards.includes(x.author)).length >= MAX_OPEN_APPROVALS) return deny("too many open approvals");
   }
-  if (openApprovals(ef, ctx.time).filter((x: A) => x.author !== a).length >= MAX_OPEN_APPROVALS) return deny("too many open approvals");
   return ok;
 }
 
@@ -588,7 +593,7 @@ function e3(s: SpaceState, ef: A, ctx: PolicyCtx): E3 {
   if (rule) {
     for (const x of candidates(s, ef, ctx.time)) {
       if (!(ctx.profiles as A)?.[x.author]) return { ok: false, code: "invalid", why: "candidate has no pinned profile" };
-      if (keyValid(ctx, x.author, x.keyId)) { approval = x; break; }
+      if (usable(s, ctx, x)) { approval = x; break; }
     }
     if (!approval) return { ok: false, code: "denied", why: "no valid approval" };
   }

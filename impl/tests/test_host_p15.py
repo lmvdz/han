@@ -44,7 +44,7 @@ async def test_auto_agent_steered_by_member_runs_auto_and_still_proposes(env):
     await until(lambda: len(agent.calls) == 2)
     st = await state(cl["alice"])
     eff = st["effects"][props[0]["receipt"]["id"]]
-    assert [m for _, m in agent.calls] == ["auto", "auto"] and st["guarded"] == {} and not host.tainted(sid)
+    assert [m for _, m in agent.calls] == ["auto", "auto"] and st["guarded"] == {} and host.tainted(sid)      # R-24: carol's steer is recorded as outside though nobody is guarded
     assert eff["phase"] == "open" and eff["guardedFor"] == []
     task.cancel()
 
@@ -239,7 +239,7 @@ async def test_proposal_in_a_task_driven_turn_names_its_task_and_carries_the_del
     assert props[0]["entry"]["body"]["task"] == tid
     st = await state(cl["alice"])
     assert st["tasks"][tid]["guardedFor"] == [BOT] and st["effects"][props[0]["receipt"]["id"]]["guardedFor"] == [BOT]
-    assert [m for _, m in agent.calls] == ["auto"]                                      # bot2 itself is not guarded
+    assert [m for _, m in agent.calls] == ["strict"]                                    # bot2 itself is not guarded; its delegator is (R-24, round 28)
     task.cancel()
 
 async def test_guarded_status_says_it_is_advisory_without_a_sandbox(env):
@@ -264,3 +264,81 @@ async def test_auto_status_has_no_advisory_detail(env):
     await seen.wait_for(lambda i: i["type"] == "status" and i["state"] == "idle" and i["n"] > 2)
     assert all("detail" not in i for i in seen.items if i["type"] == "status")
     seen.stop(); task.cancel()
+
+async def _bot2(env, cl):
+    BOT2 = env.actor("bot2", "agent", operator=ALICE)
+    await cl["alice"].append(*cl["alice"].make_entry("member.set", "profile:" + BOT2, {"actor": ALICE, "role": "owner"}))
+    await member(cl["alice"], BOT2)
+    return BOT2, await env.client("bot2")
+
+async def test_unguarded_delegate_of_a_guarded_agent_runs_strict(env):
+    """R-24 (round 28, R1): bot2 is not guarded, but the task's author bot is guarded at its seq, so bot2's host runs the turn strict; the
+    host reads the author's guard facts at that seq (`state {agent: <author>, at}`), and the guard's own facts say not guarded."""
+    cl, botc = await world(env)
+    BOT2, b2 = await _bot2(env, cl)
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))
+    agent = ScriptedAgent()
+    host, task = start_host(env, b2, "auto", agent, state=os.path.join(env.tmp, "bot2.state.db"))
+    await session_id(host)
+    r = await botc.append(*botc.make_entry("task", S, {"to": [BOT2]}, {"ask": "hello"}))
+    await until(lambda: agent.calls)
+    assert [m for _, m in agent.calls] == ["strict"] and not host.guarded_now
+    assert await host._author_guarded(BOT, r["seq"], r["profiles"]) and not await host._author_guarded(ALICE, r["seq"], r["profiles"])
+    task.cancel()
+
+async def test_task_with_guarded_for_gives_a_strict_turn(env):
+    """R-24 (round 28, R1): carol, who is not guarded and is an assignee, adds a subtask of a guarded agent's task for the unguarded bot2; the subtask carries
+    `guardedFor` [bot], so the turn it drives is strict, though neither its author nor bot2 is guarded."""
+    cl, botc = await world(env)
+    BOT2, b2 = await _bot2(env, cl)
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))
+    parent = (await botc.append(*botc.make_entry("task", S, {"to": [BOT, CAROL]}, {"ask": "parent"})))["id"]
+    agent = ScriptedAgent()
+    host, task = start_host(env, b2, "auto", agent, state=os.path.join(env.tmp, "bot2.state.db"))
+    await session_id(host)
+    sub = (await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT2], "parent": parent}, {"ask": "hello"})))["id"]
+    await until(lambda: agent.calls)
+    st = await state(cl["alice"])
+    assert st["tasks"][sub]["guardedFor"] == [BOT] and not host.guarded_now
+    assert [m for _, m in agent.calls] == ["strict"]
+    task.cancel()
+
+async def test_outside_instruction_before_guarding_makes_later_turns_strict(env):
+    """R-24 (round 28, R6): carol's steer is recorded as outside while bot is unguarded (and runs auto). Once bot chooses guarding, the guard's
+    own steer of the same session runs strict; a session that took no outside instruction stays auto."""
+    cl, botc = await world(env)
+    agent = ScriptedAgent()
+    host, task = start_host(env, botc, "auto", agent)
+    sid = await session_id(host)
+    await steer(cl["carol"], sid, "hello")
+    await until(lambda: len(agent.calls) == 1)
+    assert [m for _, m in agent.calls] == ["auto"] and host.tainted(sid) and not host.guarded_now
+    await steer(cl["alice"], sid, "again")                                  # still unguarded: auto
+    await until(lambda: len(agent.calls) == 2)
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "other"}))
+    await steer(cl["alice"], sid, "now guarded")
+    await until(lambda: len(agent.calls) == 3)
+    assert [m for _, m in agent.calls] == ["auto", "auto", "strict"]
+    task.cancel()
+
+async def test_taint_taken_while_unguarded_survives_a_restart(env):
+    """R-24 (round 28, R6): the taint is in the host's store: carol's steer is taken while bot is unguarded, the host restarts, bot then
+    chooses guarding, and the guard's own steer runs strict. The guard's steer of an untainted session of a guarded agent stays auto."""
+    cl, botc = await world(env)
+    agent1 = ScriptedAgent()
+    host, task = start_host(env, botc, "auto", agent1)
+    sid = await session_id(host)
+    await steer(cl["carol"], sid, "hello")
+    await until(lambda: agent1.calls)
+    assert [m for _, m in agent1.calls] == ["auto"] and host.tainted(sid)
+    task.cancel(); host.stop(); await botc.close()
+    botc2 = await env.client("bot")
+    await botc2.append(*botc2.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "other"}))
+    agent2 = ScriptedAgent()
+    host2, task2 = start_host(env, botc2, "auto", agent2)
+    await until(lambda: host2.state and host2.session)
+    assert host2.session == sid and host2.tainted(sid) and host2.guarded_now
+    await steer(cl["alice"], sid, "hello again")
+    await until(lambda: agent2.calls)
+    assert [m for _, m in agent2.calls] == ["strict"]
+    task2.cancel()

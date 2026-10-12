@@ -839,14 +839,14 @@ def _():
     try: h.state(S, O); item = "answered"
     except AssertionError: item = "asserts"
     h.max_frame_bytes = W.MAX_FRAME_BYTES
-    # the largest legal items: a task with 64 assignees and 17 guardedFor agents, an effect with 37 approvals, 19 guardedFor agents and 64 claims, 64 role intervals: each is far below the frame
+    # the largest legal items: a task with 64 assignees and 17 guardedFor agents, an effect with 55 approvals (P.MAX_APPROVALS), 19 guardedFor agents and 64 claims, 64 role intervals: each is far below the frame
     actor = f"@{'a' * 64}:{'b' * 61}.example"
     biggest = {"author": actor, "to": [actor] * 64, "open": True, "state": "pending", "cancelRequested": False, "depth": 16, "seq": 2 ** 53 - 1, "guardedFor": [actor] * (P.MAX_GUARDED_FOR - 2)}
     claim = {"id": "0" * 64, "attempt": 64, "instance": "k" * 64, "time": T0, "window": 3600, "approval": "0" * 64, "guardApprovals": ["0" * 64] * P.MAX_GUARDED_FOR,
              "reserved": {"unit": "u" * 32, "amount": 2 ** 53 - 1}, "source": ["task", "0" * 64], "settled": True, "outcome": "unknown", "started": "unknown"}
     appr = {"id": "0" * 64, "author": actor, "keyId": "k" * 64, "expiresAt": T0, "consumedBy": "0" * 64}
     eff = {"proposer": actor, "proposerKey": "k" * 64, "executor": actor, "action": "a" * 128, "planDigest": "0" * 64, "seq": 2 ** 53 - 1, "repeatable": True,
-           "phase": "claimed", "cancelRequested": True, "guardedFor": [actor] * P.MAX_GUARDED_FOR, "approvals": [appr] * (P.MAX_OPEN_APPROVALS + 2 + P.MAX_GUARDED_FOR), "claims": [claim] * 64}
+           "phase": "claimed", "cancelRequested": True, "guardedFor": [actor] * P.MAX_GUARDED_FOR, "approvals": [appr] * P.MAX_APPROVALS, "claims": [claim] * 64}
     interval = {"from": 2 ** 53 - 1, "to": 2 ** 53 - 1}
     room = {n: len(P.jcs({"id": W.MAX_INT, "ok": {"state": {"x": v}}})) for n, v in (("task", biggest), ("effect", eff), ("roleHistory", [interval] * 64))}
     fits = all(v < W.MAX_FRAME_BYTES - W.FRAME_RESERVE - 20000 for v in room.values())       # 20,000: a generous allowance for the 16 KiB policy and the scalars
