@@ -15,8 +15,9 @@ async def base(env):
 async def test_content_validation(env):
     """R-09, §5: a plan that doesn't match planDigest, over-long text, unknown content fields and wrong content are invalid at the home; mirrors reject tampered content."""
     alice, bob, a, b = await base(env)
+    env.actor("exec", "service")                                          # P-01 pins the executor's profile (F1), so it must be one this server can see
     plan = {"action": "git.push", "target": "repo"}
-    body = {"executor": "@x:c.example", "action": "git.push", "planDigest": plan_digest(plan), "repeatable": False}
+    body = {"executor": f"@exec:{env.server}", "action": "git.push", "planDigest": plan_digest(plan), "repeatable": False}
     async def code(c, kind, body, content):
         with pytest.raises(WireError) as ex: await c.append(*c.make_entry(kind, S, body, content))
         return ex.value.code
@@ -96,12 +97,12 @@ async def test_first_contact_notices(env):
     assert not [i for i in spy.items if i["type"] == "signal"]              # not delivered to other readers of the profile
     with pytest.raises(WireError) as ex: await c.signal("profile:" + bob, {"type": "notice", "space": S, "seq": 1})
     assert ex.value.code == "denied"                                        # only server notices on profile spaces
-    late = Collector(b.subscribe("profile:" + bob)); await asyncio.sleep(0.2)
-    assert [i for i in late.items if i["type"] == "signal"][0]["body"]["seq"] == 3     # a notice waits for an actor that connects later
-    # and survives a restart
+    late = Collector(b.subscribe("profile:" + bob)); await asyncio.sleep(0.3)
+    assert not [i for i in late.items if i["type"] == "signal"]            # F4: a notice is a signal, never replayed to a later subscribe
+    assert not env.seq.home.inbox.get(bob)                                 # nothing is kept for an actor without a subscription
     await env.bounce()
     again = Collector(b.subscribe("profile:" + bob)); await asyncio.sleep(0.4)
-    assert [i for i in again.items if i["type"] == "signal"]
+    assert not [i for i in again.items if i["type"] == "signal"]           # and nothing survives a restart
     for x in (spy, mine, late, again): x.stop()
 
 async def test_blob_access_and_parts(env):

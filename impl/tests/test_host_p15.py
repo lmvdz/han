@@ -137,10 +137,10 @@ async def test_release_ends_hold_and_stale_release_is_refused(env):
     seen_then = (await state(cl["alice"]))["head"]
     await steer(cl["carol"], sid, "push two")
     await until(lambda: len(agent.calls) == 2)
-    rel = lambda seen: cl["alice"].make_entry("session.input", S, {"session": sid, "release": True}, {"text": "reviewed"}, seen=seen)
+    rel = lambda seen: cl["alice"].make_entry("agent.release", S, {"agent": BOT}, seen=seen)
     with pytest.raises(WireError) as ex: await cl["alice"].append(*rel(seen_then))
     assert ex.value.code == "denied" and "stale" in ex.value.message
-    with pytest.raises(WireError) as ex: await cl["carol"].append(*cl["carol"].make_entry("session.input", S, {"session": sid, "release": True}, {"text": "me"}))
+    with pytest.raises(WireError) as ex: await cl["carol"].append(*cl["carol"].make_entry("agent.release", S, {"agent": BOT}))
     assert ex.value.code == "denied"                                                   # only the guard releases
     head = (await state(cl["alice"]))["head"]
     await cl["alice"].append(*rel(head))

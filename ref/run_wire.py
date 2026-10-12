@@ -226,16 +226,17 @@ def _():
     return (W.verify_hello(KEYS[M].pub, p, "CHALLENGE", "a.example") and not W.verify_hello(KEYS[M].pub, p, "CHALLENGE", "b.example")
             and not W.verify_hello(KEYS[O].pub, p, "CHALLENGE", "a.example")), "binds"
 
-@scenario("first contact across servers", "G-03, P-02", "adding a member delivers a notice to its server, which can then read the space as its server actor")
+@scenario("first contact across servers", "G-03, P-02", "adding a member delivers a notice to its server (to a live subscription only; X was added before it subscribed, so its notice was dropped), which can then read the space as its server actor")
 def _():
     net = {}
     hc = W.Home("c.example", HOME_C, network=net); hd = W.Home("d.example", W.Key("server:d"), network=net)
     h = base_home(network=net)
+    hd.follow("profile:" + Z, Z); hc.follow("profile:" + X, X)         # a notice reaches only a live subscription (F4)
     e, c = entry("member.set", O, {"actor": Z, "role": "guest"}); h.append(e, c, profiles())
     got = hd.inbox.get(Z, []); gotx = hc.inbox.get(X, [])
     code, items = h.read(S, 0, "@:d.example")
     stranger = h.read(S, 0, "@:evil.example")
-    return (bool(got) and got[-1]["body"]["space"] == S and bool(gotx) and code == "ok" and len(items) == 4
+    return (bool(got) and got[-1]["body"]["space"] == S and not gotx and code == "ok" and len(items) == 4
             and stranger[1] == []), f"notice={got[-1] if got else None} read={code}/{len(items)}"
 
 @scenario("signals ride follow streams", "G-04, §3", "followers receive signals as ReadItems; strangers can neither follow nor signal")
@@ -685,8 +686,8 @@ def _():
     effects = {k: v for pg in pages for k, v in pg["state"]["effects"].items()}; tasks = {k: v for pg in pages for k, v in pg["state"]["tasks"].items()}
     sizes = [(len(pg["state"]["effects"]), len(pg["state"]["tasks"])) for pg in pages]
     head = h.spaces[S]["state"]["head"]
-    bad = (h.read(S, 0, O, cursor="0.0.0")[0], h.read(S, 0, O, state=True, cursor="junk")[0], h.read(S, 0, O, state=True, cursor=f"{head + 5}.0.0")[0],
-           h.read(S, 0, O, state=True, cursor="3.0.0", effect=pids[0])[0], h.read(S, 0, O, state=True, cursor="3.0.0", at=2)[0],
+    bad = (h.read(S, 0, O, cursor="3.0.0.0.0")[0], h.read(S, 0, O, state=True, cursor="junk")[0], h.read(S, 0, O, state=True, cursor=f"{head + 5}.0.0.0.0")[0],
+           h.read(S, 0, O, state=True, cursor="3.0.0.0.0", effect=pids[0])[0], h.read(S, 0, O, state=True, cursor="3.0.0.0.0", at=2)[0],
            h.read(S, 0, O, state=True, effect="0" * 64)[0], h.read(S, 0, Z, state=True, cursor=first["next"])[0])
     h.max_state_items = 1000
     full = h.read(S, 0, O, state=True)[1][0]
@@ -695,6 +696,102 @@ def _():
             and "next" not in full and list(one["effects"]) == [pids[3]] and "tasks" not in one and {"policy", "roles", "sessions", "held", "guarded"} <= set(one)
             and bad == ("invalid", "invalid", "invalid", "invalid", "invalid", "not_found", "denied")), f"{code} sizes={sizes} bad={bad}"
 
+
+def _joined(h, reader, **kw):
+    """Every page of `read {state}` (following `next` with `cursor`), merged the way a client does: the paged maps are unioned, the rest is the last page's."""
+    code, items = h.read(S, 0, reader, state=True, **kw); assert code == "ok", (code, items)
+    pages = [items[0]]
+    while pages[-1].get("next") and len(pages) < 400:
+        c2, it = h.read(S, 0, reader, state=True, cursor=pages[-1]["next"]); assert c2 == "ok" and len(it) == 1, (c2, it)
+        pages.append(it[0])
+    merged = dict(pages[-1]["state"])
+    for k in W.PAGED: merged[k] = {a: b for pg in pages for a, b in pg["state"][k].items()}
+    return pages, merged
+
+def _fill(h, effects=0, tasks=0, sessions=0):
+    plan = {"action": "git.push", "target": "repo"}
+    body = {"executor": X, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan)).hexdigest(), "repeatable": False}
+    for _i in range(effects):
+        e, c = entry("effect.propose", M, body, {"plan": plan}); assert h.append(e, c, profiles())[0] == "ok"
+    for i in range(tasks):
+        e, c = entry("task", O, {"to": [M]}, {"ask": str(i)}); assert h.append(e, c, profiles())[0] == "ok"
+    for i in range(sessions):
+        e, c = entry("session.open", O, {"steerMode": "auto"}, {"title": f"s{i}"}, seen=h.spaces[S]["state"]["head"]); assert h.append(e, c, profiles())[0] == "ok"
+
+@scenario("state pages are bounded by bytes", "§3 read, G-09, F3 c", "every state page, and every `read {state, effect}` reply, fits maxFrameBytes as a frame: effects, tasks, sessions and roleHistory are cut with `next`, each item sent once; policy, roles and the scalar members repeat on every page; the pages join to the full state; a state that cannot fit is `unavailable`, never an oversize frame")
+def _():
+    h = base_home(); _fill(h, effects=8, tasks=30, sessions=3)
+    h.max_frame_bytes = W.MAX_FRAME_BYTES; full = h.read(S, 0, O, state=True)[1][0]
+    h.max_frame_bytes = 2500
+    pages, merged = _joined(h, O)
+    sizes = [len(P.jcs({"id": 9007199254740991, "item": pg})) for pg in pages]
+    once = all(sum(1 for pg in pages if k in pg["state"][key]) == 1 for key in W.PAGED for k in merged[key])
+    repeated = all(pg["state"]["policy"] == full["state"]["policy"] and pg["state"]["roles"] == full["state"]["roles"] and pg["state"]["head"] == full["state"]["head"] for pg in pages)
+    h.max_frame_bytes = 600; small = h.read(S, 0, O, state=True)              # the base alone no longer fits
+    basic = {k: v for k, v in h.spaces[S]["state"].items() if k not in W.PAGED and k != "entries"}
+    h.max_frame_bytes = len(P.jcs({"type": "state", "state": dict(basic, **{k: {} for k in W.PAGED})})) + W.FRAME_RESERVE + 10
+    tight = h.read(S, 0, O, state=True)                                       # the base fits, but not one item more
+    h.max_frame_bytes = 1300; pid = next(iter(merged["effects"]))
+    ce, ci = h.read(S, 0, O, state=True, effect=pid)
+    effect_ok = ce == "ok" and len(P.jcs({"id": 1, "item": ci[0]})) <= 1300 and "next" in ci[0] and list(ci[0]["state"]["effects"]) == [pid]
+    more = h.read(S, 0, O, state=True, cursor=ci[0]["next"]) if "next" in ci[0] else None
+    rest_ok = more is None or (more[0] == "ok" and more[1][0]["state"]["effects"] == {} and set(more[1][0]["state"]["sessions"]) | set(ci[0]["state"]["sessions"]) == set(full["state"]["sessions"]))
+    return (len(pages) > 3 and max(sizes) <= 2500 and merged == dict(full["state"]) and once and repeated and small[0] == "unavailable" and tight[0] == "unavailable"
+            and effect_ok and rest_ok), f"pages={len(pages)} max={max(sizes)} once={once} repeated={repeated} small={small[0]} effect={ce} rest={rest_ok}"
+
+@scenario("a big roleHistory is cut and paged too", "§3 read, F3 c", "roleHistory and sessions are paged like effects and tasks (cursor: head.effects.tasks.sessions.roleHistory), each at most maxStateItems per page, and join to the full state")
+def _():
+    h = base_home(); h.max_state_items = 2; _fill(h, sessions=4)
+    pages, merged = _joined(h, O)
+    h.max_state_items = 1000; full = h.read(S, 0, O, state=True)[1][0]
+    shape = [(len(pg["state"]["sessions"]), len(pg["state"]["roleHistory"])) for pg in pages]
+    return (shape == [(2, 2), (2, 1)] and merged == full["state"] and len(pages[0]["next"].split(".")) == 5), f"{shape} cursor={pages[0]['next']}"
+
+@scenario("cursor and effect exclude at, follow and each other", "§3 read, G-09, F4", "`effect` or `cursor` together with `at`, `follow` or each other is `invalid` (not a quiet choice of one); each alone still works, and a non-string effect is `invalid`")
+def _():
+    h = base_home(); h.max_state_items = 1; _fill(h, effects=1)
+    pid = next(iter(h.spaces[S]["state"]["effects"]))
+    cur = h.read(S, 0, O, state=True)[1][0]["next"]
+    got = {"effect+at": h.read(S, 0, O, state=True, effect=pid, at=2)[0], "effect+follow": h.read(S, 0, O, state=True, effect=pid, follow=True)[0],
+           "cursor+follow": h.read(S, 0, O, state=True, cursor=cur, follow=True)[0], "effect+cursor": h.read(S, 0, O, state=True, effect=pid, cursor=cur)[0],
+           "cursor+at": h.read(S, 0, O, state=True, cursor=cur, at=2)[0], "effect=5": h.read(S, 0, O, state=True, effect=5)[0],
+           "effect": h.read(S, 0, O, state=True, effect=pid)[0], "cursor": h.read(S, 0, O, state=True, cursor=cur)[0], "follow": h.read_follow(S, 0, O)[0],
+           "follow+state": h.read_follow(S, 0, O, state=True)[0]}
+    return got == {"effect+at": "invalid", "effect+follow": "invalid", "cursor+follow": "invalid", "effect+cursor": "invalid", "cursor+at": "invalid", "effect=5": "invalid",
+                   "effect": "ok", "cursor": "ok", "follow": "ok", "follow+state": "ok"}, str(got)
+
+@scenario("a notice is never replayed", "G-03, G-09, F4", "a notice for an actor with no live subscription to its profile is dropped; one that subscribes later sees none of it; a live subscription gets its notices once; after it ends, notices are dropped again")
+def _():
+    net = {}
+    hd = W.Home("d.example", W.Key("server:d"), network=net)
+    h = base_home(network=net)
+    e, c = entry("member.set", O, {"actor": Z, "role": "guest"}); h.append(e, c, profiles())                    # Z is not subscribed: dropped
+    box = hd.follow("profile:" + Z, Z)[1]
+    late = len(box)
+    e, c = entry("member.set", O, {"actor": Z, "role": "member"}); h.append(e, c, profiles())                    # live: delivered once
+    live = len(box)
+    hd.unfollow("profile:" + Z, Z)
+    e, c = entry("message", O, {"to": [Z]}, {"text": "again"}); h.append(e, c, profiles())                     # Z ended its subscription: dropped
+    box2 = hd.follow("profile:" + Z, Z)[1]
+    return (late, live, len(box2)) == (0, 1, 0), f"{late} {live} {len(box2)}"
+
+@scenario("frames: an integer beyond 2^53 in either direction", "G-07 (1a), F4", "an integer above 2^53-1 or below -(2^53-1) anywhere in a frame is `invalid` on a usable id (the connection stays open) or `{id: 0}` and a close when there is none; 2^53-1 and -(2^53-1) are not; `test.clock` is a call only in test mode")
+def _():
+    B = 2 ** 53
+    cases = {
+        "ok": ('{"id":4,"call":"cancel","args":{"target":1}}', None), "max": ('{"id":4,"call":"cancel","args":{"target":%d}}' % (B - 1), None),
+        "-max": ('{"id":4,"call":"cancel","args":{"target":%d}}' % -(B - 1), None),
+        "arg 2^53": ('{"id":4,"call":"cancel","args":{"target":%d}}' % B, (4, False)), "arg -2^53": ('{"id":4,"call":"cancel","args":{"target":%d}}' % -B, (4, False)),
+        "nested -2^53-1": ('{"id":4,"call":"signal","args":{"space":"s","body":{"a":[%d]}}}' % (-B - 1), (4, False)),
+        "no id": ('{"call":"cancel","args":{"target":%d}}' % -B, (0, True)), "id -2^53": ('{"id":%d,"call":"cancel","args":{"target":1}}' % -B, (0, True)),
+        "id 2^53": ('{"id":%d,"call":"cancel","args":{"target":1}}' % B, (0, True)), "id 0": ('{"id":0,"call":"cancel","args":{"target":%d}}' % -B, (0, True)),
+        "fraction": ('{"id":4,"call":"cancel","args":{"target":0.5}}', (0, True)), "array": ("[1]", (0, True)), "dup": ('{"id":4,"id":5}', (0, True)),
+        "extra member": ('{"id":4,"call":"cancel","args":{"target":1},"x":1}', (4, False)), "unknown call": ('{"id":4,"call":"test.clock","args":{}}', (4, False)),
+    }
+    got = {k: W.frame_verdict(t) for k, (t, _w) in cases.items()}
+    bad = {k: (got[k], w) for k, (_t, w) in cases.items() if got[k] != w}
+    test_mode = W.frame_verdict('{"id":4,"call":"test.clock","args":{}}', test_mode=True)
+    return not bad and test_mode is None, f"{bad} test_mode={test_mode}"
 
 @scenario("public keys are canonical base64url", "R-25, §2", "a key.add whose publicKey is padded, non-canonical or not 32 bytes is `invalid` at the Log (step 3), before any signature or Policy; a canonical one reaches Policy (`denied` in a plain space)")
 def _():

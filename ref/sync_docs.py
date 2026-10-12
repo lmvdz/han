@@ -4,9 +4,11 @@ The docs mark each derived value as `<!--s:key-->value<!--/s-->`. This script co
   - ref/list_tests.py        what exists: the implementation's tests, the clean-room interop scenarios, the wire vectors;
   - ref/RESULTS.md           what the last run_all.py run measured (vectors, mutations, fuzz, wire scenarios, ...);
   - interop/RESULTS.md       the cross-implementation run and its closure section (recorded runs of the wire vectors);
+  - ref/logs/*               the newest complete log of each model (guard model: depth, transitions; timing model: the round it last ran on, its counts);
+  - ref/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
   - HISTORY.md               the round number and the scores;
   - the sources of impl/     three claims that used to be written by hand (the PreToolUse gate, the advisory status, a Matrix test of §8.2)
-and rewrites the marked values in architecture.md, README.md, coverage.md and ref/README.md.
+and rewrites the marked values in architecture.md, README.md, coverage.md, ref/README.md and ref/wire-vectors/README.md.
   python ref/sync_docs.py             rewrite the docs
   python ref/sync_docs.py --check     change nothing; list every value that drifted and exit 1 (run_all.py runs this)
   python ref/sync_docs.py --facts     print the derived facts
@@ -21,7 +23,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import list_tests as LT
 
-DOCS = ["architecture.md", "README.md", "coverage.md", os.path.join("ref", "README.md")]
+DOCS = ["architecture.md", "README.md", "coverage.md", os.path.join("ref", "README.md"), os.path.join("ref", "wire-vectors", "README.md")]
 MARK = re.compile(r"<!--s:([a-z_0-9]+)-->(.*?)<!--/s-->", re.S)
 
 class Underivable(Exception): pass
@@ -45,6 +47,14 @@ def facts_exist(F):
     F["wv_probes"] = sum(1 for n, _ in wires if n.startswith("probes.json::"))
     F["wv_decided"] = sum(1 for n, _ in wires if n.startswith("probes-decided.json::"))
     F["gate_tests"] = sum(t[4] for t in tests if t[0] == "test_host_claude_gate.py")
+    fam = LT.wire_expectations()
+    F["wv_exp"] = sum(f[3] for f in fam)
+    F["wv_generated"] = f"{sum(f[5] for f in fam):,}"
+    F["wv_families"] = "; ".join(f"{f[2]} {f[0]}: {f[3]:,} expectations" + (f" (and {f[5]:,} generated appends the runner checks, not counted)" if f[5] else "") for f in fam)
+    F["wv_family_ops"], F["wv_family_ops_exp"] = next((f[1], f[3]) for f in fam if f[0].startswith("operations"))
+    for key, name in (("agreed", "agreed probes"), ("decided", "decided probes"), ("r22", "round-22 probes"), ("r23", "round-23 probes")):
+        row = next((f for f in fam if f[0] == name), None)
+        F[f"wv_{key}_vec"], F[f"wv_{key}_exp"] = (row[2], row[3]) if row else (0, 0)
     return {t[1] for t in tests}, {n.split("::", 1)[1] for n, _ in wires}
 
 # ── what the last run measured (ref/RESULTS.md) ──
@@ -108,11 +118,19 @@ def facts_interop(F):
         F[f"wv_{tag}_py"], F[f"wv_{tag}_ts"] = py, ts
         for who, s in (("Python", py), ("TS", ts)):
             if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s): raise Underivable(f"interop/RESULTS.md: cannot read {who} run {s!r}")
-    a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_ts"])      # the latest recorded run covers the vectors that exist now; round 21's is history
-    if int(a[2]) != F["wv_n"]: raise Underivable(f"interop/RESULTS.md records {a[2]} wire vectors for the latest run (round 22), list_tests.py finds {F['wv_n']}: record a new run")
-    F["wv_exp"] = int(a[4])
+    latest = max((int(k.split()[1]) for k in runs if re.fullmatch(r"round \d+", k)), default=0)       # the newest recorded run covers the vectors that exist now; earlier ones are history
+    py, ts = runs[f"round {latest}"]
+    F["wv_latest_round"], F["wv_latest_py"], F["wv_latest_ts"] = latest, py, ts
+    for who, s_ in (("Python", py), ("TS", ts)):
+        if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s_): raise Underivable(f"interop/RESULTS.md: cannot read the round {latest} {who} run {s_!r}")
+        a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", s_)
+        if int(a[2]) != F["wv_n"]: raise Underivable(f"interop/RESULTS.md records {a[2]} wire vectors for the latest run (round {latest}, {who}), list_tests.py finds {F['wv_n']}: record a new run")
+        if int(a[4]) != F["wv_exp"]: raise Underivable(f"interop/RESULTS.md records {a[4]} expectations for the latest run (round {latest}, {who}), the vector files hold {F['wv_exp']}: record a new run")
     b = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_py"])
     F["wv_r22_py_fails"] = int(b[2]) - int(b[1])
+    for who, s_ in (("py", py), ("ts", ts)):
+        a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", s_)
+        F[f"wv_latest_{who}_fails"] = int(a[2]) - int(a[1])
 
 # ── HISTORY.md: the round number and the scores ──
 def facts_history(F):
@@ -136,6 +154,54 @@ def facts_history(F):
     if pend: s += " (" + (f"round {pend[0]}" if len(pend) == 1 else "rounds " + ", ".join(map(str, pend[:-1])) + f" and {pend[-1]}") + " not graded yet)"
     F["scores"] = s
 
+# ── ref/logs: what the model checkers last did ──
+def logs(prefix):
+    """[(round, depth or 0, name, text)] for ref/logs/<prefix>*-rNN.log, newest first."""
+    out = []
+    for path in glob.glob(os.path.join(HERE, "logs", prefix + "*.log")):
+        name = os.path.basename(path)
+        m = re.fullmatch(prefix + r"(?:-depth(\d+))?-r(\d+)\.log", name)
+        if m: out.append((int(m[2]), int(m[1] or 0), name, open(path, encoding="utf-8").read()))
+    return sorted(out, reverse=True)
+
+def link(name, plain=False): return f"`ref/logs/{name}`" if plain else f"[ref/logs/{name}](ref/logs/{name})"      # plain: for ref/README.md, where that relative link would be wrong
+
+def facts_models(F):
+    """The guard model and the timing model, as the logs show them. A log counts only if it is complete; a newer log that is not (out of memory, aborted) is named, never skipped silently.
+    The `rNN` in a log's name is the round of the Policy it ran on."""
+    GUARD = re.compile(r"^\[guard\] (\d+) transitions to depth (\d+); (.*) HOLD", re.M)
+    done = [(r, d, n, GUARD.search(t)) for r, d, n, t in logs("model_guard") if "NOT COMPLETED" not in t and GUARD.search(t)]
+    undone = [(r, d, n) for r, d, n, t in logs("model_guard") if "NOT COMPLETED" in t or not GUARD.search(t)]
+    if not done: raise Underivable("ref/logs has no complete model_guard log")
+    r, d, n, m = done[0]
+    F["guard_round"], F["guard_depth"], F["guard_trans"] = r, d, f"{int(m[1]):,}"
+    F["guard_props"] = len(re.split(r", | and ", m[3]))
+    for plain in (False, True):
+        later = [f"round {r2}'s depth-{d2} run did not complete ({link(n2, plain)})" for r2, d2, n2 in undone if r2 >= r]
+        F["guard_deep_plain" if plain else "guard_deep"] = (f"the newest complete deep run is depth {d}, {F['guard_trans']} transitions, on the round-{r} Policy ({link(n, plain)})"
+                       + ("; " + "; ".join(later) if later else "") + (f"; the current Policy (round {F['round']}) has not been explored to depth {d}" if r < F["round"] else ""))
+    # depth 4 is a row of every run_all.py run (ref/RESULTS.md)
+    res = {r_[0]: r_ for r_ in table_rows(read("ref", "RESULTS.md")) if len(r_) == 3}
+    hit = [r_ for k, r_ in res.items() if k.startswith("Guard model (P-15), depth 4")]
+    if len(hit) != 1 or hit[0][1] != "PASS": raise Underivable("ref/RESULTS.md: the guard model depth-4 row is missing or not PASS; run python ref/run_all.py --quick")
+    m4 = re.search(r"\[guard\] (\d+) transitions to depth 4; (.*) HOLD", hit[0][2])
+    if not m4: raise Underivable("ref/RESULTS.md: cannot read the guard model depth-4 line")
+    F["guard4_trans"], F["guard4_props"] = f"{int(m4[1]):,}", len(re.split(r", | and ", m4[2]))
+    # the timing model
+    MC = [(r, d, n, t) for r, d, n, t in logs("model_check") if "all mutations caught" in t and all(f"[{k}]" in t and "ALL PROPERTIES HOLD" in t for k in ("timing", "drift", "single"))]
+    if not MC: raise Underivable("ref/logs has no complete model_check log")
+    r, _d, n, t = MC[0]
+    states = {k: int(re.search(r"\[%s\] (\d+) states explored; ALL PROPERTIES HOLD" % k, t)[1]) for k in ("timing", "drift", "single")}
+    muts = len(re.findall(r"^caught ", t, re.M))
+    F["timing_round"] = r
+    F["timing_log"] = link(n)
+    F["timing_counts"] = f"timing ({states['timing']:,} states), drift ({states['drift']:,}), single ({states['single']:,}), all properties hold; {muts}/{muts} mutations caught"
+    F["timing_status"] = (f"The log is by the round in its name: `ref/policy.py` has been edited since (the current round is {F['round']}), the model has not been re-run on it, and this is a round-{r} result, not a statement about the current Policy" if r < F["round"]
+                          else f"It ran on the Policy of the current round ({r})")
+    F["timing_run"] = f"round {r}, {F['timing_log']}"
+    F["timing_run_plain"] = f"round {r}, {link(n, True)}"
+    F["timing_mark"] = "✓" if r >= F["round"] else "partial"
+
 # ── claims that used to be hand-written, now read off the sources ──
 def facts_claims(F, test_names):
     def src(*p):
@@ -152,6 +218,7 @@ def facts_claims(F, test_names):
     shape = "the §8.2 shape of this round (whole-entry upload, `{id}`-only room events, `{id, kind, author, seq}` from the sequencer)"
     F["matrix_claim"] = (f"{shape} is asserted by a Matrix test" if matrix_test else
                          f"{shape} is implemented but no Matrix test asserts it" if matrix_impl else f"{shape} is not implemented")
+    F["matrix_untested"] = "" if matrix_test else "the §8.2 shape of this round; "         # only an untested claim belongs in the "Not tested" list
 
 def check_vector_names(arch, vector_ids):
     """The wire-vector names the G-07…G-11 row of §10 cites must exist."""
@@ -163,7 +230,7 @@ def check_vector_names(arch, vector_ids):
 def derive():
     F = {}
     names, vector_ids = facts_exist(F)
-    facts_results(F); facts_interop(F); facts_history(F); facts_claims(F, names)
+    facts_results(F); facts_interop(F); facts_history(F); facts_models(F); facts_claims(F, names)
     check_vector_names(read("architecture.md"), vector_ids)
     return F
 

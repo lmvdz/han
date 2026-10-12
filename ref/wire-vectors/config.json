@@ -2,7 +2,7 @@
  "format": "han-wire-config/1",
  "server": "a.localhost",
  "clock": "2026-01-01T00:00:00Z",
- "note": "Test mode (architecture.md G-11): a frozen clock, this server key, these actors, an empty data directory. Private key of a key = sha256(UTF-8 seed), 32 raw bytes.",
+ "note": "Test mode (architecture.md G-11): a clock that starts at `clock` and moves only by the control call test.clock, this server key, these actors, an empty data directory. Private key of a key = sha256(UTF-8 seed), 32 raw bytes.",
  "serverKey": {
   "keyId": "h1",
   "seed": "han-interop-key-server",

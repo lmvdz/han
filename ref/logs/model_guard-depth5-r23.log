@@ -1,0 +1,6 @@
+  depth 1: 72 transitions, 31 states, frontier 30, rss 22 MB
+  depth 2: 2278 transitions, 803 states, frontier 772, rss 25 MB
+  depth 3: 60423 transitions, 19281 states, frontier 18478, rss 66 MB
+  depth 4: 1486143 transitions, 441748 states, frontier 422467, rss 1039 MB
+  depth 5: 34852403 transitions, 9797228 states, frontier 0, rss 1108 MB
+[guard] 34852403 transitions to depth 5; GuardedClaimsNeedTheirHuman, HeldInstructNoOne, NeverLooser, GuardRightsNeedRole, OneOpenApprovalPerAuthor and ExactHolds HOLD (non-vacuous)

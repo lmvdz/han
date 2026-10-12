@@ -1399,12 +1399,12 @@
   },
   {
    "id": "P40",
-   "title": "stream item for a closed session",
-   "expect": "denied",
+   "title": "stream item for a closed session: a closed session has left the state (F3 b), so it is no session (round 22 answered denied)",
+   "expect": "not_found",
    "rules": [
     "G-05"
    ],
-   "source": "golden P40",
+   "source": "golden P40, changed by F3 b",
    "steps": [
     {
      "conn": "@alice:a.localhost",
@@ -1428,7 +1428,7 @@
      "expect": {
       "id": 2,
       "error": {
-       "code": "denied"
+       "code": "not_found"
       }
      }
     }

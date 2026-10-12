@@ -7,6 +7,8 @@ One-time conversion, kept for provenance; running the vectors needs only ref/wir
   state of a particular probe run (the entries are signed here with the fixed test keys);
 * probes-decided.json = the paths where the two servers differed or the text was silent and a decision (DECISIONS-r21.md D1..D18) now fixes the
   answer. They are conformance vectors too: an implementation that has not yet converged fails them.
+* probes-r22.json, probes-r23.json = coverage whose expected values come from the oracle ref/wire.py (below); r23 adds the test clock (G-11),
+  read combinations, dropped notices and negative big integers (DECISIONS-r23.md F4, F8).
 Format: ref/wire-vectors/README.md."""
 import base64, hashlib, json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +17,7 @@ sys.path.insert(0, HERE)
 import policy as P, wire as W
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
+
 
 GOLD = os.path.join(ROOT, "interop", "golden")
 OUT = os.path.join(HERE, "wire-vectors")
@@ -36,7 +39,7 @@ A = lambda n: f"@{n}:{SERVER}"
 CONFIG = {
     "format": "han-wire-config/1",
     "server": SERVER, "clock": T0,
-    "note": "Test mode (architecture.md G-11): a frozen clock, this server key, these actors, an empty data directory. Private key of a key = sha256(UTF-8 seed), 32 raw bytes.",
+    "note": "Test mode (architecture.md G-11): a clock that starts at `clock` and moves only by the control call test.clock, this server key, these actors, an empty data directory. Private key of a key = sha256(UTF-8 seed), 32 raw bytes.",
     "serverKey": {"keyId": "h1", "seed": KEYS["server"].seed_text, "publicKey": KEYS["server"].pub, "from": "1970-01-01T00:00:00Z"},
     "actors": [{"actor": A(n), "kind": "service" if n == "x" else "human", "keyId": "k1", "seed": KEYS[n].seed_text, "publicKey": KEYS[n].pub} for n in NAMES],
     "blobs": {
@@ -243,8 +246,8 @@ agreed.append(vec("P40-setup", "setup: alice opens sessions A, B and C and close
     {"conn": al, "send": append_frame(4, cl_b, cl_b_c)}, {"conn": al, "expect": receipt(4, cl_b_seq)}], ["P-15"], source="maker"))
 def item(sess, n, text, space="s1:" + SERVER): return {"space": space, "session": sess, "n": n, "time": T0, "type": "output", "text": text}
 def stream(i, it): return {"id": i, "call": "stream", "args": {"item": it}}
-agreed.append(vec("P40", "stream item for a closed session", [
-    {"conn": al, "send": stream(2, item(sb_id, 1, "late"))}, {"conn": al, "expect": err(2, "denied")}], ["G-05"], "denied", source="golden P40"))
+agreed.append(vec("P40", "stream item for a closed session: a closed session has left the state (F3 b), so it is no session (round 22 answered denied)", [
+    {"conn": al, "send": stream(2, item(sb_id, 1, "late"))}, {"conn": al, "expect": err(2, "not_found")}], ["G-05"], "not_found", source="golden P40, changed by F3 b"))
 agreed.append(vec("P41", "stream n=1 by the session actor", [
     {"conn": al, "send": stream(2, item(sa_id, 1, "t1"))}, {"conn": al, "expect": OKNULL(2)}], ["G-05"], "ok", source="golden P41"))
 agreed.append(vec("P42", "stream n=1 repeated (identical)", [
@@ -360,7 +363,11 @@ dec.append(vec("D9a", "hello ok carries every Limits member including maxClockSk
 # the same entries, the config server key and the frozen clock; no server's output is copied. The oracle is first checked against the 18 golden receipts
 # and the golden `read`, so it is known to produce the bytes the two reference servers produce.
 SKEYS = {SERVER: {"h1": {"publicKey": KEYS["server"].pub, "from": "1970-01-01T00:00:00Z"}}}
-def new_home(): return W.Home(SERVER, KEYS["server"], clock=lambda: T0, server_keys=SKEYS)
+class Clk:
+    """The oracle's test clock (G-11 `test.clock`): wall seconds since the epoch and steady seconds, both starting as a server in test mode does."""
+    def __init__(self): self.wall, self.steady = W.secs(T0), 0
+CLK = Clk()
+def new_home(): return W.Home(SERVER, KEYS["server"], clock=lambda: W.fmt(CLK.wall), server_keys=SKEYS, steady=lambda: CLK.steady)
 def pview(nm):
     return {"actor": A(nm), "seq": 1, "actorKind": "service" if nm == "x" else "human", "operatorConfirmed": False,
             "keys": {"k1": {"publicKey": KEYS[nm].pub, "status": "valid"}}}
@@ -429,15 +436,18 @@ def message(conn, space, actor, text, i, to=None):
 PG = "pg:" + SERVER
 steps = create_space(al, PG, "paging") + member(al, PG, "bob", "member", 3)
 NTASK = 1001
+PG_GEN = {"count": NTASK, "head": ORC.spaces[PG]["state"]["head"], "firstId": 10, "space": PG, "kind": "task", "author": al, "body": {"to": [bo]},
+          "content": {"ask": "task {k}"}, "nonce": "r22-pg-task-{k}"}
 for k in range(NTASK):
-    e, c, r = oa("alice", "task", {"to": [bo]}, {"ask": f"task {k}"}, space=PG, tag=f"pg-task-{k}")
-    steps += [{"conn": al, "send": append_frame(10 + k, e, c)}, {"conn": al, "expect": receipt(10 + k, r["seq"])}]
-r22.append(vec("E8-setup", f"setup: alice creates `{PG}`, adds bob and orders {NTASK} tasks (one more than maxStateItems, 1,000)", steps, ["§3", "E8"], source="maker"))
+    oa("alice", "task", {"to": [bo]}, {"ask": f"task {k}"}, space=PG, tag=f"pg-task-{k}")
+steps += [{"conn": al, "generate": PG_GEN}]       # the runner signs and sends the 1,001 tasks itself and checks each receipt; none is an expectation (README: generate)
+r22.append(vec("E8-setup", f"setup: alice creates `{PG}`, adds bob and generates {NTASK} tasks (one more than maxStateItems, 1,000)", steps, ["§3", "E8"], source="maker"))
 page1 = read_expect(al, 2, PG, 0, "alice", state=True, limit=1)          # limit 1 bounds the records, never the state
 assert len(page1) == 3 and len(page1[0]["expect"]["item"]["state"]["tasks"]) == 1000 and page1[0]["expect"]["item"]["next"] == "<cursor>"
-ORC.max_state_items = 10 ** 6; full = ORC.read(PG, 0, A("alice"), state=True)[1][0]["state"]; ORC.max_state_items = W.MAX_STATE_ITEMS
-last_page = dict(full, tasks=dict(list(full["tasks"].items())[1000:]))
-assert len(last_page["tasks"]) == 1
+_p1 = ORC.read(PG, 0, A("alice"), state=True, limit=1)[1][0]
+last_page = ORC.read(PG, 0, A("alice"), state=True, cursor=_p1["next"])[1][0]["state"]       # F3 c: the next slice of tasks only; sessions and roleHistory were sent with page 1
+assert len(last_page["tasks"]) == 1 and last_page["sessions"] == {} and last_page["roleHistory"] == {} and "next" not in ORC.read(PG, 0, A("alice"), state=True, cursor=_p1["next"])[1][0]
+assert len(_p1["state"]["roleHistory"]) == 2 and len(_p1["state"]["tasks"]) == 1000
 steps = [rd(al, 2, PG, 0, state=True, limit=1)] + page1
 steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>"}}},
           {"conn": al, "expect": {"id": 3, "item": {"type": "state", "state": last_page}}}, {"conn": al, "expect": {"id": 3, "end": True}},
@@ -445,7 +455,7 @@ steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "
           {"conn": al, "expect": {"id": 4, "item": {"type": "state", "state": last_page}}}, {"conn": al, "expect": {"id": 4, "end": True}},
           {"conn": al, "send": {"id": 5, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "at": 2}}}, {"conn": al, "expect": err(5, "invalid")},
           {"conn": al, "send": {"id": 6, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "effect": "0" * 64}}}, {"conn": al, "expect": err(6, "invalid")}]
-r22.append(vec("E8a", f"read {{state, limit: 1}} returns the oldest 1,000 of {NTASK} tasks with a cursor; the cursor returns the rest (the same head, no `next`); a cursor excludes `at` and `effect`; `after` is ignored with a cursor",
+r22.append(vec("E8a", f"read {{state, limit: 1}} returns the oldest 1,000 of {NTASK} tasks with a cursor; the cursor returns the rest (the same head, the same policy and roles, no `next`; the other paged members were all sent with page 1, so they are empty); a cursor excludes `at` and `effect`; `after` is ignored with a cursor",
                steps, ["§3", "G-09", "E8"], "page 1: 1,000 tasks + next, 1 record; page 2: 1 task, no next", source="maker (oracle: ref/wire.py Home)"))
 steps = [rd(al, 2, PG, 0, state=True, limit=1)] + page1
 steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "after": 0, "cursor": "<cursor>"}}}, {"conn": al, "expect": err(3, "invalid")},
@@ -454,7 +464,7 @@ steps += [{"conn": al, "send": {"id": 3, "call": "read", "args": {"space": PG, "
           {"conn": ca, "send": {"id": 6, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>"}}}, {"conn": ca, "expect": err(6, "not_found")}]
 r22.append(vec("E8b", "a cursor needs state: true; a malformed cursor is invalid; a reader who may read nothing of the space gets not_found for a valid cursor", steps,
                ["§3", "G-09", "E8"], "invalid, invalid, invalid, not_found", source="maker"))
-del full, last_page, page1
+del last_page, page1
 
 EF = "ef:" + SERVER
 steps = create_space(al, EF, "effects") + member(al, EF, "bob", "member", 3) + member(al, EF, "x", "member", 4)
@@ -469,7 +479,7 @@ steps += [rd(al, 7, EF, 0, state=True, effect="0" * 64), {"conn": al, "expect": 
           rd(al, 9, EF, 0, state=True, effect=5), {"conn": al, "expect": err(9, "invalid")},
           rd(ca, 10, EF, 0, state=True, effect=pid), {"conn": ca, "expect": err(10, "not_found")}]
 one = read_expect(al, 5, EF, 0, "alice", state=True, effect=pid)[0]["expect"]["item"]["state"]
-assert set(one) == {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "agents", "effects"} and list(one["effects"]) == [pid], sorted(one)
+assert set(one) <= {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"} and {"space", "head", "home", "policy", "roles", "sessions", "held", "guarded", "effects"} <= set(one) and list(one["effects"]) == [pid], sorted(one)
 r22.append(vec("E8c", "read {state, effect}: one state item holding only that effect, with policy, roles, sessions, held, guarded and agents; an unknown effect is not_found; effect needs state", steps,
                ["§3", "G-09", "E8"], "the EffectStateView, then end", source="maker (oracle: ref/wire.py Home)"))
 
@@ -608,6 +618,146 @@ steps += member(al, NT, "bob", "member", 9) + [{"conn": ca, "expect_silence": Tr
 r22.append(vec("E3b", "notices (G-03): the home signals the actor's own profile space when a member.set gives it guest/member/owner or a message names it in `to`; none and banned send nothing; a stranger subscribed to that profile sees nothing",
                steps, ["G-03", "G-04", "§4.3"], "signals {type: notice, space, seq} from @:S for seqs 2, 3, 6, 7 only", source="maker"))
 
+# ───────────── probes-r23.json: DECISIONS-r23.md F4 (read combinations, dropped notices, negative big integers) and F8 (the test clock) ─────────────
+r23 = []
+xc = A("x")
+
+def clock_step(wall=None, adv=0):
+    """A `clock` step (G-11 `test.clock`); the oracle's own clock moves with it."""
+    a = {}
+    if wall is not None: a["wall"] = wall; CLK.wall = W.secs(wall)
+    if adv: a["steadyAdvance"] = adv; CLK.steady += adv
+    return {"clock": a}
+def attempt(actor, kind, body, content=None, space=None, tag="", seen=None):
+    """A signed entry offered to the oracle without insisting that it is ordered: (entry, content, code, detail)."""
+    st_ = ORC.spaces.get(space)
+    e, c = mk(actor, kind, body, content, space=space, tag="r23-" + tag, seen=(st_["state"]["head"] if st_ else 0) if seen is None else seen)
+    code, d = ORC.append(e, c, PROF)
+    return e, c, code, d
+def sent(conn, i, e, c, code, d, hint=False):
+    """send an append and expect the oracle's answer: the receipt, or the error with the members the vector pins. `hint`: retryAfterMs is the
+    server's own estimate (R-03a: the two reference servers differ), so it must be a positive integer, not a particular one."""
+    if code == "ok": return [{"conn": conn, "send": append_frame(i, e, c)}, {"conn": conn, "expect": {"id": i, "ok": d}}]
+    retry = {"retryAfterMs": "<posint>" if hint else d["retryAfterMs"]} if isinstance(d, dict) and "retryAfterMs" in d else {}
+    return [{"conn": conn, "send": append_frame(i, e, c)}, {"conn": conn, "expect": err(i, code, **retry)}]
+T_BEHIND = W.fmt(W.secs(T0) - 60)
+
+# ── F8: test.clock itself (G-11) ──
+steps = [{"conn": "raw:1", "send": {"id": 2, "call": "test.clock", "args": {}}}, {"conn": "raw:1", "expect": err(2, "denied")}]
+for i, a in enumerate(({"wall": "tomorrow"}, {"steadyAdvance": -1}, {"steadyAdvance": "5"}, {"wall": T0, "extra": 1}, {"steadyAdvance": True}), start=2):
+    steps += [{"conn": al, "send": {"id": i, "call": "test.clock", "args": a}}, {"conn": al, "expect": err(i, "invalid")}]
+steps += [clock_step(), clock_step(adv=1), clock_step(wall=T0)]
+r23.append(vec("T1", "test.clock (test mode only): before hello it is denied like every call; a malformed wall, a negative, fractional-looking or non-integer steadyAdvance, a boolean and an unknown member are invalid; {} reads the clock, steadyAdvance moves the steady clock only, wall sets the wall clock only", steps,
+               ["G-11", "G-07"], "denied; invalid x5; ok {wall, steady} x3", source="maker"))
+
+# ── F8: R-16, an early abandon is unavailable with retryAfterMs, then allowed after the clock moves ──
+AB = "ab:" + SERVER
+A18 = P.abandon_after(SP_POLICY["launchWindow"])
+steps = create_space(al, AB, "abandon") + member(al, AB, "bob", "member", 3) + member(al, AB, "x", "member", 4)
+pids, claims = [], []
+for n_ in (1, 2):
+    plan_ = {"action": "git.push", "target": f"repo/{n_}"}
+    e, c, r = oa("bob", "effect.propose", {"executor": xc, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan_)).hexdigest(), "repeatable": False}, {"plan": plan_}, space=AB, tag=f"ab-propose-{n_}")
+    steps += [{"conn": bo, "send": append_frame(10 + n_, e, c)}, {"conn": bo, "expect": receipt(10 + n_, r["seq"])}]; pids.append(r["id"])      # a matcher, not the exact receipt: the setup's `profiles` pins depend on P-01 (F1), which this vector does not test
+    e, c, r = oa("x", "effect.claim", {"proposal": r["id"], "attempt": 1, "instance": "k1", "window": SP_POLICY["launchWindow"]}, space=AB, tag=f"ab-claim-{n_}")
+    steps += [{"conn": xc, "send": append_frame(20 + n_, e, c)}, {"conn": xc, "expect": receipt(20 + n_, r["seq"])}]; claims.append(r["id"])
+e, c, r = oa("x", "effect.outcome", {"claim": claims[1], "result": "unknown", "started": "unknown"}, space=AB, tag="ab-own-report")
+steps += [{"conn": xc, "send": append_frame(30, e, c)}, {"conn": xc, "expect": receipt(30, r["seq"])}]      # the executor's own report is never delayed
+ab_e, ab_c, code, d = attempt("alice", "effect.outcome", {"claim": claims[0], "result": "unknown", "started": "unknown"}, space=AB, tag="ab-abandon")
+assert code == "unavailable" and d["retryAfterMs"] == A18 * 1000, (code, d)
+steps += sent(al, 40, ab_e, ab_c, code, d)                                              # the owner's abandon at once: A seconds to wait
+steps += [clock_step(wall=W.fmt(W.secs(T0) + A18))]                                     # the wall clock jumps A forward: the steady clock has not moved, so the wait stays
+code, d = ORC.append(ab_e, ab_c, PROF); assert code == "unavailable" and d["retryAfterMs"] == A18 * 1000, (code, d)
+steps += sent(al, 41, ab_e, ab_c, code, d)
+nb_e, nb_c, code, d = attempt("bob", "effect.outcome", {"claim": claims[0], "result": "unknown", "started": "unknown"}, space=AB, tag="ab-nonowner")
+assert code == "denied", (code, d)
+steps += sent(bo, 42, nb_e, nb_c, code, d)                                              # Policy before the moment-dependent unavailable (verdict pair 5/7): a non-owner is denied now
+steps += [clock_step(adv=10)]
+code, d = ORC.append(ab_e, ab_c, PROF); assert code == "unavailable" and d["retryAfterMs"] == (A18 - 10) * 1000, (code, d)
+steps += sent(al, 43, ab_e, ab_c, code, d)
+steps += [clock_step(adv=A18 - 10)]
+code, d = ORC.append(ab_e, ab_c, PROF); assert code == "ok" and d["time"] == W.fmt(W.secs(T0) + A18), (code, d)
+steps += [{"conn": al, "send": append_frame(44, ab_e, ab_c)}, {"conn": al, "expect": {"id": 44, "ok": "<receipt seq=%d time=%s>" % (d["seq"], d["time"])}}]       # the receipt time is the wall reading
+steps += [clock_step(wall=T0)]                                                          # the next vector starts at T0 again (this space's chain ends at T0+A)
+r23.append(vec("R16", f"R-16, P-09: an owner's abandon right after the claim is unavailable with retryAfterMs {A18 * 1000} (A = {A18} s for launchWindow {SP_POLICY['launchWindow']}); a wall-clock step does not shorten it; a non-owner's is denied (Policy before the moment-dependent unavailable); after 10 s of steady time the wait is {(A18 - 10) * 1000} ms; after A it is ordered; the executor's own report is never delayed",
+               steps, ["R-16", "P-09", "§4.1", "G-11"], "unavailable + retryAfterMs, unavailable (wall step), denied, unavailable (shorter), ok", source="maker (oracle: ref/wire.py Home, with a steady clock)"))
+
+# ── F8: R-03a, a clock behind the chain is unavailable; and verdict pair 5/7 ──
+CB = "cb:" + SERVER
+steps = create_space(al, CB, "clock behind") + member(al, CB, "bob", "member", 3)
+steps += [clock_step(wall=T_BEHIND)]
+cb_e, cb_c, code, d = attempt("bob", "message", {}, {"text": "while the clock is behind"}, space=CB, tag="cb-msg")
+assert code == "unavailable" and d["retryAfterMs"] > 0, (code, d)
+steps += sent(bo, 2, cb_e, cb_c, code, d, hint=True)
+steps += [clock_step(wall=T0)]
+code, d = ORC.append(cb_e, cb_c, PROF); assert code == "ok" and d["time"] == T0
+steps += sent(bo, 3, cb_e, cb_c, code, d)                                                # the same entry again, once the clock has caught up: ordered, receipt time T0
+r23.append(vec("R03a", "R-03a: a sequencer whose clock is behind the last receipt time answers unavailable (with a retryAfterMs hint) instead of stamping an earlier time; the same entry sent again after the clock catches up is ordered with receipt time T0", steps,
+               ["R-03a", "§4.1", "G-11"], "unavailable, then the receipt", source="maker (oracle: ref/wire.py Home)"))
+VB = "vb:" + SERVER
+steps = create_space(al, VB, "pair 5/7") + member(al, VB, "bob", "member", 3)
+steps += [clock_step(wall=T_BEHIND)]
+cv_e, cv_c, code1, d1 = attempt("carol", "message", {}, {"text": "carol is no member"}, space=VB, tag="vb-carol")
+bv_e, bv_c, code2, d2 = attempt("bob", "message", {}, {"text": "bob is a member"}, space=VB, tag="vb-bob")
+mv_e, mv_c, code3, d3 = attempt("bob", "member.set", {"actor": A("carol"), "role": "member"}, space=VB, tag="vb-bob-invites")
+bad_e, bad_c = bad_shape("bob", "message", {}, {"text": "malformed"}, space=VB, tag="vb-bad", seen=ORC.spaces[VB]["state"]["head"])
+ok_e, ok_c, code5, d5 = attempt("alice", "member.set", {"actor": A("vera"), "role": "member"}, space=VB, tag="vb-alice-adds")
+assert (code1, code2, code3, code5) == ("denied", "unavailable", "denied", "unavailable"), (code1, code2, code3, code5)
+steps += sent(ca, 2, cv_e, cv_c, code1, d1) + sent(bo, 2, bv_e, bv_c, code2, d2, hint=True) + sent(bo, 3, mv_e, mv_c, code3, d3)
+steps += [{"conn": bo, "send": append_frame(4, bad_e, bad_c)}, {"conn": bo, "expect": err(4, "invalid")}] + sent(al, 4, ok_e, ok_c, code5, d5, hint=True)
+steps += [clock_step(wall=T0)]
+code, d = ORC.append(bv_e, bv_c, PROF); assert code == "ok"
+steps += sent(bo, 5, bv_e, bv_c, code, d)
+r23.append(vec("V57", "verdict pair 5/7 (Policy before the moment-dependent unavailable), on a clock behind the chain: a non-member's message and a member's invitation are denied, a malformed entry is invalid, the allowed ones (a member's message, the owner's member.set) are unavailable; once the clock has caught up the member's message is ordered",
+               steps, ["§4.1", "R-03a", "G-11"], "denied, unavailable, denied, invalid, unavailable, then the receipt", source="maker (oracle: ref/wire.py Home)"))
+
+# ── F4: read combinations ──
+page1 = read_expect(al, 6, PG, 0, "alice", state=True, limit=1)
+steps = [rd(al, 2, EF, 0, state=True, effect=pid, at=2), {"conn": al, "expect": err(2, "invalid")},
+         rd(al, 3, EF, 0, state=True, effect=pid, follow=True), {"conn": al, "expect": err(3, "invalid")},
+         rd(al, 4, EF, 0, state=True, effect=pid, at=2, follow=True), {"conn": al, "expect": err(4, "invalid")},
+         rd(al, 5, EF, 0, state=True, effect=pid)] + read_expect(al, 5, EF, 0, "alice", state=True, effect=pid) + [
+         rd(al, 6, PG, 0, state=True, limit=1)] + page1
+steps += [{"conn": al, "send": {"id": 7, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "follow": True}}}, {"conn": al, "expect": err(7, "invalid")},
+          {"conn": al, "send": {"id": 8, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "effect": pid}}}, {"conn": al, "expect": err(8, "invalid")},
+          {"conn": al, "send": {"id": 9, "call": "read", "args": {"space": PG, "after": 0, "state": True, "cursor": "<cursor>", "at": 2, "follow": True}}}, {"conn": al, "expect": err(9, "invalid")},
+          {"conn": al, "send": {"id": 10, "call": "cancel", "args": {"target": 3}}}, {"conn": al, "expect": OKNULL(10)}]
+r23.append(vec("F4a", "read combinations: effect with at, with follow, with both; cursor with follow, with effect, with at and follow are invalid (no stream is opened, the connection stays usable); each alone still works", steps,
+               ["§3", "G-09", "F4"], "invalid x6, then the plain effect read", source="maker (oracle: ref/wire.py Home)"))
+
+# ── F4: a notice is dropped when its actor has no live subscription ──
+NR = "nr:" + SERVER
+notice_of = lambda i, space, seq: {"id": i, "item": {"type": "signal", "from": "@:" + SERVER, "body": {"type": "notice", "space": space, "seq": seq}}}
+PB = "profile:" + bo
+steps = create_space(al, NR, "dropped notices") + member(al, NR, "bob", "member", 3)                  # seq 2: bob has no subscription, so the notice is dropped
+steps += [{"conn": bo, "send": {"id": 2, "call": "subscribe", "args": {"space": PB}}}, {"conn": bo, "expect_silence": True}]
+steps += member(al, NR, "bob", "guest", 4) + [{"conn": bo, "expect": notice_of(2, NR, 3)}]            # seq 3: live, delivered
+steps += [{"conn": bo, "send": {"id": 3, "call": "cancel", "args": {"target": 2}}}, {"conn": bo, "expect": OKNULL(3)}]
+steps += member(al, NR, "bob", "member", 5)                                                           # seq 4: bob's subscription ended, dropped
+steps += [{"conn": bo, "send": {"id": 4, "call": "subscribe", "args": {"space": PB}}}, {"conn": bo, "expect_silence": True},
+          {"conn": bo, "send": {"id": 5, "call": "cancel", "args": {"target": 4}}}, {"conn": bo, "expect": OKNULL(5)}]
+r23.append(vec("N1", "notices are signals and are never replayed (G-03, G-09): the notice for seq 2 (bob not subscribed) and for seq 4 (his subscription had ended) are dropped, so a later subscription to his profile sees nothing; the one sent while he was subscribed (seq 3) arrives once", steps,
+               ["G-03", "G-09", "F4"], "silence, notice for seq 3, silence", source="maker"))
+
+# ── F4: negative integers beyond -(2^53-1) are treated like 2^53 and more (G-07 (1a)) ──
+sig_ok = lambda i, n: '{"id":%d,"call":"signal","args":{"space":"%s","body":{"n":%d}}}' % (i, S1, n)
+steps = [{"conn": al, "send_raw": '{"id":2,"call":"cancel","args":{"target":%d}}' % -BIG}, {"conn": al, "expect": err(2, "invalid")},
+         {"conn": al, "send_raw": sig_ok(3, -(BIG - 1))}, {"conn": al, "expect": err(3, "invalid")},
+         {"conn": al, "send_raw": sig_ok(4, -(BIG + 1))}, {"conn": al, "expect": err(4, "invalid")},
+         {"conn": al, "send_raw": '{"id":5,"call":"cancel","args":{"target":1}}'}, {"conn": al, "expect": OKNULL(5)}]
+r23.append(vec("N2", "a negative integer below -(2^53-1) anywhere in a frame is invalid on the request's own id and the connection stays open (like 2^53 and more); -(2^53-1) is not big, but a negative number is invalid in Json all the same (section 2: integers are in [0, 2^53)), on the same id", steps,
+               ["§2", "G-07", "F4"], "invalid x3, ok null", source="maker"))
+steps = []
+for label, text in (("raw:1", '{"call":"cancel","args":{"target":%d}}' % -BIG), ("raw:2", '{"id":%d,"call":"cancel","args":{"target":1}}' % -BIG),
+                    ("raw:3", '{"id":0,"call":"cancel","args":{"target":%d}}' % (-BIG - 1)), ("raw:4", '{"id":"7","call":"cancel","args":{"target":%d}}' % -BIG)):
+    steps += [{"conn": label, "send_raw": text}, {"conn": label, "expect": err(0, "invalid")}, {"conn": label, "expect_close": True}]
+steps += [{"conn": "raw:5", "send_raw": '{"call":"cancel","args":{"target":%d}}' % -(BIG - 1)}, {"conn": "raw:5", "expect": err(0, "invalid")},
+          {"conn": "raw:5", "send": {"id": 2, "call": "cancel", "args": {"target": 1}}}, {"conn": "raw:5", "expect": err(2, "denied")}]            # -(2^53-1) is not big: invalid on id 0 as a malformed frame, and the connection stays open
+r23.append(vec("N3", "a negative integer below -(2^53-1) with no usable request id (absent, itself -2^53, 0, a string): id 0, invalid, and the server closes the connection, before authentication; -(2^53-1) is not big, so the same frame without an id is an ordinary invalid frame and the connection stays open", steps,
+               ["§2", "G-07", "F4"], "id 0, invalid, close", source="maker"))
+del page1
+
+
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""
     head = json.dumps({k: v for k, v in doc.items() if k != "vectors"}, ensure_ascii=False)[:-1]
@@ -618,9 +768,17 @@ def dump_vectors(path, doc):
     open(path, "w", encoding="utf-8", newline="\n").write(head + ',"vectors":[\n' + ",\n".join(parts) + "\n]}\n")
 dump_vectors(os.path.join(OUT, "probes-r22.json"), {"format": "han-wire-vectors/1", "kind": "r22", "note": "Round-22 coverage (DECISIONS-r22.md E5, E8, E10; architecture.md §3, §4.1, §4.3, G-03, G-07, R-15). Every expected value is from ref/wire.py (W.Home) driven with the same entries. Run after probes-decided.json, in this order: E8-setup builds the paging space, E5-setup the space E5a-E5d and E7a use.", "vectors": r22})
 
+dump_vectors(os.path.join(OUT, "probes-r23.json"), {"format": "han-wire-vectors/1", "kind": "r23", "note": "Round-23 coverage (DECISIONS-r23.md F4, F8; architecture.md G-11 test.clock, G-03, G-07 (1a), G-09, R-03a, R-16, section 4.1). Run last: they move the test clock. Every expected value is from ref/wire.py (W.Home) driven with the same entries and the same clock moves. Each vector that moves the wall clock puts it back before it ends.", "vectors": r23})
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})
-index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json"]
+index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json"]
+
+import run_wire_vectors as RV     # the runner's generated entries must be byte for byte the oracle's: check three of them
+_cfg = RV.Cfg()
+for _k in (0, 500, NTASK - 1):
+    _e, _c = RV.generated_entry(_cfg, PG_GEN, _k, PG_GEN["head"] + _k)
+    _o = ORC.spaces[PG]["records"][PG_GEN["head"] + _k]
+    assert _o["entry"] == _e and _o["content"] == _c, f"the runner's generated task {_k} differs from the oracle's"
 dump(os.path.join(OUT, "index.json"), index)
-print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "head after agreed:", HEAD_AFTER_AGREED)
+print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "head after agreed:", HEAD_AFTER_AGREED)

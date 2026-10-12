@@ -1,9 +1,9 @@
 {
- "name": "unguard-does-not-loosen-forcing",
+ "name": "service-tasked-or-steered-is-forced",
  "rules": [
   "P-15"
  ],
- "description": "an unguard clears only the agent's own choice: owner forcing (forceGuarded) still guards it",
+ "description": "CX2: a service that is tasked, or holds a session that is steered, is forced like an agent; only the executor slot is exempt",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -36,6 +36,17 @@
      "status": "valid"
     }
    }
+  },
+  "@svc:b.example": {
+   "actorKind": "service",
+   "operatorConfirmed": true,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   },
+   "operator": "@op:b.example"
   },
   "@m:a.example": {
    "actorKind": "human",
@@ -252,14 +263,35 @@
   },
   {
    "entry": {
+    "id": "1c147ed2b2defb0336ea5741038613166bf7bb21785736bd6dd8718005bdd0d8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@svc:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-svc",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
     "id": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
     "v": 1,
     "space": "s1:a.example",
     "kind": "session.open",
-    "author": "@bot:b.example",
+    "author": "@svc:b.example",
     "keyId": "k1",
     "body": {
-     "steerMode": "guarded"
+     "steerMode": "auto"
     },
     "contentHash": "",
     "refs": [],
@@ -267,21 +299,16 @@
     "nonce": "n-s",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:08Z",
-   "expect": "allow",
-   "check": {
-    "guarded": {
-     "@bot:b.example": "@op:b.example"
-    }
-   }
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow"
   },
   {
    "entry": {
-    "id": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+    "id": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "session.close",
-    "author": "@bot:b.example",
+    "kind": "session.input",
+    "author": "@m:a.example",
     "keyId": "k1",
     "body": {
      "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
@@ -289,11 +316,40 @@
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-c",
+    "nonce": "n-in",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:09Z",
-   "expect": "allow"
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@svc:b.example": "@op:b.example"
+    }
+   },
+   "note": "steering an LLM labelled 'service' holds it"
+  },
+  {
+   "entry": {
+    "id": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "agent.release",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "agent": "@svc:b.example"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 10,
+    "nonce": "n-r",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow",
+   "check": {
+    "held": {}
+   }
   },
   {
    "entry": {
@@ -305,7 +361,7 @@
     "keyId": "k1",
     "body": {
      "to": [
-      "@bot:b.example"
+      "@svc:b.example"
      ]
     },
     "contentHash": "",
@@ -314,81 +370,81 @@
     "nonce": "n-t",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:10Z",
-   "expect": "allow",
-   "check": {
-    "held": {
-     "@bot:b.example": "@op:b.example"
-    }
-   }
-  },
-  {
-   "entry": {
-    "id": "58a9a5bda21bb79847089822280e36caa873eb2f36bb6ed81cdc79670c067447",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@op:b.example",
-    "keyId": "k1",
-    "body": {
-     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
-     "release": true,
-     "unguard": true
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 10,
-    "nonce": "n-u",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:11Z",
-   "expect": "allow",
-   "check": {
-    "held": {},
-    "guarded": {}
-   }
-  },
-  {
-   "entry": {
-    "id": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "task",
-    "author": "@p:b.example",
-    "keyId": "k1",
-    "body": {
-     "to": [
-      "@bot:b.example"
-     ]
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-t2",
-    "time": "2026-10-10T12:00:00Z"
-   },
    "time": "2026-10-10T12:00:12Z",
    "expect": "allow",
    "check": {
     "held": {
-     "@bot:b.example": "@op:b.example"
+     "@svc:b.example": "@op:b.example"
     }
    },
-   "note": "still forced"
+   "note": "so does a task"
+  },
+  {
+   "entry": {
+    "id": "06d6bf041103dfbd46e6c464f64240bf1bb6b6a2d4adb9d0389d9f5e5c879178",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "agent.release",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "agent": "@svc:b.example"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 12,
+    "nonce": "n-r2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "allow",
+   "check": {
+    "held": {}
+   }
+  },
+  {
+   "entry": {
+    "id": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@svc:b.example",
+     "action": "git.push",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-d",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "held": {},
+    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.phase": "ready"
+   },
+   "note": "named as executor: exempt"
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
-  "c": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+  "d": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+  "in": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
+  "r": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
+  "r2": "06d6bf041103dfbd46e6c464f64240bf1bb6b6a2d4adb9d0389d9f5e5c879178",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
-  "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
-  "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
-  "u": "58a9a5bda21bb79847089822280e36caa873eb2f36bb6ed81cdc79670c067447"
+  "svc": "1c147ed2b2defb0336ea5741038613166bf7bb21785736bd6dd8718005bdd0d8",
+  "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815"
  }
 }

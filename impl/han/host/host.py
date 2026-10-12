@@ -117,7 +117,7 @@ class Host:
         content = rec.get("content") or {}
         text = content.get("text") or content.get("ask")
         if who != self.me:
-            if e["kind"] == "session.input" and not b.get("release") and b["session"] in self._my_sessions():
+            if e["kind"] == "session.input" and b["session"] in self._my_sessions():
                 return await self._turn(TurnInput("steer", who, text or "", eid, seq, b["session"]))
             if e["kind"] == "task" and self.me in b["to"] and self.state["tasks"].get(eid, {}).get("open"):
                 return await self._turn(TurnInput("task", who, text or "", eid, seq, self.session, task=eid))
@@ -177,7 +177,7 @@ class Host:
         def refuse(key, why):
             self.refused.append(why); out.append((key + "r", "say", {"text": "refused: " + why}))
         def entry(kind, body, content):
-            assert not {"release", "unguard"} & set(body)        # E1: only the guard releases or unguards; the host never does, for itself least of all
+            assert kind != "agent.release" and not {"release", "unguard"} & set(body)        # E1, F2: only the guard releases or unguards; the host never does, for itself least of all
             return self.client.make_entry(kind, self.space, body, content, refs=refs, seen=inp.seq)
         for i, a in enumerate(actions):
             key = f"{inp.trigger}:{i}"

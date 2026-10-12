@@ -1,9 +1,10 @@
 {
- "name": "guard-takes-the-wheel",
+ "name": "executor-guards-survive-release",
  "rules": [
-  "P-15"
+  "P-15",
+  "P-07 E3"
  ],
- "description": "auto adds no hold; one guarded session guards the whole agent; an agent can't release itself; humans are never held",
+ "description": "an effect an outsider aimed at a guarded executor keeps needing its guard after a release",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -258,7 +259,7 @@
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "steerMode": "auto"
+     "steerMode": "guarded"
     },
     "contentHash": "",
     "refs": [],
@@ -271,252 +272,140 @@
   },
   {
    "entry": {
-    "id": "986d76de5d12e781379e6d63a2a5319e979af700a8485af3449810d31d10ec73",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@m:a.example",
-    "keyId": "k1",
-    "body": {
-     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-i",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:09Z",
-   "expect": "allow"
-  },
-  {
-   "entry": {
-    "id": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
+    "id": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.propose",
-    "author": "@bot:b.example",
+    "author": "@p:b.example",
     "keyId": "k1",
     "body": {
-     "executor": "@x:c.example",
+     "executor": "@bot:b.example",
      "action": "git.push",
-     "planDigest": "9c383ea371b78bf8e7cfa4f250323119995dea2846cee0fc104d11131366bf8d",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393",
      "repeatable": false
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-p1",
+    "nonce": "n-d",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@bot:b.example": "@op:b.example"
+    },
+    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.guards": [
+     "@op:b.example"
+    ]
+   }
+  },
+  {
+   "entry": {
+    "id": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "agent.release",
+    "author": "@op:b.example",
+    "keyId": "k1",
+    "body": {
+     "agent": "@bot:b.example"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 9,
+    "nonce": "n-r",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:10Z",
    "expect": "allow",
    "check": {
-    "effects.5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4.phase": "ready"
+    "held": {}
    }
   },
   {
    "entry": {
-    "id": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+    "id": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "session.open",
+    "kind": "effect.claim",
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "steerMode": "guarded"
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-g",
+    "nonce": "n-c0",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:11Z",
-   "expect": "allow"
+   "expect": "denied",
+   "note": "CX3: still needs OP"
   },
   {
    "entry": {
-    "id": "31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749",
+    "id": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@m:a.example",
+    "kind": "effect.approve",
+    "author": "@op:b.example",
     "keyId": "k1",
     "body": {
-     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393"
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-i2",
+    "nonce": "n-a",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:12Z",
-   "expect": "allow",
-   "check": {
-    "held": {
-     "@bot:b.example": "@op:b.example"
-    }
-   }
+   "expect": "allow"
   },
   {
    "entry": {
-    "id": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
+    "id": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "effect.propose",
+    "kind": "effect.claim",
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "executor": "@x:c.example",
-     "action": "git.push",
-     "planDigest": "2643a1a94d4368298136dda4adf5dc70a06ccee8c30dfa191398122785c7d781",
-     "repeatable": false
+     "proposal": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-p2",
+    "nonce": "n-c1",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:13Z",
-   "expect": "allow",
-   "check": {
-    "effects.9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc.guards": [
-     "@op:b.example"
-    ]
-   },
-   "note": "steering its auto side-session holds it once any of its sessions is guarded"
-  },
-  {
-   "entry": {
-    "id": "8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@bot:b.example",
-    "keyId": "k1",
-    "body": {
-     "session": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-i3",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:14Z",
    "expect": "allow"
-  },
-  {
-   "entry": {
-    "id": "540530291b28f20d1f4f4932e7a37bf81e0c95bdccce811fe881e64cc242a1ec",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@bot:b.example",
-    "keyId": "k1",
-    "body": {
-     "session": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
-     "release": true
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 14,
-    "nonce": "n-i3r",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:15Z",
-   "expect": "denied",
-   "note": "an agent can't release itself"
-  },
-  {
-   "entry": {
-    "id": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.open",
-    "author": "@m:a.example",
-    "keyId": "k1",
-    "body": {
-     "steerMode": "guarded"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-h",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:16Z",
-   "expect": "allow"
-  },
-  {
-   "entry": {
-    "id": "dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@p:b.example",
-    "keyId": "k1",
-    "body": {
-     "session": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-i5",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:17Z",
-   "expect": "allow"
-  },
-  {
-   "entry": {
-    "id": "468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "effect.propose",
-    "author": "@m:a.example",
-    "keyId": "k1",
-    "body": {
-     "executor": "@x:c.example",
-     "action": "git.push",
-     "planDigest": "428b4b49b8b436c6bb05f0cdda563eca811145a53a1de04f48775b5af6689ded",
-     "repeatable": false
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-p5",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:18Z",
-   "expect": "allow",
-   "check": {
-    "effects.468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d.phase": "ready"
-   },
-   "note": "humans are their own guard"
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
-  "g": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
-  "h": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
-  "i": "986d76de5d12e781379e6d63a2a5319e979af700a8485af3449810d31d10ec73",
-  "i2": "31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749",
-  "i3": "8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6",
-  "i3r": "540530291b28f20d1f4f4932e7a37bf81e0c95bdccce811fe881e64cc242a1ec",
-  "i5": "dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26",
+  "c0": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
+  "c1": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+  "d": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
-  "p1": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
-  "p2": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
-  "p5": "468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d",
+  "r": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
  }
 }

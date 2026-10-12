@@ -79,6 +79,37 @@ def test_symlink_out_of_the_workspace_is_outside(ws, tmp_path):
     except (OSError, NotImplementedError): pytest.skip("no symlink privilege")
     assert Gate(ws).decide("Write", {"file_path": "link/x.txt"}, "auto").kind == "deny"
 
+def test_bash_refuses_every_glob_and_expansion_character_f6(ws):
+    g = Gate(ws)
+    for mode in ("auto", "strict"):
+        for cmd in ("cat lin[k]", "cat a[0-9].txt", "ls *", "ls ?", "cat a]", "ls {a,b}", "cat {a}", "echo $HOME", "echo $(id)", "ls `id`", "echo !!",
+                    "echo hi!", "cat ~/x", "ls ~", "echo a{1..3}", "ls -la *.py", "grep x [a].txt"):
+            assert g.decide("Bash", {"command": cmd}, mode).kind == "deny", (mode, cmd)
+
+def test_bash_allowed_commands_run_with_globbing_off_f6(ws):
+    g = Gate(ws)
+    d = g.decide("Bash", {"command": "cat a.txt"}, "auto")
+    assert (d.kind, d.args) == ("allow", {"command": "set -f; cat a.txt"})
+    assert g.decide("Bash", {"command": "set -f; cat a.txt"}, "strict").args == {"command": "set -f; cat a.txt"}      # idempotent for the second line
+    assert g.decide("Bash", {"command": "set -f; rm a.txt"}, "auto").kind == "deny"
+
+def test_symlink_and_glob_repro_is_denied_f6(ws, tmp_path):
+    """The grader's repro: `link` in the workspace is a symlink to a file outside it, and `cat lin[k]` is what the shell would expand to
+    `cat link`. The glob character is refused in every mode, and so is the plain name (it resolves outside); a file inside still reads."""
+    outside = tmp_path / "outside.txt"; outside.write_text("secret")
+    (tmp_path / "ws" / "inside.txt").write_text("fine")
+    g = Gate(ws)
+    for mode in ("auto", "strict"):
+        assert g.decide("Bash", {"command": "cat lin[k]"}, mode).kind == "deny"                     # needs no symlink to be refused
+        assert g.decide("Bash", {"command": "cat inside.tx[t]"}, mode).kind == "deny"             # even a glob that stays inside
+        assert g.decide("Bash", {"command": "cat inside.txt"}, mode).kind == "allow"
+    try: os.symlink(str(outside), os.path.join(ws, "link"))
+    except (OSError, NotImplementedError): pytest.skip("no symlink privilege")
+    for mode in ("auto", "strict"):
+        assert g.decide("Bash", {"command": "cat lin[k]"}, mode).kind == "deny"
+        assert g.decide("Bash", {"command": "cat link"}, mode).kind == "deny"                      # the plain name leaves the workspace too
+        assert g.decide("Read", {"file_path": "link"}, mode).kind == "deny"
+
 # ── the agent, with a fake SDK client ──
 class FakeClient:
     """Stands in for ClaudeSDKClient: records the mode set before each query and plays a script of tool calls through can_use_tool."""
@@ -173,7 +204,7 @@ class HookedClient(FakeClient):
         for i, (tool, inp, asks) in enumerate(self.script):
             out = await hook({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": inp, "tool_use_id": f"t{i}"}, f"t{i}", None)
             self.answers.append(out)
-            if not out and asks: self.answers.append(await self.options.can_use_tool(tool, inp, type("Ctx", (), {"tool_use_id": f"t{i}"})()))
+            if "permissionDecision" not in out.get("hookSpecificOutput", {}) and asks: self.answers.append(await self.options.can_use_tool(tool, inp, type("Ctx", (), {"tool_use_id": f"t{i}"})()))
         yield ResultMessage("success", 1, 1, False, 2, "sid", total_cost_usd=0.01)
 
 def hooked_agent(ws, script):
@@ -197,7 +228,8 @@ async def test_pre_tool_use_hook_decides_every_call_including_in_cwd_edits(ws):
     assert ans[0] == {}                                                                        # in-cwd edit: allowed, not asked
     assert ans[1]["hookSpecificOutput"]["permissionDecision"] == "deny" and "outside the workspace" in ans[1]["hookSpecificOutput"]["permissionDecisionReason"]
     assert ans[2]["hookSpecificOutput"]["permissionDecisionReason"] == "proposed as 1" and len(proposed) == 1
-    assert ans[3] == {} and isinstance(ans[4], PermissionResultAllow)                           # Bash ls: the hook allows, can_use_tool allows again
+    assert ans[3]["hookSpecificOutput"]["updatedInput"] == {"command": "set -f; ls"}             # Bash ls: runs with globbing off (F6)
+    assert isinstance(ans[4], PermissionResultAllow)                                           # ... and can_use_tool allows the rewritten call again
     assert agent.trace == [("Write", "allow"), ("Write", "deny"), ("mcp__han__deploy", "world"), ("Bash", "allow")]
     assert [w.action for w in out if isinstance(w, World)] == ["file.write"]
 

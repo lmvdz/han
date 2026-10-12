@@ -25,7 +25,7 @@ async def test_mode_comes_from_the_state_at_the_steer_not_the_head(env):
     assert (await state(a))["held"] == {BOT: ALICE}
     await set_policy(a, sessions=sessions(["auto", "guarded"]))
     head = (await state(a))["head"]
-    await a.append(*a.make_entry("session.input", S, {"session": sid, "release": True}, {"text": "reviewed"}, seen=head))
+    await a.append(*a.make_entry("agent.release", S, {"agent": BOT}, seen=head))
     st = await state(a)
     assert st["held"] == {} and P.guarded_now(st, BOT) is None                      # the head state alone would say auto
     past = (await a.read_all(S, 0, state=True, at=r["seq"]))[0]["state"]

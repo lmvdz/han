@@ -88,7 +88,7 @@ async def run(root: str, say=print, model: str | None = None, max_turns: int = 4
         n(f"executor wrote hello.txt = {written!r} (phase succeeded after {time.time() - t_wait:.1f}s)")
 
         await alice.read_all(SPACE, 0)                                     # so alice's `seen` covers the instruction
-        await send(alice, "session.input", SPACE, {"session": sid, "release": True}, {"text": "reviewed"})
+        await send(alice, "agent.release", SPACE, {"agent": BOT})
         n("alice releases the hold")
         n(f"alice steers (the guard's own steer is not outside input, so the turn is auto): {STEER_LOCAL!r}")
         before = len(await outputs()); effects_before = len((await state())["effects"])

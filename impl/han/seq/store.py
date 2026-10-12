@@ -11,12 +11,10 @@ CREATE TABLE IF NOT EXISTS records (space TEXT NOT NULL, seq INTEGER NOT NULL, i
 CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS uploads (hash TEXT NOT NULL, actor TEXT NOT NULL, PRIMARY KEY (hash, actor));
 CREATE TABLE IF NOT EXISTS supplied (space TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (space, hash));
-CREATE TABLE IF NOT EXISTS notices (n INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, item TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS peer_records (space TEXT NOT NULL, seq INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY (space, seq));
 CREATE TABLE IF NOT EXISTS stream_items (space TEXT NOT NULL, session TEXT NOT NULL, n INTEGER NOT NULL, item TEXT NOT NULL,
   PRIMARY KEY (space, session, n));
 """
-MAX_NOTICES = 256          # per actor; notices are hints (G-03), so the oldest may go
 
 def _j(v): return json.dumps(v, separators=(",", ":"), ensure_ascii=False)
 
@@ -67,16 +65,6 @@ class Store:
         return {(h, a): at for h, a, at in self.db.execute("SELECT hash, actor, at FROM uploads") if at is not None}
     def supplied(self) -> set:
         return set(self.db.execute("SELECT space, hash FROM supplied"))
-
-    # notices (G-03): the actor's inbox, kept until the actor reads its profile
-    def add_notice(self, actor, item):
-        self.db.execute("INSERT INTO notices (actor, item) VALUES (?,?)", (actor, _j(item)))
-        self.db.execute("DELETE FROM notices WHERE actor=? AND n NOT IN (SELECT n FROM notices WHERE actor=? ORDER BY n DESC LIMIT ?)",
-                        (actor, actor, MAX_NOTICES))
-    def notices(self) -> dict:
-        out = {}
-        for a, i in self.db.execute("SELECT actor, item FROM notices ORDER BY n"): out.setdefault(a, []).append(json.loads(i))
-        return out
 
     # verified profile records of actors on other servers (federation, §4.3)
     def add_peer_record(self, rec: dict):

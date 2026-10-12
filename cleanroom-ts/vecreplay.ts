@@ -146,7 +146,7 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
           for (const [p, want] of Object.entries(st.check)) {
             const rp = p.replace(/[0-9a-f]{64}/g, (m) => mapId(m));
             const r = resolvePath(JSON.parse(JSON.stringify(s)), rp);
-            if (jcs(r.found ? r.value : null) !== jcs(walk(want))) bad += " " + p;
+            if (jcs(r.found ? r.value : "<missing>") !== jcs(walk(want))) bad += " " + p;
           }
           if (bad) { res.fail.push(`${tag}: state check failed:${bad}`); continue; }
         }

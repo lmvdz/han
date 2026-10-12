@@ -362,7 +362,12 @@ def main():
     # root causes (hand written)
     rc = os.path.join(HERE, "rootcauses.md")
     if os.path.exists(rc): w(open(rc, encoding="utf-8").read())
-    open(os.path.join(HERE, "RESULTS.md"), "w", encoding="utf-8").write("\n".join(L) + "\n")
+    keep = ""                                    # section 6 onward (closure, recorded wire-vector runs) is written by hand: keep it
+    try:
+        prev = open(os.path.join(HERE, "RESULTS.md"), encoding="utf-8").read()
+        if "\n## 6. " in prev: keep = prev[prev.index("\n## 6. "):]
+    except FileNotFoundError: pass
+    open(os.path.join(HERE, "RESULTS.md"), "w", encoding="utf-8").write("\n".join(L) + "\n" + keep)
     idx = golden(live)
     nv, ns = golden_probes()
     print("probe vectors", nv, "skipped", ns)

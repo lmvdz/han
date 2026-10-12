@@ -88,7 +88,8 @@ export interface Bodies {
   "redact": { target: EntryId };
   "session.open": { steerMode: SteerMode; task?: EntryId };   // a live session by its author (P-15); the stream itself travels on the transport (T-07)
   "session.close": { session: EntryId };
-  "session.input": { session: EntryId; release?: true; unguard?: true };      // steering, accountable and sequenced; release: the guard ends a hold; unguard (needs release, guard only) also ends the agent's own guarded choice (P-15)
+  "session.input": { session: EntryId };      // steering, accountable and sequenced (P-15)
+  "agent.release": { agent: ActorId; unguard?: true };   // by the agent's guard: ends its hold, covering what the header's `seen` covers; unguard also ends the agent's own guarded choice (P-15)
   "space.move": { to: ServerName; accept: { keyId: KeyId; sig: Sig } };   // sig = Ed25519(to's key, "han-accept-move-v1\n" ‖ space ‖ "\n" ‖ receiptHash(head))
 }
 
@@ -114,6 +115,7 @@ export interface Contents {
   "session.open": { title?: string };
   "session.close": null;
   "session.input": { text: string; blobs?: BlobRef[] };
+  "agent.release": null;
 }
 export type KindName = keyof Bodies;
 /** How a session's host treats input from someone other than the session's own actor (P-15, R-24):
@@ -142,7 +144,7 @@ export interface PolicyDoc {
   minDurability: Durability;                             // R-08
   launchWindow: number;                                  // seconds, 15–3600: abandon threshold (P-09) and executor deadline (X-04)
   extensionsMinRole: "guest" | "member" | "owner";       // lowest role that may append extension kinds (§5)
-  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[]; forceGuarded?: boolean };   // P-15: minimum roles (read, steer no wider than watch); allowed modes; forceGuarded (default false): every agent with a confirmed operator is guarded, session or not
+  sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[]; forceGuarded?: boolean };   // P-15: minimum roles (read, steer no wider than watch); allowed modes; forceGuarded (default false): every non-human target of an instruction is guarded for the operator in the profile pinned for that entry, session or not (a service named as executor excepted)
   servers: { deny: ServerName[] };
 }
 
@@ -172,7 +174,7 @@ export interface SpaceState {
   home: ServerName;
   policy: PolicyDoc;
   roles: { [actor: ActorId]: Role };
-  roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02): held at seq k iff from ≤ k < to (no `to` while it lasts)
+  roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02): held at seq k iff a kept interval has from ≤ k < to (no `to` while it lasts); at most the 64 most recent per actor, older ones are dropped (seqs before the oldest kept `from` are then not readable for a former member)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number; seq: Seq;
                      parent?: EntryId; budget?: Budget; left?: Budget };
@@ -183,8 +185,8 @@ export interface SpaceState {
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
       expiresAt?: Time;                             // E5: no claim at or after this time
       guards?: ActorId[];                           // the proposer's guard if it was held when proposing (P-15). The executor's
-                                                    // guard is recorded here too when P-15 settles a hold (§6.6)
-      approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId; dropped?: true }[];
+                                                    // guard is recorded here too when the proposal is an outside instruction to a guarded or forced executor, or P-15 settles a hold (§6.6)
+      approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded approvals are removed; a consumed one is removed once its claim settles
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
         window: number;                             // the launchWindow in force when the claim was ordered (pinned for X-04, P-09)
@@ -197,14 +199,13 @@ export interface SpaceState {
   };
   budgetLeft: { unit: string; amount: SignedInt } | null;   // budget − committed; negative only after a cut (P-06)
   entries: { [id: EntryId]: { author: ActorId; kind: KindName } };   // R-05 resolution, P-04 redact
-  sessions: { [id: EntryId]: { actor: ActorId; open: boolean; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId;
-                                human: boolean; guard?: ActorId } };   // the guard is an agent's confirmed operator at open
+  sessions: { [id: EntryId]: { actor: ActorId; opened: Time; steerMode: SteerMode; steers: number; task?: EntryId;
+                                human: boolean; guard?: ActorId } };   // open sessions only, a closed one leaves the state; the guard is an agent's confirmed operator at open
   held: { [agent: ActorId]: ActorId };                          // P-15: agent → the human it waits for
   cleared: { [agent: ActorId]: Seq };                           // P-15: `seen` of the guard's last release (instructions up to it are reviewed)
   outside: { [agent: ActorId]: Seq };                           // P-15: seq of the latest outside instruction while guarded (stale releases)
   guarded: { [agent: ActorId]: ActorId };                       // P-15: agent → its guard; the agent's own sticky choice, ended only by its guard's unguard
-                                                                // (guardedNow also counts owner-forced guarding, derived)
-  agents: { [agent: ActorId]: ActorId };                        // P-15: agent member → its confirmed operator, from the profile pinned at member.set; cleared with the role (forceGuarded)
+                                                                // (guardedNow also counts guarding forced by owners' modes, derived; forceGuarded acts per instruction, from the pinned profile)
   profile?: {                                                          // profile spaces only (§4.3)
     actorKind: ActorKind; operator?: ActorId | null; operatorConfirmed: boolean;
     keys: { [keyId: KeyId]: { publicKey: string; status: "valid" | "revoked" } };
@@ -224,16 +225,16 @@ export interface Limits {
   maxStreamItemBytes: 65536;   // T-07: one StreamItem; larger context goes in a blob
   maxFollows: 256;
   maxClockSkewSeconds: 60;     // R-03a: the one future-time tolerance; a receipt dated further ahead of a verifier's clock is a `future-time` fault
-  maxStateItems: 1000;         // §3 read: `effects` and `tasks` per page of a state read; the rest follows by `cursor`
+  maxStateItems: 1000;         // §3 read: entries of each of `effects`, `tasks`, `sessions` and `roleHistory` per page of a state read (a page is also bounded by maxFrameBytes); the rest follows by `cursor`
 }
 export interface Challenge { challenge: string /* 43 chars: 32 random bytes, base64url; a client accepts 22–128 of [A-Za-z0-9_-] (G-08) */; server: ServerName; versions: number[]; time: Time }
 /** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never host:port). */
-export type StateView = Omit<SpaceState, "entries">;   // the wire state, one page: `effects` and `tasks` hold at most Limits.maxStateItems each; never `limit` (§3 read)
+export type StateView = Omit<SpaceState, "entries">;   // the wire state, one page: `effects`, `tasks`, `sessions` and `roleHistory` are cut to at most Limits.maxStateItems entries each and so that the item fits Limits.maxFrameBytes; every other member is repeated on every page; never `limit` (§3 read)
 /** `read {state: true, effect: id}`: that one effect, plus the members a host or executor needs to judge it (§3). */
-export type EffectStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "roles" | "effects" | "sessions" | "held" | "guarded" | "agents">;
+export type EffectStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "roles" | "effects" | "sessions" | "held" | "guarded">;
 export type ReadItem =
-  | { type: "state"; state: StateView; next?: string }   // first item when `state: true` and the reader may read at head (or at `at`, then StateView.head = at); `next`: more effects or tasks, fetch with `read {state: true, cursor: next}`
-  | { type: "state"; state: EffectStateView }            // the answer to `read {state: true, effect}`
+  | { type: "state"; state: StateView; next?: string }   // first item when `state: true` and the reader may read at head (or at `at`, then StateView.head = at); `next`: more entries of the four cut maps, fetch with `read {state: true, cursor: next}`
+  | { type: "state"; state: EffectStateView; next?: string }   // the answer to `read {state: true, effect}`; bounded by maxFrameBytes too: `sessions` are cut, `next` fetches the rest of them with `cursor`
   | { type: "heads"; heads: Receipt[] }                  // the server's latest receipts, when the reader sent knownHeads (R-15)
   | { type: "record"; record: LogRecord }
   | { type: "signal"; from: ActorId; body: Json };       // T-05, G-09: only on `subscribe` (never on `read`); ephemeral, unordered with records, never authority
@@ -245,8 +246,8 @@ export interface Calls {
   read: { args: { space: SpaceId; after: Seq; follow?: boolean; state?: boolean;
                   at?: Seq /* with state: the StateView after record `at`; needs read rights at `at` (P-02); 1…head */;
                   limit?: number /* 1–1000, default 1000; bounds the record backlog only, never the state; with follow a longer backlog leaves a seq gap the client MUST re-read */; knownHeads?: Receipt[] /* ≤ 256 */;
-                  cursor?: string /* with state: the `next` of a state page; answers that page alone; excludes `at` and `effect` */;
-                  effect?: EntryId /* with state: only that effect and the members of EffectStateView; answers the state item alone */ }; item: ReadItem };
+                  cursor?: string /* with state: the `next` of a state page; answers that page alone; with `at`, `follow` or `effect` it is `invalid` (F4) */;
+                  effect?: EntryId /* with state: only that effect and the members of EffectStateView; answers the state item alone; with `at`, `follow` or `cursor` it is `invalid` (F4) */ }; item: ReadItem };
 }   // the three sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
@@ -277,6 +278,11 @@ export interface BindingCalls {
   stream:    { args: { item: StreamItem }; ok: null };            // G-05: only the session's actor, `n` one more than its last (an identical repeat of the last item is ok)
   watch:     { args: { space: SpaceId; session: EntryId }; item: StreamItem };   // live items only, while sessionAccess grants watch; stays open and silent when the right goes (G-05)
   cancel:    { args: { target: number }; ok: null };              // ends the streaming call whose request id is `target`
+}
+/** G-11: the control call of test mode, and of nothing else. Outside test mode it is not a call: a server answers `invalid` (G-07 (2)) and a production server MUST NOT offer it.
+ *  `wall` sets the wall reading (any instant); `steadyAdvance` (integer seconds, ≥ 0) advances the steady reading. Both are independent. Answers the readings after the call. */
+export interface TestCalls {
+  "test.clock": { args: { wall?: Time; steadyAdvance?: number }; ok: { wall: Time; steady: number } };
 }
 export type BindingCallName = keyof BindingCalls;
 /** §7.3: signals in the space being moved. The owner asks; the current home A answers with the target's acceptance of its head. */

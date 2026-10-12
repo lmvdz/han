@@ -32,7 +32,7 @@ python -m han.seq --server a.localhost --db seq.db --key server-key.json --regis
 
 (`register` writes to the database directly: run it while the server is stopped, or use `--register` at startup. Registering twice is a no-op.) An agent's operator then confirms by appending `member.set {actor: <operator>, role: "owner"}` to `profile:<agent>`.
 
-State is in the `--db` file (SQLite, WAL, `synchronous=FULL`: records, receipts, pinned profiles, blobs, uploads, notices, stream items). On restart the server reloads the chain, re-verifies its receipts, and continues. Receipt time comes from a clock anchored at startup (R-03a); a clock restarted behind a space's last receipt makes appends `unavailable` until it catches up; after a restart an owner's abandon waits a full `A` (R-16).
+State is in the `--db` file (SQLite, WAL, `synchronous=FULL`: records, receipts, pinned profiles, blobs, uploads, stream items; notices are never stored). On restart the server reloads the chain, re-verifies its receipts, and continues. Receipt time comes from a clock anchored at startup (R-03a); a clock restarted behind a space's last receipt makes appends `unavailable` until it catches up; after a restart an owner's abandon waits a full `A` (R-16).
 
 ## Federation: several servers
 
@@ -97,7 +97,7 @@ The reference checks stay as they were: `python ref/run_wire.py`, `python ref/ru
 | `han-exec` | `python -m han.exec --url ws://…/han --actor @x:S --key KEY --instance k1 --journal PATH --spaces SPACE --actions file.write,http.post [--allow-url PREFIX] [--sandbox DIR]` | X-01…X-10; refuses to start (exit 3) if its instance is already running or its journal is missing. [han/exec/NOTES.md](han/exec/NOTES.md) |
 | `han-host` | `python -m han.host --url … --actor @bot:S --key KEY --space SPACE --mode auto\|guarded --agent scripted\|claude --state PATH [--executor @x:S]` | P-15 and R-24 host duties, R-17/R-18 recovery; `claude` drives Claude Code through the Agent SDK (run live: [demo/README.md](demo/README.md)). [han/host/NOTES.md](han/host/NOTES.md) |
 | `han-verify` | `python -m han.verify follow --url … --actor … --key … --space SPACE --state PATH --server-key S=KEYFILE` · `python -m han.verify proof FILE` | R-14/R-15 mirror; exit 0 ok, 2 faulty (writes a portable proof), 3 stopped, 4 moved. [han/verify/NOTES.md](han/verify/NOTES.md) |
-| `han` | `python -m han.cli <keygen\|space create\|member set\|message\|task\|propose\|approve\|cancel\|session …\|watch\|read\|status>` (or `HAN_URL`, `HAN_ACTOR`, `HAN_KEY`, `HAN_OUTBOX`) | thin over `han.client`; `approve` shows the plan and checks its digest first (P-08) |
+| `han` | `python -m han.cli <keygen\|space create\|member set\|message\|task\|propose\|approve\|cancel\|session …\|agent release\|watch\|read\|status>` (or `HAN_URL`, `HAN_ACTOR`, `HAN_KEY`, `HAN_OUTBOX`) | thin over `han.client`; `approve` shows the plan and checks its digest first (P-08) |
 
 Options added in the fix round:
 

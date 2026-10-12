@@ -135,29 +135,29 @@ class ClaudeCodeAgent(Agent):
         if self._client: await self._client.disconnect(); self._client = None
 
     def _decide(self, tool_name, tool_input, trace=True):
-        """The Gate's verdict for one call: (allowed, message for the model if not). A world call is proposed here, once."""
+        """The Gate's verdict for one call: (allowed, message for the model if not, input to run instead). A world call is proposed here, once."""
         d = self.gate.decide(tool_name, tool_input, self.mode)
         if trace: self.trace.append((tool_name, d.kind))
-        if d.kind == "allow": return True, ""
-        if d.kind == "deny": return False, d.message
+        if d.kind == "allow": return True, "", ({**tool_input, **d.args} if d.args else None)      # Bash runs with globbing off (F6)
+        if d.kind == "deny": return False, d.message, None
         w = World(d.action, d.args)
         self._world.append(w)
         answer = self.propose(w) if self.propose else None
-        return False, answer or f"{tool_name} reaches the world: proposed as {d.action}, waiting"
+        return False, answer or f"{tool_name} reaches the world: proposed as {d.action}, waiting", None
 
     async def _pre_tool_use(self, hook_input, tool_use_id=None, context=None):
         """PreToolUse hook: the Gate decides for every tool call, including those the CLI would run without asking (in-cwd edits in
         acceptEdits). An allowed call continues through the CLI's normal permission flow (and `can_use_tool`, if it asks)."""
-        ok, message = self._decide(hook_input.get("tool_name", ""), hook_input.get("tool_input") or {})
+        ok, message, run = self._decide(hook_input.get("tool_name", ""), hook_input.get("tool_input") or {})
         if ok:
             if tool_use_id: self._hooked.add(tool_use_id)
-            return {}
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": run}} if run else {}
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": message}}
 
     async def _can_use_tool(self, tool_name, tool_input, context=None):
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-        ok, message = self._decide(tool_name, tool_input, trace=getattr(context, "tool_use_id", None) not in self._hooked)
-        return PermissionResultAllow() if ok else PermissionResultDeny(message=message)
+        ok, message, run = self._decide(tool_name, tool_input, trace=getattr(context, "tool_use_id", None) not in self._hooked)
+        return PermissionResultAllow(updated_input=run) if ok else PermissionResultDeny(message=message)
 
     async def turn(self, input: TurnInput, mode: Mode) -> list[Action]:
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock

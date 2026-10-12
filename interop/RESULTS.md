@@ -104,7 +104,7 @@ Supplementary cells with the TS sequencer's own server key id `srv1` (the TS ver
 | P37 | blobGet by the uploader within 24 h (own-blob rule) | ok | ok | ok | yes |
 | P38 | blobGet with offset past the end (W-29c) | invalid | ok | ok | yes |
 | P39 | blobGet with length 0 / huge length (W-29c) | ok (clamped) for huge length | ok | ok | yes |
-| P40 | stream item for a closed session (G-05) | denied | ok | ok | yes |
+| P40 | stream item for a closed session (G-05) | denied | **not_found** | **not_found** | yes |
 | P41 | stream n=1 by the session actor | ok | ok | ok | yes |
 | P42 | stream n=1 repeated (identical) | ok | ok | ok | yes |
 | P43 | stream n=1 repeated with different text (W-31) | invalid | ok | ok | yes |
@@ -125,7 +125,7 @@ Supplementary cells with the TS sequencer's own server key id `srv1` (the TS ver
 | P58 | `host` (G-06) from a non-server connection | denied (host needs a server actor @:A) | ok | ok | yes |
 | P28b | append whose signature has non-zero padding bits in its last character (non-canonical base64url) (W-17) | invalid (Sig is canonical base64url) | ok | ok | yes |
 
-Probes matching the spec reading: Python server 56/59, TS server 55/59. Probes where the two servers answer differently: 1 (P51).
+Probes matching the spec reading: Python server 55/59, TS server 54/59. Probes where the two servers answer differently: 1 (P51).
 
 ## 3. Failing steps with their frames
 
@@ -135,9 +135,9 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 
 ```json
 {"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"CHyfTbFJyt8z6dwQ_kTZuEt78Ozbdd3z73mIppKqILs\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-11T20:54:52Z\"}"}
-{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"AVISeiGyiwgVnVj8j2FZYFKPA7SongBXmogLD7yBFdZcYiPu9ZPalg1ZxBKcpAYFPH5yrt2LwE0ayRmBnBpjCw\", \"version\": 1}}"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-11T20:54:52Z\",\"knownHeads\":[]}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"B_uj_HWlN2zflP2frMuDqaGBT-r6oXzaIWE1MxHs3V8\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-12T02:25:26Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"gbdHO-_87M2e3ofxAGV6-dtO36yJLKOm8zOzAiXJ5EWLlSPO3rIaqs8OuvJHd-INbMHNlY8nBWmt8IacYb3fAw\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-12T02:25:26Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
@@ -165,7 +165,7 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-11T20:55:49Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-12T02:26:24Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
@@ -175,8 +175,8 @@ TS executor started before the space exists, against the Python server (`exec-ts
 TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the TS verifier then looks for the entry signer `@:a.localhost` under key id `srv1` only (`verify.ts` viewOf) and reports `seq 1: entry signature does not verify against the pinned key`:
 
 ```
-< {"id": 2, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "4F6DBTq5hG0h8od3aHDZ51sXYI-d83JiK6-BwCYI8hQVfTn-lX0PKIUPNJ6lKygslT9rejgDi5XypCDNxvZIBw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "4F6DBTq5hG0h8od3aHDZ51sXYI-d83JiK6-BwCYI8hQVfTn-lX0PKIUPNJ6lKygslT9rejgDi5XypCDNxvZIBw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 2, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "xVEx724wJw0mdszBb1F0fAFK0jF7XzeRH1XG4283NdKqEsKH_GCfg70jGTAxFeSEP9JVy42xF-6aqJ46UHuoAw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "xVEx724wJw0mdszBb1F0fAFK0jF7XzeRH1XG4283NdKqEsKH_GCfg70jGTAxFeSEP9JVy42xF-6aqJ46UHuoAw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked
@@ -281,7 +281,6 @@ W-01 and W-02: hello proofs interoperate in all four pairs with the transport on
 - `golden/`: one JSON per operation (`hello`, `space.create`, `member.set`, `message`, `read`, `read.state`, `follow`, `subscribe`, `signal`, `propose`, `approve`, `blobPut`, `blobGet`, `blobPut.multipart`, `blobGet.multipart`, `session.open`, `session.input`, `stream_watch`, `session.close`, `task`, `redact`) plus `probes.json` (error-path vectors both servers agree on) and `index.json`. Frames are what crossed the tap, keys and clocks fixed, request ids renumbered per connection, hello challenge/proof masked, long blob data summarised by length and hash. Every operation except `hello` is answered byte for byte the same by both servers for both clients (`pythonServerAndTsServerAgree: true`); `hello` differs only in `limits.maxClockSkewSeconds` (root cause 9).
 - Limits of this measurement: one Python implementation and one TS implementation; the Python server and Python client share `ref/wire.py` and `ref/policy.py`, so "Python agrees with itself" says nothing about the spec; both sides had been tuned against the same vectors; probes encode my reading of the text (the `expect` column), and where a probe says "unspecified" no failure is counted.
 
-
 ## 6. Closure of round 21
 
 Appended by hand after round 21 and extended in round 22 (`report.py` regenerates sections 1 to 5 only; copy this section back after a re-run: it is the only part of the file that is not generated). It answers section 4: **the decisions of round 21 resolved all 22 failures** counted there, each with the decision that settles it (`DECISIONS-r21.md`), the place in architecture.md that now says it, and what shows it. The one extra difference, W-51 (the StateView `settled` member of a claim without a reservation), is settled by D14 (`settled` is on every claim, `false` until settled; §6.1, han.ts, `ref/policy.py`).
@@ -320,6 +319,8 @@ Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` 
 | wire vectors, end of round 21 | 82/82 vectors, 203/203 expectations | 82/82 vectors, 203/203 expectations |
 | wire vectors, round 22 | 97/99 vectors, 1330/1344 expectations | 99/99 vectors, 1344/1344 expectations |
 | wire vectors, round 22 after the G-07 (1a) fix in impl/han/seq/server.py | 99/99 vectors, 1344/1344 expectations | 99/99 vectors, 1344/1344 expectations |
+| wire vectors, round 23 before the transcripts were re-recorded | 97/107 vectors, 347/420 expectations | 97/107 vectors, 347/420 expectations |
+| wire vectors, round 23 | 107/107 vectors, 420/420 expectations | 107/107 vectors, 420/420 expectations |
 
 ### 6.1 What the round-22 refresh changed and found
 
@@ -337,3 +338,7 @@ Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` 
 No other vector fails on either server. Differences found while writing the vectors where the text is silent, so no vector pins them (details in `ref/wire-vectors/README.md`): `read {state, effect}` with `at` or with `follow`, `read {state, cursor}` with `follow`, a negative integer below -(2^53), and whether a notice for an actor with no open session is kept for its next subscription (the Python server keeps and replays it, the TS server drops it; G-09 says signals are never replayed).
 
 Still unexercised by any wire vector (test mode is one server with a frozen clock): moves, federation notices, server-to-server blob transfer, key rotation, executor crash recovery, R-16 clock behaviour, `limit`, and the `unavailable` verdicts.
+
+### 6.2 Round 23
+
+The expectations are now counted per vector family (the 1,001-task paging setup is generated by the runner and not counted), so the round-23 totals are not comparable with the 1,344 of round 22. Before the golden transcripts were re-recorded, both servers failed the same 10 operation files (06, 10, 11, 13, 15, 16, 17, 19, 20, 21): they had been recorded under the round-22 P-01, before F1 pinned the instruction targets and removed `agents`, and the chain broke after `10-propose`. `interop/run.py` was re-run on the round-23 servers (every cell passed, executors 8/8), `report.py` re-recorded `golden/` (it now keeps this hand-written section 6), `make_wire_vectors.py` regenerated the operation files without the round-22 pinning shim, and both servers then passed every vector.

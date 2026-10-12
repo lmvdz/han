@@ -481,9 +481,15 @@
    "time": "2026-10-10T12:00:11Z",
    "expect": "allow",
    "check": {
-    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.approvals.0.dropped": true
+    "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.approvals": [
+     {
+      "id": "39f82526861f1e785e2bf52b0828194c4fa43c62a0d5be74ec097cf8c6a88151",
+      "author": "@m:a.example",
+      "keyId": "k1"
+     }
+    ]
    },
-   "note": "a new approval supersedes M's own"
+   "note": "a new approval supersedes M's own, and the old one is removed"
   },
   {
    "entry": {

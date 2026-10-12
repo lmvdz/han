@@ -41,6 +41,9 @@ class AsStore:
     def session(self, space, session):
         r = self.db.execute("SELECT watch, read, done FROM sessions WHERE space=? AND session=?", (space, session)).fetchone()
         return None if r is None else {"watch": r[0], "read": r[1], "done": bool(r[2])}
+    def open_sessions(self, space) -> dict:
+        """session → {watch, read} of the session rooms of `space` that are not finished."""
+        return {r[0]: {"watch": r[1], "read": r[2]} for r in self.db.execute("SELECT session, watch, read FROM sessions WHERE space=? AND done=0", (space,))}
     def add_session(self, space, session, watch, read):
         self.db.execute("INSERT OR IGNORE INTO sessions (space, session, watch, read) VALUES (?,?,?,?)", (space, session, watch, read)); self.db.commit()
     def finish_session(self, space, session):

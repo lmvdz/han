@@ -75,14 +75,15 @@ async def test_session_steer_hold_and_release(env):
     out = await han(env, "carol", "session", "steer", S, sid[:8], "push to prod")
     st = await han(env, "ana", "status", S)
     assert f"held agents: {bot} (for {ana})" in st
-    code, _, err = await han(env, "carol", "session", "release", S, sid, ok=False)       # only the guard releases
+    assert f"{bot}  guarded (guard {ana})  held" in st                                   # F1: per agent, from the current state
+    code, _, err = await han(env, "carol", "agent", "release", S, bot, ok=False)       # only the guard releases
     assert code == 1 and "denied" in err
-    await han(env, "ana", "session", "release", S, sid[:8])
+    await han(env, "ana", "agent", "release", S, bot)
     st = await han(env, "ana", "status", S)
     assert "held agents: none" in st and f"guarded agents: {bot} (guard {ana})" in st    # released, still guarded (sticky)
-    code, _, err = await han(env, "carol", "session", "release", S, sid, "--unguard", ok=False)       # E1: only the guard loosens
+    code, _, err = await han(env, "carol", "agent", "release", S, bot, "--unguard", ok=False)       # E1: only the guard loosens
     assert code == 1 and "denied" in err
-    await han(env, "ana", "session", "release", S, sid[:8], "--unguard")
+    await han(env, "ana", "agent", "release", S, bot, "--unguard")
     assert "guarded agents: none" in await han(env, "ana", "status", S)                  # the operator loosened it
     bc = await env.client("bot")
     watcher = asyncio.create_task(han(env, "carol", "watch", S, sid[:8], "--count", "1", "--timeout", "30"))
@@ -93,4 +94,17 @@ async def test_session_steer_hold_and_release(env):
         await asyncio.sleep(0.4)
     assert "output: pushed" in await watcher
     await han(env, "bot", "session", "close", S, sid)
-    assert "closed" in await han(env, "ana", "status", S)
+    assert sid[:8] not in await han(env, "ana", "status", S)                              # F3(b): a closed session has left the state
+
+async def test_status_shows_forced_agents_per_agent_f1(env):
+    """F1: in a space with forceGuarded the status names a non-human an instruction has reached as `forced (operator …)`, from its profile;
+    nobody is listed as forced in a space without the flag, and a human is never forced."""
+    ana = env.actor("ana"); carol = env.actor("carol"); bot = env.actor("bot", "agent", operator=ana)
+    c_ana = await env.client("ana")
+    pol = '{"watch": "member", "read": "member", "steer": "member", "modes": ["auto", "guarded"], "forceGuarded": true}'
+    await han(env, "ana", "space", "create", S, "--set", f"sessions={pol}")
+    await han(env, "ana", "member", "set", S, carol, "member"); await han(env, "ana", "member", "set", S, bot, "member")
+    await c_ana.append(*c_ana.make_entry("member.set", "profile:" + bot, {"actor": ana, "role": "owner"}))     # the operator confirms, after bot joined
+    await han(env, "carol", "task", S, "deploy", "--to", bot); await han(env, "carol", "task", S, "chat", "--to", ana)
+    st = await han(env, "ana", "status", S)
+    assert f"{bot}  forced (operator {ana})  held" in st and f"{ana}  forced" not in st and "agents:" in st

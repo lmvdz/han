@@ -1,9 +1,9 @@
 {
- "name": "two-operators",
+ "name": "guard-takes-the-wheel",
  "rules": [
   "P-15"
  ],
- "description": "each agent is held for its own operator; another operator can neither release nor approve for it",
+ "description": "auto adds no hold; one guarded session guards the whole agent; an agent can't release itself; humans are never held",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -18,7 +18,7 @@
   },
   "@bot2:b.example": {
    "actorKind": "agent",
-   "operator": "@op2:b.example",
+   "operator": "@op:b.example",
    "operatorConfirmed": true,
    "keys": {
     "k1": {
@@ -48,16 +48,6 @@
    }
   },
   "@o:a.example": {
-   "actorKind": "human",
-   "operatorConfirmed": false,
-   "keys": {
-    "k1": {
-     "publicKey": "pk",
-     "status": "valid"
-    }
-   }
-  },
-  "@op2:b.example": {
    "actorKind": "human",
    "operatorConfirmed": false,
    "keys": {
@@ -219,27 +209,6 @@
   },
   {
    "entry": {
-    "id": "f6d2f86637719383939553c359545da9d11153c3b45d65a02cd64df704368328",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "member.set",
-    "author": "@o:a.example",
-    "keyId": "k1",
-    "body": {
-     "actor": "@op2:b.example",
-     "role": "member"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-op2",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:06Z",
-   "expect": "allow"
-  },
-  {
-   "entry": {
     "id": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
     "v": 1,
     "space": "s1:a.example",
@@ -256,7 +225,7 @@
     "nonce": "n-b",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:07Z",
+   "time": "2026-10-10T12:00:06Z",
    "expect": "allow"
   },
   {
@@ -277,7 +246,7 @@
     "nonce": "n-b2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:08Z",
+   "time": "2026-10-10T12:00:07Z",
    "expect": "allow"
   },
   {
@@ -289,7 +258,7 @@
     "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "steerMode": "guarded"
+     "steerMode": "auto"
     },
     "contentHash": "",
     "refs": [],
@@ -297,36 +266,16 @@
     "nonce": "n-s",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:09Z",
+   "time": "2026-10-10T12:00:08Z",
    "expect": "allow"
   },
   {
    "entry": {
-    "id": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.open",
-    "author": "@bot2:b.example",
-    "keyId": "k1",
-    "body": {
-     "steerMode": "guarded"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-s2",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:10Z",
-   "expect": "allow"
-  },
-  {
-   "entry": {
-    "id": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
+    "id": "986d76de5d12e781379e6d63a2a5319e979af700a8485af3449810d31d10ec73",
     "v": 1,
     "space": "s1:a.example",
     "kind": "session.input",
-    "author": "@op2:b.example",
+    "author": "@m:a.example",
     "keyId": "k1",
     "body": {
      "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
@@ -334,42 +283,15 @@
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-in",
+    "nonce": "n-i",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:11Z",
-   "expect": "allow",
-   "check": {
-    "held": {
-     "@bot:b.example": "@op:b.example"
-    }
-   },
-   "note": "OP2 is an outsider to BOT"
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow"
   },
   {
    "entry": {
-    "id": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "session.input",
-    "author": "@op2:b.example",
-    "keyId": "k1",
-    "body": {
-     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
-     "release": true
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 11,
-    "nonce": "n-r",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:12Z",
-   "expect": "denied"
-  },
-  {
-   "entry": {
-    "id": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
+    "id": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
     "v": 1,
     "space": "s1:a.example",
     "kind": "effect.propose",
@@ -378,101 +300,222 @@
     "body": {
      "executor": "@x:c.example",
      "action": "git.push",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736",
+     "planDigest": "9c383ea371b78bf8e7cfa4f250323119995dea2846cee0fc104d11131366bf8d",
      "repeatable": false
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-p",
+    "nonce": "n-p1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow",
+   "check": {
+    "effects.5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4.phase": "ready"
+   }
+  },
+  {
+   "entry": {
+    "id": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.open",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "steerMode": "guarded"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.input",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "session": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow",
+   "check": {
+    "held": {
+     "@bot:b.example": "@op:b.example"
+    }
+   }
+  },
+  {
+   "entry": {
+    "id": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "2643a1a94d4368298136dda4adf5dc70a06ccee8c30dfa191398122785c7d781",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p2",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:13Z",
-   "expect": "allow"
+   "expect": "allow",
+   "check": {
+    "effects.9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc.guards": [
+     "@op:b.example"
+    ]
+   },
+   "note": "steering its auto side-session holds it once any of its sessions is guarded"
   },
   {
    "entry": {
-    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "id": "8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "effect.approve",
-    "author": "@op2:b.example",
+    "kind": "session.input",
+    "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
+     "session": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8"
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-a2",
+    "nonce": "n-i3",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:14Z",
-   "expect": "denied",
-   "note": "not BOT's guard, no rule"
-  },
-  {
-   "entry": {
-    "id": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
-    "v": 1,
-    "space": "s1:a.example",
-    "kind": "effect.approve",
-    "author": "@op:b.example",
-    "keyId": "k1",
-    "body": {
-     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "planDigest": "8be3c3cd38a6e5b888f3a7c9e331d496885cd189f3eb99ad6d4b2f59ec838736"
-    },
-    "contentHash": "",
-    "refs": [],
-    "seen": 0,
-    "nonce": "n-a1",
-    "time": "2026-10-10T12:00:00Z"
-   },
-   "time": "2026-10-10T12:00:15Z",
    "expect": "allow"
   },
   {
    "entry": {
-    "id": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
+    "id": "540530291b28f20d1f4f4932e7a37bf81e0c95bdccce811fe881e64cc242a1ec",
     "v": 1,
     "space": "s1:a.example",
-    "kind": "effect.claim",
-    "author": "@x:c.example",
+    "kind": "agent.release",
+    "author": "@bot:b.example",
     "keyId": "k1",
     "body": {
-     "proposal": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-     "attempt": 1,
-     "instance": "k1",
-     "window": 30
+     "agent": "@bot:b.example"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 14,
+    "nonce": "n-i3r",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "denied",
+   "note": "an agent can't release itself"
+  },
+  {
+   "entry": {
+    "id": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.open",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "steerMode": "guarded"
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-c",
+    "nonce": "n-h",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:16Z",
    "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "session.input",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "session": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "428b4b49b8b436c6bb05f0cdda563eca811145a53a1de04f48775b5af6689ded",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "allow",
+   "check": {
+    "effects.468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d.phase": "ready"
+   },
+   "note": "humans are their own guard"
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
-  "a1": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
-  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
-  "c": "42d457d8d3605c5370321b3ebd67645610d68e0f4d2848cfa854a0360f4bdeb1",
-  "in": "be936c1265e7e878df7b8fd6705cab159813ccde2ff2e473681cb3be28f84ae9",
+  "g": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+  "h": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
+  "i": "986d76de5d12e781379e6d63a2a5319e979af700a8485af3449810d31d10ec73",
+  "i2": "31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749",
+  "i3": "8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6",
+  "i3r": "540530291b28f20d1f4f4932e7a37bf81e0c95bdccce811fe881e64cc242a1ec",
+  "i5": "dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
-  "op2": "f6d2f86637719383939553c359545da9d11153c3b45d65a02cd64df704368328",
-  "p": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
-  "r": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
-  "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
-  "s2": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c"
+  "p1": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
+  "p2": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
+  "p5": "468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d",
+  "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af"
  }
 }

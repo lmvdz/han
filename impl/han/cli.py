@@ -7,7 +7,8 @@
   member set SP ACTOR ROLE                  message SP TEXT [--to ACTOR]…
   task SP ASK --to ACTOR… [--deadline T]    propose SP --executor A --plan FILE [--repeatable] [--cost UNIT=N]
   approve SP PROPOSAL [--note T]            cancel SP ID [--task]
-  session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session release SP SESSION [--unguard]     session close SP SESSION
+  session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session close SP SESSION
+  agent release SP AGENT [--unguard]        (the guard's release; `seen` is the head this client has read, as `status` shows it)
   watch SP SESSION [--count N]              read SP [--after N] [--follow] [--json]        status SP
 Ids may be given as a unique prefix (8+ hex digits)."""
 from __future__ import annotations
@@ -117,11 +118,15 @@ async def cmd_session(c, a):
     recs = await records(c, a.space)                                  # also sets `seen` to what we have read (R-17, P-15 release)
     sid = await resolve(c, a.space, a.session, recs)
     if a.action == "steer": await put(c, "session.input", a.space, {"session": sid}, {"text": a.text})
-    elif a.action == "release":
-        body = {"session": sid, "release": True} | ({"unguard": True} if a.unguard else {})       # E1: only the guard's `unguard` ends a guarded choice
-        e, ct = c.make_entry("session.input", a.space, body, {"text": a.note}, seen=a.seen)
-        r = await c.append(e, ct); out(f"seq {r['seq']} id {r['id']}")
     else: await put(c, "session.close", a.space, {"session": sid})
+
+async def cmd_agent(c, a):
+    """F2: `agent.release {agent, unguard?}`, authored by the guard; `seen` is the head it has read (R-17), or --seen."""
+    if not P._actor(a.agent): return die(f"not an actor id: {a.agent}")
+    await records(c, a.space)                                         # reading sets `seen` to the head (R-17, P-15)
+    body = {"agent": a.agent} | ({"unguard": True} if a.unguard else {})       # E1: only the guard's `unguard` ends a guarded choice
+    e, ct = c.make_entry("agent.release", a.space, body, seen=a.seen)           # no content (§5)
+    r = await c.append(e, ct); out(f"seq {r['seq']} id {r['id']}")
 
 async def cmd_watch(c, a):
     sid = await resolve(c, a.space, a.session)
@@ -143,6 +148,23 @@ async def cmd_read(c, a):
     else:
         for rec in await records(c, a.space, a.after): await show(rec)
 
+async def agent_lines(c, st):
+    """F1: per agent, from the current state, `guarded` (by its own choice or its sessions' modes: `guardedNow`) or `forced` (the space forces
+    guarding, so an instruction to a non-human is held for the operator in the profile pinned then; the profile read here is the current one)."""
+    named = set(st["guarded"]) | set(st["held"]) | {s["actor"] for s in st["sessions"].values()}
+    named |= {x for t in st["tasks"].values() for x in t["to"]} | {e["executor"] for e in st["effects"].values()}
+    forced, lines = bool(st["policy"]["sessions"].get("forceGuarded")), []
+    for x in sorted(named):
+        g = P.guarded_now(st, x)
+        if g: lines.append(f"  {x}  guarded (guard {g})" + ("  held" if x in st["held"] else ""))
+        elif forced and not x.startswith("@:"):
+            try: prof = (await c.read_state("profile:" + x))["profile"]
+            except WireError: continue
+            if prof["actorKind"] != "human":
+                lines.append(f"  {x}  forced (operator {prof.get('operator')}{'' if prof.get('operatorConfirmed') else ', unconfirmed: instructions are denied'})"
+                             + ("  held" if x in st["held"] else ""))
+    if lines: out("agents:"); [out(l) for l in lines]
+
 async def cmd_status(c, a):
     try: st = await c.read_state(a.space)
     except WireError: return die("no state (needs read rights at the head)")
@@ -158,7 +180,8 @@ async def cmd_status(c, a):
             + (f"  guards {', '.join(g)}" if g else "") + ("  cancel-requested" if e["cancelRequested"] else ""))
     out("sessions:")
     for sid, s in st["sessions"].items():
-        out(f"  {sid[:8]} {s['actor']}  {'open' if s['open'] else 'closed'}  {s['steerMode']}" + (f"  guard {s['guard']}" if s.get("guard") else ""))
+        out(f"  {sid[:8]} {s['actor']}  {'open' if P.live(st, s) else 'not live'}  {s['steerMode']}" + (f"  guard {s['guard']}" if s.get("guard") else ""))
+    await agent_lines(c, st)
     out("held agents: " + (", ".join(f"{x} (for {g})" for x, g in sorted(st["held"].items())) or "none"))
     out("guarded agents: " + (", ".join(f"{x} (guard {g})" for x, g in sorted(st["guarded"].items())) or "none"))
 
@@ -190,9 +213,10 @@ def parser() -> argparse.ArgumentParser:
     ss = sub.add_parser("session").add_subparsers(dest="action", required=True)
     cmd("open", cmd_session, "space", ("--mode", {"choices": ["auto", "guarded"], "default": "auto"}), ("--task", {}), ("--title", {}), parent=ss)
     cmd("steer", cmd_session, "space", "session", "text", parent=ss)
-    cmd("release", cmd_session, "space", "session", ("--note", {"default": "released"}), ("--seen", {"type": int, "help": "what the guard has seen (default: the head)"}),
-        ("--unguard", {"action": "store_true", "help": "also end the agent's guarded state (the guard only; closing sessions never does)"}), parent=ss)
     cmd("close", cmd_session, "space", "session", parent=ss)
+    ag = sub.add_parser("agent").add_subparsers(dest="action", required=True)
+    cmd("release", cmd_agent, "space", "agent", ("--seen", {"type": int, "help": "what the guard has seen (default: the head)"}),
+        ("--unguard", {"action": "store_true", "help": "also end the agent's guarded state (the guard only; closing sessions never does)"}), parent=ag)
     cmd("watch", cmd_watch, "space", "session", ("--count", {"type": int, "default": 0}), ("--timeout", {"type": float, "default": 0}), ("--json", {"action": "store_true"}))
     cmd("read", cmd_read, "space", ("--after", {"type": int, "default": 0}), ("--follow", {"action": "store_true"}), ("--json", {"action": "store_true"}))
     cmd("status", cmd_status, "space")
