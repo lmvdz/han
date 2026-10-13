@@ -19,6 +19,8 @@ struct InsRec {
     /// For a copy, the canonical character its first character came from.
     origin: Option<CharId>,
     deleted: Vec<bool>,
+    /// The offsets of this insertion's characters that have children, ascending.
+    kids: Vec<u32>,
 }
 
 /// An anchor (TL-46).
@@ -158,8 +160,15 @@ impl TextObj {
             chars,
             origin,
             deleted: vec![false; n],
+            kids: Vec::new(),
         });
         self.index.insert(id, l);
+        if let Some((al, ak)) = anchor {
+            let kids = &mut self.ins[al as usize].kids;
+            if let Err(at) = kids.binary_search(&ak) {
+                kids.insert(at, ak);
+            }
+        }
         let ins = &self.ins;
         let siblings = self.children.entry(anchor).or_default();
         // Newest first: keep the list sorted by descending insertion id.
@@ -193,7 +202,8 @@ impl TextObj {
         let mut order = Vec::with_capacity(total);
         let mut pos: Vec<Vec<usize>> = self.ins.iter().map(|r| vec![0; r.chars.len()]).collect();
         // Pre-order with an explicit stack: a character, then its children newest first, then
-        // the next character of its insertion.
+        // the next character of its insertion. Runs of characters without children are
+        // emitted in one go.
         let mut stack: Vec<Local> = Vec::new();
         let push_children = |stack: &mut Vec<Local>, slot: Option<Local>| {
             if let Some(kids) = self.children.get(&slot) {
@@ -206,12 +216,20 @@ impl TextObj {
         };
         push_children(&mut stack, None);
         while let Some((l, k)) = stack.pop() {
-            pos[l as usize][k as usize] = order.len();
-            order.push((l, k));
-            if (k as usize) + 1 < self.ins[l as usize].chars.len() {
-                stack.push((l, k + 1));
+            let rec = &self.ins[l as usize];
+            let n = rec.chars.len() as u32;
+            let next_kid = rec.kids.get(rec.kids.partition_point(|&o| o < k)).copied();
+            let end = next_kid.unwrap_or(n - 1);
+            for o in k..=end {
+                pos[l as usize][o as usize] = order.len();
+                order.push((l, o));
             }
-            push_children(&mut stack, Some((l, k)));
+            if end + 1 < n {
+                stack.push((l, end + 1));
+            }
+            if next_kid.is_some() {
+                push_children(&mut stack, Some((l, end)));
+            }
         }
 
         let n = order.len();

@@ -209,9 +209,10 @@ impl<S: Store> History<S> {
         let (closure, base) = if genesis {
             (Closure(Vec::new()), std::sync::Arc::new(State::default()))
         } else {
-            self.materialise(&parents)
+            self.take_state(&parents)
         };
-        let mut state = (*base).clone();
+        // Usually the only holder: the batch then updates the parent's state in place.
+        let mut state = std::sync::Arc::try_unwrap(base).unwrap_or_else(|a| (*a).clone());
         let mut merges = Vec::new();
         for (i, op) in b.ops.iter().enumerate() {
             let id = b.op_id(i);
