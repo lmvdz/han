@@ -219,3 +219,43 @@ pub fn window() -> Window {
 pub async fn call(api: &dyn NodeApi, cmd: Command) -> CallResult {
     api.call(cmd).await.unwrap()
 }
+
+/// The operator confirms its agent over han/1 (section 4.3, P-03): `operator`'s node follows the agent's
+/// profile space and appends `member.set {actor: <operator>, role: owner}` there. The operator holds no role in
+/// that space; the peer filter admits this append because the profile names it as the operator (N-02), and
+/// Policy judges the confirmation.
+pub async fn confirm_operator(
+    world: &World,
+    operator: &Node<MemTransport>,
+    operator_actor: &str,
+    agent: &str,
+) {
+    let profile = format!("profile:{agent}");
+    let _ = operator
+        .call(Command::SpaceFollow {
+            home: world.home_ref.clone(),
+            space: profile.clone(),
+        })
+        .await;
+    for _ in 0..500 {
+        match operator
+            .call(Command::MemberSet {
+                space: profile.clone(),
+                actor: operator_actor.into(),
+                role: "owner".into(),
+            })
+            .await
+        {
+            Ok(CallResult::Receipt { .. }) => break,
+            Err(han_node::api::NodeError::NotFound { .. }) => {
+                tokio::time::sleep(Duration::from_millis(20)).await; // not followed yet
+            }
+            other => panic!("the operator's confirmation over han/1: {other:?}"),
+        }
+    }
+    let state = world.home.state_of(&profile).expect("the profile space");
+    assert!(
+        state.profile.as_ref().is_some_and(|p| p.operator_confirmed),
+        "{agent}'s operator is confirmed"
+    );
+}
