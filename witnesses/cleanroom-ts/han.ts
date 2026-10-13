@@ -178,15 +178,15 @@ export interface SpaceState {
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02): held at seq k iff a kept interval has from ≤ k < to (no `to` while it lasts); at most the 64 most recent per actor, older ones are dropped (seqs before the oldest kept `from` are then not readable for a former member)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number; seq: Seq;
-                     accepted: ActorId[];           // P-05, P-15: the assignees that accepted it (task.update "accepted"; the author if it assigned itself, from creation), in order; an assignee leaves with its own final update (a closed task still takes it), an owner's force-close (task.cancel, or a final update by an owner who isn't an assignee) empties it
-                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, or carried(author) when it has no parent, then the author if guarded when the task was created; fixed then, never shrinks; at most MAX_GUARDED_FOR − 2 (17) agents, else the task is denied
+                     accepted: ActorId[];           // P-05, P-15: the assignees that accepted it (task.update "accepted"; the author if it assigned itself, from creation), in order; an assignee leaves with its own final update (a closed task still takes it) or when it loses its role (member.set to none or banned); a final update by an owner who isn't an assignee (a force-close, on a closed task too) empties it; a task.cancel changes nothing
+                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, then guards(author) when the task was created (Z1); fixed then, never shrinks; at most MAX_GUARDED_FOR − 2 (17) agents, else the task is denied
                      parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, or carried(proposer) when it names none, then carried(executor), then the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
+      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then guards(proposer), then guards(executor) at the proposal (Z1); fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
       claims: {
@@ -226,7 +226,9 @@ export interface Limits {
   maxStateItems: 1000;         // §3 state: items of each paged map (PagedMap) per page of a state read (a page is also bounded by maxFrameBytes); the rest follows by `cursor`
 }
 export interface Challenge { challenge: string /* 43 chars: 32 random bytes, base64url; a client accepts 22–128 of [A-Za-z0-9_-] (G-08) */; server: ServerName; versions: number[]; time: Time }
-/** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never a node id, address or port). */
+/** G-08: the bytes a `han/1` hello `proof` signs: "han-hello-v2\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed) ‖ "\n" ‖ UTF-8(node), `dialed` being the ServerName the client intends (never a node id, address or port)
+ *  and `node` the server's node id as the client reached it (round 32, Z4). The key of `keyId` is the connection's node id for a user actor; a server actor's node is in its `sequencer` (SR-13).
+ *  The legacy WebSocket carrier keeps "han-hello-v1\n" ‖ challenge ‖ "\n" ‖ dialed. */
 /** Policy's numeric constants (P-07 E5, P-08, P-15, P-02): fixed by the protocol, not negotiated by `hello`. */
 export interface PolicyConstants {
   MAX_OPEN_APPROVALS: 16;      // countable open approvals by other authors a proposal may hold when a new one by a non-guard arrives: an approval counts while it is an E3 candidate (unconsumed, unexpired, matching the current rule and separateApprover, its author holding a role) and isn't by one of its guards; a guard's is never capped and never counts (P-08)
@@ -243,11 +245,12 @@ export type PagedMap = "roles" | "roleHistory" | "tasks" | "effects" | "sessions
 export type StateView = Omit<SpaceState, "entries">;   // the wire state, one page: the PagedMap members are cut as above, each present (possibly `{}`) on every page; the others are repeated; never `limit`
 /** `state {space, effect}`: that one effect and nothing else that grows. Never cut, never paged: one effect is bounded (at most 55 approvals, 64 claims, 19 guardedFor agents) and `policy` is bounded by the header limit. */
 export type EffectStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "effects">;
-/** `state {space, agent}` (K7, P8): the state's `guarded` cut to that one actor (`{}` when it is not in it) and nothing else that grows. Never cut.
+/** `state {space, agent}` (K7, P8, Z1): the state's `guarded` cut to that one actor (`{}` when it is not in it) and its `tasks` cut to those whose `accepted` lists the
+ *  actor and whose `guardedFor` isn't empty (what carried reads), and nothing else. Never cut: one that would not fit a frame is `limit`, and the host pages the state.
  *  It is a GuardInput: a host passes it to guardStatus as is, with the profiles it pinned, instead of paging the whole state (R-24). */
-export type AgentStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "guarded">;
+export type AgentStateView = Pick<StateView, "space" | "head" | "home" | "policy" | "guarded" | "tasks">;
 /** What guardStatus reads of a state. SpaceState and AgentStateView both satisfy it. */
-export type GuardInput = Pick<SpaceState, "policy" | "guarded">;
+export type GuardInput = Pick<SpaceState, "policy" | "guarded" | "tasks">;
 /** The answer to `state`: one page. `next` is the cursor of the following page, absent on the last. A cursor is `<head>.<o1>.….<oN>` (decimal, no leading zeros), N = the number of PagedMap members in order, each
  *  the count of that map's items the earlier pages sent (§3). A client treats it as opaque; a server rejects anything else as `invalid`. */
 export type StateReply = { state: StateView | EffectStateView | AgentStateView; next?: string };
@@ -330,12 +333,13 @@ export interface Policy {                                // M2 — six pure func
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
   /** P-01, the whole pin rule: author, member.set target, the targets of an instruction (session actor, assignees, executor), an unguard's agent, approve/cancel/claim: proposer, executor and guardedFor;
    *  no approver is pinned for an approve (forcing is judged from the actorKind each approval recorded, P-08);
-   *  for a claim then the guards from ctx.profiles (P-15) and the approval candidates in E3 order up to and including the first usable one by ctx.profiles: a valid key (no candidate's author is guarded: the fold drops such approvals).
+   *  for a claim then the guards from ctx.profiles (P-15: of guardedFor, and of the proposer and executor where guards(proposer) or guards(executor) holds them) and the approval candidates in E3 order up to and including the first usable one by ctx.profiles: a valid key (no candidate's author is guarded: the fold drops such approvals).
    *  The sequencer calls it with the profiles fetched so far until it names none it has not tried: three calls at most. */
   relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[];
   /** P-15, the one guard function hosts call (R-24) instead of re-deriving it. `guard`: the `operator` of ctx.profiles[agent] if it is confirmed and the agent is not human, else absent.
-   *  `forced`: policy.sessions.forceGuarded is on and ctx.profiles[agent] is not human. `guarded`: `forced`, or the agent is in the state's set `guarded` (its own choice). */
-  guardStatus(state: GuardInput, ctx: PolicyCtx, agent: ActorId): { guard?: ActorId; guarded: boolean; forced: boolean };
+   *  `forced`: policy.sessions.forceGuarded is on and ctx.profiles[agent] is not human. `guards` (Z1): the agents whose guard it answers to, the agent itself if `forced` or in the
+   *  state's set `guarded` (its own choice), then carried(agent), each once. `guarded`: `guards` is not empty. */
+  guardStatus(state: GuardInput, ctx: PolicyCtx, agent: ActorId): { guard?: ActorId; guarded: boolean; forced: boolean; guards: ActorId[] };
 }
 export interface Identity {                              // M3
   profile(actor: ActorId, minSeq?: Seq): Promise<ProfileView>;
@@ -374,15 +378,16 @@ export type GossipSignal = { type: "heads"; receipts: Receipt[] } | { type: "fau
 export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Time } & (
   | { type: "output"; text: string }                                         // what the session shows: watch
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
-  | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01)
-  | { type: "profile"; name: string /* a profile's name, e.g. "han.status/1" */; body: Json /* defined by that profile; never authority */ }   // watch, like status (X11)
+  | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" | "summary" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01); a summary of the context is context (SR-66)
+  | { type: "profile"; name: string /* a profile's name, e.g. "han.status/1" */; body: Json /* defined by that profile; opaque to the server, checked by faces (Z6); never authority */ }   // watch, like status (X11)
 );
 // ───────────────────────── nodes, invites, well-known (§4.3, §8.2) ─────────────────────────
 /** N-01: a node id is a device's Ed25519 public key, in the same base64url form as a profile key's `publicKey` (43 characters, canonical).
  *  A registered device is a `valid` key of its actor's profile; its node id is that key. Every `han/1` connection is dialled by node id (G-07). */
 export type NodeId = string;
-/** N-03: what an inviter hands a joining person: a node id of the space's home, the space, and a one-time secret (32 random bytes, base64url).
- *  Passed on as the text "han1" + base64url(JCS(ticket)). The home keeps only sha256(secret), registered with `invite`. */
+/** N-03: what an inviter hands a joining person: the home's ServerName, a node of it with its addresses, the space, and a one-time secret (32 random bytes, base64url).
+ *  Passed on as the text "han1" + base64url(JCS(ticket)). The home keeps only sha256(secret), registered with `invite`. `node` is a dial hint only (round 32, Z4): before `hello`
+ *  the client confirms that `node.node` is listed for `server` in the /.well-known/han it fetches over HTTPS. Whether its issuing owner's device auto-admits is that device's per-ticket choice, off by default (SR-17). */
 export interface InviteTicket { server: ServerName /* the ServerName to put in `dialed` (G-08): the space's home when the ticket was made */; node: NodeAddr; space: SpaceId; secret: string }
 /** §4.3, N-01 (X10): how to dial a node from the docs alone: its node id, its direct addresses ("ip:port"; IPv6 in brackets) and its relay URLs
  *  (https), at most 16 of each and at least one of the two. Every implementation MUST dial from these; it MAY also use other discovery. */
@@ -395,20 +400,21 @@ export interface WellKnownPeers { peers: { server: ServerName; url: string /* th
 // a hint a client verifies against the server the space id names; a notifier bot is a plain HAN actor. The round-29 Matrix binding's shapes are gone.
 /** N-02 (X9): the peer filter is one pure function, judged per call before the call's own rules, testable by vectors (conformance/carrier-vectors).
  *  `hello` is present after a successful `hello`: the actor and the node ids that vouch for it (the valid keys of its pinned profile, N-01; for `@:S`
- *  the node ids of S's well-known `sequencer`). `space` is the space the call names (`args.space`, or the appended entry's `space`). */
+ *  the node ids of S's well-known `sequencer`). `space` is the space the call names (`args.space`, the appended entry's `space`, or the streamed item's `space`). */
 export interface AdmitConn { node: NodeId; call: string; space?: SpaceId; hello?: { who: ActorId; nodes: NodeId[] } }
 /** The spaces the node serves, each as much of its SpaceState as admit reads. A profile space's roles name its actor and `@:server`. */
 export type AdmitSpaces = { [space: SpaceId]: Pick<SpaceState, "policy" | "roles"> };
-/** `member`: a registered device of an actor holding a role in a space the node serves; `server`: a node its server's well-known lists; both reach every
- *  call, which then judges itself. `open`: anyone, for `hello`, `join`, `cancel`, reads of public and profile spaces (and of spaces not held here, which
- *  §4.1 step 2 answers), and appends to `join: "open"` spaces; rate-limited per node. */
+/** `server`: a node its server's well-known lists, for every call. `member` (round 32, Z7: per space): a registered device of an actor holding a role in the space the call names,
+ *  or, for a call naming no space (blobPut), an owner or member of a served space that isn't open-join; the call then judges itself. `open`: anyone, for `hello`, `join`, `cancel`,
+ *  any call on a space not held here (§4.1 step 2 answers), reads of public and profile spaces, and appends to `join: "open"` spaces; rate-limited per node. */
 export type AdmitVerdict = { allow: true; tier: "member" | "server" | "open" } | { allow: false; reason: string };
 export interface PeerFilter {
   admit(conn: AdmitConn, spaces: AdmitSpaces): AdmitVerdict;
 }
-/** X15: one batch of bulk data a profile defines, on a unidirectional stream as the CBOR map {1: author, 2: keyId, 3: profile, 4: data, 5: sig}.
- *  `sig` = Ed25519 (strict, §2) by a valid key of `author` over "han/bulk/1\n" ‖ UTF-8(profile) ‖ "\n" ‖ data, `data` being the batch's exact CBOR bytes. */
-export interface BulkBatch { author: ActorId; keyId: KeyId; profile: string; data: Uint8Array; sig: Sig }
+/** G-07 (round 32, Z5): a typed one-way stream, opened by either end after `hello`. Its first frame is `type` (UTF-8, a profile name, at most 64 bytes); every further frame is
+ *  a 4-byte big-endian length (at most maxFrameBytes) and that many bytes, defined, encoded and signed by the profile that registers the type (spec/profiles/README.md;
+ *  han.timeline/1: TL-93 envelopes in TL-110 messages). The core signs and checks nothing inside the frames. */
+export interface TypedStream { type: string; frames: Uint8Array[] }
 /** M7: what HAN needs from a transport (T-01…T-07). The QUIC binding `han/1` (§8.2) implements it. */
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order

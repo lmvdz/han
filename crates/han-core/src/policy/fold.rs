@@ -60,6 +60,9 @@ pub fn fold(state: Option<&SpaceState>, record: &Record, ctx: &Ctx) -> Result<Sp
             let now = new.is_some_and(Role::reads);
             if !now {
                 drop_open_approvals(&mut s, tgt); // P-08: they could never count again
+                for t in s.tasks.values_mut() {
+                    t.accepted.retain(|a| a != tgt); // Z2: an actor that leaves carries nothing
+                }
             }
             let hist = s.role_history.entry(tgt.clone()).or_default();
             if now && !before {
@@ -121,14 +124,14 @@ pub fn fold(state: Option<&SpaceState>, record: &Record, ctx: &Ctx) -> Result<Sp
             let mut credit_back = None;
             if let Some(t) = s.tasks.get_mut(&b.task) {
                 if was_open {
-                    t.state = b.state; // a closed task only loses the author's acceptance (X1)
+                    t.state = b.state; // a closed task only loses acceptances (Z2)
                 }
                 if b.state == TaskState::Accepted && !t.accepted.iter().any(|a| a == author) {
                     t.accepted.push(author.to_owned()); // P-15, X4: only an explicit accept accepts
                 }
                 if b.state.is_final() {
-                    // X1: an assignee's own final update ends what it carries; an owner's
-                    // force-close, all
+                    // X1, Z2: an assignee's own final update ends what it carries; an owner's
+                    // force-close, all, on a closed task too
                     if assignee {
                         t.accepted.retain(|a| a != author);
                     } else {
@@ -149,12 +152,8 @@ pub fn fold(state: Option<&SpaceState>, record: &Record, ctx: &Ctx) -> Result<Sp
             }
         }
         Body::TaskCancel(b) => {
-            let owner = s.roles.get(author) == Some(&Role::Owner);
             if let Some(t) = s.tasks.get_mut(&b.task) {
-                t.cancel_requested = true;
-                if owner {
-                    t.accepted.clear(); // X1: an owner's cancel force-closes for everyone
-                }
+                t.cancel_requested = true; // Z2: a cancel only asks; it ends no carry
             }
         }
         Body::Propose(b) => {

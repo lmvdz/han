@@ -115,6 +115,9 @@ struct State {
 pub struct Conn {
     home: Arc<Home>,
     peer: String,
+    /// This end's node id on the connection, which `hello` proofs bind (Z4). `None` on the legacy carrier,
+    /// and in test mode, whose wire vectors speak that carrier's hello.
+    node: Option<String>,
     id: u64,
     state: Mutex<State>,
 }
@@ -128,9 +131,9 @@ fn error_frame(id: u64, e: &WireError) -> String {
 }
 
 impl Home {
-    /// A new connection from the node `peer` (its authenticated node id). Returns it with the bare
-    /// Challenge frame the carrier sends first, on the control stream.
-    pub fn connect(self: &Arc<Self>, peer: &str) -> (Conn, String) {
+    /// A new connection from the node `peer` (its authenticated node id) to this home's own node `node`.
+    /// Returns it with the bare Challenge frame the carrier sends first, on the control stream.
+    pub fn connect(self: &Arc<Self>, peer: &str, node: &str) -> (Conn, String) {
         let mut raw = [0u8; 32];
         // The system random source failing is not recoverable.
         getrandom::fill(&mut raw).expect("system random source");
@@ -144,6 +147,7 @@ impl Home {
         let conn = Conn {
             home: Arc::clone(self),
             peer: peer.to_owned(),
+            node: (!self.is_test_mode()).then(|| node.to_owned()),
             id: NEXT_CONN.fetch_add(1, Ordering::Relaxed),
             state: Mutex::new(State {
                 who: None,
@@ -436,6 +440,7 @@ impl Conn {
         };
         let space = match call {
             "append" => args["entry"]["space"].as_str(),
+            "stream" => args["item"]["space"].as_str(),
             _ => args["space"].as_str(),
         };
         let nodes = match &who {
@@ -499,9 +504,14 @@ impl Conn {
             }
             challenge
         };
-        let Authed { ok, nodes } =
-            self.home
-                .hello(who, key_id, proof, &challenge, args.get("knownHeads"))?;
+        let Authed { ok, nodes } = self.home.hello(
+            who,
+            key_id,
+            proof,
+            &challenge,
+            self.node.as_deref(),
+            args.get("knownHeads"),
+        )?;
         let mut st = self.st();
         st.bound = nodes.contains(&self.peer);
         st.who = Some(who.to_owned());

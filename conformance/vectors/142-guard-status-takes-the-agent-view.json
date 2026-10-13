@@ -4,7 +4,7 @@
   "P-15",
   "R-24"
  ],
- "description": "M5, P8: guardStatus reads only policy and guarded (han.ts GuardInput), so a host passes the state {agent} reply as is",
+ "description": "M5, P8, Z1: guardStatus reads only policy, guarded and the tasks whose accepted lists the agent (han.ts GuardInput), so a host passes the state {agent} reply as is",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -284,14 +284,18 @@
      },
      "guarded": {
       "@bot:b.example": true
-     }
+     },
+     "tasks": {}
     },
     "actor": "@bot:b.example"
    },
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": false
+    "forced": false,
+    "guards": [
+     "@bot:b.example"
+    ]
    }
   },
   {
@@ -325,14 +329,16 @@
        "deny": []
       }
      },
-     "guarded": {}
+     "guarded": {},
+     "tasks": {}
     },
     "actor": "@bot2:b.example"
    },
    "expect": {
     "guard": "@op:b.example",
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -367,14 +373,147 @@
        "deny": []
       }
      },
-     "guarded": {}
+     "guarded": {},
+     "tasks": {}
     },
     "actor": "@bot2:b.example"
    },
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": true
+    "forced": true,
+    "guards": [
+     "@bot2:b.example"
+    ]
+   }
+  },
+  {
+   "guardStatus": {
+    "view": {
+     "space": "s1:a.example",
+     "head": 9,
+     "home": "a.example",
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "member",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "guarded": {},
+     "tasks": {
+      "abababababababababababababababababababababababababababababababab": {
+       "author": "@bot:b.example",
+       "to": [
+        "@bot2:b.example",
+        "@m:a.example"
+       ],
+       "open": true,
+       "state": "accepted",
+       "cancelRequested": false,
+       "depth": 0,
+       "seq": 8,
+       "accepted": [
+        "@m:a.example",
+        "@bot2:b.example"
+       ],
+       "guardedFor": [
+        "@bot:b.example"
+       ]
+      }
+     }
+    },
+    "actor": "@bot2:b.example"
+   },
+   "expect": {
+    "guard": "@op:b.example",
+    "guarded": true,
+    "forced": false,
+    "guards": [
+     "@bot:b.example"
+    ]
+   }
+  },
+  {
+   "guardStatus": {
+    "view": {
+     "space": "s1:a.example",
+     "head": 9,
+     "home": "a.example",
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "member",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "guarded": {},
+     "tasks": {
+      "abababababababababababababababababababababababababababababababab": {
+       "author": "@bot:b.example",
+       "to": [
+        "@bot2:b.example",
+        "@m:a.example"
+       ],
+       "open": true,
+       "state": "accepted",
+       "cancelRequested": false,
+       "depth": 0,
+       "seq": 8,
+       "accepted": [
+        "@m:a.example",
+        "@bot2:b.example"
+       ],
+       "guardedFor": [
+        "@bot:b.example"
+       ]
+      }
+     }
+    },
+    "actor": "@m:a.example"
+   },
+   "expect": {
+    "guarded": true,
+    "forced": false,
+    "guards": [
+     "@bot:b.example"
+    ]
    }
   }
  ],

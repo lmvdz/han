@@ -57,10 +57,12 @@ impl Drop for ServerHandle {
 /// Serves `home` on `transport` until the handle is dropped or the transport shuts down.
 pub fn serve<T: Transport>(transport: T, home: Arc<Home>, opts: ServeOptions) -> ServerHandle {
     let opts = Arc::new(opts);
+    let local = transport.node_id();
     let counts: Arc<Mutex<HashMap<NodeId, usize>>> = Arc::default();
     let task = tokio::spawn(async move {
         while let Some(conn) = transport.accept().await {
             let (home, opts, counts) = (Arc::clone(&home), Arc::clone(&opts), Arc::clone(&counts));
+            let local = local.clone();
             tokio::spawn(async move {
                 let peer = conn.peer();
                 let held = {
@@ -72,7 +74,7 @@ pub fn serve<T: Transport>(transport: T, home: Arc<Home>, opts: ServeOptions) ->
                 if held > opts.max_conns_per_peer {
                     conn.close(close::LIMIT, "limit");
                 } else {
-                    run_connection(conn, home, &opts).await;
+                    run_connection(conn, home, &local, &opts).await;
                 }
                 let mut c = counts.lock().unwrap_or_else(|p| p.into_inner());
                 if let Some(n) = c.get_mut(&peer) {
@@ -114,8 +116,8 @@ impl Turn {
     }
 }
 
-async fn run_connection<C: Connection>(conn: C, home: Arc<Home>, opts: &ServeOptions) {
-    let (hconn, challenge) = home.connect(&conn.peer());
+async fn run_connection<C: Connection>(conn: C, home: Arc<Home>, local: &str, opts: &ServeOptions) {
+    let (hconn, challenge) = home.connect(&conn.peer(), local);
     let hconn = Arc::new(hconn);
     match conn.open_uni().await {
         Ok(mut control) => {

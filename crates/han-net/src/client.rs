@@ -338,7 +338,12 @@ impl<C: Connection> Client<C> {
 
     /// `hello` as `who` with `key` (G-08). Returns the `ok` of the reply.
     pub async fn hello(&self, who: &str, key_id: &str, key: &SigningKey) -> Result<Value> {
-        let proof = han_seq::auth::make_proof(key, &self.challenge.challenge, &self.dialed);
+        let proof = han_seq::auth::make_proof(
+            key,
+            &self.challenge.challenge,
+            &self.dialed,
+            Some(&self.conn.peer()),
+        );
         self.call(
             "hello",
             han_seq_obj([

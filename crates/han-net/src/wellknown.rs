@@ -217,10 +217,12 @@ pub async fn serve_http(addr: SocketAddr, routes: Routes) -> std::io::Result<Htt
 // ───────────────────────── fetching ─────────────────────────
 
 /// Fetches the well-known documents of other servers.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Fetcher {
     /// `server -> base URL` instead of `https://<server>`, for loopback and tests.
     overrides: Arc<HashMap<String, String>>,
+    /// `server -> document` served from memory instead of fetched, for tests and embedders with no web server.
+    documents: Arc<HashMap<String, WellKnown>>,
 }
 
 impl Fetcher {
@@ -236,6 +238,18 @@ impl Fetcher {
         map.insert(server.to_owned(), base.trim_end_matches('/').to_owned());
         Fetcher {
             overrides: Arc::new(map),
+            ..self
+        }
+    }
+
+    /// A fetcher that answers for `doc.server` with `doc`, without fetching.
+    #[must_use]
+    pub fn with_document(self, doc: WellKnown) -> Self {
+        let mut map = (*self.documents).clone();
+        map.insert(doc.server.clone(), doc);
+        Fetcher {
+            documents: Arc::new(map),
+            ..self
         }
     }
 
@@ -252,6 +266,9 @@ impl Fetcher {
     pub async fn wellknown(&self, server: &str) -> Result<WellKnown> {
         if !grammar::is_server_name(server) {
             return Err(NetError::Protocol(format!("not a ServerName: {server}")));
+        }
+        if let Some(doc) = self.documents.get(server) {
+            return Ok(doc.clone());
         }
         let body = self.get(&self.url(server, "/.well-known/han")).await?;
         let doc = json::parse(&body).map_err(|e| NetError::Protocol(format!("well-known: {e}")))?;

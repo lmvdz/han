@@ -625,8 +625,9 @@ export class Sequencer {
       if (!canRead(st, who, head)) throw err("denied", "state needs read rights at " + ("at" in a ? "`at`" : "the head"));
       const full = view(head);
       const cut = (m: A) => (a.agent in m ? { [a.agent]: m[a.agent] } : {});
+      const tasks = Object.fromEntries(Object.entries(full.tasks as A).filter(([, t]) => (t as A).accepted.includes(a.agent) && (t as A).guardedFor.length > 0));   // round 32 (Z1): what carried reads
       return { state: { space: full.space, head: full.head, home: full.home, policy: full.policy,
-        guarded: cut(full.guarded) } };
+        guarded: cut(full.guarded), tasks } };
     }
     if ("cursor" in a) {
       if (typeof a.cursor !== "string" || !/^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){7}$/.test(a.cursor)) throw err("invalid", "malformed cursor");

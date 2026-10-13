@@ -10,8 +10,8 @@ use super::doc::{ActorKind, AllowAgents, JoinMode, NewRole, Role, SteerMode};
 use super::guard::{
     Key, Pick, abandon_after, approval_candidates, approval_rule, budget_change_ok,
     effect_guarded_for, effect_source, expired, guard_approval, guard_status, guards_of, in_guards,
-    is_human, key_status, limited, may_approve, over_bound, pick_approval, reads, remaining,
-    role_of, secs, server_of, space_unit, task_guarded_for, task_source, usable, writes,
+    is_human, key_status, may_approve, over_bound, pick_approval, reads, remaining, role_of, secs,
+    server_of, space_unit, task_guarded_for, task_source, unbounded_guards, usable, writes,
 };
 use super::state::{Effect, Phase, Source, SpaceState, Task};
 use super::{Ctx, MAX_ATTEMPTS, MAX_GUARDED_FOR, MAX_OPEN_APPROVALS, MAX_OPEN_SESSIONS, Verdict};
@@ -130,8 +130,8 @@ pub fn decide(state: Option<&SpaceState>, entry: &PolicyEntry, ctx: &Ctx) -> Ver
         return decide_profile(state, entry, ctx);
     }
     let role = role_of(state, author);
-    if limited(state, ctx, author) && guarded_may_not(state, entry) {
-        return deny("a guarded or delegated author may not approve, govern or steer others"); // P-15
+    if guard_status(state, ctx, author).guarded && governs_others(state, ctx, entry) {
+        return deny("a guarded author may not approve, govern or steer others"); // P-15, Z1
     }
     match &entry.body {
         Body::Extension(_) => {
@@ -264,14 +264,29 @@ fn decide_profile(state: &SpaceState, entry: &PolicyEntry, ctx: &Ctx) -> Verdict
 /// P-15: a guarded author, or one that carries a guarded agent's limits, may not approve, govern
 /// or steer others: `effect.approve`, `member.set` other than leaving (its own role to none),
 /// `policy.set`, and a `session.input` into a session that isn't its own.
-fn guarded_may_not(state: &SpaceState, entry: &PolicyEntry) -> bool {
+/// P-15, the Limits (Z1, Z3): what a guarded author may not do: approve (unless it is one of the
+/// effect's guards), govern (`member.set` other than leaving, `policy.set`, `space.move`, a final
+/// update of a task it isn't assigned, a cancel of another's task) or steer others. A task or
+/// session that isn't there is left to the kind's checks; an approve of a missing proposal is
+/// denied here.
+fn governs_others(state: &SpaceState, ctx: &Ctx, entry: &PolicyEntry) -> bool {
+    let author = entry.author.as_str();
     match &entry.body {
-        Body::MemberSet(b) if b.actor == entry.author && b.role == NewRole::None => false,
-        Body::Approve(_) | Body::MemberSet(_) | Body::PolicySet(_) => true,
+        Body::MemberSet(b) => !(b.actor == author && b.role == NewRole::None),
+        Body::PolicySet(_) | Body::SpaceMove(_) => true,
+        Body::Approve(b) => state
+            .effects
+            .get(&b.proposal)
+            .is_none_or(|eff| !in_guards(&guards_of(state, ctx, eff), author)),
         Body::SessionInput(b) => state
             .sessions
             .get(&b.session)
-            .is_some_and(|s| s.actor != entry.author),
+            .is_some_and(|s| s.actor != author),
+        Body::TaskUpdate(b) => state
+            .tasks
+            .get(&b.task)
+            .is_some_and(|t| b.state.is_final() && !t.to.iter().any(|a| a == author)),
+        Body::TaskCancel(b) => state.tasks.get(&b.task).is_some_and(|t| t.author != author),
         _ => false,
     }
 }
@@ -456,8 +471,8 @@ fn task_update(
         return invalid("no such task");
     };
     let is_final = b.state.is_final();
-    if !t.open && !(is_final && t.accepted.iter().any(|a| a == author)) {
-        return deny("task closed"); // X1: an accepted assignee still closes its own part
+    if !t.open && !is_final {
+        return deny("task closed"); // Z2: a final update still ends carries on a closed task
     }
     if !reads(role) {
         return deny("author holds no role");
@@ -634,6 +649,11 @@ fn claim(
             Pick::None => return deny("E3 no usable approval"),
             Pick::Ok => {}
         }
+    }
+    if unbounded_guards(state, ctx, eff) {
+        return deny(
+            "E3 the proposer or executor took on guarding the proposal never counted: propose again",
+        ); // Z1
     }
     for g in guards_of(state, ctx, eff) {
         let Some(g) = g else {

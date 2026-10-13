@@ -10,8 +10,10 @@ use crate::types::{Entry, Receipt, Sig};
 pub const ENTRY_SIG_DOMAIN: &str = "han-sig-v1\n";
 /// Domain prefix of a receipt signature (over the receipt hash's hex).
 pub const RECEIPT_SIG_DOMAIN: &str = "han-home-sig-v1\n";
-/// Domain prefix of a hello proof.
+/// Domain prefix of a hello proof on the legacy WebSocket carrier (the wire vectors).
 pub const HELLO_DOMAIN: &str = "han-hello-v1\n";
+/// The domain of a `han/1` hello proof (round 32, Z4): the proof also binds the server's node id.
+pub const HELLO_HAN1_DOMAIN: &str = "han-hello-v2\n";
 /// Domain prefix of a `space.move` acceptance.
 pub const ACCEPT_MOVE_DOMAIN: &str = "han-accept-move-v1\n";
 
@@ -120,8 +122,9 @@ fn hello_message(challenge: &str, dialed: &str) -> Vec<u8> {
     format!("{HELLO_DOMAIN}{challenge}\n{dialed}").into_bytes()
 }
 
-/// The proof of a `hello`: a signature over `"han-hello-v1\n" || challenge || "\n" || dialed`,
-/// the challenge as sent and `dialed` the ServerName the client intends (G-08).
+/// The proof of a `hello` on the legacy WebSocket carrier (the wire vectors): a signature over
+/// `"han-hello-v1\n" || challenge || "\n" || dialed`, the challenge as sent and `dialed` the
+/// ServerName the client intends. `han/1` uses [`han1_hello_proof`].
 pub fn hello_proof(key: &SigningKey, challenge: &str, dialed: &str) -> Sig {
     key.sign(&hello_message(challenge, dialed))
 }
@@ -134,6 +137,30 @@ pub fn verify_hello_proof(
     dialed: &str,
 ) -> Result<(), Error> {
     key.verify(&hello_message(challenge, dialed), proof)
+}
+
+/// The bytes a `han/1` hello proof signs (G-08, round 32 Z4):
+/// `"han-hello-v2\n" || challenge || "\n" || dialed || "\n" || node`, `node` being the server's
+/// node id as the client reached it. A proof made on one connection fails on any other. (The
+/// legacy WebSocket carrier keeps [`hello_proof`]'s round-31 bytes.)
+pub fn han1_hello_message(challenge: &str, dialed: &str, node: &str) -> Vec<u8> {
+    format!("{HELLO_HAN1_DOMAIN}{challenge}\n{dialed}\n{node}").into_bytes()
+}
+
+/// The proof of a `hello` on `han/1`.
+pub fn han1_hello_proof(key: &SigningKey, challenge: &str, dialed: &str, node: &str) -> Sig {
+    key.sign(&han1_hello_message(challenge, dialed, node))
+}
+
+/// Checks a `han/1` hello proof against this server's own name and node id.
+pub fn verify_han1_hello_proof(
+    key: &PublicKey,
+    proof: &str,
+    challenge: &str,
+    dialed: &str,
+    node: &str,
+) -> Result<(), Error> {
+    key.verify(&han1_hello_message(challenge, dialed, node), proof)
 }
 
 fn accept_message(space: &str, head: &Receipt) -> Result<Vec<u8>, Error> {

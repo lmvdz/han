@@ -26,8 +26,9 @@ fn challenge_chars(s: &str) -> bool {
 
 /// What a client checks before it says `hello`: `frames` are the texts of the control stream so far. There is
 /// exactly one, the bare Challenge `{challenge, server, versions, time}`; its `server` equals `dialed`; and
-/// the node reached is one of `nodes`: `dialed`'s `sequencer` nodes in its well-known document, or a ticket's
-/// node. Any further control frame is a protocol error. Returns the Challenge, or why to abort.
+/// the node reached is one of `nodes`: `dialed`'s `sequencer` nodes in its well-known document (a ticket's
+/// node counts only once [`crate::dial::dial_verdict`] confirmed it). Any further control frame is a protocol
+/// error. Returns the Challenge, or why to abort.
 pub fn challenge_verdict(
     frames: &[String],
     dialed: &str,

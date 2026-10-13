@@ -18,15 +18,16 @@ CHECKS = [
     ("Conformance vectors against ref/policy.py", [PY, os.path.join(HERE, "run_vectors.py")]),
     ("Policy mutations must be caught by the vectors", [PY, os.path.join(HERE, "mutate_vectors.py")]),
     ("Fold totality fuzz: random histories never crash fold and keep budgets in bounds", [PY, os.path.join(HERE, "fuzz_fold.py")]),
-    ("Differential fuzz: ref and the TS clean-room agree on every verdict and state", [PY, os.path.join(HERE, "fuzz_diff.py")]),
+    ("Differential fuzz: ref, the TS clean-room and the Rust han-core agree on every verdict and state", [PY, os.path.join(HERE, "fuzz_diff.py"), "--target", "both"]),
     ("Wire mutations must be caught by the scenarios", [PY, os.path.join(HERE, "mutate_wire.py")]),
     ("Guard model (P-15), depth 4: the invariant holds against the real Policy", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4"]),
     ("Guard model (P-15), depth 5 (opt-in, --depth5)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "5"], "depth5"),
     ("Guard model mutations must each give a counterexample, depth 4 (~15 min)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4", "--all-mutations"]),
     ("Signed layer (real Ed25519): home pipeline, content validation, mirror verification, proofs, blobs, notices", [PY, os.path.join(HERE, "run_wire.py")]),
     ("Wire conformance vectors (conformance/wire-vectors) are well formed: signatures, receipts, one chain (offline; live runs need a server: run_wire_vectors.py --url)", [PY, os.path.join(HERE, "run_wire_vectors.py"), "--check"]),
-    ("Carrier vectors (conformance/carrier-vectors): admit, frames, control, well-known, tickets, stream items, bulk, Ed25519, headers", [PY, os.path.join(HERE, "run_carrier_vectors.py")]),
+    ("Carrier vectors (conformance/carrier-vectors): admit, frames, control, well-known, tickets, stream items, typed streams, Ed25519, headers", [PY, os.path.join(HERE, "run_carrier_vectors.py")]),
     ("Carrier mutations must be caught by the carrier vectors", [PY, os.path.join(HERE, "run_carrier_vectors.py"), "--mutations"]),
+    ("Timeline vectors (conformance/timeline-vectors) through han-timeline, the han.timeline/1 reference runner", ["cargo", "test", "--locked", "-p", "han-timeline", "--test", "vectors"]),
     ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")], "full"),
     ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"], "full"),
 ]
@@ -35,7 +36,7 @@ SYNC = ("Docs match the checks: every count, status and claim in architecture.md
         [PY, os.path.join(HERE, "sync_docs.py"), "--check"])
 
 def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=ROOT,
                        env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1"), shell=(os.name == "nt" and cmd[0] == "npx"))
     out = "\n".join(l for l in (r.stdout + r.stderr).splitlines() if not l.startswith("npm ")).strip()
     return r.returncode, out

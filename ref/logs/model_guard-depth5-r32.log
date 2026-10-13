@@ -1,0 +1,6 @@
+  depth 1: 50 transitions, 33 states, frontier 32, rss 23 MB
+  depth 2: 1674 transitions, 833 states, frontier 800, rss 26 MB
+  depth 3: 43590 transitions, 19316 states, frontier 18483, rss 71 MB
+  depth 4: 1046930 transitions, 429416 states, frontier 410100, rss 1094 MB
+  depth 5: 24110265 transitions, 9282609 states, frontier 0, rss 1070 MB
+[guard] 24110265 transitions to depth 5; GuardApproved, ClaimGuards, GuardedRestricted, GuardedApprovalsUnused, UnguardOnlyByTheGuard, NotStricter, ExactGuarding, ExactAcceptance, ClosedTasksTakeFinalUpdates, OneOpenApprovalPerAuthor, CapLiveness and DeadApprovalsDropped HOLD (non-vacuous: guarded claim, delegated claim, guard denial, restricted author, guarded approval dropped, cap refusal, uncounted approval, task-less delegated work, limited delegate, parentless delegated task, carry outlives the close, carrying executor, claim refused as never counted, carrying guard approved, closed task cleared by an owner, leaving ended a carry)

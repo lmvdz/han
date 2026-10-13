@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use han_core::SigningKey;
+use han_net::wellknown::{Fetcher, WellKnown};
 use han_net::{MemNetwork, MemTransport, ServeOptions, ServerHandle, serve};
 use han_node::api::{
     CallResult, Command, HomeRef, NodeApi, Query, Row, ViewEvent, ViewMirror, ViewStream, Window,
@@ -32,6 +33,8 @@ pub struct World {
     pub home: Arc<Home>,
     pub keys: Arc<StaticKeys>,
     pub home_ref: HomeRef,
+    /// Answers `/.well-known/han` for the home from memory (Z4: a ticket's node is confirmed there).
+    pub fetcher: Fetcher,
     pub dir: std::path::PathBuf,
     server: Option<ServerHandle>,
 }
@@ -83,7 +86,17 @@ impl World {
             // The memory network ignores addresses; tickets need one to parse.
             relays: vec!["https://mem.invalid".into()],
         };
+        let fetcher = Fetcher::new().with_document(WellKnown {
+            server: SERVER.into(),
+            sequencer: vec![han_net::NodeAddr {
+                node: pubkey(200),
+                addrs: vec![],
+                relays: vec!["https://mem.invalid".into()],
+            }],
+            keys: home.server_keys(),
+        });
         World {
+            fetcher,
             net,
             clock,
             home,
@@ -123,6 +136,7 @@ impl World {
         config.retry = Duration::from_millis(50);
         config.flush_every = Duration::from_millis(100);
         config.connect_wait = Duration::from_secs(2);
+        config.fetcher = self.fetcher.clone();
         tweak(&mut config);
         Node::start(NodeParts {
             config,

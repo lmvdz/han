@@ -1,5 +1,5 @@
 """Writes conformance/carrier-vectors/*.json: offline vectors for the pure parts of the `han/1` carrier (round 31, X16, X18).
-Expectations are hand-written from spec/core/architecture.md (§2, §4.3, G-05, G-07, G-08, N-01…N-03, X15), NOT computed by carrier.py;
+Expectations are hand-written from spec/core/architecture.md (§2, §4.3, G-05, G-07, G-08, N-01…N-03; round 32: Z4–Z7), NOT computed by carrier.py;
 only keys, signatures and encodings (bytes no one writes by hand) are computed here. ref/run_carrier_vectors.py checks them against
 ref/carrier.py; any implementation can check them the same way (conformance/carrier-vectors/README.md)."""
 import json, os, sys
@@ -25,7 +25,8 @@ def pol(**kw):
 SPACES = {
     "team:a.example": {"policy": pol(), "roles": {A: "owner", "@gone:a.example": "banned"}},
     "pub:a.example": {"policy": pol(visibility="public"), "roles": {A: "owner"}},
-    "club:a.example": {"policy": pol(join="open"), "roles": {A: "owner"}},
+    "club:a.example": {"policy": pol(join="open"), "roles": {A: "owner", Z: "member"}},
+    "lab:a.example": {"policy": pol(), "roles": {A: "owner", B: "guest"}},
     "profile:@alice:a.example": {"policy": pol(visibility="public", join="closed"), "roles": {A: "owner", "@:a.example": "owner"}},
 }
 def conn(node, call, space=None, who=None, nodes=None):
@@ -34,14 +35,24 @@ def conn(node, call, space=None, who=None, nodes=None):
     if who: c["hello"] = {"who": who, "nodes": [n.pub for n in nodes]}
     return c
 OPEN, MEMBER, SERVER, NO = {"allow": True, "tier": "open"}, {"allow": True, "tier": "member"}, {"allow": True, "tier": "server"}, {"allow": False}
-FILES["admit"] = {"name": "admit", "rules": ["N-02", "G-07", "X9", "X12"], "function": "admit(conn, spaces)",
-    "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor) or member (a role holder in a space served here, its own profile included); anyone else only for join, cancel, reads of public, profile and not-held spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
+FILES["admit"] = {"name": "admit", "rules": ["N-02", "G-07", "X9", "X12", "Z7"], "function": "admit(conn, spaces)",
+    "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor), or as member for a call on a space where the actor holds a role (round 32, Z7: judged per space), or for a call naming no space when the actor is an owner or member of a served space that isn't open-join; anyone else only for join, cancel, any call naming a space not held here (routing answers it), reads of public and profile spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
     "spaces": SPACES, "cases": [
     {"name": "hello from any node", "conn": conn(STRANGER, "hello"), "expect": OPEN},
     {"name": "join before hello (X12)", "conn": conn(STRANGER, "join", "team:a.example"), "expect": NO},
     {"name": "read before hello", "conn": conn(ALICE, "read", "pub:a.example"), "expect": NO},
     {"name": "a member's device: any call", "conn": conn(ALICE, "append", "team:a.example", A, [ALICE]), "expect": MEMBER},
-    {"name": "a member's device, a space it isn't in: the call's rules judge", "conn": conn(ALICE, "watch", "other:a.example", A, [ALICE]), "expect": MEMBER},
+    {"name": "a member's device, a space not held here: open, routing answers (§4.1 step 2)", "conn": conn(ALICE, "watch", "other:a.example", A, [ALICE]), "expect": OPEN},
+    {"name": "a stranger appends to a space not held here: routing answers", "conn": conn(BOB, "append", "moved:a.example", B, [BOB]), "expect": OPEN},
+    {"name": "an owner of one space signals another it holds no role in (Z7)", "conn": conn(ALICE, "signal", "lab2:a.example", A, [ALICE]), "spaces": dict(SPACES, **{"lab2:a.example": {"policy": pol(), "roles": {B: "owner"}}}), "expect": NO},
+    {"name": "an owner of one space uploads (a standing role)", "conn": conn(ALICE, "blobPut", None, A, [ALICE]), "expect": MEMBER},
+    {"name": "an open-join member signals a members-only space (Z7, Y10)", "conn": conn(STRANGER, "signal", "team:a.example", Z, [STRANGER]), "expect": NO},
+    {"name": "an open-join member uploads: no standing role (Z7)", "conn": conn(STRANGER, "blobPut", None, Z, [STRANGER]), "expect": NO},
+    {"name": "an open-join member reads its own space", "conn": conn(STRANGER, "read", "club:a.example", Z, [STRANGER]), "expect": MEMBER},
+    {"name": "an open-join member watches in its own space: the call's rules judge", "conn": conn(STRANGER, "watch", "club:a.example", Z, [STRANGER]), "expect": MEMBER},
+    {"name": "a guest reads its space", "conn": conn(BOB, "read", "lab:a.example", B, [BOB]), "expect": MEMBER},
+    {"name": "a guest uploads: no standing role (Z7)", "conn": conn(BOB, "blobPut", None, B, [BOB]), "expect": NO},
+    {"name": "a guest reads a members-only space it isn't in", "conn": conn(BOB, "read", "team:a.example", B, [BOB]), "expect": NO},
     {"name": "the member's actor on a node its profile doesn't list", "conn": conn(STRANGER, "append", "team:a.example", A, [ALICE]), "expect": NO},
     {"name": "the same, reading a public space: open", "conn": conn(STRANGER, "read", "pub:a.example", A, [ALICE]), "expect": OPEN},
     {"name": "a banned actor is no member", "conn": conn(BOB, "append", "team:a.example", "@gone:a.example", [BOB]), "expect": NO},
@@ -53,9 +64,10 @@ FILES["admit"] = {"name": "admit", "rules": ["N-02", "G-07", "X9", "X12"], "func
     {"name": "a stranger reads a profile", "conn": conn(BOB, "state", "profile:@alice:a.example", B, [BOB]), "expect": OPEN},
     {"name": "a stranger fetches a public blob", "conn": conn(BOB, "blobGet", "pub:a.example", B, [BOB]), "expect": OPEN},
     {"name": "a stranger reads a space not held here: routing answers", "conn": conn(BOB, "read", "elsewhere:c.example", B, [BOB]), "expect": OPEN},
+    {"name": "a relayed hello (K2): another node's actor reads a members-only space", "conn": conn(STRANGER, "read", "team:a.example", A, [ALICE]), "expect": NO},
     {"name": "a stranger reads a members-only space", "conn": conn(BOB, "read", "team:a.example", B, [BOB]), "expect": NO},
     {"name": "a stranger signals a public space", "conn": conn(BOB, "signal", "pub:a.example", B, [BOB]), "expect": NO},
-    {"name": "a stranger appends to a public invite-only space", "conn": conn(BOB, "append", "pub:a.example", B, [BOB]), "expect": NO},
+    {"name": "a stranger appends to a public invite-only space", "conn": conn(STRANGER, "append", "pub:a.example", "@s:z.example", [STRANGER]), "expect": NO},
     {"name": "a stranger joins an open space (P-03)", "conn": conn(BOB, "append", "club:a.example", B, [BOB]), "expect": OPEN},
     {"name": "join after hello (N-03)", "conn": conn(BOB, "join", "team:a.example", B, [BOB]), "expect": OPEN},
     {"name": "cancel after hello", "conn": conn(BOB, "cancel", None, B, [BOB]), "expect": OPEN},
@@ -105,34 +117,6 @@ FILES["frames"] = {"name": "frames", "rules": ["G-07", "§2", "X18"],
         {"text": '{"id":6,"call":"test.clock","args":{}}', "test_mode": True, "expect": None},
     ]}
 
-# ───────────────────────── control.json (G-07, G-08) ─────────────────────────
-CH = "A" * 43
-def chal(**kw):
-    c = {"challenge": CH, "server": "a.example", "versions": [1], "time": "2026-10-10T12:00:00Z"}
-    c.update(kw); return json.dumps(c, separators=(",", ":"))
-NODES = [SRV.pub]
-msg = ("han-hello-v1\n" + CH + "\n" + "a.example").encode()
-FILES["control"] = {"name": "control", "rules": ["G-07", "G-08", "N-03"],
-    "description": "the client's checks of the control stream before it says hello: one bare Challenge (exactly challenge, server, versions, time), its server equal to the dialed ServerName, the node reached one of dialed's; and the bytes a hello proof signs",
-    "challenges": [
-        {"name": "well formed", "frames": [chal()], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "ok"},
-        {"name": "a second frame on the control stream", "frames": [chal(), chal()], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
-        {"name": "an id on the challenge", "frames": [json.dumps({"id": 0, "challenge": CH, "server": "a.example", "versions": [1], "time": "2026-10-10T12:00:00Z"})], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
-        {"name": "another server's name", "frames": [chal(server="b.example")], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
-        {"name": "a node dialed's well-known doesn't list", "frames": [chal()], "dialed": "a.example", "node": SRVB.pub, "nodes": NODES, "expect": "abort"},
-        {"name": "a ticket's node for its server (N-03)", "frames": [chal()], "dialed": "a.example", "node": SRVB.pub, "nodes": [SRVB.pub], "expect": "ok"},
-        {"name": "a challenge of 21 characters", "frames": [chal(challenge="A" * 21)], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
-        {"name": "a challenge of 128 characters", "frames": [chal(challenge="A" * 128)], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "ok"},
-        {"name": "no version 1", "frames": [chal(versions=[2])], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
-        {"name": "versions 1 and 2", "frames": [chal(versions=[1, 2])], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "ok"},
-        {"name": "no challenge yet", "frames": [], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
-    ],
-    "proofs": [
-        {"challenge": CH, "dialed": "a.example", "message": msg.hex(), "publicKey": ALICE.pub, "proof": ALICE.sign(msg), "valid": True},
-        {"challenge": CH, "dialed": "a.example", "message": msg.hex(), "publicKey": BOB.pub, "proof": ALICE.sign(msg), "valid": False, "note": "another key"},
-        {"challenge": CH, "dialed": "b.example", "message": ("han-hello-v1\n" + CH + "\nb.example").encode().hex(), "publicKey": ALICE.pub, "proof": ALICE.sign(msg), "valid": False, "note": "signed for a.example"},
-    ]}
-
 # ───────────────────────── wellknown.json, tickets.json (§4.3, N-03, X10, X13) ─────────────────────────
 def na(k, addrs=("192.0.2.1:7000",), relays=("https://relay.example/",)): return {"node": k.pub, "addrs": list(addrs), "relays": list(relays)}
 SK = {"keyId": "h1", "publicKey": SRV.pub, "from": "2026-01-01T00:00:00Z"}
@@ -177,6 +161,52 @@ FILES["tickets"] = {"name": "tickets", "rules": ["N-03", "X13"],
         {"name": "a profile space", "text": ttext(dict(TK, space="profile:@alice:a.example")), "expect": "invalid"},
     ]}
 
+# ───────────────────────── control.json (G-07, G-08) ─────────────────────────
+CH = "A" * 43
+def chal(**kw):
+    c = {"challenge": CH, "server": "a.example", "versions": [1], "time": "2026-10-10T12:00:00Z"}
+    c.update(kw); return json.dumps(c, separators=(",", ":"))
+NODES = [SRV.pub]
+msg = ("han-hello-v2\n" + CH + "\n" + "a.example" + "\n" + SRV.pub).encode()
+EVIL = key("attacker")
+FILES["control"] = {"name": "control", "rules": ["G-07", "G-08", "N-03", "Z4", "SR-13"],
+    "description": "the client's checks before it says hello: a ticket's or a hint's node is only a hint, confirmed against the server's /.well-known/han (`dials`, round 32 Z4); one bare Challenge (exactly challenge, server, versions, time), its server equal to the dialed ServerName, the node reached one of dialed's well-known nodes (`challenges`); the bytes a han/1 hello proof signs, \"han-hello-v2\\n\" challenge \"\\n\" dialed \"\\n\" the server's node id (`proofs`); and the server's check that a hello is bound to the connection (`bindings`, SR-13)",
+    "dials": [
+        {"name": "a ticket's node listed in the server's well-known", "server": "a.example", "node": SRV.pub, "wellknown": wk(), "expect": "ok"},
+        {"name": "a crafted ticket: an attacker's node for the victim's home (K1)", "server": "a.example", "node": EVIL.pub, "wellknown": wk(), "expect": "abort"},
+        {"name": "a well-known that names another server", "server": "a.example", "node": SRV.pub, "wellknown": wk(server="b.example"), "expect": "abort"},
+        {"name": "a malformed well-known", "server": "a.example", "node": SRV.pub, "wellknown": wk(sequencer=[]), "expect": "abort"},
+        {"name": "after a move: the new home's node, listed by the new home", "server": "b.example", "node": SRVB.pub, "wellknown": wk(server="b.example", sequencer=[na(SRVB)]), "expect": "ok"},
+    ],
+    "challenges": [
+        {"name": "well formed", "frames": [chal()], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "ok"},
+        {"name": "a second frame on the control stream", "frames": [chal(), chal()], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "an id on the challenge", "frames": [json.dumps({"id": 0, "challenge": CH, "server": "a.example", "versions": [1], "time": "2026-10-10T12:00:00Z"})], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "another server's name", "frames": [chal(server="b.example")], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "a node dialed's well-known doesn't list", "frames": [chal()], "dialed": "a.example", "node": SRVB.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "the real challenge relayed by an attacker's node (K1)", "frames": [chal()], "dialed": "a.example", "node": EVIL.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "a challenge of 21 characters", "frames": [chal(challenge="A" * 21)], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "a challenge of 128 characters", "frames": [chal(challenge="A" * 128)], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "ok"},
+        {"name": "no version 1", "frames": [chal(versions=[2])], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
+        {"name": "versions 1 and 2", "frames": [chal(versions=[1, 2])], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "ok"},
+        {"name": "no challenge yet", "frames": [], "dialed": "a.example", "node": SRV.pub, "nodes": NODES, "expect": "abort"},
+    ],
+    "proofs": [
+        {"challenge": CH, "dialed": "a.example", "node": SRV.pub, "message": msg.hex(), "publicKey": ALICE.pub, "proof": ALICE.sign(msg), "valid": True},
+        {"challenge": CH, "dialed": "a.example", "node": SRV.pub, "message": msg.hex(), "publicKey": BOB.pub, "proof": ALICE.sign(msg), "valid": False, "note": "another key"},
+        {"challenge": CH, "dialed": "b.example", "node": SRV.pub, "message": ("han-hello-v2\n" + CH + "\nb.example\n" + SRV.pub).encode().hex(), "publicKey": ALICE.pub, "proof": ALICE.sign(msg), "valid": False, "note": "signed for a.example"},
+        {"challenge": CH, "dialed": "a.example", "node": EVIL.pub, "message": ("han-hello-v2\n" + CH + "\na.example\n" + EVIL.pub).encode().hex(), "publicKey": ALICE.pub, "proof": ALICE.sign(("han-hello-v2\n" + CH + "\na.example\n" + EVIL.pub).encode()), "valid": True,
+         "checkedAs": SRV.pub, "note": "made on a connection to the attacker's node (K1): the real home checks its own node id and the proof fails there"},
+        {"challenge": CH, "dialed": "a.example", "node": SRV.pub, "message": msg.hex(), "publicKey": ALICE.pub, "proof": ALICE.sign(("han-hello-v1\n" + CH + "\na.example").encode()), "valid": False, "note": "the legacy WebSocket carrier's v1 bytes never verify as a han/1 proof"},
+    ],
+    "bindings": [
+        {"name": "a user signs with the key that is its connection's node", "who": A, "keyId": "d1", "node": ALICE.pub, "keys": {"d1": {"publicKey": ALICE.pub, "status": "valid"}}, "expect": "ok"},
+        {"name": "a valid key of the actor, but another device's connection (SR-13)", "who": A, "keyId": "d1", "node": STRANGER.pub, "keys": {"d1": {"publicKey": ALICE.pub, "status": "valid"}, "d2": {"publicKey": STRANGER.pub, "status": "valid"}}, "expect": "denied"},
+        {"name": "the connection's node, but a revoked key", "who": A, "keyId": "d1", "node": ALICE.pub, "keys": {"d1": {"publicKey": ALICE.pub, "status": "revoked"}}, "expect": "denied"},
+        {"name": "a server on a node its well-known lists", "who": "@:a.example", "keyId": "h1", "node": SRV.pub, "keys": wk(), "expect": "ok"},
+        {"name": "a server on a node its well-known doesn't list", "who": "@:a.example", "keyId": "h1", "node": SRVB.pub, "keys": wk(), "expect": "denied"},
+    ]}
+
 # ───────────────────────── stream-items.json (T-07, G-05, X11) ─────────────────────────
 SESS = "ab" * 32
 def item(**kw):
@@ -185,39 +215,57 @@ def item(**kw):
 STATUS = {"session": SESS, "agent": "@fixer:b.example", "harness": "claude-code", "state": "working", "step": "running tests", "files": [], "seq": 7, "at": "2026-10-10T12:00:00Z"}
 deep = 1
 for _ in range(33): deep = {"a": deep}
-FILES["stream-items"] = {"name": "stream-items", "rules": ["T-07", "G-05", "X11", "§2"],
-    "description": "StreamItem shapes: output, status, context, and profile {name, body} (X11); a han.status/1 body has the members its profile requires (unknown ones ignored); `right` is the sessionAccess right an item needs: read for context, watch for every other type",
+FILES["stream-items"] = {"name": "stream-items", "rules": ["T-07", "G-05", "X11", "Z6", "SR-59", "SR-66", "§2"],
+    "description": "StreamItem shapes as the server checks them (G-05): output, status, context (a layer-2 summary is a context item, what: summary), and profile {name, body} (X11), whose body is opaque to the server (round 32, Z6): only the name grammar, Json depth and the item size are checked; `right` is the sessionAccess right an item needs: read for context, watch for every other type. `bodies` is a face's check of a han.status/1 body (han.status-1.md): its required members, and the length bounds of its free-text members (SR-59)",
     "cases": [
         {"name": "output", "item": item(type="output", text="hi"), "expect": "ok", "right": "watch"},
         {"name": "status", "item": item(type="status", state="working"), "expect": "ok", "right": "watch"},
         {"name": "context", "item": item(type="context", blob={"hash": "cd" * 32, "size": 10, "type": "text/plain"}, what="plan"), "expect": "ok", "right": "read"},
         {"name": "han.status/1 as a profile item", "item": item(type="profile", name="han.status/1", body=STATUS), "expect": "ok", "right": "watch"},
         {"name": "han.status/1 with an unknown member", "item": item(type="profile", name="han.status/1", body=dict(STATUS, mood="fine")), "expect": "ok", "right": "watch"},
-        {"name": "han.status/1 without seq", "item": item(type="profile", name="han.status/1", body={k: v for k, v in STATUS.items() if k != "seq"}), "expect": "invalid"},
-        {"name": "han.status/1 with a state outside the seven", "item": item(type="profile", name="han.status/1", body=dict(STATUS, state="asleep")), "expect": "invalid"},
+        {"name": "han.status/1 without seq: the server doesn't look (Z6)", "item": item(type="profile", name="han.status/1", body={k: v for k, v in STATUS.items() if k != "seq"}), "expect": "ok", "right": "watch"},
+        {"name": "han.status/1 with a state outside the seven: the server doesn't look", "item": item(type="profile", name="han.status/1", body=dict(STATUS, state="asleep")), "expect": "ok", "right": "watch"},
+        {"name": "a layer-2 summary as context (SR-66)", "item": item(type="context", blob={"hash": "cd" * 32, "size": 10, "type": "application/json"}, what="summary"), "expect": "ok", "right": "read"},
+        {"name": "a profile item over maxStreamItemBytes", "item": item(type="profile", name="team.board/2", body="x" * 65537), "expect": "invalid"},
         {"name": "an unknown profile: any Json body", "item": item(type="profile", name="team.board/2", body={"x": [1, 2]}), "expect": "ok", "right": "watch"},
         {"name": "a profile name without a version", "item": item(type="profile", name="han.status", body={}), "expect": "invalid"},
         {"name": "a profile body nested 33 deep", "item": item(type="profile", name="team.board/2", body=deep), "expect": "invalid"},
         {"name": "a profile item with an extra member", "item": item(type="profile", name="team.board/2", body={}, extra=1), "expect": "invalid"},
         {"name": "an unknown type", "item": item(type="bulk", body={}), "expect": "invalid"},
         {"name": "n = 0", "item": item(type="output", text="hi", n=0), "expect": "invalid"},
+    ],
+    "bodies": [
+        {"name": "han.status/1", "body": STATUS, "expect": "ok"},
+        {"name": "with an unknown member", "body": dict(STATUS, mood="fine"), "expect": "ok"},
+        {"name": "without seq", "body": {k: v for k, v in STATUS.items() if k != "seq"}, "expect": "invalid"},
+        {"name": "a state outside the seven", "body": dict(STATUS, state="asleep"), "expect": "invalid"},
+        {"name": "step of 256 characters", "body": dict(STATUS, step="s" * 256), "expect": "ok"},
+        {"name": "step of 257 characters (SR-59)", "body": dict(STATUS, step="s" * 257), "expect": "invalid"},
+        {"name": "tool of 129 characters", "body": dict(STATUS, tool="t" * 129), "expect": "invalid"},
+        {"name": "a plan of 64 items", "body": dict(STATUS, plan=[{"text": "p", "done": False}] * 64), "expect": "ok"},
+        {"name": "a plan of 65 items", "body": dict(STATUS, plan=[{"text": "p", "done": False}] * 65), "expect": "invalid"},
+        {"name": "a plan text of 257 characters", "body": dict(STATUS, plan=[{"text": "p" * 257, "done": True}]), "expect": "invalid"},
+        {"name": "sandbox and gate fidelity (SR-34)", "body": dict(STATUS, sandbox="mxc", gate="every_call"), "expect": "ok"},
+        {"name": "a gate fidelity outside the two", "body": dict(STATUS, gate="sometimes"), "expect": "invalid"},
     ]}
 
-# ───────────────────────── bulk.json (X15) ─────────────────────────
-DATA = bytes.fromhex("a201016474657874") + b"\x00" * 3
-def bulk(k, profile="han.timeline/1", data=DATA, keyId="d1", sign_profile=None, sign_data=None):
-    m = b"han/bulk/1\n" + (sign_profile or profile).encode() + b"\n" + (data if sign_data is None else sign_data)
-    return {"author": A, "keyId": keyId, "profile": profile, "data": data.hex(), "sig": k.sign(m)}
-VIEW = {"actor": A, "keys": {"d1": {"publicKey": ALICE.pub, "status": "valid"}, "d0": {"publicKey": BOB.pub, "status": "revoked"}}}
-FILES["bulk"] = {"name": "bulk", "rules": ["X15", "G-07", "§2"],
-    "description": "a bulk batch's signature covers \"han/bulk/1\\n\" ‖ UTF-8(profile) ‖ \"\\n\" ‖ data (its exact CBOR bytes, hex here) and is made by a valid key of the author's pinned profile (`view`)",
-    "view": VIEW, "message": (b"han/bulk/1\nhan.timeline/1\n" + DATA).hex(), "cases": [
-        {"name": "genuine", "batch": bulk(ALICE), "valid": True},
-        {"name": "another profile name", "batch": bulk(ALICE, profile="han.timeline/2", sign_profile="han.timeline/1"), "valid": False},
-        {"name": "one byte changed", "batch": bulk(ALICE, data=DATA[:-1] + b"\x01", sign_data=DATA), "valid": False},
-        {"name": "a revoked key", "batch": bulk(BOB, keyId="d0"), "valid": False},
-        {"name": "a key not in the profile", "batch": bulk(ALICE, keyId="d9"), "valid": False},
-        {"name": "the name and the data run together (no separator)", "batch": dict(bulk(ALICE), sig=ALICE.sign(b"han/bulk/1\nhan.timeline/1" + DATA)), "valid": False},
+# ───────────────────────── typed-streams.json (G-07, round 32 Z5) ─────────────────────────
+def frame_hex(b): return (len(b).to_bytes(4, "big") + b).hex()
+TL = "han.timeline/1"
+F1, F2 = bytes.fromhex("a201016474657874"), b""
+FILES["typed-streams"] = {"name": "typed-streams", "rules": ["G-07", "Z5"],
+    "description": "a typed one-way stream: a header frame (4-byte big-endian length, then the UTF-8 stream type name, the profile-name grammar, at most 64 bytes), then the profile's frames, each a 4-byte length and that many bytes (at most maxFrameBytes). The core signs nothing: the frames are the profile's (han.timeline/1: TL-93 envelopes and TL-110 messages). `expect` is {type, frames (hex)} for a finished stream that reads whole, \"more\" for an unfinished one that ends inside a frame, or \"close\"",
+    "encode": [{"type": TL, "frames": [F1.hex(), F2.hex()], "hex": frame_hex(TL.encode()) + frame_hex(F1) + frame_hex(F2)}],
+    "cases": [
+        {"name": "a header and two frames, one empty", "hex": frame_hex(TL.encode()) + frame_hex(F1) + frame_hex(F2), "finished": True, "expect": {"type": TL, "frames": [F1.hex(), ""]}},
+        {"name": "a header alone", "hex": frame_hex(TL.encode()), "finished": True, "expect": {"type": TL, "frames": []}},
+        {"name": "an unfinished stream inside a frame", "hex": frame_hex(TL.encode()) + "00000008a201", "finished": False, "expect": "more"},
+        {"name": "a finished stream that ends inside a frame", "hex": frame_hex(TL.encode()) + "00000008a201", "finished": True, "expect": "close"},
+        {"name": "a frame over maxFrameBytes, judged from its length", "hex": frame_hex(TL.encode()) + "00140001", "finished": False, "expect": "close"},
+        {"name": "a type name without a version", "hex": frame_hex(b"han.timeline"), "finished": True, "expect": "close"},
+        {"name": "a type name over 64 bytes", "hex": frame_hex(("han." + "a" * 32 + "." + "b" * 30 + "/1").encode()), "finished": True, "expect": "close"},
+        {"name": "no header", "hex": "", "finished": True, "expect": "close"},
+        {"name": "an unknown profile's type reads the same (what it means is the profile's)", "hex": frame_hex(b"team.board/2") + frame_hex(b"\xff"), "finished": True, "expect": {"type": "team.board/2", "frames": ["ff"]}},
     ]}
 
 # ───────────────────────── ed25519.json (§2, X18) ─────────────────────────

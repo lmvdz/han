@@ -24,12 +24,12 @@ async def test_mode_comes_from_the_state_at_the_steer_not_the_head(env):
     assert (await state(a))["guarded"] == {BOT: True}
     await a.append(*a.make_entry("agent.unguard", S, {"agent": BOT}))
     st = await state(a)
-    assert st["guarded"] == {} and P.guard_status(st, {"profiles": {}}, BOT) == {"guarded": False, "forced": False}      # the head alone would say auto
+    assert st["guarded"] == {} and P.guard_status(st, {"profiles": {}}, BOT) == {"guarded": False, "forced": False, "guards": []}      # the head alone would say auto
     past = await a.read_state(S, at=r["seq"])
     assert past["guarded"] == {BOT: True} and past["head"] == r["seq"]
-    assert P.guard_status(past, {"profiles": {}}, BOT) == {"guarded": True, "forced": False}      # no pinned profile here, so no guard named
+    assert P.guard_status(past, {"profiles": {}}, BOT) == {"guarded": True, "forced": False, "guards": [BOT]}      # no pinned profile here, so no guard named
     prof = (await a.read_state("profile:" + BOT))["profile"]
-    assert P.guard_status(past, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": False}      # K1: the guard is the pinned operator
+    assert P.guard_status(past, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": False, "guards": [BOT]}      # K1: the guard is the pinned operator
     agent = ScriptedAgent()
     botc2 = await env.client("bot")
     host2, task2 = start_host(env, botc2, "auto", agent)

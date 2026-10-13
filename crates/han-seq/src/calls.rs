@@ -7,7 +7,7 @@ use han_core::policy::{SpaceState, can_read};
 use han_core::{PublicKey, grammar, limits};
 
 use crate::auth;
-use crate::error::{Result, WireError};
+use crate::error::{Code, Result, WireError};
 use crate::fanout::{Live, SubId};
 use crate::home::{Home, Inner, Space, readable_any};
 use crate::identity::PinView;
@@ -77,13 +77,15 @@ impl Home {
         ])
     }
 
-    /// G-08: authenticates `who` from its profile. `challenge` is the one this connection was issued.
+    /// G-08: authenticates `who` from its profile. `challenge` is the one this connection was issued, `node`
+    /// this end's node id on it (`han/1`; `None` on the legacy carrier).
     pub(crate) fn hello(
         &self,
         who: &str,
         key_id: &str,
         proof: &str,
         challenge: &str,
+        node: Option<&str>,
         known_heads: Option<&Value>,
     ) -> Result<Authed> {
         let g = self.lock();
@@ -102,7 +104,7 @@ impl Home {
             .filter(|k| k.status == han_core::policy::KeyStatus::Valid)
             .ok_or_else(denied)?;
         let public = PublicKey::from_base64url(&key.public_key).map_err(|_| denied())?;
-        auth::verify_hello(&public, proof, challenge, &self.server).map_err(|_| denied())?;
+        auth::verify_hello(&public, proof, challenge, &self.server, node).map_err(|_| denied())?;
         let heads = self.heads_for(&g, who, known_heads.unwrap_or(&Value::Array(vec![])))?;
         let ok = jv::obj([
             ("limits", self.limits_value(&g)),
@@ -439,7 +441,36 @@ impl Home {
                 Value::Object(Default::default())
             };
             one.insert("guarded".into(), guarded);
-            return Ok(jv::obj([("state", Value::Object(one))]));
+            // Z1: the tasks whose `accepted` lists the agent and whose `guardedFor` isn't empty, which is what
+            // `carried` reads, so the reply is a GuardInput as it stands
+            let carried = |t: &Value| {
+                t["accepted"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(agent)))
+                    && t["guardedFor"].as_array().is_some_and(|g| !g.is_empty())
+            };
+            let tasks = match &view["tasks"] {
+                Value::Object(all) => all
+                    .iter()
+                    .filter(|(_, t)| carried(t))
+                    .map(|(id, t)| (id.clone(), t.clone()))
+                    .collect(),
+                _ => Default::default(),
+            };
+            one.insert("tasks".into(), Value::Object(tasks));
+            let reply = jv::obj([("state", Value::Object(one))]);
+            let framed = jv::obj([
+                ("id", jv::int(json::MAX_SAFE_INT as u64)),
+                ("ok", reply.clone()),
+            ]);
+            if json::canonicalize(&framed).map_or(usize::MAX, |b| b.len()) > g.max_frame_bytes {
+                // an agent in more guarded tasks than a frame holds: the host reads the paged state
+                return Err(WireError::new(
+                    Code::Limit,
+                    "the agent view does not fit a frame: read the paged state",
+                ));
+            }
+            return Ok(reply);
         }
         if sel.cursor.is_some() && (0..PAGED.len()).any(|m| offsets[m] > paging::len_of(&view, m)) {
             return Err(WireError::invalid("cursor offset beyond the map"));

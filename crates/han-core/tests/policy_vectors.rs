@@ -1,4 +1,4 @@
-//! Replays every Policy vector of `conformance/vectors` (166 files) through the `han-conform`
+//! Replays every Policy vector of `conformance/vectors` (every file there) through the `han-conform`
 //! binary, which checks each verdict and the folded state after every step as
 //! `ref/run_vectors.py` does.
 
@@ -11,11 +11,18 @@ fn every_policy_vector_passes() {
         .expect("han-conform runs");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "han-conform failed:\n{text}");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
+    let files = std::fs::read_dir(dir)
+        .expect("the vector directory")
+        .filter(|e| {
+            e.as_ref()
+                .is_ok_and(|e| e.path().extension().is_some_and(|x| x == "json"))
+        })
+        .count();
+    let want = format!("vectors pass {files} fail 0");
     assert!(
-        text.lines()
-            .last()
-            .is_some_and(|l| l.ends_with("vectors pass 166 fail 0")),
-        "unexpected report:\n{text}"
+        text.lines().last().is_some_and(|l| l.ends_with(&want)),
+        "unexpected report (want {want}):\n{text}"
     );
 }
 

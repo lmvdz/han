@@ -4,7 +4,7 @@
   "P-15",
   "P-07 E3"
  ],
- "description": "X3 (W5, the reviewer's p1 W-a): an effect's guardedFor holds carried(executor) at the proposal, as it would hold a guarded executor, so a carrying delegate can't execute anything without the delegator's guard",
+ "description": "X3, Z1 (the reviewer's p1 W-a and Q1): an effect's guardedFor holds guards(executor) at the proposal, and E3 recomputes guards(proposer) and guards(executor) at the claim, so a carrying delegate can't execute anything without the delegator's guard, whenever it was proposed",
  "profiles": {
   "@d:b.example": {
    "actorKind": "agent",
@@ -576,23 +576,174 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:20Z",
+   "expect": "denied",
+   "note": "Z1 (Q1): D carries BOT now, and e0 never counted BOT: propose again"
+  },
+  {
+   "entry": {
+    "id": "39bf24d6435ff9378468ef9661be601b6b1e1247ae686b3025437d414020c9ec",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@d:b.example",
+     "action": "git.push",
+     "planDigest": "dce7dccdb9f065e9109deb88b5bc3b4d04b0e9398b6d18d5b6e197266f0db201",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
    "expect": "allow",
-   "note": "what was recorded before D accepted stays as it was"
+   "check": {
+    "effects.39bf24d6435ff9378468ef9661be601b6b1e1247ae686b3025437d414020c9ec.guardedFor": [
+     "@bot:b.example"
+    ]
+   }
+  },
+  {
+   "entry": {
+    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "39bf24d6435ff9378468ef9661be601b6b1e1247ae686b3025437d414020c9ec",
+     "planDigest": "dce7dccdb9f065e9109deb88b5bc3b4d04b0e9398b6d18d5b6e197266f0db201"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "39bf24d6435ff9378468ef9661be601b6b1e1247ae686b3025437d414020c9ec",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "denied",
+   "note": "BOT's guard hasn't approved"
+  },
+  {
+   "entry": {
+    "id": "708f6a50104bf8c4069d9af50da41af1b4c4bbb532e85537a303f727babc6ff5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+     "state": "done"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-dd",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "allow",
+   "check": {
+    "tasks.2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815.accepted": []
+   }
+  },
+  {
+   "entry": {
+    "id": "6e58ebd48c8582f4e2c49cae178f7ce8eb545d1aedbd376b6724288e849a8ec2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "3ce001886938b2329e29a28b5a08c986cbd057de0f5a3a5cfcd0ea39deab0698",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "allow",
+   "note": "D's own final update ended the carry: e0 needs no guard"
+  },
+  {
+   "entry": {
+    "id": "0dc7f1082875870847589a7dafb436850d1855c148236799431801fa69dbd14e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "39bf24d6435ff9378468ef9661be601b6b1e1247ae686b3025437d414020c9ec",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "denied",
+   "note": "what e2 recorded never shrinks"
   }
  ],
  "ids": {
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
   "a0": "ee7e850e319018a9b6c6da53031ad8e53b1e5199d7c91c8a30cc25f5c5cbb5f3",
   "a1": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
   "ad": "8724f5058b3ff1b37f10fb3734452f28d30b65997606691d1b0fb8b27035d27c",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
   "c0": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
   "c1": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
   "c2": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+  "c3": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+  "c4": "6e58ebd48c8582f4e2c49cae178f7ce8eb545d1aedbd376b6724288e849a8ec2",
+  "c5": "0dc7f1082875870847589a7dafb436850d1855c148236799431801fa69dbd14e",
   "d": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+  "dd": "708f6a50104bf8c4069d9af50da41af1b4c4bbb532e85537a303f727babc6ff5",
   "e0": "3ce001886938b2329e29a28b5a08c986cbd057de0f5a3a5cfcd0ea39deab0698",
   "e1": "efb2869d09e06b5d59b3e04d036adfe202288ef17c3d52e6e3f8c96a18919253",
+  "e2": "39bf24d6435ff9378468ef9661be601b6b1e1247ae686b3025437d414020c9ec",
   "g1": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
   "h": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
