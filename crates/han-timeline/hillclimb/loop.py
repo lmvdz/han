@@ -29,7 +29,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-WORK = os.path.join(REPO, "target", "hillclimb")
+# One folder per climb; set CLIMB_DIR to start a new one next to earlier ones.
+WORK = os.path.join(REPO, os.environ.get("CLIMB_DIR", os.path.join("target", "hillclimb")))
 WT = os.path.join(WORK, "wt")
 STATE = os.path.join(WORK, "state.json")
 BRANCH = "climb/run"
