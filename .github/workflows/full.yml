@@ -1,0 +1,68 @@
+name: full
+
+# The deep checks: nightly and on demand. Not required for merging.
+on:
+  schedule:
+    - cron: "17 2 * * *"   # 02:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: witnesses/cleanroom-ts/package-lock.json
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "witnesses/impl-py[dev]"
+      - name: Build the TypeScript witness
+        working-directory: witnesses/cleanroom-ts
+        run: |
+          npm ci
+          npm run build
+      - name: Spec checks
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python ref/run_all.py --quick
+      - name: Wire vectors against both witness servers
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python ref/run_wire_vectors.py --launch py
+          python ref/run_wire_vectors.py --launch ts
+      - name: Python witness tests
+        working-directory: witnesses/impl-py
+        run: python -m pytest -q
+      - name: Differential fuzz, 1000 seeds
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python ref/fuzz_diff.py --seeds 1000
+
+  rust-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo test --workspace --locked
+      - run: cargo deny check
