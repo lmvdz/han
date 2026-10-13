@@ -20,36 +20,17 @@ Q1–Q9 of the first round are answered in the spec text, and the implementation
 
 Implementing TL-72 dropped the earlier tombstone-revival anchoring. Copies follow step 7.
 
-## Q10. TL-72 step 7: the recommended anchor of an empty target region can break its reading
+## Q10. TL-72 step 7: anchoring an empty target region (answered, PR #28)
 
-**Spec:** "when the target's region is empty, [the first run goes] after the target character
-that holds the nearest kept character preceding the run in the incoming order, else at
-`start`" (RECOMMENDED). The MUST is that the region reads exactly its incoming text, and that
-nothing outside it changes.
+The recommended anchor "after the target character that holds the nearest kept character" could
+be a copy placed elsewhere by an earlier merge, which broke the region's reading in about
+1 in 10,000 randomized worktree merges. Team A adopted the position-based anchor:
+- the run goes after the last character of the region's prefix still visible after the merge;
+- otherwise after an earlier run of the merge, when no visible character lies between;
+- otherwise at `start`.
 
-**Observed:** the randomized tests compare each merged text with the target text after every
-resolved region is replaced, computed from strings alone. Following the recommended rule, about
-1 in 10,000 merges in worktree histories came out wrong. The run landed far from its region.
+The prefix is the target's kept characters from base lines before the region, plus its edits
+whose line ranges end at or before the region's first line. Vector 63 pins it, and the
+implementation follows the text.
 
-**Cause:** "the target character that holds" a kept character can be a copy of that base
-character. A copy sits where an earlier merge anchored it (TL-43), so it can lie anywhere in the
-target's order. For example, it can come before the region's lines rather than right before the
-region. Observed case:
-- base `"\nc\n\n\n \na\n\nx \né\n\n\nx\n\nxc\n"`;
-- target `"\nc\n\n\n \na\n\nx "`;
-- incoming `"\ntwc🙂 cc🙂\nx\n\nxc\nex\n"`.
-
-The text conflict on lines 1–14 is resolved `{text: "\n éé"}`, and `ex\n` is an incoming-only
-empty cluster at line 14. The target holds the kept `\n` before `ex\n` as a copy near the start.
-The recommended anchor gave `"\nex\n\n éé"` instead of `"\n\n ééex\n"`.
-
-**Reading taken:** the anchoring is only RECOMMENDED, so the implementation keeps the MUST.
-- Each region has a gap in the target's sequence. A region whose target is empty goes after the
-  last target character that survives the merge before that gap, else at `start`.
-- A region with nothing surviving between it and an earlier inserted run continues after that
-  run. This generalises the chaining rule, and vector 62 still gives `N` then `Z`.
-
-The planner's result still reads exactly the incoming region text.
-
-**Question:** should step 7 recommend this position-based anchor for empty target regions (or
-say "holds … as a character kept by both sides")?
+No questions are open.

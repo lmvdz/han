@@ -1,14 +1,4 @@
-//! HAN work timelines: the engine of profile `han.timeline/1`.
-//!
-//! A [`History`] holds the signed op batches of one body of work (a repository's worktree, a
-//! session's transcript, or other data). It integrates envelopes from peers in any order
-//! ([`History::receive`]), writes local batches ([`History::write`], [`History::fork`],
-//! [`History::merge`]), answers sync ([`History::hello`], [`History::answer`]), materialises any
-//! version ([`History::state`]), and plans local text edits ([`History::plan_edit`]) and
-//! three-way merges ([`History::plan_merge`]).
-//!
-//! The engine does no I/O: storage is a [`Store`], keys and roles come from a [`Directory`],
-//! and signing from a [`Signer`].
+#![doc = include_str!("../README.md")]
 
 mod cbor;
 pub mod codec;

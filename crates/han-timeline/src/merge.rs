@@ -168,7 +168,7 @@ struct Region {
     /// The incoming region characters (indexes into the incoming sequence), in order.
     i: Vec<usize>,
     /// Where the region sits in the target sequence: its first character, or for an empty
-    /// target region the index of the first target character after it.
+    /// target region the index right after the last character of its prefix (step 7).
     gap: usize,
     /// The conflict this region raised, or `None` for a clean incoming change.
     conflict: Option<usize>,
@@ -541,16 +541,17 @@ fn plan_text(
     let line_pos = |l: usize| line_start.get(l).copied().unwrap_or(base.len());
 
     let (t_edits, t_bx) = edits_of(Side::Target, &base, &base_index, &tseq, &line, &base_char);
-    // The base position each target character stands at: its own when kept, else the first
-    // base position its edit covers.
-    let mut t_pos = vec![0usize; tseq.len()];
+    // Where each target character's line range ends: a kept character's base line + 1, an
+    // edit's character the end of the edit's line range (step 7: the prefix before a region
+    // is what ends at or before the region's first line).
+    let mut t_end = vec![0usize; tseq.len()];
     for (bi, x) in t_bx.iter().enumerate() {
         if let Some(x) = x {
-            t_pos[*x] = bi;
+            t_end[*x] = line(bi) + 1;
         }
     }
     for e in &t_edits {
-        t_pos[e.x.0..e.x.1].fill(e.p);
+        t_end[e.x.0..e.x.1].fill(e.lines.1);
     }
     let (i_edits, i_bx) = edits_of(Side::Incoming, &base, &base_index, &iseq, &line, &base_char);
     let mut t_kept = vec![None; tseq.len()];
@@ -640,7 +641,7 @@ fn plan_text(
         }
         let gap = match t.first() {
             Some(&first) => first,
-            None => t_pos.partition_point(|&p| p < base_range.0),
+            None => t_end.iter().rposition(|&end| end <= a).map_or(0, |x| x + 1),
         };
         regions.push(Region {
             t,
