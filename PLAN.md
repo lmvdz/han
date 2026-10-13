@@ -254,8 +254,9 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 | Proxy upstream | optional: an HTTP or SOCKS5 proxy, or the system route. Tailscale recipe: runners tagged `tag:han-runner`; access rules allowing only `autogroup:internet` via the exit node; a dedicated exit node on a guest network; ideally a separate tailnet from personal devices; ephemeral tagged auth keys. Check each provider's terms before using residential IPs |
 | Worktrees | han-host makes a git worktree and branch (`han/<issue>-<agent>`) per session from the default branch, records the base sha, and cleans up after merge or cancel |
 | Shared runners | a runner is an actor in the space (an owner as operator). Members start agents on it with a signed task, so Policy decides who may use it |
+| Board freshness | a working session with no status item for 10 minutes shows as stale; if its host is unreachable for 30 minutes it shows as failed. Configurable per space |
 | Cost | the proxy counts tokens and cost per session from provider responses; spaces can set budgets through Policy's budget ledger |
-| Summaries (`team.read`) | layered, cheapest first: (0) structured status, free; (1) a required `summary` argument on HAN tool calls; (2) a turn-end summary made by the proxy re-sending the session's last request plus a summarise instruction **on the same model**, so about 90% of the input is a prompt-cache hit; (3) transcript windows or timeline diffs on request. `team.read(session, budget_tokens)` fills the reader's budget layer by layer. Layer 2 runs only while the cache is warm, only for sessions someone follows, at most once per N minutes. Summaries count against the summarised session; layer-3 reads against the reader |
+| Summaries (`team.read`) | layered, cheapest first: (0) structured status, free; (1) a required `summary` argument on HAN tool calls; (2) a turn-end summary made by the proxy re-sending the session's last request plus a summarise instruction **on the same model**, so about 90% of the input is a prompt-cache hit; (3) transcript windows or timeline diffs on request. `team.read(session, budget_tokens)` fills the reader's budget layer by layer. Layer 2 runs only while the cache is warm, only for sessions someone follows, at most once per 5 minutes, matching the default prompt-cache lifetime. Summaries count against the summarised session; layer-3 reads against the reader |
 | Agent tests | a fake ACP agent replays recorded sessions in CI, plus scripted edge cases; nightly, a live pi run under a hard token budget |
 
 ### 6.5 Work timelines (`han-timeline`, profile `han.timeline/1`)
@@ -286,7 +287,7 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 
 | Topic | Decision |
 |---|---|
-| GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens. Issue events arrive by webhook through a relay, with polling as the fallback |
+| GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens. MVP: han-github polls issues every 60 s with conditional requests (ETags). Later: a webhook relay run by the team, or a small hosted forwarder |
 | Finish flow | configurable per space and per repo: mark done; push the branch and propose a PR (default); or merge the timeline into main. Each step is gated or free as configured |
 | git | shell out to `git` for push (gix can't push yet); gix for reads; octocrab for the GitHub API |
 
@@ -391,5 +392,4 @@ Full findings: `research/`. No existing tool gives a self-hosted, live view of e
 
 - A scratch benchmark of CBOR against postcard on real op shapes (optional).
 - Verify that a Tailscale exit node can't be used to reach its own LAN with the planned access rules.
-- Confirm the GitHub App webhook relay design (who hosts the relay).
-- Choose N for the summary rate limit, and the stale threshold for the board.
+- Design the webhook relay (after the MVP).
