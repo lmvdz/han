@@ -174,12 +174,17 @@ async fn scenario() {
         Some(Code::Denied),
         "a device of someone with no role in the space is a stranger to it (N-02, Z7)"
     );
-    // the same person on a node that is not one of her registered devices is a stranger to the filter
+    // the same person on a node that is not one of her registered devices cannot say hello (G-08, SR-13)
     let other_t = endpoint(77).await;
     let o = Client::connect(&other_t, &ticket.node, &ticket.server, &trusted)
         .await
         .unwrap();
-    o.hello(bob, "d1", &bob_key).await.unwrap();
+    let e = o.hello(bob, "d1", &bob_key).await.unwrap_err();
+    assert_eq!(
+        e.wire().map(|w| w.code),
+        Some(Code::Denied),
+        "an unregistered node is not bound to her key"
+    );
     let e = o
         .call(
             "read",
@@ -190,7 +195,7 @@ async fn scenario() {
     assert_eq!(
         e.wire().map(|w| w.code),
         Some(Code::Denied),
-        "an unregistered node reads no members-only space (N-02)"
+        "an unauthenticated node reads no members-only space (N-02)"
     );
     o.close();
     b.call(

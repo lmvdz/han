@@ -12,9 +12,7 @@ use han_core::frame::request_verdict;
 use han_core::json::{self, Value};
 use han_core::{base64url, grammar};
 
-use crate::calls::{
-    Authed, Feed, MAX_BLOB_PART_BYTES, MAX_FOLLOWS, MAX_SIGNAL_BYTES, ReadReq, StateSel,
-};
+use crate::calls::{Feed, MAX_BLOB_PART_BYTES, MAX_FOLLOWS, MAX_SIGNAL_BYTES, ReadReq, StateSel};
 use crate::error::{Result, WireError};
 use crate::fanout::{Live, Next, SubId};
 use crate::home::Home;
@@ -104,8 +102,6 @@ impl CallFeed {
 
 struct State {
     who: Option<String>,
-    /// Whether the peer's node was among those that vouch for `who` when it said `hello`.
-    bound: bool,
     challenge: Option<String>,
     issued_ms: u64,
     open: HashMap<u64, SubId>,
@@ -151,7 +147,6 @@ impl Home {
             id: NEXT_CONN.fetch_add(1, Ordering::Relaxed),
             state: Mutex::new(State {
                 who: None,
-                bound: false,
                 challenge: Some(challenge),
                 issued_ms: self.steady_ms(),
                 open: HashMap::new(),
@@ -174,12 +169,10 @@ impl Conn {
     /// Whether the peer's node still vouches for the actor it said `hello` for (X14). A carrier calls this
     /// at least every 300 s and closes the connection when it is false.
     pub fn still_vouched(&self) -> bool {
-        let (who, bound) = {
-            let st = self.st();
-            (st.who.clone(), st.bound)
-        };
+        let who = self.st().who.clone();
         match who {
-            Some(who) if bound && !self.home.is_test_mode() => {
+            // a `hello` is only accepted bound to the peer's node (SR-13), so this is the whole check
+            Some(who) if !self.home.is_test_mode() => {
                 self.home.nodes_for(&who).contains(&self.peer)
             }
             _ => true,
@@ -434,17 +427,14 @@ impl Conn {
         if self.home.is_test_mode() {
             return Ok(()); // G-11: in test mode the peer filter admits every node
         }
-        let (who, bound) = {
-            let st = self.st();
-            (st.who.clone(), st.bound)
-        };
+        let who = self.st().who.clone();
         let space = match call {
             "append" => args["entry"]["space"].as_str(),
             "stream" => args["item"]["space"].as_str(),
             _ => args["space"].as_str(),
         };
         let nodes = match &who {
-            Some(w) if bound => self.home.nodes_for(w),
+            Some(w) => self.home.nodes_for(w),
             _ => Vec::new(),
         };
         let conn = AdmitConn {
@@ -504,16 +494,15 @@ impl Conn {
             }
             challenge
         };
-        let Authed { ok, nodes } = self.home.hello(
+        let ok = self.home.hello(
             who,
             key_id,
             proof,
             &challenge,
-            self.node.as_deref(),
+            self.node.as_deref().map(|n| (n, self.peer.as_str())),
             args.get("knownHeads"),
         )?;
         let mut st = self.st();
-        st.bound = nodes.contains(&self.peer);
         st.who = Some(who.to_owned());
         Ok(ok)
     }

@@ -29,14 +29,6 @@ pub const MAX_CLOCK_SKEW_SECONDS: u64 = 60;
 /// A signal body, as JCS.
 pub const MAX_SIGNAL_BYTES: usize = 65_536;
 
-/// A successful `hello`.
-pub(crate) struct Authed {
-    /// The `ok` of the reply.
-    pub ok: Value,
-    /// The node ids that vouch for the actor (N-01).
-    pub nodes: Vec<String>,
-}
-
 /// The arguments of `read` besides who asks and what space.
 #[derive(Clone, Copy)]
 pub(crate) struct ReadReq<'a> {
@@ -78,16 +70,17 @@ impl Home {
     }
 
     /// G-08: authenticates `who` from its profile. `challenge` is the one this connection was issued, `node`
-    /// this end's node id on it (`han/1`; `None` on the legacy carrier).
+    /// this end's node id on it and `peer` the remote's, which the hello must be bound to (SR-13), as
+    /// `(node, peer)` (`han/1`; `None` on the legacy carrier and in test mode, where nothing binds).
     pub(crate) fn hello(
         &self,
         who: &str,
         key_id: &str,
         proof: &str,
         challenge: &str,
-        node: Option<&str>,
+        nodes: Option<(&str, &str)>,
         known_heads: Option<&Value>,
-    ) -> Result<Authed> {
+    ) -> Result<Value> {
         let g = self.lock();
         let now = self.now_str();
         let view = self.profile_view(&g, who, &now).ok_or_else(|| {
@@ -98,15 +91,30 @@ impl Home {
             }
         })?;
         let denied = || WireError::denied("authentication failed");
-        let key = view
-            .keys
-            .get(key_id)
+        let found = view.keys.get(key_id);
+        if let Some((_, peer)) = nodes {
+            let bound = if who.starts_with("@:") {
+                let sequencer = self.nodes_for_locked(&g, who);
+                auth::server_binding(&sequencer, found.is_some(), peer)
+            } else {
+                let key = found.map(|k| {
+                    (
+                        k.public_key.as_str(),
+                        k.status == han_core::policy::KeyStatus::Valid,
+                    )
+                });
+                auth::user_binding(key, peer)
+            };
+            bound.map_err(WireError::denied)?;
+        }
+        let key = found
             .filter(|k| k.status == han_core::policy::KeyStatus::Valid)
             .ok_or_else(denied)?;
         let public = PublicKey::from_base64url(&key.public_key).map_err(|_| denied())?;
-        auth::verify_hello(&public, proof, challenge, &self.server, node).map_err(|_| denied())?;
+        auth::verify_hello(&public, proof, challenge, &self.server, nodes.map(|n| n.0))
+            .map_err(|_| denied())?;
         let heads = self.heads_for(&g, who, known_heads.unwrap_or(&Value::Array(vec![])))?;
-        let ok = jv::obj([
+        Ok(jv::obj([
             ("limits", self.limits_value(&g)),
             (
                 "durability",
@@ -117,11 +125,7 @@ impl Home {
             ),
             ("time", jv::s(&now)),
             ("knownHeads", Value::Array(heads)),
-        ]);
-        Ok(Authed {
-            ok,
-            nodes: self.nodes_for_locked(&g, who),
-        })
+        ]))
     }
 
     /// R-15: the latest receipt of each space the asker named and may read.
