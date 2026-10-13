@@ -249,11 +249,19 @@ Do not commit. Summarise what you changed in two or three sentences."""
         "-C",
         WT,
         "--ignore-user-config",
+        # The sandbox's restricted token cannot start app-alias executables (pwsh from
+        # WindowsApps); without them on PATH Codex uses the system PowerShell.
+        "-c",
+        'windows.sandbox="unelevated"',
         "--json",
         "-o",
         os.path.join(rdir, "codex_last.txt"),
     ]
-    code, out, err = sh(cmd, cwd=WT, input=prompt)
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join(
+        d for d in env.get("PATH", "").split(os.pathsep) if "windowsapps" not in d.lower()
+    )
+    code, out, err = sh(cmd, cwd=WT, input=prompt, env=env)
     with open(os.path.join(rdir, "codex.jsonl"), "w", encoding="utf-8") as f:
         f.write(out)
     with open(os.path.join(rdir, "codex_stderr.txt"), "w", encoding="utf-8") as f:
