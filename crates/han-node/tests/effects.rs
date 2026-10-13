@@ -3,10 +3,8 @@
 
 mod common;
 
-use common::{World, call, id_of, space_of, until};
-use han_core::SigningKey;
+use common::{World, call, confirm_operator, id_of, space_of, until};
 use han_node::api::{CallResult, Command, CommandClass, NodeApi, NodeError, Query, Row, Window};
-use han_seq::Home;
 
 const ALICE: &str = "@alice:a.localhost";
 const CODER: &str = "@coder:a.localhost";
@@ -32,34 +30,6 @@ fn effects(api: &dyn NodeApi, executor: &str, include_done: bool) -> Vec<han_nod
         }
     }
     out
-}
-
-/// The operator confirms its agent (`member.set {actor: operator, role: owner}` in the agent's profile space,
-/// signed by the operator's device key `[n; 32]`), handed to the home directly. Since round 32's Z7 the
-/// operator holds no role in the profile space before confirming, so the peer filter refuses that append over
-/// han/1 (a spec gap, reported for round 33).
-fn confirm_operator(home: &Home, operator: &str, n: u8, agent: &str) {
-    use han_core::Value;
-    let space = format!("profile:{agent}");
-    let mut body = std::collections::BTreeMap::new();
-    body.insert("actor".to_owned(), Value::Str(operator.to_owned()));
-    body.insert("role".to_owned(), Value::Str("owner".to_owned()));
-    let (entry, content) = han_seq::build::sign_entry(
-        han_seq::build::EntrySpec {
-            space,
-            kind: "member.set".into(),
-            author: operator.to_owned(),
-            key_id: "d1".into(),
-            body: Value::Object(body),
-            content: None,
-            refs: vec![],
-            seen: 1,
-            time_secs: home.now_secs(),
-        },
-        &SigningKey::from_seed([n; 32]),
-    )
-    .unwrap();
-    home.append(&entry, content.as_ref()).unwrap();
 }
 
 /// The default policy with every action needing an owner's approval.
@@ -115,8 +85,8 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
         )
         .await,
     );
-    confirm_operator(&world.home, ALICE, 41, CODER);
-    confirm_operator(&world.home, ALICE, 41, EXEC);
+    confirm_operator(&world, &alice, ALICE, CODER).await;
+    confirm_operator(&world, &alice, ALICE, EXEC).await;
     call(
         &alice,
         Command::PolicySet {
@@ -252,7 +222,7 @@ async fn an_agent_that_opens_a_guarded_session_is_guarded() {
         )
         .await,
     );
-    confirm_operator(&world.home, ALICE, 51, CODER);
+    confirm_operator(&world, &alice, ALICE, CODER).await;
     call(
         &alice,
         Command::MemberSet {

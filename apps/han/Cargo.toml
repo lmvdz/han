@@ -24,3 +24,10 @@ tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+
+# The MSI installer (cargo-dist, WiX). These GUIDs identify the product across upgrades: never change them.
+[package.metadata.wix]
+upgrade-guid = "A9A4FA1D-7033-4B78-8512-807A580572F5"
+path-guid = "91504E97-FF8F-4764-BDC8-38D973C2E932"
+license = false
+eula = false

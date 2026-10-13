@@ -1,0 +1,34 @@
+# cargo-dist (https://opensource.axo.dev/cargo-dist/) configuration for the `han` binary (PLAN 6.8).
+# `.github/workflows/release.yml` is written by hand after dist's own template, so `allow-dirty` keeps
+# `dist plan` from refusing it. To adopt dist's generated workflow, remove the "ci" entry, run `dist generate`
+# and re-apply the pins and the TODO jobs (docs/release.md).
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.33.0"
+ci = "github"
+allow-dirty = ["ci"]
+# Only apps/han is released; the crates are libraries of this workspace.
+installers = ["shell", "homebrew", "msi"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+unix-archive = ".tar.xz"
+windows-archive = ".zip"
+checksum = "sha256"
+install-path = "CARGO_HOME"
+install-updater = false
+# TODO(maintainer): create the tap repository lmvdz/homebrew-tap and add the HOMEBREW_TAP_TOKEN secret.
+tap = "lmvdz/homebrew-tap"
+publish-jobs = ["homebrew"]
+# Releases are cut only from tags; pull requests do not run the release workflow.
+pr-run-mode = "skip"
+
+[dist.github-custom-runners]
+aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
