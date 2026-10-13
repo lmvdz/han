@@ -83,6 +83,29 @@ impl Directory for NoDirectory {
     }
 }
 
+/// Whose `space.create` for a space id naming this server the home accepts (section 4.1 step 2: "the
+/// server's own hosting rules").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum HostingPolicy {
+    /// Only known actors: those whose profile space this home serves (its own users, agents and server
+    /// actor) and those holding a role, not banned, in any space it hosts. The default.
+    #[default]
+    KnownActors,
+    /// Anyone who can authenticate.
+    Open,
+    /// Known actors, and also the listed ones: each entry is an ActorId or a bare ServerName (every actor
+    /// of that server).
+    AllowList(Vec<String>),
+}
+
+/// The reason of the hosting rule's `denied`.
+pub const HOSTING_DENIED: &str =
+    "this home creates spaces only for its own actors; ask an owner for an invite";
+
+/// Remote profile fetches a stranger's request may trigger: at most this many per window.
+const FETCH_CALLS: u32 = 20;
+const FETCH_WINDOW_MS: u64 = 60_000;
+
 /// A per-author rate limit (section 4.1 step 6): the `retryAfterMs` to answer with, or `None` when under it.
 pub trait RateLimit: Send + Sync + 'static {
     /// Checks one append by `author`.
@@ -119,6 +142,9 @@ pub(crate) struct Inner {
     pub hooks: Arc<dyn Hooks>,
     pub directory: Arc<dyn Directory>,
     pub limiter: Option<Arc<dyn RateLimit>>,
+    pub hosting: HostingPolicy,
+    /// Remote profile fetches triggered by hosting-rule requests: window start (steady ms) and count.
+    pub fetch_rate: (u64, u32),
 }
 
 /// The sequencer of a server: the engine behind every call.
@@ -249,6 +275,7 @@ impl Home {
             }
         }
         let run_start = clock.steady_ms();
+        let is_test = test_clock.is_some();
         let home = Home {
             server: cfg.server,
             key: cfg.key,
@@ -275,6 +302,13 @@ impl Home {
                 hooks: Arc::new(NoHooks),
                 directory: Arc::new(NoDirectory),
                 limiter: None,
+                // test mode (G-11) keeps the wire vectors' strangers able to create spaces
+                hosting: if is_test {
+                    HostingPolicy::Open
+                } else {
+                    HostingPolicy::KnownActors
+                },
+                fetch_rate: (run_start, 0),
             }),
         };
         {
@@ -392,6 +426,74 @@ impl Home {
     /// Installs a per-author rate limit (section 4.1 step 6).
     pub fn set_rate_limit(&self, limit: Arc<dyn RateLimit>) {
         self.lock().limiter = Some(limit);
+    }
+
+    /// Sets the hosting policy: whose `space.create` for a space of this server is accepted.
+    pub fn set_hosting(&self, policy: HostingPolicy) {
+        self.lock().hosting = policy;
+    }
+
+    /// The hosting policy (default [`HostingPolicy::KnownActors`]; test-mode homes start `Open`).
+    pub fn hosting(&self) -> HostingPolicy {
+        self.lock().hosting.clone()
+    }
+
+    /// For a carrier, before it fetches the profile or well-known document of `actor`'s server on behalf of
+    /// a request: `Ok` only if a `space.create` by `actor` could pass the hosting rule, and the fetch is
+    /// within the budget (`limit` otherwise). Strangers get `denied` without a fetch.
+    pub fn may_fetch_profile(&self, actor: &str) -> Result<()> {
+        let mut g = self.lock();
+        if !self.hosting_allows(&g, actor) {
+            return Err(WireError::denied(HOSTING_DENIED));
+        }
+        self.charge_fetch(&mut g)
+    }
+
+    /// Whether this home serves the profile space of `actor` (or `actor` is its server actor), or `actor`
+    /// holds a role, not banned, in a space it hosts.
+    fn is_known_actor(&self, g: &Inner, actor: &str) -> bool {
+        if actor == format!("@:{}", self.server) {
+            return true;
+        }
+        if grammar::server_of(actor) == Some(self.server.as_str())
+            && g.spaces.contains_key(&format!("profile:{actor}"))
+        {
+            return true;
+        }
+        g.spaces
+            .values()
+            .any(|s| s.state.roles.get(actor).is_some_and(|r| r.reads()))
+    }
+
+    /// The hosting rule for `actor` under the current policy.
+    fn hosting_allows(&self, g: &Inner, actor: &str) -> bool {
+        match &g.hosting {
+            HostingPolicy::Open => true,
+            HostingPolicy::KnownActors => self.is_known_actor(g, actor),
+            HostingPolicy::AllowList(list) => {
+                self.is_known_actor(g, actor)
+                    || list
+                        .iter()
+                        .any(|e| e == actor || grammar::server_of(actor) == Some(e.as_str()))
+            }
+        }
+    }
+
+    fn charge_fetch(&self, g: &mut Inner) -> Result<()> {
+        let now = self.steady_ms();
+        let slot = &mut g.fetch_rate;
+        if now.saturating_sub(slot.0) >= FETCH_WINDOW_MS {
+            *slot = (now, 0);
+        }
+        slot.1 += 1;
+        if slot.1 > FETCH_CALLS {
+            let wait = FETCH_WINDOW_MS - now.saturating_sub(slot.0);
+            return Err(WireError::limit(
+                "too many profile fetches for strangers",
+                wait.max(1),
+            ));
+        }
+        Ok(())
     }
 
     /// Changes whenever a record that can revoke a key or remove a role is ordered: a carrier re-checks the
@@ -598,12 +700,23 @@ impl Home {
             self.check_acceptance(g, &entry)?;
         }
         let pe = PolicyEntry::from_entry(&entry)?;
-        // 4 profile and signature
+        // 4 hosting rule (step 2's "the server's own hosting rules"), before any profile is looked up or
+        // fetched, so a stranger costs nothing; then profile and signature
+        let hosted_create = entry.kind == "space.create"
+            && !entry.space.starts_with("profile:")
+            && grammar::server_of(&entry.space) == Some(self.server.as_str())
+            && !g.spaces.contains_key(&entry.space);
+        if hosted_create && !self.hosting_allows(g, &entry.author) {
+            return Err(WireError::denied(HOSTING_DENIED));
+        }
         let now_secs = self.now_secs();
         let now = format_time(now_secs); // read once: the pin loop, Policy's ctx.time and the receipt time
-        let author = self
-            .profile_view(g, &entry.author, &now)
-            .ok_or_else(|| WireError::unavailable("profile"))?;
+        let Some(author) = self.profile_view(g, &entry.author, &now) else {
+            if hosted_create {
+                self.charge_fetch(g)?; // the carrier fetches on this answer: bounded
+            }
+            return Err(WireError::unavailable("profile"));
+        };
         if !author.keys.contains_key(&entry.key_id) {
             return Err(WireError::denied("no valid key")); // R-12: nothing to verify against
         }
