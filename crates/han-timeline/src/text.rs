@@ -609,37 +609,60 @@ impl TextObj {
         })
     }
 
+    /// Renders visible runs into one exactly sized output buffer.
+    fn run_text(&self, runs: &[(u32, u32, u32)]) -> String {
+        if let [(l, from, to)] = runs
+            && let Some(ascii) = &self.ins[*l as usize].ascii
+        {
+            return ascii[*from as usize..*to as usize].to_owned();
+        }
+        let capacity = runs
+            .iter()
+            .map(|&(l, from, to)| {
+                let rec = &self.ins[l as usize];
+                if rec.ascii.is_some() {
+                    (to - from) as usize
+                } else {
+                    rec.chars()[from as usize..to as usize]
+                        .iter()
+                        .map(|c| c.len_utf8())
+                        .sum()
+                }
+            })
+            .sum();
+        let mut out = String::with_capacity(capacity);
+        for &(l, from, to) in runs {
+            let rec = &self.ins[l as usize];
+            if let Some(ascii) = &rec.ascii {
+                out.push_str(&ascii[from as usize..to as usize]);
+            } else {
+                out.extend(rec.chars()[from as usize..to as usize].iter());
+            }
+        }
+        out
+    }
+
     /// The visible text (TL-45).
     pub fn text(&self) -> String {
+        if self.compact_layout() {
+            let runs = self.visible_runs();
+            // ASCII rendering costs the same allocation and byte copy as cloning a cached
+            // string. Cache the runs instead, so the first read also copies only once.
+            if runs
+                .iter()
+                .all(|&(l, _, _)| self.ins[l as usize].ascii.is_some())
+            {
+                return self.run_text(runs);
+            }
+            // Unicode rendering still benefits from caching its character-to-UTF-8 work.
+            return self
+                .text
+                .get_or_init(|| Arc::new(self.run_text(runs)))
+                .as_ref()
+                .clone();
+        }
         self.text
             .get_or_init(|| {
-                if self.compact_layout() {
-                    let runs = self.visible_runs();
-                    let capacity = runs
-                        .iter()
-                        .map(|&(l, from, to)| {
-                            let rec = &self.ins[l as usize];
-                            if rec.ascii.is_some() {
-                                (to - from) as usize
-                            } else {
-                                rec.chars()[from as usize..to as usize]
-                                    .iter()
-                                    .map(|c| c.len_utf8())
-                                    .sum()
-                            }
-                        })
-                        .sum();
-                    let mut out = String::with_capacity(capacity);
-                    for &(l, from, to) in runs {
-                        let rec = &self.ins[l as usize];
-                        if let Some(ascii) = &rec.ascii {
-                            out.push_str(&ascii[from as usize..to as usize]);
-                        } else {
-                            out.extend(rec.chars()[from as usize..to as usize].iter());
-                        }
-                    }
-                    return Arc::new(out);
-                }
                 let lay = self.layout();
                 let mut out = String::with_capacity(lay.visible_index.len());
                 out.extend(
@@ -849,6 +872,62 @@ mod tests {
                 assert_eq!(t.compute(), dense.compute(), "round {round} step {step}");
                 assert_eq!(t.text(), dense.text(), "round {round} step {step}");
             }
+        }
+    }
+
+    /// Direct rendering equals cached dense rendering, without forcing dense caches.
+    #[test]
+    fn direct_run_text_equals_cached_dense_text() {
+        let rep = Arc::new(ReplicaId::new("@r:x.example", "k", 0));
+        let id = InsertionId {
+            op: OpId::new(1, rep),
+            index: 0,
+        };
+        let mut seed = 51u64;
+        let mut rnd = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 33) as usize % n
+        };
+        for round in 0..12 {
+            let payload: String = (0..4096 + rnd(1000))
+                .map(|_| {
+                    if round % 2 == 0 {
+                        (b'a' + rnd(26) as u8) as char
+                    } else {
+                        ['a', '\u{e9}', '\u{1f642}'][rnd(3)]
+                    }
+                })
+                .collect();
+            let mut t = TextObj::new(false);
+            t.insert(id.clone(), None, &payload, None);
+            let n = payload.chars().count();
+            for step in 0..30 {
+                let snapshot = t.clone();
+                let before = snapshot.text();
+                let mut dense = t.clone();
+                dense.large = false;
+                assert_eq!(t.text(), dense.text(), "round {round} step {step}");
+                assert_eq!(t.text(), dense.text(), "repeated round {round} step {step}");
+                assert!(t.layout.get().is_none());
+                if round % 2 == 0 {
+                    assert!(t.text.get().is_none());
+                    assert!(t.ins[0].chars.get().is_none());
+                }
+                let from = rnd(n);
+                let to = (from + 1 + rnd(100)).min(n);
+                t.delete(&IdRange {
+                    insertion: id.clone(),
+                    from: from as u32,
+                    to: to as u32,
+                });
+                assert_eq!(snapshot.text(), before);
+            }
+            t.delete(&IdRange {
+                insertion: id.clone(),
+                from: 0,
+                to: n as u32,
+            });
+            assert_eq!(t.text(), "");
         }
     }
 
