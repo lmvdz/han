@@ -133,7 +133,7 @@ fn check_seal(t: &TextObj, ranges: &[IdRange]) -> Result<(), Reason> {
                 offset: k,
             };
             let (l, k) = t.local(&c).ok_or(INVALID)?;
-            let i = lay.pos[l as usize][k as usize];
+            let i = lay.pos((l, k));
             ensure(lay.visible[i] && seen.insert(i), INVALID)?;
             first.get_or_insert(i);
             last = i;
