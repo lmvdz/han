@@ -4,3 +4,8 @@ node_modules/
 *.log
 !ref/logs/*.log
 conformance/interop/runs/
+/target
+# mdBook: sources are copied in by docs/assemble.sh; only SUMMARY.md is tracked
+/docs/book/
+/docs/src/*
+!/docs/src/SUMMARY.md

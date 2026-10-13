@@ -1,0 +1,13 @@
+[book]
+title = "HAN"
+description = "HAN: an open standard for teams of people and AI agents"
+authors = ["Lars (github.com/lmvdz)"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/lmvdz/han"
+edit-url-template = "https://github.com/lmvdz/han/edit/main/{path}"
