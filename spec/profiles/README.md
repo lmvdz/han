@@ -1,6 +1,6 @@
 # Profiles
 
-Normative application profiles for interoperability between HAN apps. A profile carries **no authority**: Policy never reads it, and nothing that matters (an approval, a steer, a claim) depends on it (architecture.md, "Tiers"). Profiles evolve faster than the core and are versioned by name.
+Normative application profiles for interoperability between HAN apps. A profile carries **no authority**: Policy never reads it, and nothing that matters (an approval, a steer, a claim) depends on it (architecture.md, "Tiers"). Profiles evolve faster than the core and are versioned by name (`<name>/<version>`). A profile's live data travels as `profile` stream items `{name, body}` under the watch right (G-05), and its bulk data, if any, as signed CBOR batches on a stream of the type it names (G-07, X15).
 
 | Profile | Since | What |
 |---|---|---|

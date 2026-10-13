@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio, hashlib, time
 from ..core import P, WireError
 from ..entries import fmt_time
-from .agent import ADVISORY, Agent, Say, Steer, Task, TurnInput, World
+from .agent import ADVISORY, Agent, Finish, Say, Steer, Task, TurnInput, World
 from .journal import Journal, TaintStore
 
 MAX_DATA = 50
@@ -166,9 +166,21 @@ class Host:
                 return await self._turn(TurnInput("steer", who, text or "", eid, seq, b["session"]), rcpt["profiles"])
             if e["kind"] == "task" and self.me in b["to"] and (await self._full())["tasks"].get(eid, {}).get("open"):
                 return await self._turn(TurnInput("task", who, text or "", eid, seq, self.session, task=eid), rcpt["profiles"])
+            if e["kind"] in ("task.cancel", "task.update") and (e["kind"] == "task.cancel" or b["state"] in P.TASK_FINAL):
+                return await self._stop_working(b["task"], seq, eid)
             if text:
                 self._data("record", f"{e['kind']} by {who}: {text}", eid)      # a message, a task.update, an outcome: data
         self.j.commit_turn(seq, [])
+
+    async def _stop_working(self, task: str, seq: int, eid: str):
+        """R-24: the task was cancelled or closed by someone else, so this host stops working it and makes the agent's own final update
+        (`cancelled`), also on a task that is already closed: Policy still takes an accepted assignee's own final update, and it is the only
+        thing that ends what the agent carries from the task (P-15). Nothing when this agent is not in `accepted` (it never accepted, or
+        has made its final update)."""
+        if self.me not in ((await self._full())["tasks"].get(task) or {}).get("accepted", []): return self.j.commit_turn(seq, [])
+        e, c = self.client.make_entry("task.update", self.space, {"task": task, "state": "cancelled"}, None, refs=[task, eid], seen=seq)
+        self.j.commit_turn(seq, [(f"{eid}:end", "entry", {"entry": e, "content": c})])
+        await self._deliver_pending()
 
     def _data(self, source, text, rid=None):
         self.data.append((source, text, rid))
@@ -209,7 +221,10 @@ class Host:
         except Exception as ex:
             self._ctx = None
             await self._emit({"type": "status", "state": "error", "detail": str(ex)[:200]})
-            return self.j.commit_turn(inp.seq, [])
+            fail = [] if not inp.task else [(f"{inp.trigger}:end", "entry", dict(zip(("entry", "content"),
+                    self.client.make_entry("task.update", self.space, {"task": inp.task, "state": "failed"}, None, refs=[inp.task], seen=inp.seq))))]
+            self.j.commit_turn(inp.seq, fail)               # R-24: the host stops working the task, so it makes the agent's own final update
+            return await self._deliver_pending()
         self._ctx = None
         self._crash("decided")
         await self._refresh()                          # the state may have changed during the turn (a policy change, an unguard)
@@ -264,6 +279,10 @@ class Host:
                     if (self.full["tasks"].get(inp.task) or {}).get("left"): refuse(key, "cannot delegate a budgeted task without a budget"); continue
                     body["parent"] = inp.task
                 e, c = entry("task", body, {"ask": a.text})
+                out.append((key, "entry", {"entry": e, "content": c}))
+            elif isinstance(a, Finish):
+                if not inp.task: refuse(key, "finish: no driving task"); continue
+                e, c = entry("task.update", {"task": inp.task, "state": a.state}, None)      # R-24: the agent's own final update
                 out.append((key, "entry", {"entry": e, "content": c}))
             elif isinstance(a, Steer):
                 if guarded and a.session not in self._my_sessions(): refuse(key, f"{'guarded' if self.guarded_now else 'strict turn'}: cannot steer {a.session[:8]}"); continue

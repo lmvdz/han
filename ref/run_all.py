@@ -25,6 +25,8 @@ CHECKS = [
     ("Guard model mutations must each give a counterexample, depth 4 (~15 min)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4", "--all-mutations"]),
     ("Signed layer (real Ed25519): home pipeline, content validation, mirror verification, proofs, blobs, notices", [PY, os.path.join(HERE, "run_wire.py")]),
     ("Wire conformance vectors (conformance/wire-vectors) are well formed: signatures, receipts, one chain (offline; live runs need a server: run_wire_vectors.py --url)", [PY, os.path.join(HERE, "run_wire_vectors.py"), "--check"]),
+    ("Carrier vectors (conformance/carrier-vectors): admit, frames, control, well-known, tickets, stream items, bulk, Ed25519, headers", [PY, os.path.join(HERE, "run_carrier_vectors.py")]),
+    ("Carrier mutations must be caught by the carrier vectors", [PY, os.path.join(HERE, "run_carrier_vectors.py"), "--mutations"]),
     ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")], "full"),
     ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"], "full"),
 ]
