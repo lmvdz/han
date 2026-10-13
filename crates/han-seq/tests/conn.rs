@@ -142,14 +142,16 @@ fn a_han1_hello_proof_binds_the_servers_node() {
         None,
     )
     .unwrap();
-    let hello_with = |node: Option<&str>| {
-        let (conn, frame) = home.connect("n1", "s1");
+    let hello_from = |peer: &str, node: Option<&str>| {
+        let (conn, frame) = home.connect(peer, "s1");
         let proof = auth::make_proof(&alice_key(), &challenge_of(&frame), "a.localhost", node);
         let text = format!(
             r#"{{"id":1,"call":"hello","args":{{"who":"{ALICE}","keyId":"k1","proof":"{proof}","version":1}}}}"#
         );
         code(&conn, &text)
     };
+    let hello_with =
+        |node: Option<&str>| hello_from(&alice_key().public_key().to_base64url(), node);
     assert_eq!(
         hello_with(None),
         "denied",
@@ -157,6 +159,11 @@ fn a_han1_hello_proof_binds_the_servers_node() {
     );
     assert_eq!(hello_with(Some("s2")), "denied", "a proof for another node");
     assert_eq!(hello_with(Some("s1")), "ok");
+    assert_eq!(
+        hello_from("n1", Some("s1")),
+        "denied",
+        "a valid proof on another device's connection (SR-13)"
+    );
 }
 
 #[test]

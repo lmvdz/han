@@ -31,3 +31,30 @@ pub fn verify_hello(
         None => verify_hello_proof(key, proof, challenge, server),
     }
 }
+
+/// G-08, SR-13: a user actor's `hello` is bound to the connection when its key is `valid` and is the
+/// connection's node id (the device that signs is the device that connected). `key` is the key's
+/// `(publicKey, valid)`, if the pinned profile has it. `Err` carries the reason.
+pub fn user_binding(key: Option<(&str, bool)>, node: &str) -> Result<(), &'static str> {
+    match key {
+        Some((public, true)) if public == node => Ok(()),
+        Some((_, true)) => Err("the signing key is not the connection's node"),
+        _ => Err("key not valid"),
+    }
+}
+
+/// G-08, SR-13: a server actor's `hello` is bound to the connection when the connection's node is in its
+/// server's `sequencer` and the key is among the server's keys.
+pub fn server_binding(
+    sequencer: &[String],
+    key_listed: bool,
+    node: &str,
+) -> Result<(), &'static str> {
+    if !sequencer.iter().any(|n| n == node) {
+        return Err("node not in the server's sequencer");
+    }
+    if !key_listed {
+        return Err("no such server key");
+    }
+    Ok(())
+}
