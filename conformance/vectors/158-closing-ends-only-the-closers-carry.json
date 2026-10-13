@@ -5,7 +5,7 @@
   "P-05",
   "P-16"
  ],
- "description": "X1 (W1, the reviewer's p3_selfclose and the co-assignee decline): an assignee's carried limits end only with its own final update, or when an owner force-closes the task (an owner's task.cancel, or a final update by an owner who isn't an assignee); the guarded author or another assignee closing or declining ends nothing; a closed task takes only a final update by an assignee still in accepted",
+ "description": "X1, Z2 (the reviewer's p3_selfclose, the co-assignee decline, Q2 and Q5): an assignee's carry ends only with its own final update, when an owner who isn't an assignee makes a final update (a force-close, on a closed task too), or when the assignee leaves the space; the guarded author or another assignee closing or declining ends nothing, and neither does an owner's task.cancel; a closed task takes only final updates, which change only accepted",
  "profiles": {
   "@d:b.example": {
    "actorKind": "agent",
@@ -489,7 +489,7 @@
      "@bot:b.example"
     ]
    },
-   "note": "X1: D still carries BOT's limits"
+   "note": "X1: D still carries BOT's guarding"
   },
   {
    "entry": {
@@ -578,7 +578,7 @@
    },
    "time": "2026-10-10T12:00:19Z",
    "expect": "denied",
-   "note": "a closed task takes no other update"
+   "note": "a closed task takes no update but a final one"
   },
   {
    "entry": {
@@ -625,8 +625,12 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:21Z",
-   "expect": "denied",
-   "note": "once only: D is no longer in accepted"
+   "expect": "allow",
+   "check": {
+    "tasks.2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815.accepted": [],
+    "tasks.2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815.state": "done"
+   },
+   "note": "Z2: another final update changes nothing"
   },
   {
    "entry": {
@@ -674,7 +678,7 @@
    },
    "time": "2026-10-10T12:00:23Z",
    "expect": "allow",
-   "note": "D's limits ended with its own final update"
+   "note": "D's carry ended with its own final update"
   },
   {
    "entry": {
@@ -779,7 +783,7 @@
   },
   {
    "entry": {
-    "id": "fe663d6d27d4261e5da969bd5cb2432cc60321867a0df33971f763c49dbd759d",
+    "id": "8a234c94f0ef948ac06d17b33bc24d2358af050739bb9bc09b19945db9a5e837",
     "v": 1,
     "space": "s1:a.example",
     "kind": "task.update",
@@ -787,17 +791,17 @@
     "keyId": "k1",
     "body": {
      "task": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
-     "state": "done"
+     "state": "progress"
     },
     "contentHash": "",
     "refs": [],
     "seen": 0,
-    "nonce": "n-ed2",
+    "nonce": "n-ep",
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:28Z",
    "expect": "denied",
-   "note": "E never accepted: the task is closed for it"
+   "note": "the task is closed"
   },
   {
    "entry": {
@@ -888,10 +892,13 @@
    "time": "2026-10-10T12:00:32Z",
    "expect": "allow",
    "check": {
-    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.accepted": [],
-    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.open": true
+    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.accepted": [
+     "@e:b.example"
+    ],
+    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.open": true,
+    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.cancelRequested": true
    },
-   "note": "X1: an owner's task.cancel force-closes it for every assignee"
+   "note": "Z2 (Q2): an owner's task.cancel only asks; it ends no carry"
   },
   {
    "entry": {
@@ -916,8 +923,11 @@
    "time": "2026-10-10T12:00:33Z",
    "expect": "allow",
    "check": {
-    "effects.6780f12a64c3f49dd08b8a0dbd042d3887db5b71abc1945dda286233327cebe1.guardedFor": []
-   }
+    "effects.6780f12a64c3f49dd08b8a0dbd042d3887db5b71abc1945dda286233327cebe1.guardedFor": [
+     "@bot:b.example"
+    ]
+   },
+   "note": "E still carries BOT's guarding"
   },
   {
    "entry": {
@@ -942,6 +952,32 @@
   },
   {
    "entry": {
+    "id": "9a12bc76f24e5cac76270a6c551b3d961916f7c81bb6daab07896d74baaa651b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "task": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "state": "cancelled"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-of3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "allow",
+   "check": {
+    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.accepted": [],
+    "tasks.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.open": false
+   },
+   "note": "an owner who isn't an assignee force-closes it for everyone"
+  },
+  {
+   "entry": {
     "id": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
     "v": 1,
     "space": "s1:a.example",
@@ -959,7 +995,7 @@
     "nonce": "n-t4",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:35Z",
+   "time": "2026-10-10T12:00:36Z",
    "expect": "allow"
   },
   {
@@ -980,7 +1016,7 @@
     "nonce": "n-ae4",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:36Z",
+   "time": "2026-10-10T12:00:37Z",
    "expect": "allow"
   },
   {
@@ -1000,7 +1036,7 @@
     "nonce": "n-bc4",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:37Z",
+   "time": "2026-10-10T12:00:38Z",
    "expect": "allow",
    "check": {
     "tasks.ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21.accepted": [
@@ -1027,7 +1063,7 @@
     "nonce": "n-of",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:38Z",
+   "time": "2026-10-10T12:00:39Z",
    "expect": "allow",
    "check": {
     "tasks.ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21.accepted": [],
@@ -1055,11 +1091,324 @@
     "nonce": "n-pe2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:39Z",
+   "time": "2026-10-10T12:00:40Z",
    "expect": "allow",
    "check": {
     "effects.e8f97c449e17318219710ac3ec74c7694abe1b7f753867184294673234ef6019.guardedFor": []
    }
+  },
+  {
+   "entry": {
+    "id": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@d:b.example",
+      "@e:b.example"
+     ]
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:41Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1c4900ab9be474de1778d569b60bc7c588e70a2f9cf3ef0a4f317fed39cdb12c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+     "state": "accepted"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ad5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:42Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "54880d6caa881e3699e081894c3490b94910556206b9bb1cc2edb2bc36e14790",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@e:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+     "state": "accepted"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ae5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:43Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9a0581f0f60dac0e52ccae2e363959e0447397a94baf04a69d03c4e8ee77cc35",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@e:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+     "state": "done"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ed5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:44Z",
+   "expect": "allow",
+   "check": {
+    "tasks.c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd.open": false,
+    "tasks.c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd.accepted": [
+     "@d:b.example"
+    ]
+   }
+  },
+  {
+   "entry": {
+    "id": "731cfe8aa84461bdeab32a06601beb941078a8e1470e396473f08930be40a6cc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "task": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+     "state": "cancelled"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-of5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:45Z",
+   "expect": "allow",
+   "check": {
+    "tasks.c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd.accepted": [],
+    "tasks.c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd.state": "done",
+    "tasks.c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd.open": false
+   },
+   "note": "Z2 (Q5, Y9): an owner's final update clears accepted on a closed task, and changes nothing else"
+  },
+  {
+   "entry": {
+    "id": "7e82bf30134c238bc998910d1fa191694ee25de25d18eb6d20a2c04b44aecf22",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.cancel",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "task": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-oc5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:46Z",
+   "expect": "denied",
+   "note": "a closed task still takes no cancel"
+  },
+  {
+   "entry": {
+    "id": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@bot:b.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@d:b.example"
+     ]
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:47Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "eaadf03ccf29ad45afac24fe2ef5c45c49ca98eeffbc2f50696f8c0c43ec686c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+     "state": "accepted"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ad6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:48Z",
+   "expect": "allow",
+   "check": {
+    "tasks.402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1.accepted": [
+     "@d:b.example"
+    ]
+   }
+  },
+  {
+   "entry": {
+    "id": "c53b805e05b2df06a93f026c31b0432206d279f490e27885aac62b73d00d32ea",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@d:b.example",
+     "role": "none"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-dl",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:49Z",
+   "expect": "allow",
+   "check": {
+    "tasks.402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1.accepted": []
+   },
+   "note": "Z2: an actor that leaves the space leaves every accepted list"
+  },
+  {
+   "entry": {
+    "id": "a959d8b22101e001a922fd6d319cad03b89e1d7968f9d0c82c8b49ad3012961f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@d:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-dr",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:50Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "03554ad88006f0fcf3f564772d84488970e925779efd293f825df008248c2f41",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "66aaf9051b22d361e363d780417ff61f172394b4d01b8e7d768c64050c7e7a6b",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pd6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:51Z",
+   "expect": "allow",
+   "check": {
+    "effects.03554ad88006f0fcf3f564772d84488970e925779efd293f825df008248c2f41.guardedFor": []
+   },
+   "note": "re-admitted, D carries nothing"
+  },
+  {
+   "entry": {
+    "id": "44435bc79a8cae5fa41421069fc3091e9a032d68dfdba22f4e5c79f87526df6d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@d:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+     "state": "accepted"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ad7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:52Z",
+   "expect": "allow",
+   "check": {
+    "tasks.402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1.accepted": [
+     "@d:b.example"
+    ]
+   },
+   "note": "until it accepts again"
+  },
+  {
+   "entry": {
+    "id": "684be36fa3d64631ab6117d0f3a5c2cfb4d66aba81a135fba001401e3cb40c96",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@d:b.example",
+     "role": "banned"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-db",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:53Z",
+   "expect": "allow",
+   "check": {
+    "tasks.402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1.accepted": []
+   },
+   "note": "banning removes it too"
   }
  ],
  "ids": {
@@ -1068,8 +1417,12 @@
   "ad0": "c51a375be6a0224801f802e637f7d6a685e9f350ba979b2eea5704dc867cb478",
   "ad1": "8d5d802e841bc38c18be45e34e03d48c073801ee3b11082ff2b94cf86c10c8bb",
   "ad2": "e04eb7ecc210f72bf3ffb1f34e95125b6145e3d7ac11501fd99dfe967f0fa4e6",
+  "ad5": "1c4900ab9be474de1778d569b60bc7c588e70a2f9cf3ef0a4f317fed39cdb12c",
+  "ad6": "eaadf03ccf29ad45afac24fe2ef5c45c49ca98eeffbc2f50696f8c0c43ec686c",
+  "ad7": "44435bc79a8cae5fa41421069fc3091e9a032d68dfdba22f4e5c79f87526df6d",
   "ae3": "4ef48a42d1c60ca6b3e04fc5ea988dfe8bbaf3816e8c0bcacb3d499eb4ce7fe1",
   "ae4": "fda78271751b0a7e47e1114d1665a26bdbea465b945fc02f908ebd81b014e083",
+  "ae5": "54880d6caa881e3699e081894c3490b94910556206b9bb1cc2edb2bc36e14790",
   "ao": "c73ce8f3cc891ea64d8ec7352d3d9f34c37076db2a43d749976579d6df83168a",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
@@ -1078,29 +1431,39 @@
   "bc4": "974767146698f1cfaefd3fcd0850f631a4862f2e1c4160b72ac5422564e8fae6",
   "cd0": "1737a1926141b68a6a30c09055000263b0b72d230f44d2c257a0070e93683d8a",
   "d": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+  "db": "684be36fa3d64631ab6117d0f3a5c2cfb4d66aba81a135fba001401e3cb40c96",
   "dd": "708f6a50104bf8c4069d9af50da41af1b4c4bbb532e85537a303f727babc6ff5",
   "dd2": "56abf0530aecc475b21406d1ba943e0ab20aa70a784fcb15ff2cc0087c1dd932",
   "dd3": "2f80779b4d9f77426ed8a90bebb1ed5531e82bf4e118f25d8188863f5ee23f95",
+  "dl": "c53b805e05b2df06a93f026c31b0432206d279f490e27885aac62b73d00d32ea",
   "dp": "49806e5dba4ad5eefcfd0a5ae15ec8dcbdc4de3bc7efadb82a8a0532c59da863",
+  "dr": "a959d8b22101e001a922fd6d319cad03b89e1d7968f9d0c82c8b49ad3012961f",
   "e": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
   "ed": "b2e1546537827d151f8351c59127ad0ab94259920dacdf05a74f06c3166fd051",
-  "ed2": "fe663d6d27d4261e5da969bd5cb2432cc60321867a0df33971f763c49dbd759d",
+  "ed5": "9a0581f0f60dac0e52ccae2e363959e0447397a94baf04a69d03c4e8ee77cc35",
+  "ep": "8a234c94f0ef948ac06d17b33bc24d2358af050739bb9bc09b19945db9a5e837",
   "h": "2c53f891dd1dc45531ce216d7ba1fee76d66c33f8a1a87c6f16da211acaf276d",
   "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "oc": "0b29cfa9959bb2e9908e8d0be9f6b01563ed97c2cd4cf32365c95862da700f00",
+  "oc5": "7e82bf30134c238bc998910d1fa191694ee25de25d18eb6d20a2c04b44aecf22",
   "of": "59f94fa389c715def35334cff7cf2c1f772f8cb09ef2edcb3ad731cee2e5b549",
+  "of3": "9a12bc76f24e5cac76270a6c551b3d961916f7c81bb6daab07896d74baaa651b",
+  "of5": "731cfe8aa84461bdeab32a06601beb941078a8e1470e396473f08930be40a6cc",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
   "pd": "1a07d1e65a78fa08db693bae68787289b2e7448163a7183b1387f692f932423c",
   "pd2": "d5a0fdc47449c3d0d35c9b94ef5e1d6219d425d751200db7840b8184cf44778a",
   "pd3": "7d1404a9c0cd37f3076b8cd055d881bbbef9353ff19c29e4b8e8b19d5fe96ead",
+  "pd6": "03554ad88006f0fcf3f564772d84488970e925779efd293f825df008248c2f41",
   "pe": "6780f12a64c3f49dd08b8a0dbd042d3887db5b71abc1945dda286233327cebe1",
   "pe2": "e8f97c449e17318219710ac3ec74c7694abe1b7f753867184294673234ef6019",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
   "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
   "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
   "t3": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
-  "t4": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21"
+  "t4": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+  "t5": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+  "t6": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1"
  }
 }

@@ -350,9 +350,11 @@ def _add(m, key, val):
 def _empty_like(view, path): return {} if isinstance(_get_map(view, path), dict) else []
 
 def agent_facts(state, actor) -> dict:
-    """K7, P8: what a host needs of one agent besides its profile: the state's `guarded` cut to that one actor (`{}` when the actor is not
-    in it), so the reply is a GuardInput that `guard_status` takes as is (R-24)."""
-    return {"guarded": {actor: True} if actor in state.get("guarded", {}) else {}}
+    """K7, P8, round 32 (Z1): what a host needs of one agent besides its profile: the state's `guarded` cut to that one actor (`{}` when
+    the actor is not in it) and its `tasks` cut to those whose `accepted` lists the actor and whose `guardedFor` isn't empty (what
+    `carried` reads), so the reply is a GuardInput that `guard_status` takes as is (R-24)."""
+    return {"guarded": {actor: True} if actor in state.get("guarded", {}) else {},
+            "tasks": {t: v for t, v in state.get("tasks", {}).items() if actor in v["accepted"] and v["guardedFor"]}}
 
 # ── a reference home ──
 class Home:
@@ -560,7 +562,8 @@ class Home:
             return "ok", {"state": one}
         if agent is not None:
             one = dict({k: view[k] for k in EFFECT_VIEW}, **agent_facts(view, agent))
-            assert len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) <= self.max_frame_bytes, "the agent view does not fit maxFrameBytes: impossible by construction (H3)"
+            if len(P.jcs({"id": MAX_INT, "ok": {"state": one}})) > self.max_frame_bytes:     # round 32: an agent in more guarded tasks than a frame holds
+                return "limit", "the agent view does not fit a frame: read the paged state"
             return "ok", {"state": one}
         if cursor is not None and any(offs[p] > len(_items(view, p)) for p in PAGED): return "invalid", "cursor offset beyond the map"
         page, offs, more = self._page(view, offs)

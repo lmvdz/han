@@ -1,11 +1,11 @@
 {
- "name": "only-linked-work-carries",
+ "name": "a-guarded-authors-work-all-carries",
  "rules": [
   "P-15",
   "R-24",
   "§7.5"
  ],
- "description": "X2 (W4, the reviewer's p4_cascade): a carrying agent's limits stay while it carries, but its carried guarding is stamped only on linked work: a subtask of an accepted task (or of one descending from it) and an effect naming one carry the chain's list, and work with no parent or task carries carried(author); work under an unlinked parent it holds carries only that parent's guarding, so nothing spreads to unrelated tasks or teammates",
+ "description": "Z1 (the reviewer's p4_cascade and Q4): while X carries a guarded agent's task, X is guarded by that agent's guard: everything X creates records guards(X), whatever parent or task it names, so the guarding reaches whoever accepts X's work",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -535,7 +535,7 @@
    },
    "time": "2026-10-10T12:00:19Z",
    "expect": "allow",
-   "note": "p4: none of the team is limited"
+   "note": "p4: none of the team is guarded"
   },
   {
    "entry": {
@@ -633,9 +633,11 @@
    "time": "2026-10-10T12:00:23Z",
    "expect": "allow",
    "check": {
-    "tasks.fe9dd5686fe84a2b7927eab0adae8b83a8965afaff2c52889dba94b1b91bc558.guardedFor": []
+    "tasks.fe9dd5686fe84a2b7927eab0adae8b83a8965afaff2c52889dba94b1b91bc558.guardedFor": [
+     "@bot:b.example"
+    ]
    },
-   "note": "X2: a subtask of an unlinked parent O holds carries only that parent's guarding"
+   "note": "Z1: O's subtask of an unrelated parent records guards(O)"
   },
   {
    "entry": {
@@ -682,7 +684,9 @@
    "time": "2026-10-10T12:00:25Z",
    "expect": "allow",
    "check": {
-    "effects.2be9e7f70cc329ac5e1fd9b309a25f515a75f9c8c10f7043a333203114b30cb9.guardedFor": []
+    "effects.2be9e7f70cc329ac5e1fd9b309a25f515a75f9c8c10f7043a333203114b30cb9.guardedFor": [
+     "@bot:b.example"
+    ]
    }
   },
   {
@@ -704,8 +708,8 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:00:26Z",
-   "expect": "allow",
-   "note": "no spread: H carries nothing"
+   "expect": "denied",
+   "note": "H accepted O's guarded work: H is guarded too"
   },
   {
    "entry": {
@@ -731,9 +735,11 @@
    "time": "2026-10-10T12:00:27Z",
    "expect": "allow",
    "check": {
-    "effects.68b056119ddbd9ce967389e3aba9d231eb5f27168ebfe57c3cf772857a8732de.guardedFor": []
+    "effects.68b056119ddbd9ce967389e3aba9d231eb5f27168ebfe57c3cf772857a8732de.guardedFor": [
+     "@bot:b.example"
+    ]
    },
-   "note": "X2: O's effect named under the unlinked task u"
+   "note": "Z1: O's effect named under the unrelated task u"
   },
   {
    "entry": {
@@ -755,7 +761,7 @@
    },
    "time": "2026-10-10T12:00:28Z",
    "expect": "denied",
-   "note": "O's limits stay while O carries"
+   "note": "O is guarded while O carries"
   },
   {
    "entry": {
@@ -784,7 +790,7 @@
      "@bot:b.example"
     ]
    },
-   "note": "linked: a subtask of O's accepted task carries its list"
+   "note": "a subtask of O's accepted task"
   },
   {
    "entry": {
@@ -813,7 +819,7 @@
      "@bot:b.example"
     ]
    },
-   "note": "and so does everything below it"
+   "note": "and everything below it"
   },
   {
    "entry": {
@@ -842,8 +848,7 @@
     "effects.9af51ec1515354c5f5556d7833215ba12fb05ce8f173f5971f76595e41546eb0.guardedFor": [
      "@bot:b.example"
     ]
-   },
-   "note": "linked: an effect naming the accepted task"
+   }
   },
   {
    "entry": {
@@ -871,7 +876,7 @@
      "@bot:b.example"
     ]
    },
-   "note": "X2: a parentless task while carrying carries carried(O): no parentless escape"
+   "note": "a parentless task"
   },
   {
    "entry": {
@@ -900,7 +905,64 @@
      "@bot:b.example"
     ]
    },
-   "note": "and so does a task-less effect"
+   "note": "and a task-less effect"
+  },
+  {
+   "entry": {
+    "id": "17af61f2bf3efcc8fc07b4e259841f151f095e3adf5db9517e39cf49a8bae571",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@o:a.example"
+     ]
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-uq",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:34Z",
+   "expect": "allow",
+   "check": {
+    "tasks.17af61f2bf3efcc8fc07b4e259841f151f095e3adf5db9517e39cf49a8bae571.guardedFor": [
+     "@bot:b.example"
+    ]
+   },
+   "note": "M accepted sl2, its own subtask of the guarded chain: M is guarded too"
+  },
+  {
+   "entry": {
+    "id": "0905d2cfc7a619eeea6ce73dedae057803832bb26510ecf65da5f77222946f63",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@m:a.example"
+     ],
+     "parent": "17af61f2bf3efcc8fc07b4e259841f151f095e3adf5db9517e39cf49a8bae571"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-s4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "allow",
+   "check": {
+    "tasks.0905d2cfc7a619eeea6ce73dedae057803832bb26510ecf65da5f77222946f63.guardedFor": [
+     "@bot:b.example"
+    ]
+   },
+   "note": "Q4: a carrying author's subtask under a task it never accepted carries too"
   }
  ],
  "ids": {
@@ -928,6 +990,7 @@
   "pl": "9af51ec1515354c5f5556d7833215ba12fb05ce8f173f5971f76595e41546eb0",
   "pu": "68b056119ddbd9ce967389e3aba9d231eb5f27168ebfe57c3cf772857a8732de",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
+  "s4": "0905d2cfc7a619eeea6ce73dedae057803832bb26510ecf65da5f77222946f63",
   "sl": "3ada0bdd91c62a283b1550eccec63c93626a87c677a9468e7e3b54bde2694e75",
   "sl2": "41f79c92965c6064411db0d57ce7652efe14693775e979a2272ee8afe0b86404",
   "su": "fe9dd5686fe84a2b7927eab0adae8b83a8965afaff2c52889dba94b1b91bc558",
@@ -935,6 +998,7 @@
   "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
   "t3": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
   "tf": "30175afe153ca31ad499f945793c0e4aa152652d7816d1e9b6873ba161d3e54f",
-  "u": "58a9a5bda21bb79847089822280e36caa873eb2f36bb6ed81cdc79670c067447"
+  "u": "58a9a5bda21bb79847089822280e36caa873eb2f36bb6ed81cdc79670c067447",
+  "uq": "17af61f2bf3efcc8fc07b4e259841f151f095e3adf5db9517e39cf49a8bae571"
  }
 }

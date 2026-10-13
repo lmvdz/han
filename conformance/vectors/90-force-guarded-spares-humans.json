@@ -340,7 +340,8 @@
    },
    "expect": {
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -351,7 +352,10 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": true
+    "forced": true,
+    "guards": [
+     "@x:c.example"
+    ]
    }
   }
  ],

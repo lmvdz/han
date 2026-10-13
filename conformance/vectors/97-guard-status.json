@@ -258,7 +258,8 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -268,7 +269,8 @@
    },
    "expect": {
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -299,7 +301,10 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": false
+    "forced": false,
+    "guards": [
+     "@bot:b.example"
+    ]
    }
   },
   {
@@ -310,7 +315,8 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -366,7 +372,10 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": true
+    "forced": true,
+    "guards": [
+     "@bot:b.example"
+    ]
    }
   },
   {
@@ -377,7 +386,10 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": true
+    "forced": true,
+    "guards": [
+     "@bot2:b.example"
+    ]
    }
   },
   {
@@ -387,7 +399,8 @@
    },
    "expect": {
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -429,7 +442,10 @@
    },
    "expect": {
     "guarded": true,
-    "forced": true
+    "forced": true,
+    "guards": [
+     "@bot2:b.example"
+    ]
    }
   },
   {
@@ -485,7 +501,10 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": false
+    "forced": false,
+    "guards": [
+     "@bot:b.example"
+    ]
    }
   },
   {
@@ -495,7 +514,8 @@
    },
    "expect": {
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   },
   {
@@ -505,7 +525,8 @@
    },
    "expect": {
     "guarded": false,
-    "forced": false
+    "forced": false,
+    "guards": []
    }
   }
  ],

@@ -245,54 +245,77 @@ function live(s: SpaceState, sess: A): boolean {
   return holds(s, sess.actor);
 }
 /** P-15 guardStatus(state, ctx, agent): guard = the operator in the profile pinned for this entry if confirmed and the agent is not human; forced = forceGuarded on and
- *  the pinned profile not human; guarded = forced or the agent is in the state's set `guarded` (its own choice). `state` needs only `policy` and `guarded` (a `state {agent}` reply serves). */
-export function guardStatus(s: GuardInput, ctx: PolicyCtx, x: string): { guard?: ActorId; guarded: boolean; forced: boolean } {
+ *  the pinned profile not human; guards (round 32, Z1) = the agent itself if it chose guarding (the state's set) or is forced, then carried(agent), each once;
+ *  guarded = guards not empty. `state` needs only `policy`, `guarded` and the tasks whose `accepted` lists the agent (a `state {agent}` reply serves). */
+export function guardStatus(s: GuardInput, ctx: PolicyCtx, x: string): { guard?: ActorId; guarded: boolean; forced: boolean; guards: ActorId[] } {
   const v = (ctx.profiles as A)?.[x];
   const agent = !!v && v.actorKind !== "human";
   const forced = agent && s.policy.sessions.forceGuarded === true;
-  const r: { guard?: ActorId; guarded: boolean; forced: boolean } = { guarded: forced || (s.guarded as A)[x] === true, forced };
+  const own: string[] = forced || (s.guarded as A)[x] === true ? [x] : [];
+  const gs = [...own, ...carried(s, x).filter((y) => !own.includes(y))] as ActorId[];
+  const r: { guard?: ActorId; guarded: boolean; forced: boolean; guards: ActorId[] } = { guarded: gs.length > 0, forced, guards: gs };
   if (agent && v.operatorConfirmed && v.operator) r.guard = v.operator as ActorId;
   return r;
 }
-/** P-15: `recorded` plus each of `agents` that is guarded at this entry, each once. The fold records it on a new task and effect. */
-function guardedFor(s: GuardInput, ctx: PolicyCtx, recorded: string[], ...agents: string[]): string[] {
-  const out = [...recorded];
-  for (const x of agents) if (!out.includes(x) && guardStatus(s, ctx, x).guarded) out.push(x);
-  return out;
-}
-/** P-15: the guarded agents whose limits x carries: the union of the guardedFor of the tasks whose `accepted` lists x, in the order the tasks were created
- *  (an assignee's own final update removes it from `accepted`; an owner's force-close empties it; round 31, X1). */
-function carried(s: SpaceState, x: string): string[] {
+const guards = (s: GuardInput, ctx: PolicyCtx, x: string): string[] => guardStatus(s, ctx, x).guards;
+/** P-15: the guarded agents whose guarding x carries: the union of the guardedFor of the tasks whose `accepted` lists x, in the order the tasks were created
+ *  (an assignee leaves `accepted` with its own final update or by leaving the space; a final update by an owner who isn't an assignee empties it; round 32, Z2). */
+function carried(s: GuardInput, x: string): string[] {
   const out: string[] = [];
-  const open = (Object.values(s.tasks) as A[]).filter((t) => t.accepted.includes(x)).sort((p, q) => p.seq - q.seq);
-  for (const t of open) for (const y of t.guardedFor as string[]) if (!out.includes(y)) out.push(y);
+  const mine = (Object.values(s.tasks) as A[]).filter((t) => t.accepted.includes(x)).sort((p, q) => p.seq - q.seq);
+  for (const t of mine) for (const y of t.guardedFor as string[]) if (!out.includes(y)) out.push(y);
   return out;
 }
-/** P-15: guarded, or carrying a guarded agent's limits. */
-const limited = (s: SpaceState, ctx: PolicyCtx, x: string): boolean => guardStatus(s, ctx, x).guarded || carried(s, x).length > 0;
-/** P-15, a task's guardedFor at its creation: the parent's list, or carried(author) when it has no parent (X2); then the author if guarded; each once. */
+/** P-15, a task's guardedFor at its creation: the parent's list, then guards(author); each once (Z1). */
 function taskGuardedFor(s: SpaceState, ctx: PolicyCtx, author: string, parentId: string | undefined): string[] {
-  const out: string[] = parentId !== undefined ? [...((s.tasks as A)[parentId].guardedFor as string[])] : carried(s, author);
-  return guardedFor(s, ctx, out, author);
+  const out: string[] = parentId !== undefined ? [...((s.tasks as A)[parentId].guardedFor as string[])] : [];
+  for (const x of guards(s, ctx, author)) if (!out.includes(x)) out.push(x);
+  return out;
 }
-/** P-15 whose own approval a claim needs: the guard of each agent in the effect's guardedFor and of its proposer and executor if guarded now. null: such an agent has no confirmed operator. */
+/** P-15, an effect's guardedFor at its proposal: the named task's list, then guards(proposer), then guards(executor); each once (Z1). */
 function effectGuardedFor(s: SpaceState, ctx: PolicyCtx, proposer: string, executor: string, taskId: string | undefined): string[] {
-  const out: string[] = taskId !== undefined ? [...((s.tasks as A)[taskId].guardedFor as string[])] : carried(s, proposer);
-  for (const x of carried(s, executor)) if (!out.includes(x)) out.push(x);   // X3
-  return guardedFor(s, ctx, out, proposer, executor);
+  const out: string[] = taskId !== undefined ? [...((s.tasks as A)[taskId].guardedFor as string[])] : [];
+  for (const p of [proposer, executor]) for (const x of guards(s, ctx, p)) if (!out.includes(x)) out.push(x);
+  return out;
 }
+/** E3 (Z1): guards(proposer) then guards(executor) at this entry, each once. */
+function claimGuards(s: SpaceState, ctx: PolicyCtx, ef: A): string[] {
+  const out: string[] = [];
+  for (const x of [...guards(s, ctx, ef.proposer), ...guards(s, ctx, ef.executor)]) if (!out.includes(x)) out.push(x);
+  return out;
+}
+/** E3 (Z1): the agents of claimGuards the proposal never counted (neither in guardedFor nor the proposer or executor): a claim needing one is denied. */
+const unboundedGuards = (s: SpaceState, ctx: PolicyCtx, ef: A): string[] =>
+  claimGuards(s, ctx, ef).filter((x) => !ef.guardedFor.includes(x) && x !== ef.proposer && x !== ef.executor);
 /** P-15: a proposal's bound counts its proposer and executor whether guarded or not. (A task's is on its own list: MAX_GUARDED_FOR - 2, X6.) */
 const overBound = (recorded: string[], ...actors: string[]): boolean => new Set([...recorded, ...actors]).size > MAX_GUARDED_FOR;
 /** P-08: whether an open approval can never count again: its author is guarded now (judged from the state and the actorKind it recorded) or its server is denied (X7). */
 const approvalDead = (s: SpaceState, x: A): boolean =>
   (s.guarded as A)[x.author] === true || (s.policy.sessions.forceGuarded === true && x.actorKind !== "human") || s.policy.servers.deny.includes(serverOf(x.author));
+/** P-15: whose own approval a claim needs besides any rule: the guard of each agent in guardedFor, then of each agent of claimGuards the proposal counted (the
+ *  proposer or executor); each once. null: such an agent has no confirmed operator. */
 function guardsOf(s: SpaceState, ctx: PolicyCtx, ef: A): (string | null)[] {
+  const need: string[] = [...ef.guardedFor, ...claimGuards(s, ctx, ef).filter((x) => (x === ef.proposer || x === ef.executor) && !ef.guardedFor.includes(x))];
   const out: (string | null)[] = [];
-  for (const x of guardedFor(s, ctx, ef.guardedFor, ef.proposer, ef.executor)) { const v = guardStatus(s, ctx, x).guard ?? null; if (!out.includes(v)) out.push(v); }
+  for (const x of need) { const v = guardStatus(s, ctx, x).guard ?? null; if (!out.includes(v)) out.push(v); }
   return out;
 }
 const openApproval = (a: A, time: string) => !a.consumedBy && unexpired(a.expiresAt, time);
 const openApprovals = (ef: A, time: string): A[] => ef.approvals.filter((a: A) => openApproval(a, time));
+
+/** P-15, the Limits (Z1, Z3): what a guarded author may not do. A task or session that isn't there is left to the kind's checks; an approve of a missing proposal is denied here. */
+function governsOthers(s: SpaceState, ctx: PolicyCtx, e: A): boolean {
+  const b = e.body as A, a = e.author as string;
+  switch (e.kind) {
+    case "member.set": return !(b.actor === a && b.role === "none" && Object.keys(b).length === 2);   // leaving is not governing
+    case "policy.set": case "space.move": return true;
+    case "effect.approve": { const ef = (s.effects as A)[b.proposal]; return !ef || !guardsOf(s, ctx, ef).includes(a); }
+    case "session.input": { const se = (s.sessions as A)[b.session]; return se !== undefined && se.actor !== a; }
+    case "task.update": { const t = (s.tasks as A)[b.task]; return !!t && FINAL_TASK.includes(b.state) && !t.to.includes(a); }   // a force-close
+    case "task.cancel": { const t = (s.tasks as A)[b.task]; return !!t && t.author !== a; }
+    default: return false;
+  }
+}
 
 // ───────────────────────── P-02 read ─────────────────────────
 export function canRead(state: SpaceState, reader: string, seq: Seq): boolean {
@@ -397,12 +420,8 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     if (e.kind === "member.set") return decideProfileMember(s, e, ctx);
     return deny("kind not allowed in a profile space");
   }
-  // step 8: a guarded author, or one carrying a guarded agent's limits, may not approve, govern or steer others (P-15)
-  if (limited(s, ctx, a)) {
-    const own = e.kind === "session.input" ? ((s.sessions as A)[b.session] === undefined || (s.sessions as A)[b.session].actor === a) : true;
-    const leaving = e.kind === "member.set" && b.actor === a && b.role === "none" && Object.keys(b).length === 2;   // leaving is not governing
-    if (!leaving && (e.kind === "effect.approve" || e.kind === "member.set" || e.kind === "policy.set" || !own)) return deny("a guarded or delegated author may not approve, govern or steer others");
-  }
+  // step 8: a guarded author (guards not empty, Z1) may not approve (unless it is one of the effect's guards, Z3), govern or steer others (P-15)
+  if (guardStatus(s, ctx, a).guarded && governsOthers(s, ctx, e)) return deny("a guarded author may not approve, govern or steer others");
   // step 9: extension kinds
   if (isExtensionKind(e.kind)) {
     const r = roleOf(s, a);
@@ -419,7 +438,7 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
       const t = (s.tasks as A)[b.task];
       if (!t) return inv("not a task");
       const final = FINAL_TASK.includes(b.state);
-      if (!t.open && !(final && t.accepted.includes(a))) return deny("task closed");   // X1: an accepted assignee still closes its own part
+      if (!t.open && !final) return deny("task closed");   // Z2: a final update still ends carries on a closed task
       if (!holds(s, a)) return deny("no role");
       const assignee = t.to.includes(a);
       if (isOwner(s, a) && !assignee && final) return ok;
@@ -626,6 +645,7 @@ function e3(s: SpaceState, ef: A, ctx: PolicyCtx): E3 {
     }
     if (!approval) return { ok: false, code: "denied", why: "no valid approval" };
   }
+  if (unboundedGuards(s, ctx, ef).length > 0) return { ok: false, code: "denied", why: "the proposer or executor took on guarding the proposal never counted: propose again" };   // Z1
   const guardApprovals: string[] = [];
   for (const g of guardsOf(s, ctx, ef)) {
     if (g === null) return { ok: false, code: "denied", why: "a guarded agent has no confirmed operator" };
@@ -820,7 +840,10 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const hist = ((s.roleHistory as A)[t] ??= []);
       if (!was && now) { hist.push({ from: seq }); while (hist.length > ROLE_INTERVALS) hist.shift(); }
       else if (was && !now) { const last = hist[hist.length - 1]; if (last && last.to === undefined) last.to = seq; }
-      if (!now) dropOpenApprovals(s, t);   // P-08: they could never count again
+      if (!now) {
+        dropOpenApprovals(s, t);   // P-08: they could never count again
+        for (const tk of Object.values(s.tasks) as A[]) if (tk.accepted.includes(t)) tk.accepted = tk.accepted.filter((x: string) => x !== t);   // Z2: leaving ends every carry
+      }
       break;
     }
     case "policy.set": {
@@ -855,7 +878,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     case "task.update": {
       const t = (s.tasks as A)[b.task];
       const wasOpen = t.open;
-      if (wasOpen) t.state = b.state;   // a closed task only loses the author's acceptance (X1)
+      if (wasOpen) t.state = b.state;   // a closed task only loses acceptances (Z2)
       if (b.state === "accepted" && !t.accepted.includes(a)) t.accepted.push(a);   // P-15, X4: only an explicit accept accepts
       if (FINAL_TASK.includes(b.state)) t.accepted = t.to.includes(a) ? t.accepted.filter((x: string) => x !== a) : [];   // X1: an assignee's own final update ends what it carries; an owner's force-close, all
       if (FINAL_TASK.includes(b.state) && wasOpen) {
@@ -867,7 +890,6 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     case "task.cancel": {
       const t = (s.tasks as A)[b.task];
       t.cancelRequested = true;
-      if (isOwner(s, a)) t.accepted = [];   // X1: an owner's cancel force-closes for everyone
       break;
     }
     case "effect.propose": {

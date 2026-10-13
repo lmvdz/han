@@ -4,19 +4,23 @@
 use serde::Serialize;
 
 use super::doc::{ActorKind, ApprovalRule, PolicyDoc, Role};
-use super::state::{ActorSet, Approval, Effect, Remaining, Source, SpaceState};
+use std::collections::BTreeMap;
+
+use super::state::{ActorSet, Approval, Effect, Remaining, Source, SpaceState, Task};
 use super::{Ctx, KeyStatus, MAX_GUARDED_FOR};
 use crate::grammar;
-use crate::types::{ActorId, Budget};
+use crate::types::{ActorId, Budget, EntryId};
 
-/// What [`guard_status`] reads of a state: the policy and the agents that chose guarding. A
-/// [`SpaceState`] and a `state {agent}` reply both provide it.
+/// What [`guard_status`] reads of a state: the policy, the agents that chose guarding and the
+/// tasks (for `carried`, round 32 Z1). A [`SpaceState`] and a `state {agent}` reply both provide it.
 #[derive(Clone, Copy, Debug)]
 pub struct GuardInput<'a> {
     /// The policy in force.
     pub policy: &'a PolicyDoc,
     /// The agents that chose guarding.
     pub guarded: &'a ActorSet,
+    /// The tasks; a `state {agent}` reply holds those whose `accepted` lists the agent.
+    pub tasks: &'a BTreeMap<EntryId, Task>,
 }
 
 impl<'a> From<&'a SpaceState> for GuardInput<'a> {
@@ -24,6 +28,7 @@ impl<'a> From<&'a SpaceState> for GuardInput<'a> {
         GuardInput {
             policy: &s.policy,
             guarded: &s.guarded,
+            tasks: &s.tasks,
         }
     }
 }
@@ -34,10 +39,13 @@ pub struct GuardStatus {
     /// The actor's operator, if it is confirmed and the actor is not human.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard: Option<ActorId>,
-    /// The actor chose guarding (sticky) or is forced.
+    /// `guards` is not empty.
     pub guarded: bool,
     /// The owners' `forceGuarded` is on and the actor is not human.
     pub forced: bool,
+    /// Z1: the agents whose guard the actor answers to: itself if it chose guarding (sticky) or
+    /// is forced, then `carried(actor)`, each once.
+    pub guards: Vec<ActorId>,
 }
 
 /// P-15, the one guard function: whether `agent` is guarded and by whom, at this entry. The
@@ -53,10 +61,20 @@ pub fn guard_status<'a>(state: impl Into<GuardInput<'a>>, ctx: &Ctx, agent: &str
         .filter(|p| p.operator_confirmed)
         .and_then(|p| p.operator.clone())
         .filter(|o| !o.is_empty());
+    let mut guards = Vec::new();
+    if forced || input.guarded.contains(agent) {
+        guards.push(agent.to_owned());
+    }
+    for a in carried(input.tasks, agent) {
+        if !guards.contains(&a) {
+            guards.push(a);
+        }
+    }
     GuardStatus {
         guard,
-        guarded: forced || input.guarded.contains(agent),
+        guarded: !guards.is_empty(),
         forced,
+        guards,
     }
 }
 
@@ -216,17 +234,16 @@ pub(super) fn guard_approval<'e>(
 
 // ───────────────────────── guarding (P-15) ─────────────────────────
 
-/// P-15: the guarded agents whose limits `x` carries: the union of the `guardedFor` of the tasks
+/// P-15: the guarded agents whose guarding `x` carries: the union of the `guardedFor` of the tasks
 /// whose `accepted` lists `x`, in the order the tasks were created.
-pub(super) fn carried(state: &SpaceState, x: &str) -> Vec<ActorId> {
-    let mut tasks: Vec<_> = state
-        .tasks
+pub(super) fn carried(tasks: &BTreeMap<EntryId, Task>, x: &str) -> Vec<ActorId> {
+    let mut mine: Vec<_> = tasks
         .values()
         .filter(|t| t.accepted.iter().any(|a| a == x))
         .collect();
-    tasks.sort_by_key(|t| t.seq);
+    mine.sort_by_key(|t| t.seq);
     let mut out = Vec::new();
-    for t in tasks {
+    for t in mine {
         for a in &t.guarded_for {
             if !out.contains(a) {
                 out.push(a.clone());
@@ -236,50 +253,36 @@ pub(super) fn carried(state: &SpaceState, x: &str) -> Vec<ActorId> {
     out
 }
 
-/// P-15: guarded, or carrying a guarded agent's limits: either way `x` may not approve, govern or
-/// steer others.
-pub(super) fn limited(state: &SpaceState, ctx: &Ctx, x: &str) -> bool {
-    guard_status(state, ctx, x).guarded || !carried(state, x).is_empty()
+/// P-15, Z1: the agents whose guard `x` answers to ([`guard_status`]).
+pub(super) fn guards(state: &SpaceState, ctx: &Ctx, x: &str) -> Vec<ActorId> {
+    guard_status(state, ctx, x).guards
 }
 
-/// P-15: `recorded` plus each of `agents` that is guarded at this entry, each once.
-fn guarded_for(
-    state: &SpaceState,
-    ctx: &Ctx,
-    recorded: Vec<ActorId>,
-    agents: &[&str],
-) -> Vec<ActorId> {
-    let mut out = recorded;
-    for a in agents {
-        if !out.iter().any(|x| x == a) && guard_status(state, ctx, a).guarded {
-            out.push((*a).to_owned());
+fn push_new(out: &mut Vec<ActorId>, more: Vec<ActorId>) {
+    for a in more {
+        if !out.contains(&a) {
+            out.push(a);
         }
     }
-    out
 }
 
-/// P-15, a task's `guardedFor` at its creation: the parent's list, or `carried(author)` when it has
-/// no parent; then the author if guarded; each once.
+/// P-15, a task's `guardedFor` at its creation: the parent's list, then guards(author); each once.
 pub(super) fn task_guarded_for(
     state: &SpaceState,
     ctx: &Ctx,
     author: &str,
     parent: Option<&str>,
 ) -> Vec<ActorId> {
-    let out = match parent {
-        Some(p) => state
-            .tasks
-            .get(p)
-            .map(|t| t.guarded_for.clone())
-            .unwrap_or_default(),
-        None => carried(state, author),
-    };
-    guarded_for(state, ctx, out, &[author])
+    let mut out = parent
+        .and_then(|p| state.tasks.get(p))
+        .map(|t| t.guarded_for.clone())
+        .unwrap_or_default();
+    push_new(&mut out, guards(state, ctx, author));
+    out
 }
 
-/// P-15, an effect's `guardedFor` at its proposal: the named task's list, or `carried(proposer)`
-/// when it names none; then `carried(executor)`; then the proposer and the executor, each if
-/// guarded now; each agent once.
+/// P-15, an effect's `guardedFor` at its proposal: the named task's list, then guards(proposer),
+/// then guards(executor); each agent once.
 pub(super) fn effect_guarded_for(
     state: &SpaceState,
     ctx: &Ctx,
@@ -287,20 +290,28 @@ pub(super) fn effect_guarded_for(
     executor: &str,
     task: Option<&str>,
 ) -> Vec<ActorId> {
-    let mut out = match task {
-        Some(t) => state
-            .tasks
-            .get(t)
-            .map(|t| t.guarded_for.clone())
-            .unwrap_or_default(),
-        None => carried(state, proposer),
-    };
-    for a in carried(state, executor) {
-        if !out.contains(&a) {
-            out.push(a);
-        }
-    }
-    guarded_for(state, ctx, out, &[proposer, executor])
+    let mut out = task
+        .and_then(|t| state.tasks.get(t))
+        .map(|t| t.guarded_for.clone())
+        .unwrap_or_default();
+    push_new(&mut out, guards(state, ctx, proposer));
+    push_new(&mut out, guards(state, ctx, executor));
+    out
+}
+
+/// E3, Z1: guards(proposer) then guards(executor) as they stand at this entry, each once.
+pub(super) fn claim_guards(state: &SpaceState, ctx: &Ctx, eff: &Effect) -> Vec<ActorId> {
+    let mut out = guards(state, ctx, &eff.proposer);
+    push_new(&mut out, guards(state, ctx, &eff.executor));
+    out
+}
+
+/// E3, Z1: whether [`claim_guards`] holds an agent the proposal never counted (neither in
+/// `guardedFor` nor the proposer or executor); a claim needing one is denied.
+pub(super) fn unbounded_guards(state: &SpaceState, ctx: &Ctx, eff: &Effect) -> bool {
+    claim_guards(state, ctx, eff)
+        .iter()
+        .any(|a| !eff.guarded_for.contains(a) && *a != eff.proposer && *a != eff.executor)
 }
 
 /// P-15: the proposal bound, counting the proposer and the executor whether guarded or not.
@@ -319,15 +330,16 @@ pub(super) fn over_bound(recorded: &[ActorId], actors: &[&str]) -> bool {
 }
 
 /// P-15: whose own approval a claim of `eff` needs besides any rule: the guard of each agent in
-/// its `guardedFor`, and of its proposer and executor if guarded now, each guard once. `None`
-/// stands for such an agent with no confirmed operator: nobody can approve for it.
+/// its `guardedFor`, then of each agent of [`claim_guards`] the proposal counted (its proposer or
+/// executor), each guard once. `None` stands for such an agent with no confirmed operator: nobody
+/// can approve for it.
 pub(super) fn guards_of(state: &SpaceState, ctx: &Ctx, eff: &Effect) -> Vec<Option<ActorId>> {
-    let need = guarded_for(
-        state,
-        ctx,
-        eff.guarded_for.clone(),
-        &[&eff.proposer, &eff.executor],
-    );
+    let mut need = eff.guarded_for.clone();
+    for a in claim_guards(state, ctx, eff) {
+        if (a == eff.proposer || a == eff.executor) && !need.contains(&a) {
+            need.push(a);
+        }
+    }
     let mut out: Vec<Option<ActorId>> = Vec::new();
     for a in need {
         let g = guard_status(state, ctx, &a).guard;

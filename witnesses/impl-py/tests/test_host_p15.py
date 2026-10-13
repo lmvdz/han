@@ -272,7 +272,7 @@ async def _bot2(env, cl):
     return BOT2, await env.client("bot2")
 
 async def test_unguarded_delegate_of_a_guarded_agent_runs_strict(env):
-    """R-24 (round 28, R1): bot2 is not guarded, but the task's author bot is guarded at its seq, so bot2's host runs the turn strict; the
+    """R-24 (round 28, R1): bot2 is not guarded by its own choice, but the task's author bot is guarded at its seq, so bot2's host runs the turn strict; the
     host reads the author's guard facts at that seq (`state {agent: <author>, at}`), and the guard's own facts say not guarded."""
     cl, botc = await world(env)
     BOT2, b2 = await _bot2(env, cl)
@@ -282,7 +282,7 @@ async def test_unguarded_delegate_of_a_guarded_agent_runs_strict(env):
     await session_id(host)
     r = await botc.append(*botc.make_entry("task", S, {"to": [BOT2]}, {"ask": "hello"}))
     await until(lambda: agent.calls)
-    assert [m for _, m in agent.calls] == ["strict"] and not host.guarded_now
+    assert [m for _, m in agent.calls] == ["strict"] and host.guarded_now      # round 32 (Z1): having accepted bot's task, bot2 is guarded by bot's guard
     assert await host._author_guarded(BOT, r["seq"], r["profiles"]) and not await host._author_guarded(ALICE, r["seq"], r["profiles"])
     task.cancel()
 
@@ -299,7 +299,7 @@ async def test_task_with_guarded_for_gives_a_strict_turn(env):
     sub = (await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT2], "parent": parent}, {"ask": "hello"})))["id"]
     await until(lambda: agent.calls)
     st = await state(cl["alice"])
-    assert st["tasks"][sub]["guardedFor"] == [BOT] and not host.guarded_now
+    assert st["tasks"][sub]["guardedFor"] == [BOT] and host.guarded_now      # round 32 (Z1): bot2 accepted the subtask, so it carries bot's guarding
     assert [m for _, m in agent.calls] == ["strict"]
     task.cancel()
 
@@ -426,7 +426,7 @@ async def test_host_accepts_a_task_before_its_first_turn_on_it(env):
     handle.cancel()
 
 async def test_strict_turn_refuses_to_steer_another_session_even_for_an_unguarded_agent(env):
-    """R-24 (round 30, V1): bot2 is not guarded but its task-driven turn is strict; a Steer into another's session is refused (reported,
+    """R-24 (round 30, V1): bot2 never chose guarding (round 32: once it accepts the task it is guarded by bot's guard); its task-driven turn is strict; a Steer into another's session is refused (reported,
     not appended) while its proposal in the same turn is made. The gate refuses approve, govern and steer as tools (`test_host_claude_gate.py`)."""
     cl, botc = await world(env)
     BOT2, b2 = await _bot2(env, cl)
@@ -437,8 +437,8 @@ async def test_strict_turn_refuses_to_steer_another_session_even_for_an_unguarde
     await session_id(host)
     await botc.append(*botc.make_entry("task", S, {"to": [BOT2]}, {"ask": f"steer {dsid} do it; push x"}))
     await until(lambda: records(cl["alice"], "effect.propose", BOT2))
-    assert [m for _, m in agent.calls] == ["strict"] and not host.guarded_now
-    assert await records(cl["alice"], "session.input", BOT2) == [] and any("strict turn: cannot steer" in r for r in host.refused)
+    assert [m for _, m in agent.calls] == ["strict"] and host.guarded_now      # round 32 (Z1): the accepting delegate is guarded
+    assert await records(cl["alice"], "session.input", BOT2) == [] and any("cannot steer" in r for r in host.refused)
     handle.cancel()
 
 async def test_subtasks_of_a_task_driven_turn_are_parented_under_the_driving_task(env):

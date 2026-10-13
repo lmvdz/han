@@ -2064,14 +2064,8 @@
     "time": "2026-10-10T12:00:00Z"
    },
    "time": "2026-10-10T12:01:14Z",
-   "expect": "allow",
-   "check": {
-    "effects.a669390afc14feed8882bcd5a600ac04b48ec17ceeb8ae070cb2d0de883031ff.guardedFor": [
-     "@f19:b.example",
-     "@x:c.example"
-    ]
-   },
-   "note": "X2: work named under an unlinked task carries that task's guarding, not carried(M)"
+   "expect": "denied",
+   "note": "Z1: work named under any task carries guards(proposer) too: t19's agent, 17 carried, X and M make 20"
   },
   {
    "entry": {

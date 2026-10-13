@@ -3,9 +3,138 @@
  "rules": [
   "G-07",
   "G-08",
-  "N-03"
+  "N-03",
+  "Z4",
+  "SR-13"
  ],
- "description": "the client's checks of the control stream before it says hello: one bare Challenge (exactly challenge, server, versions, time), its server equal to the dialed ServerName, the node reached one of dialed's; and the bytes a hello proof signs",
+ "description": "the client's checks before it says hello: a ticket's or a hint's node is only a hint, confirmed against the server's /.well-known/han (`dials`, round 32 Z4); one bare Challenge (exactly challenge, server, versions, time), its server equal to the dialed ServerName, the node reached one of dialed's well-known nodes (`challenges`); the bytes a han/1 hello proof signs, \"han-hello-v2\\n\" challenge \"\\n\" dialed \"\\n\" the server's node id (`proofs`); and the server's check that a hello is bound to the connection (`bindings`, SR-13)",
+ "dials": [
+  {
+   "name": "a ticket's node listed in the server's well-known",
+   "server": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "wellknown": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "a crafted ticket: an attacker's node for the victim's home (K1)",
+   "server": "a.example",
+   "node": "qLjQhv68lyiF_lao1j6GO1l9RjNc22Rtx5d6Iy_-sKc",
+   "wellknown": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "abort"
+  },
+  {
+   "name": "a well-known that names another server",
+   "server": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "wellknown": {
+    "server": "b.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "abort"
+  },
+  {
+   "name": "a malformed well-known",
+   "server": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "wellknown": {
+    "server": "a.example",
+    "sequencer": [],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "abort"
+  },
+  {
+   "name": "after a move: the new home's node, listed by the new home",
+   "server": "b.example",
+   "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+   "wellknown": {
+    "server": "b.example",
+    "sequencer": [
+     {
+      "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  }
+ ],
  "challenges": [
   {
    "name": "well formed",
@@ -69,16 +198,16 @@
    "expect": "abort"
   },
   {
-   "name": "a ticket's node for its server (N-03)",
+   "name": "the real challenge relayed by an attacker's node (K1)",
    "frames": [
     "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
    ],
    "dialed": "a.example",
-   "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+   "node": "qLjQhv68lyiF_lao1j6GO1l9RjNc22Rtx5d6Iy_-sKc",
    "nodes": [
-    "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0"
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
    ],
-   "expect": "ok"
+   "expect": "abort"
   },
   {
    "name": "a challenge of 21 characters",
@@ -143,28 +272,153 @@
   {
    "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
    "dialed": "a.example",
-   "message": "68616e2d68656c6c6f2d76310a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c65",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "message": "68616e2d68656c6c6f2d76320a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c650a5759646439333334546c416b4c4a466a4b385f514548455461364c6270643257656a485331794662387455",
    "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
-   "proof": "qYjFCLxrDO4J_FP78wq0_dosWwfS-hhm1fqPROpdwAuAu2tu0OYZ9wHP99RL0qi-ppL9m1fahwMF4kmsP-VlAQ",
+   "proof": "nXA7TOadivbPXUxB1Lwc23NCUkPOzkgtEWd6GPSARnZLbaUw6hrylXCPzCQ_TABSkPja-IEA6h-d0l01rAhqCg",
    "valid": true
   },
   {
    "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
    "dialed": "a.example",
-   "message": "68616e2d68656c6c6f2d76310a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c65",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "message": "68616e2d68656c6c6f2d76320a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c650a5759646439333334546c416b4c4a466a4b385f514548455461364c6270643257656a485331794662387455",
    "publicKey": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
-   "proof": "qYjFCLxrDO4J_FP78wq0_dosWwfS-hhm1fqPROpdwAuAu2tu0OYZ9wHP99RL0qi-ppL9m1fahwMF4kmsP-VlAQ",
+   "proof": "nXA7TOadivbPXUxB1Lwc23NCUkPOzkgtEWd6GPSARnZLbaUw6hrylXCPzCQ_TABSkPja-IEA6h-d0l01rAhqCg",
    "valid": false,
    "note": "another key"
   },
   {
    "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
    "dialed": "b.example",
-   "message": "68616e2d68656c6c6f2d76310a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a622e6578616d706c65",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "message": "68616e2d68656c6c6f2d76320a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a622e6578616d706c650a5759646439333334546c416b4c4a466a4b385f514548455461364c6270643257656a485331794662387455",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "proof": "nXA7TOadivbPXUxB1Lwc23NCUkPOzkgtEWd6GPSARnZLbaUw6hrylXCPzCQ_TABSkPja-IEA6h-d0l01rAhqCg",
+   "valid": false,
+   "note": "signed for a.example"
+  },
+  {
+   "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "dialed": "a.example",
+   "node": "qLjQhv68lyiF_lao1j6GO1l9RjNc22Rtx5d6Iy_-sKc",
+   "message": "68616e2d68656c6c6f2d76320a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c650a714c6a51687636386c7969465f6c616f316a36474f316c39526a4e63323252747835643649795f2d734b63",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "proof": "BgK_W_2WZAT3yVU1VbQtmZ_6qF_47dvYIsfYf0cgfWciGF95hyCJlRVvTrf-4mYVapFMDPGImoXA6skahdk7DQ",
+   "valid": true,
+   "checkedAs": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "note": "made on a connection to the attacker's node (K1): the real home checks its own node id and the proof fails there"
+  },
+  {
+   "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "message": "68616e2d68656c6c6f2d76320a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c650a5759646439333334546c416b4c4a466a4b385f514548455461364c6270643257656a485331794662387455",
    "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
    "proof": "qYjFCLxrDO4J_FP78wq0_dosWwfS-hhm1fqPROpdwAuAu2tu0OYZ9wHP99RL0qi-ppL9m1fahwMF4kmsP-VlAQ",
    "valid": false,
-   "note": "signed for a.example"
+   "note": "the legacy WebSocket carrier's v1 bytes never verify as a han/1 proof"
+  }
+ ],
+ "bindings": [
+  {
+   "name": "a user signs with the key that is its connection's node",
+   "who": "@alice:a.example",
+   "keyId": "d1",
+   "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "keys": {
+    "d1": {
+     "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+     "status": "valid"
+    }
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "a valid key of the actor, but another device's connection (SR-13)",
+   "who": "@alice:a.example",
+   "keyId": "d1",
+   "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+   "keys": {
+    "d1": {
+     "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+     "status": "valid"
+    },
+    "d2": {
+     "publicKey": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+     "status": "valid"
+    }
+   },
+   "expect": "denied"
+  },
+  {
+   "name": "the connection's node, but a revoked key",
+   "who": "@alice:a.example",
+   "keyId": "d1",
+   "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "keys": {
+    "d1": {
+     "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+     "status": "revoked"
+    }
+   },
+   "expect": "denied"
+  },
+  {
+   "name": "a server on a node its well-known lists",
+   "who": "@:a.example",
+   "keyId": "h1",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "keys": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "a server on a node its well-known doesn't list",
+   "who": "@:a.example",
+   "keyId": "h1",
+   "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+   "keys": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "denied"
   }
  ]
 }

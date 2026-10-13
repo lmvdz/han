@@ -4,11 +4,13 @@
   encode_frame / decode_frame    G-07: a 4-byte big-endian length, then that many bytes of UTF-8 I-JSON
   request_verdict(text)          G-07 (1), (1a), (2) for one frame of a call stream (ref/wire.py frame_verdict, with han/1's calls)
   challenge_verdict(...)         G-07, G-08: the client's check of the control stream and of the node it reached
-  hello_message(challenge, dialed)   G-08: the bytes a hello proof signs
+  dial_verdict(server, node, wk) Z4: a ticket's or a hint's node is confirmed against the server's well-known before hello
+  hello_message(challenge, dialed, node)   G-08: the bytes a han/1 hello proof signs (round 32: the server's node id too)
+  hello_binding(who, keyId, node, keys)    G-08, SR-13: the signing key is the connection's node (a user) or a listed node (a server)
   parse_wellknown / parse_ticket §4.3, N-03: node ids with their direct addresses and relays (X10), a ticket's server (X13)
-  stream_item_verdict / stream_right   T-07, G-05: StreamItem shapes, `profile` items (X11), `han.status/1` bodies, and the right
-                                 each type needs
-  bulk_message / verify_bulk     X15: the bytes a bulk batch's signature covers, and its check
+  stream_item_verdict / stream_right   T-07, G-05: StreamItem shapes, `profile` items (X11; bodies opaque, Z6), and the right
+                                 each type needs; status_body_verdict: a face's check of a `han.status/1` body (SR-59)
+  typed_stream / read_typed_stream   G-07 (round 32, Z5): the framing of a typed one-way stream; its frames are the profile's
 Signatures use ref/wire.py's strict Ed25519 (§2). The vectors are in conformance/carrier-vectors/ (ref/make_carrier_vectors.py writes
 them, ref/run_carrier_vectors.py checks them)."""
 from __future__ import annotations
@@ -24,28 +26,35 @@ READ_CALLS = ("read", "subscribe", "state", "blobGet")       # the calls a stran
 def admit(conn: dict, spaces: dict) -> dict:
     """N-02, the peer filter, judged per call before the call's own checks (G-07 (3)).
     conn:   {node, call, space?, hello?: {who, nodes}}: the peer's node id (its TLS key); the call's name; the space it names (`args.space`,
-            or `entry.space` of an append); and after a successful `hello` the authenticated actor and the node ids that vouch for it:
-            the `valid` keys of its pinned profile (N-01), or for a server actor `@:S` the `sequencer` node ids of S's /.well-known/han.
+            `entry.space` of an append, or `item.space` of a stream); and after a successful `hello` the authenticated actor and the node ids
+            that vouch for it: the `valid` keys of its pinned profile (N-01), or for a server actor `@:S` the `sequencer` node ids of S's
+            /.well-known/han.
     spaces: {SpaceId: {policy: {visibility, join, ...}, roles: {actor: role}}}: the spaces this node serves (han.ts `AdmitSpaces`, a
             Pick of each SpaceState). A profile space's roles are its actor and `@:server`, so serving an actor's profile makes its
-            devices members here.
-    Returns {allow: True, tier} with tier "member" (every call; the call's own rules judge it), "server" (likewise, for a server's
-    node), or "open" (a stranger's call, rate-limited per node by the host), or {allow: False, reason}. Nothing else is read."""
+            devices standing members here.
+    The member tier is judged per space (round 32, Z7): a call that names a space is a member's when the actor holds a role in that
+    space; a call that names none (blobPut) needs a standing role: owner or member of a served space that isn't open-join. A role in
+    another space admits nothing, and a guest or open-join role reaches only that space.
+    Returns {allow: True, tier} with tier "member" (the call's own rules judge it), "server" (likewise, for a server's node), or "open"
+    (a stranger's call, rate-limited per node by the host), or {allow: False, reason}. Nothing else is read."""
     call, hello = conn["call"], conn.get("hello")
     if call == "hello": return {"allow": True, "tier": "open"}                       # any node may say hello (X9)
     if not hello: return {"allow": False, "reason": "hello first"}                   # G-07 (3); `join` too (X12)
     who, bound = hello["who"], conn["node"] in hello["nodes"]
     if bound and who.startswith("@:"): return {"allow": True, "tier": "server"}     # G-10: a node listed by the server it speaks for
-    if bound and any(s["roles"].get(who) in READ_ROLES for s in spaces.values()):
-        return {"allow": True, "tier": "member"}                                     # a registered device of a role holder here (N-01)
-    if call in ("join", "cancel"): return {"allow": True, "tier": "open"}            # N-03 after hello; ending one's own stream
     sp = conn.get("space")
-    if call in READ_CALLS:
-        s = spaces.get(sp)
-        if s is None or sp.startswith("profile:") or s["policy"]["visibility"] == "public":
-            return {"allow": True, "tier": "open"}                                   # public reads (P-02); a space not held: §4.1 step 2
+    s = spaces.get(sp) if sp is not None else None
+    if bound and s is not None and s["roles"].get(who) in READ_ROLES:
+        return {"allow": True, "tier": "member"}                                     # a registered device of a role holder of this space (Z7)
+    if bound and sp is None and any(x["roles"].get(who) in ("owner", "member") and x["policy"]["join"] != "open" for x in spaces.values()):
+        return {"allow": True, "tier": "member"}                                     # a spaceless call needs a standing role (Z7)
+    if call in ("join", "cancel"): return {"allow": True, "tier": "open"}            # N-03 after hello; ending one's own stream
+    if sp is not None and s is None: return {"allow": True, "tier": "open"}          # a space not held here: §4.1 step 2 answers, nothing else
+    if call in READ_CALLS and sp is not None:
+        if sp.startswith("profile:") or s["policy"]["visibility"] == "public":
+            return {"allow": True, "tier": "open"}                                   # public reads (P-02)
         return {"allow": False, "reason": "members only"}
-    if call == "append" and sp in spaces and spaces[sp]["policy"]["join"] == "open":
+    if call == "append" and s is not None and s["policy"]["join"] == "open":
         return {"allow": True, "tier": "open"}                                       # an open join (P-03) is a stranger's append
     return {"allow": False, "reason": "not a member's device"}
 
@@ -78,8 +87,9 @@ CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{22,128}$", re.ASCII)
 def challenge_verdict(frames: list, dialed: str, node: str, nodes: list):
     """The client's checks before it sends `hello` (G-07, G-08): `frames` are the texts of the control stream so far. The first is the
     bare Challenge, exactly {challenge, server, versions, time}, with a challenge of 22–128 base64url characters, versions holding 1 and
-    a Time; its `server` equals `dialed`; the node reached is one of `nodes` (dialed's well-known `sequencer` node ids, or a ticket's
-    node for a space whose `server` is dialed). Any further control frame is a protocol error. Returns "ok" or ("abort", reason)."""
+    a Time; its `server` equals `dialed`; the node reached is one of `nodes`, the node ids that dialed's /.well-known/han lists (fetched
+    over HTTPS; a ticket's or a hint's node never counts by itself, round 32, Z4: see dial_verdict). Any further control frame is a
+    protocol error. Returns "ok" or ("abort", reason)."""
     if not frames: return ("abort", "no challenge")
     if len(frames) > 1: return ("abort", "the control stream carries only the challenge")
     try:
@@ -94,8 +104,34 @@ def challenge_verdict(frames: list, dialed: str, node: str, nodes: list):
     if node not in nodes: return ("abort", "node is not one of dialed's")
     return "ok"
 
-def hello_message(challenge: str, dialed: str) -> bytes:
-    return ("han-hello-v1\n" + challenge + "\n" + dialed).encode("utf-8")
+def dial_verdict(server: str, node: str, wellknown) -> str | None:
+    """Z4 (round 32): a ticket's `node` and addresses, and a Matrix hint's node (§8.3), are dial hints only. Before `hello` the client
+    confirms that `node` is listed for `server` in the `/.well-known/han` it fetched over HTTPS from `server`: the document is well
+    formed, names `server`, and lists `node` in `sequencer`. None if confirmed, else the reason (the client does not say hello)."""
+    err = parse_wellknown(wellknown)
+    if err: return f"well-known: {err}"
+    if wellknown["server"] != server: return "the well-known is another server's"
+    if node not in [n["node"] for n in wellknown["sequencer"]]: return "node not listed for the server"
+    return None
+
+def hello_message(challenge: str, dialed: str, node: str) -> bytes:
+    """G-08 (round 32, Z4, SR-13): the bytes a `han/1` hello proof signs. `node` is the server's node id as the client reached it (the
+    TLS key it authenticated, 43 characters), so a proof made on one connection is useless on any other."""
+    return ("han-hello-v2\n" + challenge + "\n" + dialed + "\n" + node).encode("utf-8")
+
+def hello_binding(who: str, key_id: str, node: str, keys) -> str | None:
+    """G-08 (SR-13): the server's check that a hello is bound to the connection. For a user actor, `keys` is the `keys` map of its pinned
+    profile, and the key `key_id` must be `valid` and be the connection's node id (the device that signs is the device that connected).
+    For a server actor `@:S`, `keys` is S's /.well-known/han: `node` must be in its `sequencer` and `key_id` among its `keys`.
+    None if bound, else the reason (`denied`)."""
+    if who.startswith("@:"):
+        if node not in [n["node"] for n in keys["sequencer"]]: return "node not in the server's sequencer"
+        if key_id not in [k["keyId"] for k in keys["keys"]]: return "no such server key"
+        return None
+    k = keys.get(key_id)
+    if not k or k["status"] != "valid": return "key not valid"
+    if k["publicKey"] != node: return "the signing key is not the connection's node"
+    return None
 
 # ───────────────────────── §4.3, N-03: well-known and tickets (X10, X13) ─────────────────────────
 RELAY = re.compile(r"^https://[!-~]{1,1016}$", re.ASCII)
@@ -177,23 +213,36 @@ PROFILE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}(\.[a-z0-9-]{1,32}){1,4}/[1-9][
 MAX_STREAM_ITEM_BYTES = 65536
 STATUS_STATES = ("working", "waiting-approval", "blocked", "idle", "done", "stale", "failed")
 
+STATUS_TEXT = {"step": 256, "tool": 128}     # SR-59: the free-text members' bounds, in characters (han.status-1.md)
+PLAN_ITEMS, PLAN_TEXT = 64, 256
+
 def status_body_verdict(b) -> str | None:
-    """spec/profiles/han.status-1.md: the members a face relies on; unknown members are ignored."""
+    """spec/profiles/han.status-1.md, a face's check (never the server's, Z6): the members a face relies on, and the bounds of the
+    free-text members, which are untrusted text (SR-59); unknown members are ignored."""
     if not isinstance(b, dict): return "body is not an object"
     req = {"session": P._id, "agent": P._actor, "harness": lambda v: isinstance(v, str), "state": lambda v: v in STATUS_STATES,
            "step": lambda v: isinstance(v, str), "files": lambda v: isinstance(v, list), "seq": lambda v: P._int(v) and v >= 1, "at": P._time}
     for k, ok in req.items():
         if k not in b: return f"missing {k}"
         if not ok(b[k]): return f"bad {k}"
-    for k, ok in (("delegate_of", P._actor), ("issue", P._external)):
+    for k, ok in (("delegate_of", P._actor), ("issue", P._external), ("tool", lambda v: isinstance(v, str)),
+                  ("gate", lambda v: v in ("every_call", "prompt_only")), ("sandbox", lambda v: isinstance(v, str) and 1 <= len(v) <= 64)):
         if k in b and not ok(b[k]): return f"bad {k}"
+    for k, n in STATUS_TEXT.items():
+        if k in b and len(b[k]) > n: return f"{k} longer than {n}"
+    if "plan" in b:
+        if not (isinstance(b["plan"], list) and len(b["plan"]) <= PLAN_ITEMS): return "bad plan"
+        for x in b["plan"]:
+            if not (isinstance(x, dict) and isinstance(x.get("text"), str) and isinstance(x.get("done"), bool)): return "bad plan item"
+            if len(x["text"]) > PLAN_TEXT: return f"plan text longer than {PLAN_TEXT}"
     return None
 
 PROFILE_BODIES = {"han.status/1": status_body_verdict}
 
 def stream_item_verdict(item) -> str | None:
     """G-05's shape check of a StreamItem (han.ts): the common members, then one of output, status, context, profile; JCS at most
-    maxStreamItemBytes. A `profile` item's body is any Json (§2) that its profile, when known here, accepts."""
+    maxStreamItemBytes. A `profile` item's name follows the grammar and its body is any Json (§2): the server never validates a profile's
+    body (round 32, Z6); a face does, with the profile's own check (PROFILE_BODIES)."""
     if not isinstance(item, dict): return "not an object"
     common = {"space", "session", "n", "time", "type"}
     if not common <= set(item): return "missing members"
@@ -205,14 +254,10 @@ def stream_item_verdict(item) -> str | None:
         if not ({"state"} <= rest <= {"state", "detail"}) or item["state"] not in ("idle", "working", "blocked", "done", "error"): return "status"
         if "detail" in item and not isinstance(item["detail"], str): return "status detail"
     elif t == "context":
-        if rest != {"blob", "what"} or not W._blobref(item["blob"]) or item["what"] not in ("transcript", "files", "plan"): return "context"
+        if rest != {"blob", "what"} or not W._blobref(item["blob"]) or item["what"] not in ("transcript", "files", "plan", "summary"): return "context"
     elif t == "profile":
         if rest != {"name", "body"} or not (isinstance(item["name"], str) and PROFILE_NAME.fullmatch(item["name"])): return "profile name"
-        if not P.json_ok(item["body"]): return "profile body is not Json"
-        check = PROFILE_BODIES.get(item["name"])
-        if check:
-            err = check(item["body"])
-            if err: return f"{item['name']}: {err}"
+        if not P.json_ok(item["body"]): return "profile body is not Json"      # the body is opaque here: faces check it (Z6)
     else:
         return "unknown type"
     if len(P.jcs(item)) > MAX_STREAM_ITEM_BYTES: return "too large"
@@ -223,15 +268,36 @@ def stream_right(item) -> str:
     profile) watch."""
     return "read" if item["type"] == "context" else "watch"
 
-# ───────────────────────── X15: bulk batches ─────────────────────────
-def bulk_message(profile: str, data: bytes) -> bytes:
-    """The bytes a bulk batch's signature covers: "han/bulk/1\\n" ‖ UTF-8(profile name) ‖ "\\n" ‖ the batch's exact CBOR bytes."""
-    return b"han/bulk/1\n" + profile.encode("utf-8") + b"\n" + data
+# ───────────────────────── G-07: typed streams (round 32, Z5) ─────────────────────────
+MAX_TYPE_BYTES = 64
 
-def verify_bulk(batch: dict, view: dict) -> bool:
-    """A bulk batch {author, keyId, profile, data (bytes), sig} is genuine when `keyId` is a `valid` key of `view` (the author's pinned
-    ProfileView) and `sig` verifies strictly over bulk_message(profile, data)."""
-    if not (isinstance(batch.get("profile"), str) and PROFILE_NAME.fullmatch(batch["profile"])): return False
-    k = view["keys"].get(batch["keyId"])
-    if not k or k["status"] != "valid": return False
-    return W.verify_sig(k["publicKey"], batch["sig"], bulk_message(batch["profile"], batch["data"]))
+def typed_stream(stream_type: str, frames: list) -> bytes:
+    """A typed one-way stream (G-07): a header frame holding the stream type's UTF-8 name (a profile name, e.g. `han.timeline/1`),
+    then the profile's frames, each a 4-byte big-endian length and that many bytes. The core signs nothing here: a profile that needs
+    authenticity signs its own frames (han.timeline/1: TL-93)."""
+    out = encode_frame(stream_type)
+    for f in frames: out += len(f).to_bytes(4, "big") + f
+    return out
+
+def read_typed_stream(buf: bytes, finished: bool = True, max_bytes: int = MAX_FRAME_BYTES):
+    """A receiver's reading of a typed stream: ("ok", type, [frames]) when it is well framed; ("more",) when it isn't finished and ends
+    inside a frame; ("close", reason) when the header isn't a stream type name (the profile-name grammar, at most 64 bytes), a length
+    exceeds max_bytes (judged from the 4 length bytes alone), or a finished stream ends inside a frame. A receiver that doesn't know
+    the type stops reading the stream; what the frames mean is the profile's business, never the core's."""
+    if len(buf) < 4: return ("close", "no header") if finished else ("more",)
+    n = int.from_bytes(buf[:4], "big")
+    if n > MAX_TYPE_BYTES: return ("close", "stream type too long")
+    if len(buf) < 4 + n: return ("close", "no header") if finished else ("more",)
+    try:
+        name = buf[4:4 + n].decode("utf-8")
+    except UnicodeDecodeError:
+        return ("close", "stream type not UTF-8")
+    if not PROFILE_NAME.fullmatch(name): return ("close", "not a stream type name")
+    i, frames = 4 + n, []
+    while i < len(buf):
+        if len(buf) - i < 4: return ("close", "ends inside a length") if finished else ("more",)
+        m = int.from_bytes(buf[i:i + 4], "big")
+        if m > max_bytes: return ("close", "frame too long")
+        if len(buf) - i - 4 < m: return ("close", "ends inside a frame") if finished else ("more",)
+        frames.append(buf[i + 4:i + 4 + m]); i += 4 + m
+    return ("ok", name, frames)

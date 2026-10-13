@@ -1,0 +1,88 @@
+{
+ "name": "typed-streams",
+ "rules": [
+  "G-07",
+  "Z5"
+ ],
+ "description": "a typed one-way stream: a header frame (4-byte big-endian length, then the UTF-8 stream type name, the profile-name grammar, at most 64 bytes), then the profile's frames, each a 4-byte length and that many bytes (at most maxFrameBytes). The core signs nothing: the frames are the profile's (han.timeline/1: TL-93 envelopes and TL-110 messages). `expect` is {type, frames (hex)} for a finished stream that reads whole, \"more\" for an unfinished one that ends inside a frame, or \"close\"",
+ "encode": [
+  {
+   "type": "han.timeline/1",
+   "frames": [
+    "a201016474657874",
+    ""
+   ],
+   "hex": "0000000e68616e2e74696d656c696e652f3100000008a20101647465787400000000"
+  }
+ ],
+ "cases": [
+  {
+   "name": "a header and two frames, one empty",
+   "hex": "0000000e68616e2e74696d656c696e652f3100000008a20101647465787400000000",
+   "finished": true,
+   "expect": {
+    "type": "han.timeline/1",
+    "frames": [
+     "a201016474657874",
+     ""
+    ]
+   }
+  },
+  {
+   "name": "a header alone",
+   "hex": "0000000e68616e2e74696d656c696e652f31",
+   "finished": true,
+   "expect": {
+    "type": "han.timeline/1",
+    "frames": []
+   }
+  },
+  {
+   "name": "an unfinished stream inside a frame",
+   "hex": "0000000e68616e2e74696d656c696e652f3100000008a201",
+   "finished": false,
+   "expect": "more"
+  },
+  {
+   "name": "a finished stream that ends inside a frame",
+   "hex": "0000000e68616e2e74696d656c696e652f3100000008a201",
+   "finished": true,
+   "expect": "close"
+  },
+  {
+   "name": "a frame over maxFrameBytes, judged from its length",
+   "hex": "0000000e68616e2e74696d656c696e652f3100140001",
+   "finished": false,
+   "expect": "close"
+  },
+  {
+   "name": "a type name without a version",
+   "hex": "0000000c68616e2e74696d656c696e65",
+   "finished": true,
+   "expect": "close"
+  },
+  {
+   "name": "a type name over 64 bytes",
+   "hex": "0000004568616e2e61616161616161616161616161616161616161616161616161616161616161612e6262626262626262626262626262626262626262626262626262626262622f31",
+   "finished": true,
+   "expect": "close"
+  },
+  {
+   "name": "no header",
+   "hex": "",
+   "finished": true,
+   "expect": "close"
+  },
+  {
+   "name": "an unknown profile's type reads the same (what it means is the profile's)",
+   "hex": "0000000c7465616d2e626f6172642f3200000001ff",
+   "finished": true,
+   "expect": {
+    "type": "team.board/2",
+    "frames": [
+     "ff"
+    ]
+   }
+  }
+ ]
+}

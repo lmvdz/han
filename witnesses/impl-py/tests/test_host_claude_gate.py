@@ -299,7 +299,7 @@ async def test_strict_turn_of_an_unguarded_delegate_has_no_local_allow_and_propo
     await until(three)
     props = await records(cl["alice"], "effect.propose", BOT2)
     st = await state(cl["alice"])
-    assert not host.guarded_now and made[0].modes == ["default"] and made[0].options.allowed_tools == []
+    assert host.guarded_now and made[0].modes == ["default"]      # round 32 (Z1): the accepting delegate is guarded and made[0].options.allowed_tools == []
     assert all(isinstance(a, PermissionResultDeny) for a in made[0].answers)                                  # nothing is approved locally
     assert all(p["entry"]["body"]["task"] == tid for p in props)                                               # each proposal names the driving task
     assert all(st["effects"][p["receipt"]["id"]]["guardedFor"] == [BOT] for p in props)

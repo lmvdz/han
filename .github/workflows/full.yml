@@ -15,6 +15,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Rust toolchain (from rust-toolchain.toml; run_all's timeline row and the Rust fuzz target need it)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -45,10 +48,10 @@ jobs:
       - name: Python witness tests
         working-directory: witnesses/impl-py
         run: python -m pytest -q
-      - name: Differential fuzz, 1000 seeds
+      - name: Differential fuzz, 1000 seeds, against the TypeScript witness and the Rust han-core
         env:
           PYTHONIOENCODING: utf-8
-        run: python ref/fuzz_diff.py --seeds 1000
+        run: python ref/fuzz_diff.py --target both --seeds 1000
 
   rust-matrix:
     strategy:

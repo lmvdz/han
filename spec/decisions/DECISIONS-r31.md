@@ -117,9 +117,4 @@ All agents follow these. Where one is silent, the owning agent decides and write
 
 ### Results
 
-- fuzz_diff (200 seeds) diverges where the TypeScript witness hasn't followed round 31:
-  - X4: `accepted` after a progress update.
-  - X1: `accepted` after a final update and after an owner's cancel; a closed task's own final update is `denied` there.
-  - X2 and X3: the contents and order of the `guardedFor` of tasks and effects.
-
-  No round-30 field diverges any more.
+- *Corrected in round 32 (Z10).* fuzz_diff agrees: 1000 seeds × 250 steps, 300,206 vector steps, 0 seeds diverge (`ref/RESULTS.md` of the round-31 commit). The TypeScript witness follows round 31 in the same commit (`witnesses/cleanroom-ts/policy.ts`: X1, X2, X3, X4). An earlier draft of this note listed divergences in `accepted` (X1, X4) and in the order of `guardedFor` (X2, X3); they were measured before the witness followed and were never true of the merged round.

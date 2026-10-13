@@ -29,7 +29,8 @@ pub struct AdmitConn {
     pub node: NodeId,
     /// The call's name.
     pub call: String,
-    /// The space the call names: `args.space`, or the `space` of an appended entry.
+    /// The space the call names: `args.space`, the `space` of an appended entry, or the `space`
+    /// of a streamed item.
     #[serde(default)]
     pub space: Option<SpaceId>,
     /// Present after a successful `hello`.
@@ -48,7 +49,7 @@ pub struct AdmitPolicy {
 
 /// A space the node serves, as much of its state as `admit` reads (`Pick<SpaceState, "policy" |
 /// "roles">`). A profile space's roles name its actor and `@:server`, so serving an actor's
-/// profile makes its devices members here.
+/// profile gives its devices a standing role here.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct AdmitSpace {
     /// The policy.
@@ -80,8 +81,9 @@ pub type AdmitSpaces = BTreeMap<SpaceId, AdmitSpace>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
-    /// A registered device of an actor holding a role in a space served here: every call, which
-    /// then judges itself.
+    /// A registered device of an actor holding a role in the space the call names (or, for a call
+    /// naming none, a standing role: owner or member of a served space that isn't open-join);
+    /// the call then judges itself.
     Member,
     /// A node its server's well-known document lists: every call, likewise.
     Server,
@@ -98,14 +100,16 @@ pub enum AdmitVerdict {
     Deny(&'static str),
 }
 
-/// The calls a stranger may make on a public or profile space, or on one not held here.
+/// The calls a stranger may make on a public or profile space.
 const READ_CALLS: [&str; 4] = ["read", "subscribe", "state", "blobGet"];
 
 /// N-02: judges one call. Any node may say `hello`; nothing else is admitted before it (`join`
 /// too). A node that vouches for its hello's actor is admitted as `Server` when the actor is a
-/// server actor, as `Member` when the actor holds a role in a space served here. Anyone else
-/// may `join` or `cancel`, read public, profile and not-held spaces, and append to a space with
-/// `join: "open"`.
+/// server actor; as `Member` for a call on a space where the actor holds a role, or for a call
+/// naming no space when the actor is an owner or member of a served space that isn't open-join
+/// (round 32, Z7: the member tier is judged per space). Anyone else may `join` or `cancel`, make
+/// any call on a space not held here (section 4.1 step 2 answers it), read public and profile
+/// spaces, and append to a space with `join: "open"`.
 pub fn admit(conn: &AdmitConn, spaces: &AdmitSpaces) -> AdmitVerdict {
     let call = conn.call.as_str();
     if call == "hello" {
@@ -118,33 +122,35 @@ pub fn admit(conn: &AdmitConn, spaces: &AdmitSpaces) -> AdmitVerdict {
     if bound && hello.who.starts_with("@:") {
         return AdmitVerdict::Allow(Tier::Server); // G-10: a node listed by the server it speaks for
     }
+    let space = conn.space.as_deref();
+    let held = space.and_then(|sp| spaces.get(sp));
+    if bound && held.is_some_and(|s| s.roles.get(&hello.who).is_some_and(|r| r.reads())) {
+        return AdmitVerdict::Allow(Tier::Member); // a registered device of a role holder of this space (Z7)
+    }
     if bound
-        && spaces
-            .values()
-            .any(|s| s.roles.get(&hello.who).is_some_and(|r| r.reads()))
+        && space.is_none()
+        && spaces.values().any(|s| {
+            s.policy.join != JoinMode::Open && s.roles.get(&hello.who).is_some_and(|r| r.writes())
+        })
     {
-        return AdmitVerdict::Allow(Tier::Member); // a registered device of a role holder here (N-01)
+        return AdmitVerdict::Allow(Tier::Member); // a spaceless call needs a standing role (Z7)
     }
     if call == "join" || call == "cancel" {
         return AdmitVerdict::Allow(Tier::Open); // N-03 after hello; ending one's own stream
     }
-    let space = conn.space.as_deref();
+    let Some(sp) = space else {
+        return AdmitVerdict::Deny("not a member's device");
+    };
+    let Some(s) = held else {
+        return AdmitVerdict::Allow(Tier::Open); // a space not held here: section 4.1 step 2 answers
+    };
     if READ_CALLS.contains(&call) {
-        let held = space.and_then(|sp| spaces.get(sp).map(|s| (sp, s)));
-        return match held {
-            Some((sp, s))
-                if !sp.starts_with("profile:") && s.policy.visibility != Visibility::Public =>
-            {
-                AdmitVerdict::Deny("members only")
-            }
-            _ => AdmitVerdict::Allow(Tier::Open), // public reads (P-02); a space not held: section 4.1 step 2
-        };
+        if sp.starts_with("profile:") || s.policy.visibility == Visibility::Public {
+            return AdmitVerdict::Allow(Tier::Open); // public reads (P-02)
+        }
+        return AdmitVerdict::Deny("members only");
     }
-    if call == "append"
-        && space
-            .and_then(|sp| spaces.get(sp))
-            .is_some_and(|s| s.policy.join == JoinMode::Open)
-    {
+    if call == "append" && s.policy.join == JoinMode::Open {
         return AdmitVerdict::Allow(Tier::Open); // an open join (P-03) is a stranger's append
     }
     AdmitVerdict::Deny("not a member's device")

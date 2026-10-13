@@ -23,6 +23,9 @@ def E(id, kind, author, body, *, key="k1", refs=None, space=S):
     return {"id": id, "v": 1, "space": space, "kind": kind, "author": author, "keyId": key, "body": body,
             "contentHash": "", "refs": refs or [], "seen": 0, "nonce": "n-" + id, "time": "2026-10-10T12:00:00Z"}
 
+def own_guards(actor, expect):
+    return expect if "guards" in expect else dict(expect, guards=[actor] if expect["guarded"] else [])
+
 class V:
     def __init__(self, name, rules, desc):
         self.v = {"name": name, "rules": rules, "description": desc, "profiles": {}, "steps": []}
@@ -47,15 +50,16 @@ class V:
     def access(self, actor, session, expect, space=S):
         self.v["steps"].append({"sessionAccess": {"space": space, "actor": actor, "session": session}, "expect": expect}); return self
     def guard(self, actor, expect, space=S):
-        self.v["steps"].append({"guardStatus": {"space": space, "actor": actor}, "expect": expect}); return self
+        """guardStatus; `guards` (round 32, Z1), when the expectation leaves it out, is the actor alone if guarded: no carrying."""
+        self.v["steps"].append({"guardStatus": {"space": space, "actor": actor}, "expect": own_guards(actor, expect)}); return self
     def actors(self, entry, expect, pinned=None):
         """relevantActors at the current time; `pinned`: only these actors' profiles are known yet (the sequencer's first rounds, P-01)."""
         st = {"relevantActors": entry, "time": (BASE + timedelta(seconds=self.t)).strftime("%Y-%m-%dT%H:%M:%SZ"), "expect": expect}
         if pinned is not None: st["pinned"] = pinned
         self.v["steps"].append(st); return self
     def guard_view(self, actor, view, expect):
-        """guardStatus on a `state {agent}` reply as is (GuardInput is `{policy, guarded}`, which both the state and the reply satisfy)."""
-        self.v["steps"].append({"guardStatus": {"view": view, "actor": actor}, "expect": expect}); return self
+        """guardStatus on a `state {agent}` reply as is (GuardInput is `{policy, guarded, tasks}`, which both the state and the reply satisfy)."""
+        self.v["steps"].append({"guardStatus": {"view": view, "actor": actor}, "expect": own_guards(actor, expect)}); return self
     def done(self):
         names = set()
         for st in self.v["steps"]:
@@ -1666,12 +1670,15 @@ v.actors(claim("c", "d", author=BOT), [BOT, M, OP, P, X])
 v.step(claim("c", "d", author=BOT), "allow", check={"effects.d.claims.0.approval": "a2", "effects.d.claims.0.guardApprovals": ["a3"]}, note="P's approval is skipped, X's is consumed, and the guard's")
 add(v.done())
 
-v = V("guard-status-takes-the-agent-view", ["P-15", "R-24"], "M5, P8: guardStatus reads only policy and guarded (han.ts GuardInput), so a host passes the state {agent} reply as is")
+v = V("guard-status-takes-the-agent-view", ["P-15", "R-24"], "M5, P8, Z1: guardStatus reads only policy, guarded and the tasks whose accepted lists the agent (han.ts GuardInput), so a host passes the state {agent} reply as is")
 agents(v, policy(sessions=MEMBERS3))
-VIEW = {"space": S, "head": 9, "home": "a.example", "policy": policy(sessions=MEMBERS3), "guarded": {BOT: True}}
+VIEW = {"space": S, "head": 9, "home": "a.example", "policy": policy(sessions=MEMBERS3), "guarded": {BOT: True}, "tasks": {}}
 v.guard_view(BOT, VIEW, {"guard": OP, "guarded": True, "forced": False})
 v.guard_view(BOT2, dict(VIEW, guarded={}), {"guard": OP, "guarded": False, "forced": False})
 v.guard_view(BOT2, dict(VIEW, guarded={}, policy=policy(sessions=sess("member", "member", "member", MODES, True))), {"guard": OP, "guarded": True, "forced": True})
+TASKV = {"author": BOT, "to": [BOT2, M], "open": True, "state": "accepted", "cancelRequested": False, "depth": 0, "seq": 8, "accepted": [M, BOT2], "guardedFor": [BOT]}
+v.guard_view(BOT2, dict(VIEW, guarded={}, tasks={"ab" * 32: TASKV}), {"guard": OP, "guarded": True, "forced": False, "guards": [BOT]})
+v.guard_view(M, dict(VIEW, guarded={}, tasks={"ab" * 32: TASKV}), {"guarded": True, "forced": False, "guards": [BOT]})
 add(v.done())
 
 # ── round 28 (DECISIONS-r28): the edges of recorded guarding ──
@@ -1827,7 +1834,7 @@ v.step(prop("q3", author=M, executor=M, task="t19"), "denied", note="X3: M execu
 v.step(E("tm", "task", M, {"to": [OP]}), "denied", note="X6: a parentless task records carried(M), 19 agents; a task may hold 17")
 v.step(E("d0", "task.update", M, {"task": "t0", "state": "done"}), "allow").step(E("d1", "task.update", M, {"task": "t1", "state": "done"}), "allow")
 v.step(prop("q4", author=M, executor=M, task="t19"), "allow", check={"effects.q4.guardedFor": [FORCED29[19]] + FORCED29[2:19]}, note="the named task's agents first, then carried(executor) in the order the tasks were created (X3)")
-v.step(prop("q5", author=M, executor=X, task="t19"), "allow", check={"effects.q5.guardedFor": [FORCED29[19], X]}, note="X2: work named under an unlinked task carries that task's guarding, not carried(M)")
+v.step(prop("q5", author=M, executor=X, task="t19"), "denied", note="Z1: work named under any task carries guards(proposer) too: t19's agent, 17 carried, X and M make 20")
 v.step(E("tm2", "task", M, {"to": [OP]}), "allow", check={"tasks.tm2.guardedFor": FORCED29[2:19]}, note="V1, X6: a parentless task records carried(author): 17, at the task bound")
 add(v.done())
 
@@ -1957,7 +1964,7 @@ add(v.done())
 # ── round 31 (DECISIONS-r31): per-assignee closure, linked carrying, carrying executors, explicit acceptance, the task bound, denied servers ──
 D31, E31, H31 = "@d:b.example", "@e:b.example", "@h:a.example"
 
-v = V("closing-ends-only-the-closers-carry", ["P-15", "P-05", "P-16"], "X1 (W1, the reviewer's p3_selfclose and the co-assignee decline): an assignee's carried limits end only with its own final update, or when an owner force-closes the task (an owner's task.cancel, or a final update by an owner who isn't an assignee); the guarded author or another assignee closing or declining ends nothing; a closed task takes only a final update by an assignee still in accepted")
+v = V("closing-ends-only-the-closers-carry", ["P-15", "P-05", "P-16"], "X1, Z2 (the reviewer's p3_selfclose, the co-assignee decline, Q2 and Q5): an assignee's carry ends only with its own final update, when an owner who isn't an assignee makes a final update (a force-close, on a closed task too), or when the assignee leaves the space; the guarded author or another assignee closing or declining ends nothing, and neither does an owner's task.cancel; a closed task takes only final updates, which change only accepted")
 v.prof(D31, AG).prof(E31, AG)
 agents(v, policy(sessions=MEMBERS3, approvals=[{"action": "*", "approvers": ["member", "owner"]}]))
 v.step(ms("d", O, D31, "member"), "allow").step(ms("e", O, E31, "member"), "allow").step(ms("h", O, H31, "member"), "allow")
@@ -1965,31 +1972,42 @@ v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
 v.step(E("t", "task", BOT, {"to": [BOT, D31]}), "allow", check={"tasks.t.accepted": [BOT], "tasks.t.guardedFor": [BOT]}, note="BOT assigns itself too: accepted at creation")
 v.step(E("ad", "task.update", D31, {"task": "t", "state": "accepted"}), "allow", check={"tasks.t.accepted": [BOT, D31]})
 v.step(E("bc", "task.update", BOT, {"task": "t", "state": "done"}), "allow", check={"tasks.t.open": False, "tasks.t.accepted": [D31]}, note="p3: the guarded delegator closes the task")
-v.step(prop("pd", author=D31), "allow", check={"effects.pd.guardedFor": [BOT]}, note="X1: D still carries BOT's limits")
+v.step(prop("pd", author=D31), "allow", check={"effects.pd.guardedFor": [BOT]}, note="X1: D still carries BOT's guarding")
 v.step(appr("ad0", "pd", author=D31), "denied", note="and may not approve")
 v.step(appr("ao", "pd", author=O), "allow").step(claim("cd0", "pd"), "denied", note="BOT's guard must approve D's task-less work")
-v.step(E("dp", "task.update", D31, {"task": "t", "state": "progress"}), "denied", note="a closed task takes no other update")
+v.step(E("dp", "task.update", D31, {"task": "t", "state": "progress"}), "denied", note="a closed task takes no update but a final one")
 v.step(E("dd", "task.update", D31, {"task": "t", "state": "done"}), "allow", check={"tasks.t.accepted": [], "tasks.t.state": "done"}, note="D's own final update on the closed task")
-v.step(E("dd2", "task.update", D31, {"task": "t", "state": "done"}), "denied", note="once only: D is no longer in accepted")
+v.step(E("dd2", "task.update", D31, {"task": "t", "state": "done"}), "allow", check={"tasks.t.accepted": [], "tasks.t.state": "done"}, note="Z2: another final update changes nothing")
 v.step(prop("pd2", author=D31), "allow", check={"effects.pd2.guardedFor": []})
-v.step(appr("ad1", "pd2", author=D31), "allow", note="D's limits ended with its own final update")
+v.step(appr("ad1", "pd2", author=D31), "allow", note="D's carry ended with its own final update")
 v.step(E("t2", "task", BOT, {"to": [D31, E31]}), "allow")
 v.step(E("ad2", "task.update", D31, {"task": "t2", "state": "accepted"}), "allow")
 v.step(E("ed", "task.update", E31, {"task": "t2", "state": "declined"}), "allow", check={"tasks.t2.open": False, "tasks.t2.accepted": [D31]}, note="a co-assignee that never accepted declines: the task closes")
 v.step(prop("pd3", author=D31), "allow", check={"effects.pd3.guardedFor": [BOT]}, note="X1: E's decline ends nothing for D")
-v.step(E("ed2", "task.update", E31, {"task": "t2", "state": "done"}), "denied", note="E never accepted: the task is closed for it")
+v.step(E("ep", "task.update", E31, {"task": "t2", "state": "progress"}), "denied", note="the task is closed")
 v.step(E("dd3", "task.update", D31, {"task": "t2", "state": "failed"}), "allow", check={"tasks.t2.state": "declined", "tasks.t2.accepted": []}, note="D's own final update keeps the closed task's state")
 v.step(E("t3", "task", BOT, {"to": [E31]}), "allow").step(E("ae3", "task.update", E31, {"task": "t3", "state": "accepted"}), "allow")
-v.step(E("oc", "task.cancel", O, {"task": "t3"}), "allow", check={"tasks.t3.accepted": [], "tasks.t3.open": True}, note="X1: an owner's task.cancel force-closes it for every assignee")
-v.step(prop("pe", author=E31), "allow", check={"effects.pe.guardedFor": []})
+v.step(E("oc", "task.cancel", O, {"task": "t3"}), "allow", check={"tasks.t3.accepted": [E31], "tasks.t3.open": True, "tasks.t3.cancelRequested": True}, note="Z2 (Q2): an owner's task.cancel only asks; it ends no carry")
+v.step(prop("pe", author=E31), "allow", check={"effects.pe.guardedFor": [BOT]}, note="E still carries BOT's guarding")
 v.step(E("bc3", "task.cancel", BOT, {"task": "t2"}), "denied", note="a closed task takes no cancel")
+v.step(E("of3", "task.update", O, {"task": "t3", "state": "cancelled"}), "allow", check={"tasks.t3.accepted": [], "tasks.t3.open": False}, note="an owner who isn't an assignee force-closes it for everyone")
 v.step(E("t4", "task", BOT, {"to": [E31]}), "allow").step(E("ae4", "task.update", E31, {"task": "t4", "state": "accepted"}), "allow")
 v.step(E("bc4", "task.cancel", BOT, {"task": "t4"}), "allow", check={"tasks.t4.accepted": [E31]}, note="the guarded author's own cancel request ends nothing")
 v.step(E("of", "task.update", O, {"task": "t4", "state": "cancelled"}), "allow", check={"tasks.t4.accepted": [], "tasks.t4.open": False}, note="X1: an owner who isn't an assignee force-closes it for everyone")
 v.step(prop("pe2", author=E31), "allow", check={"effects.pe2.guardedFor": []})
+v.step(E("t5", "task", BOT, {"to": [D31, E31]}), "allow").step(E("ad5", "task.update", D31, {"task": "t5", "state": "accepted"}), "allow").step(E("ae5", "task.update", E31, {"task": "t5", "state": "accepted"}), "allow")
+v.step(E("ed5", "task.update", E31, {"task": "t5", "state": "done"}), "allow", check={"tasks.t5.open": False, "tasks.t5.accepted": [D31]})
+v.step(E("of5", "task.update", O, {"task": "t5", "state": "cancelled"}), "allow", check={"tasks.t5.accepted": [], "tasks.t5.state": "done", "tasks.t5.open": False}, note="Z2 (Q5, Y9): an owner's final update clears accepted on a closed task, and changes nothing else")
+v.step(E("oc5", "task.cancel", O, {"task": "t5"}), "denied", note="a closed task still takes no cancel")
+v.step(E("t6", "task", BOT, {"to": [D31]}), "allow").step(E("ad6", "task.update", D31, {"task": "t6", "state": "accepted"}), "allow", check={"tasks.t6.accepted": [D31]})
+v.step(ms("dl", D31, D31, "none"), "allow", check={"tasks.t6.accepted": []}, note="Z2: an actor that leaves the space leaves every accepted list")
+v.step(ms("dr", O, D31, "member"), "allow")
+v.step(prop("pd6", author=D31), "allow", check={"effects.pd6.guardedFor": []}, note="re-admitted, D carries nothing")
+v.step(E("ad7", "task.update", D31, {"task": "t6", "state": "accepted"}), "allow", check={"tasks.t6.accepted": [D31]}, note="until it accepts again")
+v.step(ms("db", O, D31, "banned"), "allow", check={"tasks.t6.accepted": []}, note="banning removes it too")
 add(v.done())
 
-v = V("only-linked-work-carries", ["P-15", "R-24", "§7.5"], "X2 (W4, the reviewer's p4_cascade): a carrying agent's limits stay while it carries, but its carried guarding is stamped only on linked work: a subtask of an accepted task (or of one descending from it) and an effect naming one carry the chain's list, and work with no parent or task carries carried(author); work under an unlinked parent it holds carries only that parent's guarding, so nothing spreads to unrelated tasks or teammates")
+v = V("a-guarded-authors-work-all-carries", ["P-15", "R-24", "§7.5"], "Z1 (the reviewer's p4_cascade and Q4): while X carries a guarded agent's task, X is guarded by that agent's guard: everything X creates records guards(X), whatever parent or task it names, so the guarding reaches whoever accepts X's work")
 agents(v, policy(sessions=MEMBERS3, approvals=[{"action": "*", "approvers": ["member", "owner"]}]))
 v.step(ms("h", O, H31, "member"), "allow")
 v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
@@ -2000,23 +2018,25 @@ v.step(E("ah2", "task.update", H31, {"task": "t2", "state": "accepted"}), "allow
 v.step(E("t3", "task", H31, {"to": [M]}), "allow", check={"tasks.t3.guardedFor": []})
 v.step(E("am3", "task.update", M, {"task": "t3", "state": "accepted"}), "allow")
 v.step(prop("dep", author=OP), "allow")
-v.step(appr("ao", "dep", author=O), "allow").step(appr("ah", "dep", author=H31), "allow").step(appr("am", "dep", author=M), "allow", note="p4: none of the team is limited")
+v.step(appr("ao", "dep", author=O), "allow").step(appr("ah", "dep", author=H31), "allow").step(appr("am", "dep", author=M), "allow", note="p4: none of the team is guarded")
 v.step(E("ac1", "task.update", O, {"task": "t1", "state": "accepted"}), "allow", check={"tasks.t1.accepted": [O]}, note="now the lead accepts BOT's task")
 v.step(E("u", "task", OP, {"to": [O]}), "allow").step(E("au", "task.update", O, {"task": "u", "state": "accepted"}), "allow", check={"tasks.u.guardedFor": []})
-v.step(E("su", "task", O, {"to": [H31], "parent": "u"}), "allow", check={"tasks.su.guardedFor": []}, note="X2: a subtask of an unlinked parent O holds carries only that parent's guarding")
+v.step(E("su", "task", O, {"to": [H31], "parent": "u"}), "allow", check={"tasks.su.guardedFor": [BOT]}, note="Z1: O's subtask of an unrelated parent records guards(O)")
 v.step(E("ash", "task.update", H31, {"task": "su", "state": "accepted"}), "allow")
-v.step(prop("hp", author=H31, task="su"), "allow", check={"effects.hp.guardedFor": []})
-v.step(appr("ah2", "hp", author=H31), "allow", note="no spread: H carries nothing")
-v.step(prop("pu", author=O, executor=X, task="u"), "allow", check={"effects.pu.guardedFor": []}, note="X2: O's effect named under the unlinked task u")
-v.step(appr("ao2", "hp", author=O), "denied", note="O's limits stay while O carries")
-v.step(E("sl", "task", O, {"to": [M], "parent": "t1"}), "allow", check={"tasks.sl.guardedFor": [BOT]}, note="linked: a subtask of O's accepted task carries its list")
-v.step(E("sl2", "task", M, {"to": [M], "parent": "sl"}), "allow", check={"tasks.sl2.guardedFor": [BOT]}, note="and so does everything below it")
-v.step(prop("pl", author=O, executor=X, task="t1"), "allow", check={"effects.pl.guardedFor": [BOT]}, note="linked: an effect naming the accepted task")
-v.step(E("tf", "task", O, {"to": [M]}), "allow", check={"tasks.tf.guardedFor": [BOT]}, note="X2: a parentless task while carrying carries carried(O): no parentless escape")
-v.step(prop("pf", author=O, executor=X), "allow", check={"effects.pf.guardedFor": [BOT]}, note="and so does a task-less effect")
+v.step(prop("hp", author=H31, task="su"), "allow", check={"effects.hp.guardedFor": [BOT]})
+v.step(appr("ah2", "hp", author=H31), "denied", note="H accepted O's guarded work: H is guarded too")
+v.step(prop("pu", author=O, executor=X, task="u"), "allow", check={"effects.pu.guardedFor": [BOT]}, note="Z1: O's effect named under the unrelated task u")
+v.step(appr("ao2", "hp", author=O), "denied", note="O is guarded while O carries")
+v.step(E("sl", "task", O, {"to": [M], "parent": "t1"}), "allow", check={"tasks.sl.guardedFor": [BOT]}, note="a subtask of O's accepted task")
+v.step(E("sl2", "task", M, {"to": [M], "parent": "sl"}), "allow", check={"tasks.sl2.guardedFor": [BOT]}, note="and everything below it")
+v.step(prop("pl", author=O, executor=X, task="t1"), "allow", check={"effects.pl.guardedFor": [BOT]})
+v.step(E("tf", "task", O, {"to": [M]}), "allow", check={"tasks.tf.guardedFor": [BOT]}, note="a parentless task")
+v.step(prop("pf", author=O, executor=X), "allow", check={"effects.pf.guardedFor": [BOT]}, note="and a task-less effect")
+v.step(E("uq", "task", M, {"to": [O]}), "allow", check={"tasks.uq.guardedFor": [BOT]}, note="M accepted sl2, its own subtask of the guarded chain: M is guarded too")
+v.step(E("s4", "task", O, {"to": [M], "parent": "uq"}), "allow", check={"tasks.s4.guardedFor": [BOT]}, note="Q4: a carrying author's subtask under a task it never accepted carries too")
 add(v.done())
 
-v = V("carrying-executors-need-the-guard", ["P-15", "P-07 E3"], "X3 (W5, the reviewer's p1 W-a): an effect's guardedFor holds carried(executor) at the proposal, as it would hold a guarded executor, so a carrying delegate can't execute anything without the delegator's guard")
+v = V("carrying-executors-need-the-guard", ["P-15", "P-07 E3"], "X3, Z1 (the reviewer's p1 W-a and Q1): an effect's guardedFor holds guards(executor) at the proposal, and E3 recomputes guards(proposer) and guards(executor) at the claim, so a carrying delegate can't execute anything without the delegator's guard, whenever it was proposed")
 v.prof(D31, AG)
 agents(v, policy(sessions=MEMBERS3, approvals=[{"action": "*", "approvers": ["owner"]}]))
 v.step(ms("d", O, D31, "member"), "allow").step(ms("h", O, H31, "member"), "allow")
@@ -2027,7 +2047,12 @@ v.step(E("ad", "task.update", D31, {"task": "t", "state": "accepted"}), "allow")
 v.step(prop("e1", author=H31, executor=D31), "allow", check={"effects.e1.guardedFor": [BOT]}, note="X3: a human asks the carrying D to execute")
 v.step(appr("a1", "e1", author=O), "allow").step(claim("c0", "e1", author=D31), "denied", note="BOT's guard hasn't approved")
 v.step(appr("g1", "e1", author=OP), "allow").step(claim("c1", "e1", author=D31), "allow", check={"effects.e1.claims.0.guardApprovals": ["g1"]})
-v.step(appr("a0", "e0", author=O), "allow").step(claim("c2", "e0", author=D31), "allow", note="what was recorded before D accepted stays as it was")
+v.step(appr("a0", "e0", author=O), "allow").step(claim("c2", "e0", author=D31), "denied", note="Z1 (Q1): D carries BOT now, and e0 never counted BOT: propose again")
+v.step(prop("e2", author=D31, executor=D31), "allow", check={"effects.e2.guardedFor": [BOT]}).step(appr("a2", "e2", author=O), "allow")
+v.step(claim("c3", "e2", author=D31), "denied", note="BOT's guard hasn't approved")
+v.step(E("dd", "task.update", D31, {"task": "t", "state": "done"}), "allow", check={"tasks.t.accepted": []})
+v.step(claim("c4", "e0", author=D31), "allow", note="D's own final update ended the carry: e0 needs no guard")
+v.step(claim("c5", "e2", author=D31), "denied", note="what e2 recorded never shrinks")
 add(v.done())
 
 v = V("only-an-explicit-accept-accepts", ["P-05", "P-15"], "X4 (W10): only task.update with state accepted puts its author in accepted; progress doesn't; an author assigning itself has accepted at creation")
@@ -2084,6 +2109,48 @@ v.step(ms("s253", O, "@u:" + LONG253, "none"), "allow", note="253 characters")
 v.step(ms("s254", O, "@u:" + LONG253 + "c", "none"), "invalid", note="254 characters")
 v.step(E("j32", "x.note", M, {"a": NEST(31)}), "allow", note="32 containers: the body and 31 below it")
 v.step(E("j33", "x.note", M, {"a": NEST(32)}), "invalid", note="33 containers")
+add(v.done())
+
+
+# ── round 32 (DECISIONS-r32): carrying is guarding; a guard is not trapped by its agent ──
+v = V("carrying-is-guarding", ["P-15", "P-16", "P-07 E3", "P-04"], "Z1 (the reviewer's Q1 and Q3): while X carries a guarded agent's task, X is guarded: E3 recomputes guards(proposer) and guards(executor) at the claim, and a carrying owner is a guarded author that may not force-close or cancel others' tasks, move the space or govern; guardStatus reports guards(X)")
+v.prof(D31, AG)
+agents(v, policy(sessions=MEMBERS3, approvals=[{"action": "*", "approvers": ["owner"]}]))
+v.step(ms("d", O, D31, "member"), "allow").step(ms("h", O, H31, "owner"), "allow")
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(prop("e", author=D31, executor=D31), "allow", check={"effects.e.guardedFor": []}, note="Q1: proposed before D accepts anything")
+v.step(prop("e1", author=M, executor=D31), "allow", check={"effects.e1.guardedFor": []}, note="and another member's effect that D executes")
+v.step(E("t", "task", BOT, {"to": [D31]}), "allow").step(E("ad", "task.update", D31, {"task": "t", "state": "accepted"}), "allow")
+v.guard(D31, {"guard": OP, "guarded": True, "forced": False, "guards": [BOT]})
+v.step(appr("ae", "e", author=O), "allow").step(claim("ce", "e", author=D31), "denied", note="Z1, E3: guards(D) holds BOT at the claim, and the proposal never counted it: propose again")
+v.step(appr("ae1", "e1", author=O), "allow").step(claim("ce1", "e1", author=D31), "denied", note="as the executor too")
+v.step(appr("ge", "e", author=OP), "denied", note="BOT's guard is no guard of e, whose guardedFor is empty: nothing it approves can count")
+v.step(E("t1", "task", BOT, {"to": [H31]}), "allow").step(E("ah", "task.update", H31, {"task": "t1", "state": "accepted"}), "allow")
+v.guard(H31, {"guarded": True, "forced": False, "guards": [BOT]})
+v.step(E("hc", "task.update", H31, {"task": "t", "state": "cancelled"}), "denied", note="Q3: a carrying owner may not force-close another's task")
+v.step(E("hk", "task.cancel", H31, {"task": "t"}), "denied", note="nor cancel another's task")
+v.step(E("hm", "space.move", H31, {"to": "b.example", "accept": ACCEPT}), "denied", note="nor move the space")
+v.step(ms("hs", H31, M, "guest"), "denied", note="nor govern")
+v.step(E("th", "task", H31, {"to": [M]}), "allow", check={"tasks.th.guardedFor": [BOT]}, note="its own work carries its guards")
+v.step(E("hk2", "task.cancel", H31, {"task": "th"}), "allow", note="and it may cancel its own task")
+v.step(E("hd", "task.update", H31, {"task": "t1", "state": "done"}), "allow", check={"tasks.t1.accepted": []}, note="its own final update ends the carry")
+v.step(E("hc2", "task.update", H31, {"task": "t", "state": "cancelled"}), "allow", check={"tasks.t.accepted": [], "tasks.t.open": False}, note="now H may force-close, which ends D's carry")
+v.guard(D31, {"guard": OP, "guarded": False, "forced": False, "guards": []})
+v.step(claim("ce3", "e", author=D31), "allow", note="e needs no guard any more")
+add(v.done())
+
+v = V("a-guard-is-not-trapped-by-its-agent", ["P-15", "P-16", "P-08"], "Z3 (the reviewer's probe6): an approval whose author is a required guard of that effect is exempt from the guarded Limits: a guard that carries its own agent's task still approves that agent's effects, and its own work under the task, which needs its own approval")
+agents(v, policy(sessions=MEMBERS3, approvals=[{"action": "*", "approvers": ["owner"]}]))
+v.step(E("s", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(prop("e0", author=BOT), "allow", check={"effects.e0.guardedFor": [BOT]})
+v.step(E("t", "task", BOT, {"to": [OP]}), "allow").step(E("ao", "task.update", OP, {"task": "t", "state": "accepted"}), "allow")
+v.guard(OP, {"guarded": True, "forced": False, "guards": [BOT]})
+v.step(appr("a0", "e0", author=O), "allow").step(appr("g0", "e0", author=OP), "allow", note="Z3: approving is the guard's role")
+v.step(claim("c0", "e0"), "allow", check={"effects.e0.claims.0.guardApprovals": ["g0"]})
+v.step(prop("e1", author=OP, task="t"), "allow", check={"effects.e1.guardedFor": [BOT]}, note="OP's own work under the task")
+v.step(appr("a1", "e1", author=O), "allow").step(claim("c10", "e1"), "denied", note="needs BOT's guard: OP itself")
+v.step(appr("g1", "e1", author=OP), "allow", note="a guard's approval of its own guarded work").step(claim("c1", "e1"), "allow", check={"effects.e1.claims.0.guardApprovals": ["g1"]})
+v.step(prop("pm", author=M), "allow", check={"effects.pm.guardedFor": []}).step(appr("gm", "pm", author=OP), "denied", note="OP is no guard of M's effect: the Limits hold")
 add(v.done())
 
 
