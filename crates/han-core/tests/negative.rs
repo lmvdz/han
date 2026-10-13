@@ -157,9 +157,8 @@ fn verify_strict_refuses_a_small_order_key() {
     let raw = ed25519_dalek::VerifyingKey::from_bytes(&identity).unwrap();
     let raw_sig = ed25519_dalek::Signature::from_bytes(&sig);
     let lax = raw.verify(b"anything", &raw_sig).is_ok();
-    let public = PublicKey::from_base64url(&base64url::encode(&identity)).unwrap();
-    let strict = public.verify(b"anything", &base64url::encode(&sig));
-    assert_eq!(strict, Err(Error::BadSignature));
+    // A small-order key is refused where it is parsed (§2), so it never reaches verification.
+    assert!(PublicKey::from_base64url(&base64url::encode(&identity)).is_err());
     eprintln!("non-strict verification of the small-order forgery accepts: {lax}");
 }
 
@@ -623,4 +622,18 @@ fn times_are_real_dates_and_convert_to_epoch_seconds() {
     ] {
         assert!(!grammar::is_time(bad), "{bad}");
     }
+}
+
+#[test]
+fn server_names_stop_at_253_characters_and_opaque_json_at_32_levels() {
+    use han_core::grammar::{is_actor_id, is_opaque_json, is_server_name};
+    let label = "a".repeat(63);
+    let long = format!("{label}.{label}.{label}.{}", "b".repeat(61)); // 253 characters
+    assert_eq!(long.len(), 253);
+    assert!(is_server_name(&long));
+    assert!(!is_server_name(&format!("{long}c")));
+    assert!(!is_actor_id(&format!("@a:{long}c")));
+    let nested = |n: usize| (0..n).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
+    assert!(is_opaque_json(&nested(31))); // 32 containers
+    assert!(!is_opaque_json(&nested(32))); // 33
 }

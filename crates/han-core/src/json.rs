@@ -156,11 +156,26 @@ pub fn parse(input: &[u8]) -> Result<Value, JsonError> {
 /// Parses strict I-JSON, with the number rule chosen by `numbers`.
 pub fn parse_with(input: &[u8], numbers: Numbers) -> Result<Value, JsonError> {
     let text = std::str::from_utf8(input).map_err(|_| JsonError::InvalidUtf8)?;
+    parse_text(text, numbers, false).map(|(v, _)| v)
+}
+
+/// Parses one frame (G-07): strict I-JSON with integers only, except that an integer outside
+/// `[-(2^53 - 1), 2^53 - 1]` is not an error. It becomes `i64::MAX` and the flag in the result is
+/// set, so the caller can answer on the request's own id. `-0`, fractions, exponents, duplicate
+/// keys and nesting over [`MAX_DEPTH`] stay errors.
+pub fn parse_frame(input: &[u8]) -> Result<(Value, bool), JsonError> {
+    let text = std::str::from_utf8(input).map_err(|_| JsonError::InvalidUtf8)?;
+    parse_text(text, Numbers::IntegersOnly, true)
+}
+
+fn parse_text(text: &str, numbers: Numbers, wide: bool) -> Result<(Value, bool), JsonError> {
     let mut p = Parser {
         src: text,
         bytes: text.as_bytes(),
         pos: 0,
         numbers,
+        wide,
+        saw_wide: false,
     };
     p.ws();
     let v = p.value(0)?;
@@ -168,7 +183,7 @@ pub fn parse_with(input: &[u8], numbers: Numbers) -> Result<Value, JsonError> {
     if p.pos != p.bytes.len() {
         return Err(p.err("trailing characters"));
     }
-    Ok(v)
+    Ok((v, p.saw_wide))
 }
 
 struct Parser<'a> {
@@ -176,6 +191,9 @@ struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
     numbers: Numbers,
+    /// Tolerate integers outside the safe range (see [`parse_frame`]).
+    wide: bool,
+    saw_wide: bool,
 }
 
 impl Parser<'_> {
@@ -391,11 +409,16 @@ impl Parser<'_> {
             plain = false;
         }
         if plain {
-            if int_digits.len() > 16 {
-                return Err(JsonError::IntegerOutOfRange);
-            }
-            let magnitude: i64 = int_digits.parse().map_err(|_| self.err("bad number"))?;
+            let magnitude = if int_digits.len() > 16 {
+                i64::MAX
+            } else {
+                int_digits.parse().map_err(|_| self.err("bad number"))?
+            };
             if magnitude > MAX_SAFE_INT {
+                if self.wide {
+                    self.saw_wide = true;
+                    return Ok(Value::Int(i64::MAX));
+                }
                 return Err(JsonError::IntegerOutOfRange);
             }
             if negative && magnitude == 0 && self.numbers == Numbers::IntegersOnly {

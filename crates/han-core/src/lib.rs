@@ -8,14 +8,19 @@
 //! * [`sign`]: Ed25519 with the protocol's domain separation, verified with `verify_strict`.
 //! * [`Entry::validate`], [`Entry::validate_content`], [`LogRecord::validate`]: shape and limits.
 //!
-//! Policy is not here yet; it joins this crate after spec round 31.
+//! * [`policy`]: the six pure functions of Policy over a typed [`policy::SpaceState`].
+//! * [`admit`]: the peer filter of the `han/1` carrier (N-02).
+//! * [`frame`]: the carrier's frames (G-07).
 
+pub mod admit;
 pub mod base64url;
 pub mod error;
+pub mod frame;
 pub mod grammar;
 pub mod ids;
 pub mod json;
 pub mod limits;
+pub mod policy;
 pub mod sign;
 pub mod types;
 mod validate;

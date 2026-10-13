@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::base64url;
 use crate::error::Error;
 use crate::grammar::{self as g, is_opaque_json};
 use crate::ids;
@@ -14,6 +13,7 @@ use crate::json::{self, MAX_SAFE_INT, Value};
 use crate::limits::{
     MAX_BLOB_BYTES, MAX_CONTENT_BYTES, MAX_DENIED_SERVERS, MAX_HEADER_BYTES, MAX_LIST,
 };
+use crate::sign::PublicKey;
 use crate::types::{BlobRef, Entry, Link, LogRecord, Receipt};
 
 type Check = fn(&Value) -> bool;
@@ -433,14 +433,15 @@ fn check_object(v: &Value, schema: &[Field], what: &str) -> Result<(), Error> {
 
 // ───────────────────────── entries ─────────────────────────
 
-/// R-25: the Log owns the canonical form of a public key: canonical base64url of 32 bytes.
+/// R-25, §2: the Log owns the canonical form of a public key: canonical base64url of 32 bytes
+/// that are a curve point of large order, judged here at parse.
 fn canonical_key_bytes(key: &Value) -> Result<(), Error> {
-    let bytes = base64url::decode(key.as_str().unwrap_or_default())?;
-    if bytes.len() == 32 {
-        Ok(())
-    } else {
-        Err(Error::invalid("publicKey length"))
-    }
+    PublicKey::from_base64url(key.as_str().unwrap_or_default()).map(|_| ())
+}
+
+/// The shape check of a core kind's body against its closed schema; `None` if `kind` is not a core kind.
+pub(crate) fn check_core_body(kind: &str, body: &Value) -> Option<Result<(), Error>> {
+    body_schema(kind).map(|schema| check_object(body, &schema, "body"))
 }
 
 impl Entry {
