@@ -1,6 +1,7 @@
 """Hill-climbs han-timeline's speed: Claude plans, Codex edits, the scorer decides.
 
     python loop.py init                 # make the worktree, measure the baseline and its noise
+                                        # (again whenever examples/bench.rs gains or loses a line)
     python loop.py run --rounds 1       # one supervised round
     python loop.py run --rounds 10 --patience 3
     python loop.py status
