@@ -48,7 +48,7 @@ pub struct WireError {
 }
 
 impl WireError {
-    fn new(code: Code, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: Code, message: impl Into<String>) -> Self {
         WireError {
             code,
             message: message.into(),

@@ -12,7 +12,7 @@ use han_core::{LogRecord, Receipt, ids};
 use han_net::client::args;
 use han_net::dial::{trusted_nodes_for_server, trusted_nodes_for_ticket};
 use han_net::wellknown::Fetcher;
-use han_net::{Client, Connection, InviteTicket, ServeOptions, Transport};
+use han_net::{Client, Connection, InviteTicket, NodeAddr, ServeOptions, Transport};
 use std::sync::Arc;
 
 use han_core::SigningKey;
@@ -143,6 +143,21 @@ async fn scenario() {
     // Bob, on his own device, parses the ticket, dials its node, says hello and joins
     let ticket = InviteTicket::parse(&text).unwrap();
     let trusted = trusted_nodes_for_ticket(&fetcher, &ticket).await.unwrap();
+    assert_eq!(trusted, vec![ticket.node.node.clone()]);
+    // a crafted ticket names an attacker's node for this home: the well-known does not list it, so it is
+    // refused before any hello (Z4)
+    let crafted = InviteTicket {
+        node: NodeAddr {
+            node: key(66).public_key().to_base64url(),
+            ..ticket.node.clone()
+        },
+        ..ticket.clone()
+    };
+    let refused = trusted_nodes_for_ticket(&fetcher, &crafted).await;
+    assert!(
+        matches!(&refused, Err(han_net::NetError::Dial(why)) if why.contains("not listed")),
+        "{refused:?}"
+    );
     let bob_t = endpoint(32).await;
     let b = Client::connect(&bob_t, &ticket.node, &ticket.server, &trusted)
         .await
@@ -156,8 +171,8 @@ async fn scenario() {
         .await;
     assert_eq!(
         before.unwrap_err().wire().map(|w| w.code),
-        Some(Code::NotFound),
-        "a registered device is admitted (N-02) and the call's own rules find nothing it may read"
+        Some(Code::Denied),
+        "a device of someone with no role in the space is a stranger to it (N-02, Z7)"
     );
     // the same person on a node that is not one of her registered devices is a stranger to the filter
     let other_t = endpoint(77).await;

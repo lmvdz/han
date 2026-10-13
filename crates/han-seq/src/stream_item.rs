@@ -1,5 +1,5 @@
-//! `StreamItem` shapes (T-07, G-05, X11): output, status, context and `profile` items, with the members a
-//! `han.status/1` body must carry, and the `sessionAccess` right each type needs.
+//! `StreamItem` shapes (T-07, G-05, X11): output, status, context and `profile` items, and a face's check of
+//! `han.status/1` bodies, and the `sessionAccess` right each type needs.
 
 use han_core::grammar;
 use han_core::json::{self, Value};
@@ -43,8 +43,17 @@ pub fn is_profile_name(s: &str) -> bool {
         })
 }
 
-/// The members a face relies on in a `han.status/1` body; unknown members are ignored.
-fn status_body_verdict(b: &Value) -> Option<String> {
+/// The bounds of `han.status/1`'s free-text members, in characters (SR-59).
+const STEP_CHARS: usize = 256;
+const TOOL_CHARS: usize = 128;
+const PLAN_ITEMS: usize = 64;
+const PLAN_TEXT_CHARS: usize = 256;
+const SANDBOX_CHARS: usize = 64;
+
+/// A face's check of a `han.status/1` body (spec/profiles/han.status-1.md), never the server's (round 32, Z6):
+/// the members a face relies on and the bounds of the free-text members; unknown members are ignored. `None`
+/// means the body is usable, otherwise the reason (free text), and the face treats the body as absent.
+pub fn status_body_verdict(b: &Value) -> Option<String> {
     let Value::Object(m) = b else {
         return Some("body is not an object".into());
     };
@@ -68,15 +77,46 @@ fn status_body_verdict(b: &Value) -> Option<String> {
             Some(_) => {}
         }
     }
-    if m.get("delegate_of")
-        .is_some_and(|v| !v.as_str().is_some_and(grammar::is_actor_id))
-    {
-        return Some("bad delegate_of".into());
+    let optional: [(&str, Check); 5] = [
+        ("delegate_of", |v| {
+            v.as_str().is_some_and(grammar::is_actor_id)
+        }),
+        ("issue", |v| v.as_str().is_some_and(grammar::is_external)),
+        ("tool", |v| v.as_str().is_some()),
+        ("gate", |v| {
+            v.as_str()
+                .is_some_and(|g| g == "every_call" || g == "prompt_only")
+        }),
+        ("sandbox", |v| {
+            v.as_str()
+                .is_some_and(|s| (1..=SANDBOX_CHARS).contains(&s.chars().count()))
+        }),
+    ];
+    for (name, ok) in optional {
+        if m.get(name).is_some_and(|v| !ok(v)) {
+            return Some(format!("bad {name}"));
+        }
     }
-    if m.get("issue")
-        .is_some_and(|v| !v.as_str().is_some_and(grammar::is_external))
-    {
-        return Some("bad issue".into());
+    for (name, max) in [("step", STEP_CHARS), ("tool", TOOL_CHARS)] {
+        if m.get(name)
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.chars().count() > max)
+        {
+            return Some(format!("{name} longer than {max}"));
+        }
+    }
+    if let Some(plan) = m.get("plan") {
+        let Some(items) = plan.as_array().filter(|l| l.len() <= PLAN_ITEMS) else {
+            return Some("bad plan".into());
+        };
+        for x in items {
+            let (Some(text), Some(Value::Bool(_))) = (x["text"].as_str(), x.get("done")) else {
+                return Some("bad plan item".into());
+            };
+            if text.chars().count() > PLAN_TEXT_CHARS {
+                return Some(format!("plan text longer than {PLAN_TEXT_CHARS}"));
+            }
+        }
     }
     None
 }
@@ -125,7 +165,7 @@ pub fn verdict(item: &Value) -> Option<String> {
         Some("context") => {
             let what_ok = item["what"]
                 .as_str()
-                .is_some_and(|w| ["transcript", "files", "plan"].contains(&w));
+                .is_some_and(|w| ["transcript", "files", "plan", "summary"].contains(&w));
             if !(has(&["blob", "what"]) && parse_blobref(&item["blob"]).is_some() && what_ok) {
                 return Some("context".into());
             }
@@ -137,11 +177,7 @@ pub fn verdict(item: &Value) -> Option<String> {
             if !grammar::is_opaque_json(&item["body"]) {
                 return Some("profile body is not Json".into());
             }
-            if item["name"].as_str() == Some("han.status/1")
-                && let Some(why) = status_body_verdict(&item["body"])
-            {
-                return Some(format!("han.status/1: {why}"));
-            }
+            // the body is opaque here: faces check it with the profile's own check (Z6)
         }
         _ => return Some("unknown type".into()),
     }
