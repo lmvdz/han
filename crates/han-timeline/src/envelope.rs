@@ -150,6 +150,29 @@ impl Envelope {
         })
     }
 
+    /// Hash the value spans of an already shape-checked deterministic envelope. The id
+    /// preimage is a six-item array, rather than the seven-entry envelope map.
+    pub(crate) fn received_id(&self, bytes: &[u8]) -> BatchId {
+        let lengths = [
+            1,
+            head_len(self.space.len()) + self.space.len(),
+            head_len(self.history.map_or(0, |_| 32)) + self.history.map_or(0, |_| 32),
+            head_len(self.actor.len()) + self.actor.len(),
+            head_len(self.key.len()) + self.key.len(),
+            head_len(self.payload.len()) + self.payload.len(),
+        ];
+        let mut hash = Sha256::new();
+        hash.update(BATCH_DOMAIN);
+        hash.update([0x86]);
+        let mut pos = 1;
+        for len in lengths {
+            pos += 1; // Unsigned map keys 1 through 6.
+            hash.update(&bytes[pos..pos + len]);
+            pos += len;
+        }
+        BatchId(hash.finalize().into())
+    }
+
     /// The deterministic encoding.
     pub fn encode(&self) -> Vec<u8> {
         Cbor::Map(vec![
@@ -183,16 +206,28 @@ impl Envelope {
 
     /// The batch id (TL-93); for a genesis envelope, the history id.
     pub fn batch_id(&self) -> BatchId {
-        BatchId(Sha256::digest(self.batch_id_preimage()).into())
+        let mut hash = Sha256::new();
+        hash.update(BATCH_DOMAIN);
+        hash.update([0x86, 1]);
+        hash_field(&mut hash, 3, self.space.as_bytes());
+        hash_field(&mut hash, 2, self.history.as_ref().map_or(&[], |h| &h.0));
+        hash_field(&mut hash, 3, self.actor.as_bytes());
+        hash_field(&mut hash, 3, self.key.as_bytes());
+        hash_field(&mut hash, 2, &self.payload);
+        BatchId(hash.finalize().into())
     }
 
     /// Checks the signature with `public_key` using strict verification.
     pub fn verify(&self, public_key: &[u8; 32]) -> bool {
+        self.verify_id(public_key, &self.batch_id())
+    }
+
+    pub(crate) fn verify_id(&self, public_key: &[u8; 32], id: &BatchId) -> bool {
         let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(public_key) else {
             return false;
         };
         key.verify_strict(
-            &sig_message(&self.batch_id()),
+            &sig_message(id),
             &ed25519_dalek::Signature::from_bytes(&self.sig),
         )
         .is_ok()
@@ -204,6 +239,35 @@ impl Envelope {
         let batch = codec::decode_batch(&raw, &self.actor, &self.key)?;
         Ok((batch, raw))
     }
+}
+
+fn head_len(n: usize) -> usize {
+    match n {
+        0..=23 => 1,
+        24..=255 => 2,
+        256..=65535 => 3,
+        65536..=4294967295 => 5,
+        _ => 9,
+    }
+}
+
+/// Hash a CBOR string header and its borrowed contents without allocating a preimage.
+fn hash_field(hash: &mut Sha256, major: u8, bytes: &[u8]) {
+    let len = head_len(bytes.len());
+    if len == 1 {
+        hash.update([(major << 5) | bytes.len() as u8]);
+    } else {
+        let additional = match len {
+            2 => 24,
+            3 => 25,
+            5 => 26,
+            _ => 27,
+        };
+        hash.update([(major << 5) | additional]);
+        let n = (bytes.len() as u64).to_be_bytes();
+        hash.update(&n[9 - len..]);
+    }
+    hash.update(bytes);
 }
 
 /// `"han-timeline-sig-v1\n" ‖ hex(batchId)`.
@@ -220,6 +284,17 @@ pub fn seal(
     signer: &dyn Signer,
     compression: Compression,
 ) -> Vec<u8> {
+    seal_raw(space, history, batch, signer, compression).0
+}
+
+/// Keep the deterministic batch bytes for local validation instead of decompressing them.
+pub(crate) fn seal_raw(
+    space: &str,
+    history: Option<BatchId>,
+    batch: &Batch,
+    signer: &dyn Signer,
+    compression: Compression,
+) -> (Vec<u8>, Vec<u8>) {
     let raw = codec::encode_batch(batch);
     let payload = compress(&raw, compression);
     let mut env = Envelope {
@@ -231,12 +306,13 @@ pub fn seal(
         sig: [0; 64],
     };
     env.sig = signer.sign(&sig_message(&env.batch_id()));
-    env.encode()
+    (env.encode(), raw)
 }
 
 /// One zstd frame holding `raw`, with its content size declared and no dictionary.
 pub fn compress(raw: &[u8], compression: Compression) -> Vec<u8> {
     if compression == Compression::Zstd
+        && raw.len() >= 128
         && let Ok(frame) = zstd::bulk::compress(raw, 3)
         && frame.len() < raw.len()
     {
@@ -301,7 +377,7 @@ pub fn decompress(payload: &[u8]) -> Result<Vec<u8>, DecodeError> {
     };
     let field = payload.get(pos..pos + fcs_len).ok_or(malformed)?;
     pos += fcs_len;
-    let _ = pos;
+
     let mut le = [0u8; 8];
     le[..fcs_len].copy_from_slice(field);
     let mut size = u64::from_le_bytes(le);
@@ -314,6 +390,14 @@ pub fn decompress(payload: &[u8]) -> Result<Vec<u8>, DecodeError> {
     match zstd::zstd_safe::find_frame_compressed_size(payload) {
         Ok(n) if n == payload.len() => {}
         _ => return Err(malformed),
+    }
+    // The stored single-block frame emitted for tiny batches needs no zstd decoder.
+    // Exact header/length checks leave every other frame on the full validation path.
+    if fhd == 0x20 && size < 128 && payload.len() == pos + 3 + size as usize {
+        let header = ((size as u32) << 3) | 1;
+        if payload[pos..pos + 3] == header.to_le_bytes()[..3] {
+            return Ok(payload[pos + 3..].to_vec());
+        }
     }
     let out = zstd::bulk::decompress(payload, size as usize).map_err(|_| malformed)?;
     if out.len() as u64 != size {
@@ -341,5 +425,108 @@ mod tests {
         let mut p = compress(b"abc", Compression::Raw);
         p.extend(compress(b"abc", Compression::Raw));
         assert!(decompress(&p).is_err());
+    }
+
+    /// `received_id` hashes the received bytes in place, so it must equal TL-93's batch id for
+    /// every envelope decode accepts, and decode must refuse every non-canonical spelling of an
+    /// envelope before an id could be taken from it.
+    #[test]
+    fn received_id_equals_batch_id_and_non_canonical_envelopes_are_refused() {
+        let mut seed = 0x5eed_u64;
+        let mut rnd = |n: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as usize) % n.max(1)
+        };
+        // Lengths around every CBOR head boundary.
+        const LENS: [usize; 9] = [0, 1, 23, 24, 255, 256, 1000, 65_535, 65_536];
+        for case in 0..200 {
+            let word = |n: usize| -> String { "abcdefghij".chars().cycle().take(n).collect() };
+            // Valid grammar of varied lengths: a server name of up to 243 characters (DNS caps it at
+            // 253), so the space id still passes 256 bytes.
+            let server: String = (0..1 + case % 4)
+                .map(|_| word(1 + case % 60))
+                .collect::<Vec<_>>()
+                .join(".");
+            let env = Envelope {
+                space: format!("{}:{server}", word(1 + case % 26)),
+                history: (case % 2 == 1).then_some(BatchId([case as u8; 32])),
+                actor: format!("@{}:{server}", word(case % 65)),
+                key: word(1 + case % 64),
+                payload: (0..LENS[case % LENS.len()])
+                    .map(|i| (i * 31 + case) as u8)
+                    .collect(),
+                sig: [case as u8; 64],
+            };
+            let bytes = env.encode();
+            let decoded = Envelope::decode(&bytes).unwrap_or_else(|e| panic!("case {case}: {e:?}"));
+            assert_eq!(decoded, env, "case {case}");
+            assert_eq!(decoded.received_id(&bytes), env.batch_id(), "case {case}");
+
+            // The same envelope spelled non-canonically: entries as (key, value) encodings.
+            let Cbor::Map(entries) = Cbor::decode(&bytes).unwrap() else {
+                panic!("not a map")
+            };
+            let parts: Vec<(Vec<u8>, Vec<u8>)> = entries
+                .iter()
+                .map(|(k, v)| (k.encode(), v.encode()))
+                .collect();
+            let join = |head: &[u8], parts: &[(Vec<u8>, Vec<u8>)], tail: &[u8]| {
+                let mut out = head.to_vec();
+                for (k, v) in parts {
+                    out.extend_from_slice(k);
+                    out.extend_from_slice(v);
+                }
+                out.extend_from_slice(tail);
+                out
+            };
+            assert_eq!(join(&[0xa7], &parts, &[]), bytes, "case {case}: rebuilt");
+            let mut variants: Vec<(&str, Vec<u8>)> = Vec::new();
+            // A value with a longer head than needed.
+            let i = rnd(parts.len());
+            let mut longer = parts.clone();
+            let v = &longer[i].1;
+            let (major, info) = (v[0] & 0xe0, v[0] & 0x1f);
+            if info < 24 {
+                longer[i].1 = [vec![major | 24, info], v[1..].to_vec()].concat();
+            } else if info == 24 {
+                longer[i].1 = [vec![major | 25, 0, v[1]], v[2..].to_vec()].concat();
+            } else if info == 25 {
+                longer[i].1 = [vec![major | 26, 0, 0, v[1], v[2]], v[3..].to_vec()].concat();
+            } else {
+                longer[i].1 = [
+                    vec![major | 27, 0, 0, 0, 0, v[1], v[2], v[3], v[4]],
+                    v[5..].to_vec(),
+                ]
+                .concat();
+            }
+            variants.push(("longer head", join(&[0xa7], &longer, &[])));
+            // A key with a longer head.
+            let mut key_head = parts.clone();
+            key_head[i].0 = vec![0x18, key_head[i].0[0]];
+            variants.push(("longer key head", join(&[0xa7], &key_head, &[])));
+            // Two entries swapped.
+            let j = (i + 1 + rnd(parts.len() - 1)) % parts.len();
+            let mut swapped = parts.clone();
+            swapped.swap(i, j);
+            variants.push(("reordered keys", join(&[0xa7], &swapped, &[])));
+            // An extra key, and a repeated key.
+            let mut extra = parts.clone();
+            extra.push((vec![0x08], vec![0xf6]));
+            variants.push(("extra key", join(&[0xa8], &extra, &[])));
+            let mut repeated = parts.clone();
+            repeated.insert(i + 1, parts[i].clone());
+            variants.push(("repeated key", join(&[0xa8], &repeated, &[])));
+            // Indefinite-length map, and a map head in a longer form.
+            variants.push(("indefinite map", join(&[0xbf], &parts, &[0xff])));
+            variants.push(("longer map head", join(&[0xb8, 7], &parts, &[])));
+            for (what, v) in variants {
+                assert!(
+                    Envelope::decode(&v).is_err(),
+                    "case {case}: {what} must be refused before an id is taken"
+                );
+            }
+        }
     }
 }
