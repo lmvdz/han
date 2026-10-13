@@ -1,0 +1,231 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "63-merge-empty-region-anchors-by-position",
+ "description": "The target holds the line end before the incoming new line only as a copy moved to the start: the new line is placed at the region's gap by position (after p), not after the character holding that line end",
+ "rules": [
+  "TL-72"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "odd": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "3@A"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         1,
+         2
+        ]
+       ],
+       "inserts": [
+        [
+         null,
+         "\n",
+         "2@A#0:1"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "N\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "merge": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "5@B"
+     ],
+     "base": [
+      "3@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         "2@A#0:0",
+         "N\n",
+         "5@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "odd"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "\npq\n"
+         }
+        }
+       }
+      ],
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "merge",
+        "base": [
+         "3@A"
+        ],
+        "conflicts": [],
+        "results": [
+         {
+          "resolutions": [],
+          "texts": {
+           "2@A": "\npN\nq\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "merge",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "\npN\nq\n"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

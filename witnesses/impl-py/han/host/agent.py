@@ -38,7 +38,11 @@ class Steer:
     session: str
     text: str                           # a session.input into someone else's session
 
-Action = Say | World | Task | Steer
+@dataclass
+class Finish:
+    state: Literal["done", "failed"] = "done"   # the agent has stopped working the driving task: the host makes its own final `task.update` (R-24)
+
+Action = Say | World | Task | Steer | Finish
 
 ADVISORY = "guarded: advisory (no sandbox)"      # §8.4: the status detail of a guarded session whose tools run without an OS sandbox
 
@@ -58,6 +62,7 @@ class ScriptedAgent(Agent):
       push X                     → World("http.post", {"url": "http://example.invalid/X", "body": X})
       delegate to @bot2:srv [t]  → Task(to, t or "please help")
       steer SESSION text         → Steer(SESSION, text)
+      finish / fail              → Finish("done") / Finish("failed")
       anything else              → Say("ok: " + part)
     Every call is kept in `calls` as (TurnInput, mode)."""
     def __init__(self, rules: list[Rule] | None = None):
@@ -66,6 +71,8 @@ class ScriptedAgent(Agent):
             (r"push (\S+)", lambda m: World("http.post", {"url": f"http://example.invalid/{m[1]}", "body": m[1]})),
             (r"delegate to (@\S+)(?: (.+))?", lambda m: Task(m[1], m[2] or "please help")),
             (r"steer (\S+) (.+)", lambda m: Steer(m[1], m[2])),
+            (r"finish", lambda m: Finish("done")),
+            (r"fail", lambda m: Finish("failed")),
         ]
 
     async def turn(self, input: TurnInput, mode: Mode) -> list[Action]:

@@ -6,6 +6,7 @@ The docs mark each derived value as `<!--s:key-->value<!--/s-->`. This script co
   - conformance/interop/RESULTS.md       the cross-implementation run and its closure section (recorded runs of the wire vectors);
   - ref/logs/*               the newest complete log of each model (guard model: depth, transitions; timing model: the round it last ran on, its counts);
   - conformance/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
+  - conformance/carrier-vectors/     the files, cases and mutations of ref/run_carrier_vectors.py, which it runs (round 31);
   - spec/decisions/DECISIONS-rNN.md the round being built (the newest such file, H9); spec/decisions/HISTORY.md the scores of the rounds already graded;
   - the sources of witnesses/impl-py/     two claims that used to be written by hand (the PreToolUse gate, the advisory status)
 and rewrites the marked values in spec/core/architecture.md, README.md, spec/goal.md, spec/core/coverage.md, ref/README.md and conformance/wire-vectors/README.md.
@@ -275,10 +276,21 @@ def check_test_names():
     missing = sorted({f"{d}: {f}::{n}" for d in DOCS for f, n in CITED_TEST.findall(read(d)) if (f, n) not in have})
     if missing: raise Underivable("the docs name tests that do not exist: " + "; ".join(missing))
 
+# ── conformance/carrier-vectors (round 31, X16): run here, offline and in a second, since run_all.py does not run them yet ──
+def facts_carrier(F):
+    import io, contextlib
+    import run_carrier_vectors as RC
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): rc = RC.main()
+    last = buf.getvalue().strip().splitlines()[-1]
+    m = re.fullmatch(r"(\d+)/(\d+) carrier vector files pass \((\d+) cases\)", last)
+    if rc or not m or m[1] != m[2]: raise Underivable(f"conformance/carrier-vectors: python ref/run_carrier_vectors.py does not pass: {last}")
+    F["cv_files"], F["cv_cases"], F["cv_muts"] = int(m[2]), int(m[3]), len(RC.MUTATIONS)
+
 def derive():
     F = {}
     names, vector_ids = facts_exist(F)
-    facts_interfaces(F); facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names)
+    facts_interfaces(F); facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names); facts_carrier(F)
     check_vector_names(read("spec", "core", "architecture.md"), vector_ids)
     check_test_names()
     return F

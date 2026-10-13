@@ -4,7 +4,7 @@
   "P-15",
   "P-16"
  ],
- "description": "T1, V2: MAX_GUARDED_FOR (19) is a hard bound on every guardedFor, counting the author of a task, and the proposer and executor of a proposal, whether guarded or not: a proposal whose guardedFor (carried(proposer) included) with its proposer and executor would hold more than 19 agents is denied, and so is a task whose guardedFor with its author would; closing a task makes room",
+ "description": "T1, V2, X6: MAX_GUARDED_FOR (19) is a hard bound on every proposal, counting its proposer and executor whether guarded or not: a proposal whose guardedFor (carried(proposer) and carried(executor) included) with its proposer and executor would hold more than 19 agents is denied; a task's guardedFor may hold at most 17, so a proposer and an executor always fit; closing a task makes room",
  "profiles": {
   "@f0:b.example": {
    "actorKind": "agent",
@@ -1928,7 +1928,7 @@
    },
    "time": "2026-10-10T12:01:09Z",
    "expect": "denied",
-   "note": "naming another task only adds to it"
+   "note": "X3: M executes, so carried(M) joins t19's agent"
   },
   {
    "entry": {
@@ -1951,7 +1951,7 @@
    },
    "time": "2026-10-10T12:01:10Z",
    "expect": "denied",
-   "note": "V2: a task's guardedFor counts its author: 19 carried and M"
+   "note": "X6: a parentless task records carried(M), 19 agents; a task may hold 17"
   },
   {
    "entry": {
@@ -2040,7 +2040,38 @@
      "@f18:b.example"
     ]
    },
-   "note": "the named task's agents first, then carried(M) in the order the tasks were created"
+   "note": "the named task's agents first, then carried(executor) in the order the tasks were created (X3)"
+  },
+  {
+   "entry": {
+    "id": "a669390afc14feed8882bcd5a600ac04b48ec17ceeb8ae070cb2d0de883031ff",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "fcdeaf82542d63c27e1b4e6aaa1ed1351835f106ab902add4f2153ec5595b34b",
+     "repeatable": false,
+     "task": "fa752f50edf4b3f96a5c0549362dc998d6b9d524967a255075c591b6229adbf8"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-q5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:14Z",
+   "expect": "allow",
+   "check": {
+    "effects.a669390afc14feed8882bcd5a600ac04b48ec17ceeb8ae070cb2d0de883031ff.guardedFor": [
+     "@f19:b.example",
+     "@x:c.example"
+    ]
+   },
+   "note": "X2: work named under an unlinked task carries that task's guarding, not carried(M)"
   },
   {
    "entry": {
@@ -2061,7 +2092,7 @@
     "nonce": "n-tm2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:01:14Z",
+   "time": "2026-10-10T12:01:15Z",
    "expect": "allow",
    "check": {
     "tasks.a47ab7a3914d92d27ec7cd7194b728ae9c4cd6a959c9b81948a1d65ae6cff1ee.guardedFor": [
@@ -2084,7 +2115,7 @@
      "@f18:b.example"
     ]
    },
-   "note": "V1: a task records carried(author)"
+   "note": "V1, X6: a parentless task records carried(author): 17, at the task bound"
   }
  ],
  "ids": {
@@ -2139,6 +2170,7 @@
   "q2": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
   "q3": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
   "q4": "cb9b634a59a07c741ae3eb96d829a7c93ef69fff984d9123a49d2e50abbbb780",
+  "q5": "a669390afc14feed8882bcd5a600ac04b48ec17ceeb8ae070cb2d0de883031ff",
   "t0": "be42d958550f244126651786998ff156a791e2282db7ddbdae3efa4d8e145f47",
   "t1": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
   "t10": "a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452",

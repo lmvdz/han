@@ -1,0 +1,605 @@
+{
+ "name": "admit",
+ "rules": [
+  "N-02",
+  "G-07",
+  "X9",
+  "X12"
+ ],
+ "function": "admit(conn, spaces)",
+ "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor) or member (a role holder in a space served here, its own profile included); anyone else only for join, cancel, reads of public, profile and not-held spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
+ "spaces": {
+  "team:a.example": {
+   "policy": {
+    "visibility": "members",
+    "join": "invite",
+    "membersMayInvite": false,
+    "allowAgents": "any",
+    "approvals": [],
+    "separateApprover": false,
+    "budget": null,
+    "maxDelegationDepth": 4,
+    "minDurability": "local",
+    "launchWindow": 30,
+    "extensionsMinRole": "member",
+    "sessions": {
+     "watch": "member",
+     "read": "member",
+     "steer": "owner",
+     "modes": [
+      "auto",
+      "guarded"
+     ]
+    },
+    "servers": {
+     "deny": []
+    }
+   },
+   "roles": {
+    "@alice:a.example": "owner",
+    "@gone:a.example": "banned"
+   }
+  },
+  "pub:a.example": {
+   "policy": {
+    "visibility": "public",
+    "join": "invite",
+    "membersMayInvite": false,
+    "allowAgents": "any",
+    "approvals": [],
+    "separateApprover": false,
+    "budget": null,
+    "maxDelegationDepth": 4,
+    "minDurability": "local",
+    "launchWindow": 30,
+    "extensionsMinRole": "member",
+    "sessions": {
+     "watch": "member",
+     "read": "member",
+     "steer": "owner",
+     "modes": [
+      "auto",
+      "guarded"
+     ]
+    },
+    "servers": {
+     "deny": []
+    }
+   },
+   "roles": {
+    "@alice:a.example": "owner"
+   }
+  },
+  "club:a.example": {
+   "policy": {
+    "visibility": "members",
+    "join": "open",
+    "membersMayInvite": false,
+    "allowAgents": "any",
+    "approvals": [],
+    "separateApprover": false,
+    "budget": null,
+    "maxDelegationDepth": 4,
+    "minDurability": "local",
+    "launchWindow": 30,
+    "extensionsMinRole": "member",
+    "sessions": {
+     "watch": "member",
+     "read": "member",
+     "steer": "owner",
+     "modes": [
+      "auto",
+      "guarded"
+     ]
+    },
+    "servers": {
+     "deny": []
+    }
+   },
+   "roles": {
+    "@alice:a.example": "owner"
+   }
+  },
+  "profile:@alice:a.example": {
+   "policy": {
+    "visibility": "public",
+    "join": "closed",
+    "membersMayInvite": false,
+    "allowAgents": "any",
+    "approvals": [],
+    "separateApprover": false,
+    "budget": null,
+    "maxDelegationDepth": 4,
+    "minDurability": "local",
+    "launchWindow": 30,
+    "extensionsMinRole": "member",
+    "sessions": {
+     "watch": "member",
+     "read": "member",
+     "steer": "owner",
+     "modes": [
+      "auto",
+      "guarded"
+     ]
+    },
+    "servers": {
+     "deny": []
+    }
+   },
+   "roles": {
+    "@alice:a.example": "owner",
+    "@:a.example": "owner"
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "hello from any node",
+   "conn": {
+    "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+    "call": "hello"
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "join before hello (X12)",
+   "conn": {
+    "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+    "call": "join",
+    "space": "team:a.example"
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "read before hello",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "read",
+    "space": "pub:a.example"
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a member's device: any call",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "append",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "member"
+   }
+  },
+  {
+   "name": "a member's device, a space it isn't in: the call's rules judge",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "watch",
+    "space": "other:a.example",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "member"
+   }
+  },
+  {
+   "name": "the member's actor on a node its profile doesn't list",
+   "conn": {
+    "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+    "call": "append",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the same, reading a public space: open",
+   "conn": {
+    "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+    "call": "read",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a banned actor is no member",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "append",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@gone:a.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a server's listed node",
+   "conn": {
+    "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+    "call": "host",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@:b.example",
+     "nodes": [
+      "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "server"
+   }
+  },
+  {
+   "name": "a server's notice (G-03) to a server that never federated",
+   "conn": {
+    "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+    "call": "signal",
+    "space": "profile:@alice:a.example",
+    "hello": {
+     "who": "@:b.example",
+     "nodes": [
+      "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "server"
+   }
+  },
+  {
+   "name": "a server actor on a node its well-known doesn't list",
+   "conn": {
+    "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+    "call": "host",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@:b.example",
+     "nodes": [
+      "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a stranger reads a public space",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "read",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a stranger subscribes to a public space",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "subscribe",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a stranger reads a profile",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "state",
+    "space": "profile:@alice:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a stranger fetches a public blob",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "blobGet",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a stranger reads a space not held here: routing answers",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "read",
+    "space": "elsewhere:c.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a stranger reads a members-only space",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "read",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a stranger signals a public space",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "signal",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a stranger appends to a public invite-only space",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "append",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a stranger joins an open space (P-03)",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "append",
+    "space": "club:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "join after hello (N-03)",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "join",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "cancel after hello",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "cancel",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "a stranger watches a session",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "watch",
+    "space": "pub:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a stranger uploads",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "blobPut",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a stranger invites",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "invite",
+    "space": "team:a.example",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the actor whose profile is served here is a member",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "blobPut",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "spaces": {
+    "profile:@alice:a.example": {
+     "policy": {
+      "visibility": "public",
+      "join": "closed",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "roles": {
+      "@alice:a.example": "owner",
+      "@:a.example": "owner"
+     }
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "member"
+   }
+  }
+ ]
+}

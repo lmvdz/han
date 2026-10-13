@@ -1,0 +1,100 @@
+{
+ "name": "ed25519",
+ "rules": [
+  "§2",
+  "R-12",
+  "N-01",
+  "X18"
+ ],
+ "description": "strict Ed25519: a public key must be the canonical encoding of a curve point not of small order (`key`: ok or invalid, judged where the key is parsed); a signature verifies only with R canonical and not of small order, S below L, and the cofactorless equation (`valid`). msg is hex; keys and signatures base64url",
+ "cases": [
+  {
+   "name": "genuine",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "ok",
+   "valid": true
+  },
+  {
+   "name": "another message",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "msg": "68616e20737472696374206564323535313921",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "ok",
+   "valid": false
+  },
+  {
+   "name": "S + L (malleable, non-canonical S)",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtuqA_Tn4_6m-fqKpoe22DaI5GRbHt_Ihu9Chi4qTSAsGw",
+   "key": "ok",
+   "valid": false
+  },
+  {
+   "name": "the identity as key, R = identity, S = 0: passes the bare equation for every message",
+   "publicKey": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "key": "invalid",
+   "valid": false
+  },
+  {
+   "name": "a key of order 4",
+   "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "invalid",
+   "valid": false
+  },
+  {
+   "name": "a non-canonical key encoding (y = p + 1)",
+   "publicKey": "7v_______________________________________38",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "invalid",
+   "valid": false
+  },
+  {
+   "name": "x = 0 with the sign bit set",
+   "publicKey": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "invalid",
+   "valid": false
+  },
+  {
+   "name": "not a curve point (y = 2)",
+   "publicKey": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "invalid",
+   "valid": false
+  },
+  {
+   "name": "R of small order",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAsCw",
+   "key": "ok",
+   "valid": false
+  },
+  {
+   "name": "R of small order that satisfies the bare equation",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADOx-cSEh8akW4XAmBzHZWz_fhZqcLO2LnYlNr4T6wLBQ",
+   "key": "ok",
+   "valid": false
+  },
+  {
+   "name": "a 63-byte signature",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "msg": "68616e207374726963742065643235353139",
+   "sig": "qYu_lMwtq1rxKfBrMu8udZo6s23p1ehRAZyO4sbcOtu9L_6KyZuUoSTuruTX3ldz5GRbHt_Ihu9Chi4qTSAs",
+   "key": "ok",
+   "valid": false
+  }
+ ]
+}
