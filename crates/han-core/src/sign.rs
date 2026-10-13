@@ -46,14 +46,20 @@ impl SigningKey {
 pub struct PublicKey(ed25519_dalek::VerifyingKey);
 
 impl PublicKey {
-    /// Parses a `publicKey`: canonical base64url of exactly 32 bytes that form a curve point.
+    /// Parses a `publicKey`: canonical base64url of exactly 32 bytes that are the canonical
+    /// encoding of a curve point of large order (a small-order key is refused here, at parse).
     pub fn from_base64url(s: &str) -> Result<Self, Error> {
         let bytes: [u8; 32] = base64url::decode(s)?
             .try_into()
             .map_err(|_| Error::invalid("publicKey length"))?;
-        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
-            .map(PublicKey)
-            .map_err(|_| Error::invalid("publicKey is not a curve point"))
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| Error::invalid("publicKey is not a curve point"))?;
+        if key.is_weak() || key.as_bytes() != &bytes {
+            return Err(Error::invalid(
+                "publicKey is of small order or not canonical",
+            ));
+        }
+        Ok(PublicKey(key))
     }
 
     /// The canonical base64url form.
@@ -148,4 +154,11 @@ pub fn verify_accept_move(
     head: &Receipt,
 ) -> Result<(), Error> {
     key.verify(&accept_message(space, head)?, sig)
+}
+
+/// N-01: whether `s` is a node id: a public key HAN accepts, 43 characters of canonical
+/// base64url, a curve point not of small order. Well-known `publicKey`s are judged the same way
+/// with [`PublicKey::from_base64url`].
+pub fn is_node_id(s: &str) -> bool {
+    s.len() == 43 && PublicKey::from_base64url(s).is_ok()
 }
