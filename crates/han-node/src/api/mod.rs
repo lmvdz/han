@@ -16,14 +16,15 @@ mod rows;
 mod stream;
 
 pub use bindings::typescript;
-pub use command::{CallResult, Command, HomeRef};
+pub use command::{CallResult, Command, CommandClass, HomeRef};
 pub use error::NodeError;
 pub use query::{Facets, Filter, Group, Query, Scope, Target, Window};
 pub use rows::{
-    ApprovalRow, BoardRow, CostRow, DiffOp, Fidelity, FilePatchRow, FileTouch, JoinProgressRow,
-    JoinStage, NodeStatusRow, OutboxRow, OverlapKind, OverlapParty, OverlapRow, PatchStatus,
-    PlanItem, RoleInfo, Row, Sandbox, SandboxBackend, SessionRow, SessionState, SpaceLink,
-    SpaceStatusRow, StatusBody, Tests, TimelinePointRow, Tokens, ViewEvent, ViewMirror, WhoRow,
+    ApprovalRow, BoardRow, CostRow, DiffOp, EffectRow, Fidelity, FilePatchRow, FileTouch, GuardRow,
+    InputRow, JoinProgressRow, JoinStage, NodeStatusRow, OutboxRow, OverlapKind, OverlapParty,
+    OverlapRow, PatchStatus, PlanItem, RoleInfo, Row, Sandbox, SandboxBackend, SessionRow,
+    SessionState, SpaceLink, SpaceStatusRow, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens,
+    ViewEvent, ViewMirror, WhoRow,
 };
 pub use stream::{BoxFuture, NodeApi, ViewSink, ViewStream};
 

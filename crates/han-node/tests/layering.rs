@@ -105,8 +105,22 @@ fn a_face_gets_only_the_api_types() {
 }
 
 #[test]
+fn the_agent_tools_get_only_the_api_types() {
+    // PLAN 4: han-mcp, like a face, depends only on han-node's API types (SR-29: no runtime, no keys).
+    let mcp = tree(&["-p", "han-mcp"]);
+    assert_absent(
+        "han-mcp",
+        &mcp,
+        &["han-net", "han-seq", "iroh", "keyring", "rusqlite"],
+    );
+}
+
+#[test]
 fn face_sources_use_only_the_api_and_the_rpc_client() {
-    let faces = [root().join("apps/han/src/board.rs")];
+    let faces = [
+        root().join("apps/han/src/board.rs"),
+        root().join("apps/han/src/agent.rs"),
+    ];
     for file in faces {
         let text =
             std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));

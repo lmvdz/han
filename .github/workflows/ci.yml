@@ -1,6 +1,6 @@
 name: ci
 
-# Early development: every PR runs one lean job (a few minutes). The deep checks run nightly and on demand.
+# Early development: every PR runs one lean job (M4 added the host, executor and their tests: allow 30 min cold). The deep checks run nightly and on demand.
 on:
   pull_request:
   push:
@@ -16,7 +16,7 @@ permissions:
 jobs:
   quick:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Rust toolchain (from rust-toolchain.toml)

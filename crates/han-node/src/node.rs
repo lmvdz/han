@@ -102,6 +102,8 @@ pub(crate) struct Inner<T: Transport> {
     links: Mutex<HashMap<String, (HomeRef, LinkHandle<T>)>>,
     space_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     ticker: Mutex<Option<JoinHandle<()>>>,
+    /// The work timelines of watched sessions, fed by their `han.timeline/1` items.
+    pub timelines: Arc<crate::timeline::StreamTimelines>,
 }
 
 /// The runtime of one device.
@@ -375,7 +377,10 @@ impl<T: Transport> Node<T> {
                 engine.apply_status(&f.space, st);
             }
         }
+        let timelines = Arc::new(crate::timeline::StreamTimelines::new());
+        engine.set_timeline(timelines.clone());
         let inner = Arc::new(Inner {
+            timelines,
             cfg: config,
             key,
             transport,
@@ -677,6 +682,64 @@ impl<T: Transport> Node<T> {
         self.append(&space, kind, body, None).await
     }
 
+    /// The number the next item of a session's stream will carry.
+    fn next_item(&self, space: &str, session: &str) -> Result<u64, NodeError> {
+        let key = format!("n/{space}/{session}");
+        Ok(self
+            .inner
+            .db
+            .config(&key)
+            .map_err(unavailable)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+            + 1)
+    }
+
+    /// Sends one profile item on a session's stream, one sender per session at a time, and returns its
+    /// number.
+    async fn publish_item(
+        &self,
+        space: &str,
+        session: &str,
+        name: &str,
+        body: Value,
+    ) -> Result<u64, NodeError> {
+        let lock = self.inner.space_lock(&format!("stream/{space}/{session}"));
+        let _held = lock.lock().await;
+        self.send_item(space, session, name, body).await
+    }
+
+    /// Sends one item; the caller holds the session's stream lock.
+    async fn send_item(
+        &self,
+        space: &str,
+        session: &str,
+        name: &str,
+        body: Value,
+    ) -> Result<u64, NodeError> {
+        let inner = &self.inner;
+        let (_, client) = self.client_of(space).await?;
+        let n = self.next_item(space, session)?;
+        let item = obj([
+            ("space", s(space)),
+            ("session", s(session)),
+            ("n", int(n)),
+            ("time", s(&format_time(inner.now_secs()))),
+            ("type", s("profile")),
+            ("name", s(name)),
+            ("body", body),
+        ]);
+        client
+            .call("stream", args([("item", item)]))
+            .await
+            .map_err(|e| map_net_error(&e))?;
+        inner
+            .db
+            .set_config(&format!("n/{space}/{session}"), &n.to_string())
+            .map_err(unavailable)?;
+        Ok(n)
+    }
+
     async fn execute(&self, cmd: Command) -> Result<CallResult, NodeError> {
         let inner = &self.inner;
         match cmd {
@@ -825,6 +888,18 @@ impl<T: Transport> Node<T> {
                 issue,
             } => {
                 self.require_followed(&space)?;
+                if !grammar::is_actor_id(&agent) {
+                    return Err(NodeError::invalid("not an ActorId"));
+                }
+                let home = inner
+                    .engine()
+                    .home_of(&space)
+                    .and_then(|server| self.home_ref(&server))
+                    .ok_or_else(|| NodeError::unavailable("no link to the space's home yet"))?;
+                let name = match &issue {
+                    Some(i) => format!("host-{agent}#{i}"),
+                    None => format!("host-{agent}"),
+                };
                 let mut a = vec![
                     "--space".to_owned(),
                     space,
@@ -832,7 +907,31 @@ impl<T: Transport> Node<T> {
                     agent.clone(),
                     "--harness".into(),
                     harness,
+                    "--operator".into(),
+                    inner.cfg.actor.clone(),
+                    "--home-server".into(),
+                    home.server.clone(),
+                    "--home-node".into(),
+                    home.node.clone(),
                 ];
+                for addr in &home.addrs {
+                    a.extend(["--home-addr".into(), addr.clone()]);
+                }
+                for relay in &home.relays {
+                    a.extend(["--home-relay".into(), relay.clone()]);
+                }
+                if let Some(dir) = &inner.cfg.data_dir {
+                    let safe: String = agent
+                        .chars()
+                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                        .collect();
+                    a.extend([
+                        "--data".into(),
+                        dir.join("agents").join(safe).to_string_lossy().into_owned(),
+                        "--keys".into(),
+                        dir.to_string_lossy().into_owned(),
+                    ]);
+                }
                 if let Some(r) = repo {
                     a.extend(["--repo".into(), r]);
                 }
@@ -843,8 +942,9 @@ impl<T: Transport> Node<T> {
                     .supervisor
                     .start(RoleSpec {
                         role: Role::Host,
-                        name: format!("host-{agent}"),
+                        name,
                         args: a,
+                        env: Vec::new(),
                     })
                     .map_err(|e| match e {
                         SupervisorError::Running(_) => NodeError::conflict(e.to_string()),
@@ -853,13 +953,28 @@ impl<T: Transport> Node<T> {
                 Ok(CallResult::Done)
             }
             Command::AgentStop { target } => {
-                inner
+                // The target is an agent (all its sessions) or one `host-<agent>#<issue>` name.
+                let exact = format!("host-{target}");
+                let prefix = format!("host-{target}#");
+                let names: Vec<String> = inner
                     .supervisor
-                    .stop(&format!("host-{target}"))
-                    .map_err(|e| match e {
+                    .status()
+                    .into_iter()
+                    .filter(|(n, s)| {
+                        (n == &exact || n.starts_with(&prefix) || n == &target)
+                            && *s == RoleStatus::Running
+                    })
+                    .map(|(n, _)| n)
+                    .collect();
+                if names.is_empty() {
+                    return Err(NodeError::not_found(format!("{target} is not running")));
+                }
+                for n in names {
+                    inner.supervisor.stop(&n).map_err(|e| match e {
                         SupervisorError::NotRunning(_) => NodeError::not_found(e.to_string()),
                         other => NodeError::unavailable(other.to_string()),
                     })?;
+                }
                 Ok(CallResult::Done)
             }
             Command::TaskCreate {
@@ -898,8 +1013,17 @@ impl<T: Transport> Node<T> {
                 self.append(&space, "task.cancel", obj([("task", s(&task))]), None)
                     .await
             }
-            Command::SessionOpen { space, task, title } => {
-                let mut body = vec![("steerMode", s("auto"))];
+            Command::SessionOpen {
+                space,
+                steer_mode,
+                task,
+                title,
+            } => {
+                let mode = steer_mode.unwrap_or_else(|| "auto".into());
+                if !["auto", "guarded"].contains(&mode.as_str()) {
+                    return Err(NodeError::invalid("steer mode is auto or guarded"));
+                }
+                let mut body = vec![("steerMode", s(&mode))];
                 if let Some(t) = &task {
                     body.push(("task", s(t)));
                 }
@@ -936,37 +1060,17 @@ impl<T: Transport> Node<T> {
             }
             Command::StatusPublish { space, status } => {
                 let mut status = *status;
-                let (_, client) = self.client_of(&space).await?;
-                let key = format!("n/{space}/{}", status.session);
-                let n: u64 = inner
-                    .db
-                    .config(&key)
-                    .map_err(unavailable)?
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0)
-                    + 1;
+                let session = status.session.clone();
+                let lock = inner.space_lock(&format!("stream/{space}/{session}"));
+                let _held = lock.lock().await;
                 if status.seq == 0 {
-                    status.seq = n;
+                    status.seq = self.next_item(&space, &session)?;
                 }
                 let body =
                     json::to_value(&status).map_err(|e| NodeError::invalid(e.to_string()))?;
-                let item = obj([
-                    ("space", s(&space)),
-                    ("session", s(&status.session)),
-                    ("n", int(n)),
-                    ("time", s(&format_time(inner.now_secs()))),
-                    ("type", s("profile")),
-                    ("name", s("han.status/1")),
-                    ("body", body),
-                ]);
-                client
-                    .call("stream", args([("item", item)]))
-                    .await
-                    .map_err(|e| map_net_error(&e))?;
-                inner
-                    .db
-                    .set_config(&key, &n.to_string())
-                    .map_err(unavailable)?;
+                let n = self
+                    .send_item(&space, &session, "han.status/1", body)
+                    .await?;
                 Ok(CallResult::Status { n })
             }
             Command::LeaseSet {
@@ -1045,6 +1149,113 @@ impl<T: Transport> Node<T> {
                     note.map(|n| obj([("note", s(&n))])),
                 )
                 .await
+            }
+            Command::EffectPropose {
+                space,
+                executor,
+                plan,
+                task,
+                cost,
+                repeatable,
+                expires_at,
+            } => {
+                let plan = json::parse(plan.as_bytes())
+                    .map_err(|e| NodeError::invalid(format!("plan: {e}")))?;
+                let action = plan
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| NodeError::invalid("a plan names its action"))?
+                    .to_owned();
+                if plan.get("target").and_then(Value::as_str).is_none() {
+                    return Err(NodeError::invalid("a plan names its target"));
+                }
+                let digest =
+                    ids::json_digest(&plan).map_err(|e| NodeError::invalid(e.to_string()))?;
+                let mut body = vec![
+                    ("executor", s(&executor)),
+                    ("action", s(&action)),
+                    ("planDigest", s(&digest)),
+                    ("repeatable", Value::Bool(repeatable)),
+                ];
+                if let Some(t) = &task {
+                    body.push(("task", s(t)));
+                }
+                if let Some((unit, amount)) = &cost {
+                    body.push(("cost", obj([("unit", s(unit)), ("amount", int(*amount))])));
+                }
+                if let Some(x) = &expires_at {
+                    body.push(("expiresAt", s(x)));
+                }
+                self.append(
+                    &space,
+                    "effect.propose",
+                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+                    Some(obj([("plan", plan)])),
+                )
+                .await
+            }
+            Command::EffectClaim {
+                space,
+                proposal,
+                attempt,
+                window,
+            } => {
+                let key_id = inner.cfg.key_id.clone();
+                self.append(
+                    &space,
+                    "effect.claim",
+                    obj([
+                        ("proposal", s(&proposal)),
+                        ("attempt", int(attempt)),
+                        ("instance", s(&key_id)),
+                        ("window", int(window)),
+                    ]),
+                    None,
+                )
+                .await
+            }
+            Command::EffectOutcome {
+                space,
+                claim,
+                result,
+                started,
+                cost,
+            } => {
+                let mut body = vec![
+                    ("claim", s(&claim)),
+                    ("result", s(&result)),
+                    ("started", s(&started)),
+                ];
+                if let Some((unit, amount)) = &cost {
+                    body.push(("cost", obj([("unit", s(unit)), ("amount", int(*amount))])));
+                }
+                self.append(
+                    &space,
+                    "effect.outcome",
+                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+                    None,
+                )
+                .await
+            }
+            Command::PolicySet { space, policy } => {
+                let policy = json::parse(policy.as_bytes())
+                    .map_err(|e| NodeError::invalid(format!("policy: {e}")))?;
+                self.append(&space, "policy.set", obj([("policy", policy)]), None)
+                    .await
+            }
+            Command::StreamPublish {
+                space,
+                session,
+                name,
+                body,
+            } => {
+                if name == "han.status/1" {
+                    return Err(NodeError::invalid("status items go through StatusPublish"));
+                }
+                let body = json::parse(body.as_bytes())
+                    .map_err(|e| NodeError::invalid(format!("body: {e}")))?;
+                let n = self.publish_item(&space, &session, &name, body).await?;
+                Ok(CallResult::Status { n })
             }
             Command::EffectCancel { space, proposal } => {
                 let found = inner.engine().plan_digest(&space, &proposal);

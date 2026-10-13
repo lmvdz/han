@@ -273,6 +273,56 @@ pub enum Query {
         #[serde(default)]
         window: Window,
     },
+    /// The steering inputs of a session (`session.input` with their receipts), oldest first: what its host
+    /// turns into user turns (R-24). Only the session's host should act on them.
+    Inputs {
+        /// The session.
+        session: String,
+        /// The window (its cursor is the key of the last input handled).
+        #[serde(default)]
+        window: Window,
+    },
+    /// Tasks, optionally only those assigned to one actor.
+    Tasks {
+        /// The space.
+        space: String,
+        /// Only tasks with this assignee.
+        #[serde(default)]
+        #[ts(optional)]
+        assignee: Option<String>,
+        /// The window.
+        #[serde(default)]
+        window: Window,
+    },
+    /// Whether an actor is guarded in a space, as this device folds the log (R-24): it chose guarding (a
+    /// session opened `guarded`, until its guard's `agent.unguard`) or the owners force non-humans.
+    Guard {
+        /// The space.
+        space: String,
+        /// The actor.
+        actor: String,
+        /// The window.
+        #[serde(default)]
+        window: Window,
+    },
+    /// Effects with their plans, as an executor reads them: the proposals it may run, their approvals and
+    /// claims, and the space's launch window (X-03).
+    Effects {
+        /// Only this space; every followed space when absent.
+        #[serde(default)]
+        #[ts(optional)]
+        space: Option<String>,
+        /// Only effects whose executor is this actor.
+        #[serde(default)]
+        #[ts(optional)]
+        executor: Option<String>,
+        /// Include effects in a final phase.
+        #[serde(default)]
+        include_done: bool,
+        /// The window.
+        #[serde(default)]
+        window: Window,
+    },
     /// The full change set of an effect: a push plan or a merge preview (unavailable before M4).
     ChangeSet {
         /// The space.
@@ -301,6 +351,10 @@ impl Query {
             | Query::NodeStatus { window }
             | Query::Timeline { window, .. }
             | Query::Patches { window, .. }
+            | Query::Effects { window, .. }
+            | Query::Guard { window, .. }
+            | Query::Inputs { window, .. }
+            | Query::Tasks { window, .. }
             | Query::ChangeSet { window, .. } => window,
         }
     }

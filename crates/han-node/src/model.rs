@@ -9,7 +9,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use han_core::grammar;
-use han_core::policy::{Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel};
+use han_core::policy::{Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel, Started};
 use han_core::{LogRecord, Value};
 
 use crate::api::{
@@ -57,6 +57,8 @@ pub(crate) struct SessionInfo {
     pub task: Option<String>,
     pub closed: bool,
     pub status: Option<StatusBody>,
+    /// Its steering inputs, oldest first.
+    pub inputs: Vec<InputInfo>,
     /// This node's steady clock when the last item arrived (or the session was learnt of).
     pub last_item_ms: u64,
 }
@@ -68,6 +70,17 @@ pub(crate) struct TaskInfo {
     pub to: Vec<String>,
     pub external: Option<String>,
     pub open: bool,
+    pub seq: u64,
+    pub ask: Option<String>,
+}
+
+/// A `session.input` as its session's host reads it.
+#[derive(Clone, Debug)]
+pub(crate) struct InputInfo {
+    pub id: String,
+    pub seq: u64,
+    pub author: String,
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +103,13 @@ pub(crate) struct EffectInfo {
     pub seq: u64,
     repeatable: bool,
     phase: Phase,
+    /// The plan from the proposal's content, as JSON text.
+    pub plan: Option<String>,
+    /// The task it is charged to.
+    pub task: Option<String>,
+    /// Claims so far, and the latest.
+    pub claims: u64,
+    pub last_claim: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +144,11 @@ pub(crate) struct SpaceModel {
     pub rules: Vec<(String, Vec<String>)>,
     /// Who may steer sessions, by the policy.
     pub steer: Option<SessionLevel>,
+    /// The policy's `launchWindow` in seconds.
+    pub launch_window: u64,
+    /// Actors that chose guarding (sticky until `agent.unguard`), and whether owners force non-humans.
+    pub guarded: BTreeSet<String>,
+    pub force_guarded: bool,
     /// Counts every change a view could show; a view recomputes when it moves.
     pub rev: u64,
     claims: BTreeMap<String, String>,
@@ -164,6 +189,9 @@ impl SpaceModel {
             me: me.to_owned(),
             rules: Vec::new(),
             steer: None,
+            launch_window: 30,
+            guarded: BTreeSet::new(),
+            force_guarded: false,
             rev: 1,
             claims: BTreeMap::new(),
             time_sig: 0,
@@ -183,6 +211,8 @@ impl SpaceModel {
             .map(|r| (r.action, r.approvers))
             .collect();
         self.steer = Some(policy.sessions.steer);
+        self.launch_window = policy.launch_window;
+        self.force_guarded = policy.sessions.force_guarded == Some(true);
     }
 
     fn is_owner(&self, actor: &str) -> bool {
@@ -253,6 +283,13 @@ impl SpaceModel {
                         to: t.to,
                         external: t.external,
                         open: true,
+                        seq,
+                        ask: rec
+                            .content
+                            .as_ref()
+                            .and_then(|c| c.get("ask"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
                     },
                 );
             }
@@ -269,6 +306,9 @@ impl SpaceModel {
                 }
             }
             Body::SessionOpen(s) => {
+                if s.steer_mode == han_core::policy::SteerMode::Guarded {
+                    self.guarded.insert(author.clone());
+                }
                 opened.push(id.clone());
                 self.sessions.insert(
                     id.clone(),
@@ -279,6 +319,7 @@ impl SpaceModel {
                         task: s.task,
                         closed: false,
                         status: None,
+                        inputs: Vec::new(),
                         last_item_ms: now.ms,
                     },
                 );
@@ -303,6 +344,15 @@ impl SpaceModel {
                         seq,
                         repeatable: p.repeatable,
                         phase: Phase::Open,
+                        plan: rec
+                            .content
+                            .as_ref()
+                            .and_then(|c| c.get("plan"))
+                            .and_then(|p| han_core::json::canonicalize(p).ok())
+                            .and_then(|b| String::from_utf8(b).ok()),
+                        task: p.task,
+                        claims: 0,
+                        last_claim: None,
                     },
                 );
             }
@@ -324,6 +374,8 @@ impl SpaceModel {
                 if let Some(e) = self.effects.get_mut(&c.proposal) {
                     e.phase = Phase::Claimed;
                     e.approvals.clear(); // a claim consumes the approvals it stands on
+                    e.claims += 1;
+                    e.last_claim = Some(id.clone());
                     self.claims.insert(id, c.proposal);
                 }
             }
@@ -331,11 +383,36 @@ impl SpaceModel {
                 if let Some(p) = self.claims.get(&o.claim)
                     && let Some(e) = self.effects.get_mut(p)
                 {
-                    e.phase = match o.result {
-                        EffectResult::Failed if e.repeatable => Phase::Open,
+                    e.phase = match (o.result, o.started) {
+                        // P-09: not started returns the effect to open (cancelled if a cancel was
+                        // asked for, which this fold does not track: it shows open until the next
+                        // claim is refused).
+                        (EffectResult::Failed | EffectResult::Cancelled, Started::No) => {
+                            Phase::Open
+                        }
+                        (EffectResult::Failed, _) if e.repeatable => Phase::Open,
+                        (EffectResult::Unknown, _) if e.repeatable => Phase::Open,
                         _ => Phase::Done,
                     };
                 }
+            }
+            Body::SessionInput(i) => {
+                if let Some(s) = self.sessions.get_mut(&i.session) {
+                    s.inputs.push(InputInfo {
+                        id: id.clone(),
+                        seq,
+                        author: author.clone(),
+                        text: rec
+                            .content
+                            .as_ref()
+                            .and_then(|c| c.get("text"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    });
+                }
+            }
+            Body::AgentUnguard(u) => {
+                self.guarded.remove(&u.agent);
             }
             Body::Resolve(r) => {
                 if let Some(e) = self.effects.get_mut(&r.proposal) {
@@ -1059,6 +1136,134 @@ impl SpaceModel {
             ));
         }
         rows
+    }
+}
+
+impl SpaceModel {
+    /// The inputs of a session.
+    pub fn input_rows(&self, session: &str) -> Option<Vec<(Facets, crate::api::Row)>> {
+        let s = self.sessions.get(session)?;
+        Some(
+            s.inputs
+                .iter()
+                .map(|i| {
+                    (
+                        Facets {
+                            actors: vec![i.author.clone()],
+                            ..Facets::default()
+                        },
+                        crate::api::Row::Input(crate::api::InputRow {
+                            key: format!("{:012}", i.seq),
+                            space: self.space.clone(),
+                            session: session.to_owned(),
+                            id: i.id.clone(),
+                            seq: i.seq,
+                            author: i.author.clone(),
+                            text: i.text.clone(),
+                        }),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// The tasks of the space, optionally only one assignee's.
+    pub fn task_rows(&self, assignee: Option<&str>) -> Vec<(Facets, crate::api::Row)> {
+        self.tasks
+            .values()
+            .filter(|t| assignee.is_none_or(|a| t.to.iter().any(|x| x == a)))
+            .map(|t| {
+                (
+                    Facets {
+                        actors: t.to.iter().chain([&t.author]).cloned().collect(),
+                        issue: t.external.clone(),
+                        ..Facets::default()
+                    },
+                    crate::api::Row::Task(crate::api::TaskRow {
+                        key: format!("{}|{:012}", self.space, t.seq),
+                        space: self.space.clone(),
+                        task: t.id.clone(),
+                        seq: t.seq,
+                        author: t.author.clone(),
+                        to: t.to.clone(),
+                        external: t.external.clone(),
+                        ask: t.ask.clone(),
+                        open: t.open,
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether `actor` is guarded, as this device folds the log. Forcing applies to non-humans; the node
+    /// does not hold profiles, so it treats every actor without a human role-holder's device as forced when
+    /// `forceGuarded` is on except the device's own person.
+    pub fn guard_row(&self, actor: &str) -> (Facets, crate::api::Row) {
+        let forced = self.force_guarded && actor != self.me;
+        (
+            Facets {
+                actors: vec![actor.to_owned()],
+                ..Facets::default()
+            },
+            crate::api::Row::Guard(crate::api::GuardRow {
+                key: format!("{}|{}", self.space, actor),
+                space: self.space.clone(),
+                actor: actor.to_owned(),
+                guarded: forced || self.guarded.contains(actor),
+                forced,
+                head: self.head,
+            }),
+        )
+    }
+
+    /// The effects of the space as an executor reads them.
+    pub fn effect_rows(
+        &self,
+        executor: Option<&str>,
+        include_done: bool,
+    ) -> Vec<(Facets, crate::api::Row)> {
+        self.effects
+            .values()
+            .filter(|e| executor.is_none_or(|x| e.executor == x))
+            .filter(|e| include_done || e.phase != Phase::Done)
+            .map(|e| {
+                let phase = match e.phase {
+                    Phase::Open => "open",
+                    Phase::Claimed => "claimed",
+                    Phase::Done => "done",
+                };
+                (
+                    Facets {
+                        state: None,
+                        actors: vec![e.proposer.clone(), e.executor.clone()],
+                        issue: None,
+                        closed: false,
+                        text: format!("{} {} {}", e.action, e.proposer, e.executor),
+                    },
+                    crate::api::Row::Effect(crate::api::EffectRow {
+                        key: format!("{}|{:012}|{}", self.space, e.seq, e.id),
+                        space: self.space.clone(),
+                        proposal: e.id.clone(),
+                        proposer: e.proposer.clone(),
+                        executor: e.executor.clone(),
+                        action: e.action.clone(),
+                        plan_digest: e.plan_digest.clone(),
+                        plan: e.plan.clone(),
+                        task: e.task.clone(),
+                        phase: phase.into(),
+                        approvals: e.approvals.clone(),
+                        claims: e.claims,
+                        last_claim: e.last_claim.clone(),
+                        launch_window: self.launch_window,
+                        repeatable: e.repeatable,
+                        cost: e.cost.clone(),
+                        expires_at: e.expires_at.clone(),
+                        seq: e.seq,
+                        head: self.head,
+                    }),
+                )
+            })
+            .collect()
     }
 }
 
