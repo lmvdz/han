@@ -441,6 +441,10 @@ impl Conn {
             node: self.peer.clone(),
             call: call.to_owned(),
             space: space.map(str::to_owned),
+            kind: (call == "append")
+                .then(|| args["entry"]["kind"].as_str())
+                .flatten()
+                .map(str::to_owned),
             hello: who.map(|who| Hello { who, nodes }),
         };
         match admit(&conn, &self.home.admit_spaces()) {

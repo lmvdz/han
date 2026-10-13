@@ -5,10 +5,11 @@
   "G-07",
   "X9",
   "X12",
-  "Z7"
+  "Z7",
+  "P-03"
  ],
  "function": "admit(conn, spaces)",
- "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor), or as member for a call on a space where the actor holds a role (round 32, Z7: judged per space), or for a call naming no space when the actor is an owner or member of a served space that isn't open-join; anyone else only for join, cancel, any call naming a space not held here (routing answers it), reads of public and profile spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
+ "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor), or as member for a call on a space where the actor holds a role (round 32, Z7: judged per space), or for a call naming no space when the actor is an owner or member of a served space that isn't open-join, or for the append of a member.set (`conn.kind`) into an agent's or a service's profile space by the operator that profile names (`spaces[...].operator`, P-03); anyone else only for join, cancel, any call naming a space not held here (routing answers it), reads of public and profile spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
  "spaces": {
   "team:a.example": {
    "policy": {
@@ -163,6 +164,70 @@
     "@alice:a.example": "owner",
     "@:a.example": "owner"
    }
+  },
+  "profile:@coder:a.example": {
+   "policy": {
+    "visibility": "public",
+    "join": "closed",
+    "membersMayInvite": false,
+    "allowAgents": "any",
+    "approvals": [],
+    "separateApprover": false,
+    "budget": null,
+    "maxDelegationDepth": 4,
+    "minDurability": "local",
+    "launchWindow": 30,
+    "extensionsMinRole": "member",
+    "sessions": {
+     "watch": "member",
+     "read": "member",
+     "steer": "owner",
+     "modes": [
+      "auto",
+      "guarded"
+     ]
+    },
+    "servers": {
+     "deny": []
+    }
+   },
+   "roles": {
+    "@coder:a.example": "owner",
+    "@:a.example": "owner"
+   },
+   "operator": "@alice:a.example"
+  },
+  "profile:@bot:a.example": {
+   "policy": {
+    "visibility": "public",
+    "join": "closed",
+    "membersMayInvite": false,
+    "allowAgents": "any",
+    "approvals": [],
+    "separateApprover": false,
+    "budget": null,
+    "maxDelegationDepth": 4,
+    "minDurability": "local",
+    "launchWindow": 30,
+    "extensionsMinRole": "member",
+    "sessions": {
+     "watch": "member",
+     "read": "member",
+     "steer": "owner",
+     "modes": [
+      "auto",
+      "guarded"
+     ]
+    },
+    "servers": {
+     "deny": []
+    }
+   },
+   "roles": {
+    "@bot:a.example": "owner",
+    "@:a.example": "owner"
+   },
+   "operator": "@zed:c.example"
   }
  },
  "cases": [
@@ -420,6 +485,70 @@
       "@alice:a.example": "owner",
       "@:a.example": "owner"
      }
+    },
+    "profile:@coder:a.example": {
+     "policy": {
+      "visibility": "public",
+      "join": "closed",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "roles": {
+      "@coder:a.example": "owner",
+      "@:a.example": "owner"
+     },
+     "operator": "@alice:a.example"
+    },
+    "profile:@bot:a.example": {
+     "policy": {
+      "visibility": "public",
+      "join": "closed",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     },
+     "roles": {
+      "@bot:a.example": "owner",
+      "@:a.example": "owner"
+     },
+     "operator": "@zed:c.example"
     },
     "lab2:a.example": {
      "policy": {
@@ -952,6 +1081,186 @@
      "who": "@bob:b.example",
      "nodes": [
       "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the named operator confirms its agent: a member.set in the agent's profile (P-03, §4.3)",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "append",
+    "space": "profile:@coder:a.example",
+    "kind": "member.set",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "member"
+   }
+  },
+  {
+   "name": "another actor's member.set in that profile",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "append",
+    "space": "profile:@coder:a.example",
+    "kind": "member.set",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "another actor's other append in that profile",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "append",
+    "space": "profile:@coder:a.example",
+    "kind": "key.add",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the operator's other kinds in that profile",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "append",
+    "space": "profile:@coder:a.example",
+    "kind": "key.add",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the operator's message in that profile",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "append",
+    "space": "profile:@coder:a.example",
+    "kind": "message",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the operator's actor on a node its profile doesn't list",
+   "conn": {
+    "node": "VPzQEwfdDS2TCBifjcCmESqpmkUOiqwNwbdAM_mJBs8",
+    "call": "append",
+    "space": "profile:@coder:a.example",
+    "kind": "member.set",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the operator of one agent confirms another's",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "append",
+    "space": "profile:@bot:a.example",
+    "kind": "member.set",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "a member.set in a human's profile, which names no operator",
+   "conn": {
+    "node": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "call": "append",
+    "space": "profile:@alice:a.example",
+    "kind": "member.set",
+    "hello": {
+     "who": "@bob:b.example",
+     "nodes": [
+      "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": false
+   }
+  },
+  {
+   "name": "the operator's other calls there stay as they were: a profile read is open",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "state",
+    "space": "profile:@coder:a.example",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
+     ]
+    }
+   },
+   "expect": {
+    "allow": true,
+    "tier": "open"
+   }
+  },
+  {
+   "name": "the operator's signal there is refused",
+   "conn": {
+    "node": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "call": "signal",
+    "space": "profile:@coder:a.example",
+    "hello": {
+     "who": "@alice:a.example",
+     "nodes": [
+      "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY"
      ]
     }
    },

@@ -219,32 +219,44 @@ pub fn fake_driver(script: &Path) -> DriverConfig {
     }
 }
 
-/// The operator confirms its agent (`member.set {actor: operator, role: owner}` in the agent's profile space,
-/// signed by the operator's device key `[n; 32]`), handed to the home directly. Since round 32's Z7 the
-/// operator holds no role in the profile space before confirming, so the peer filter refuses that append over
-/// han/1 (a spec gap, reported for round 33).
-pub fn confirm_operator(home: &Home, operator: &str, n: u8, agent: &str) {
-    use han_core::Value;
-    let space = format!("profile:{agent}");
-    let mut body = std::collections::BTreeMap::new();
-    body.insert("actor".to_owned(), Value::Str(operator.to_owned()));
-    body.insert("role".to_owned(), Value::Str("owner".to_owned()));
-    let (entry, content) = han_seq::build::sign_entry(
-        han_seq::build::EntrySpec {
-            space,
-            kind: "member.set".into(),
-            author: operator.to_owned(),
-            key_id: "d1".into(),
-            body: Value::Object(body),
-            content: None,
-            refs: vec![],
-            seen: 1,
-            time_secs: home.now_secs(),
-        },
-        &SigningKey::from_seed([n; 32]),
-    )
-    .unwrap();
-    home.append(&entry, content.as_ref()).unwrap();
+/// The operator confirms its agent over han/1 (section 4.3, P-03): `operator`'s node follows the agent's
+/// profile space and appends `member.set {actor: <operator>, role: owner}` there. The operator holds no role in
+/// that space; the peer filter admits this append because the profile names it as the operator (N-02), and
+/// Policy judges the confirmation.
+pub async fn confirm_operator(
+    world: &World,
+    operator: &Node<MemTransport>,
+    operator_actor: &str,
+    agent: &str,
+) {
+    let profile = format!("profile:{agent}");
+    let _ = operator
+        .call(Command::SpaceFollow {
+            home: world.home_ref.clone(),
+            space: profile.clone(),
+        })
+        .await;
+    for _ in 0..500 {
+        match operator
+            .call(Command::MemberSet {
+                space: profile.clone(),
+                actor: operator_actor.into(),
+                role: "owner".into(),
+            })
+            .await
+        {
+            Ok(CallResult::Receipt { .. }) => break,
+            Err(han_node::api::NodeError::NotFound { .. }) => {
+                tokio::time::sleep(Duration::from_millis(20)).await; // not followed yet
+            }
+            other => panic!("the operator's confirmation over han/1: {other:?}"),
+        }
+    }
+    let state = world.home.state_of(&profile).expect("the profile space");
+    assert!(
+        state.profile.as_ref().is_some_and(|p| p.operator_confirmed),
+        "{agent}'s operator is confirmed"
+    );
 }
 
 pub const BOB: &str = "@bob:a.localhost";
@@ -271,7 +283,7 @@ pub async fn setup_space(
         panic!("a space")
     };
     for (agent, _) in agents {
-        confirm_operator(&world.home, ALICE, 1, agent);
+        confirm_operator(world, alice, ALICE, agent).await;
     }
     for (who, _) in agents {
         call(
