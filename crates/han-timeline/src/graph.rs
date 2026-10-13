@@ -172,11 +172,6 @@ impl Graph {
         false
     }
 
-    /// Whether `a` is in the causal past of any of `heads` (or one of them).
-    pub fn in_past_of(&self, a: Pos, heads: &[Pos]) -> bool {
-        heads.iter().any(|h| self.happens_before_eq(a, *h))
-    }
-
     /// The closure of `heads`; with `extended`, the extended closure of TL-70.
     pub fn closure(&self, heads: &[Pos], extended: bool) -> Closure {
         let mut prefix = vec![0u32; self.nodes.len()];

@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cbor::Cbor;
 use crate::codec::full_id;
-use crate::ids::{InsertionId, ObjectId, OpId};
+use crate::ids::{CharId, InsertionId, ObjectId, OpId};
 use crate::op::{Change, MergeOp, Op};
 use crate::text::{Anchor, Bias, TextObj};
 use crate::value::Value;
@@ -119,6 +119,21 @@ impl State {
             Obj::Text(t) => Some(t.text()),
             _ => None,
         }
+    }
+
+    /// The visible characters of a text in order: identity, canonical id (TL-72) and character.
+    pub fn chars(&self, id: &ObjectId) -> Option<Vec<(CharId, CharId, char)>> {
+        let t = self.text_obj(id)?;
+        let lay = t.layout();
+        Some(
+            lay.visible_index
+                .iter()
+                .map(|&i| {
+                    let l = lay.order[i];
+                    (t.char_id(l), t.canonical(l), t.char_at(l))
+                })
+                .collect(),
+        )
     }
 
     /// The value of a register.
