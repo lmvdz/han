@@ -225,3 +225,12 @@ fn no_floats(v: &Value) -> bool {
         _ => true,
     }
 }
+
+/// Regression (found by the oracle proptest): a double exactly halfway between two shortest
+/// candidates takes the even digit, as ECMAScript requires.
+#[test]
+fn halfway_doubles_take_the_even_digit() {
+    use han_core::json::{Value, canonicalize};
+    let v = Value::Float(-2185592229608536.25);
+    assert_eq!(canonicalize(&v).unwrap(), b"-2185592229608536.2".to_vec());
+}
