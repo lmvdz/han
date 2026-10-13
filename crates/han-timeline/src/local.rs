@@ -65,7 +65,8 @@ pub(crate) fn plan_edit(
     }
     let mut deletes = ranges_in_order(t, doomed.iter().map(|&i| lay.order[i]));
     // Characters hidden only by TL-45 (b) that duplicate a deleted one.
-    if !doomed.is_empty() {
+    // Without copies visible == vis_a, so nothing is hidden only by (b).
+    if !doomed.is_empty() && t.has_copies() {
         let canon: std::collections::HashSet<CharId> =
             doomed.iter().map(|&i| t.canonical(lay.order[i])).collect();
         let hidden = (0..lay.order.len())
