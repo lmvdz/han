@@ -8,7 +8,7 @@ use clap::Args;
 use han_core::types::Durability;
 use han_net::wellknown::{document, serve_http, wellknown_routes};
 use han_net::{IrohOptions, IrohTransport, RelayChoice, ServeOptions, Transport, serve};
-use han_seq::{Home, HomeConfig, SqliteStore, SystemClock};
+use han_seq::{Home, HomeConfig, HostingPolicy, SqliteStore, SystemClock};
 
 use crate::keys;
 
@@ -34,6 +34,11 @@ pub struct SeqArgs {
     /// register a profile is out of scope of the protocol (section 4.3).
     #[arg(long)]
     register: Vec<String>,
+    /// Who may create a space on this server: `known` (its own actors and holders of a role in a hosted
+    /// space; the default), `open`, or `allow:<actor-or-server>,...` (known actors and the listed ones).
+    /// Test mode defaults to `open`.
+    #[arg(long, value_parser = parse_hosting)]
+    hosting: Option<HostingPolicy>,
     /// Test mode (G-11): the clock moves only by `test.clock`, the peer filter admits every node, and the
     /// actors of `--test-config` are provisioned. Never for production.
     #[arg(long)]
@@ -41,6 +46,19 @@ pub struct SeqArgs {
     /// `config.json` of the wire vectors, for `--test-mode`.
     #[arg(long, default_value = "conformance/wire-vectors/config.json")]
     test_config: PathBuf,
+}
+
+fn parse_hosting(spec: &str) -> Result<HostingPolicy, String> {
+    match spec {
+        "known" => Ok(HostingPolicy::KnownActors),
+        "open" => Ok(HostingPolicy::Open),
+        list => match list.strip_prefix("allow:") {
+            Some(l) if !l.is_empty() => Ok(HostingPolicy::AllowList(
+                l.split(',').map(str::to_owned).collect(),
+            )),
+            _ => Err("want known, open or allow:<actor-or-server>,...".into()),
+        },
+    }
 }
 
 pub fn relay_choice(spec: &str) -> RelayChoice {
@@ -70,6 +88,9 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
             store,
         )?)
     };
+    if let Some(hosting) = args.hosting.clone() {
+        home.set_hosting(hosting);
+    }
     for spec in &args.register {
         let p: Vec<&str> = spec.split(':').collect();
         let [
