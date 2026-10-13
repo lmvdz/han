@@ -53,7 +53,4 @@ the deterministic CBOR checks (decode + re-encode compare, `cbor.rs`).
 
 - `Closure` per materialise is O(batches): incremental closures or a smarter cache key.
 - `ops_between` sorts full `OpId`s; sort by (counter, replica rank) integers instead.
-- zstd: batches under ~100 bytes never shrink; skip the compressor call for tiny payloads.
-- `Envelope::decode` → `batch_id` hashes the preimage, built by re-encoding; hash the bytes in
-  place.
 - `Layout` vectors for small or seal/copy texts: `vis_a`/`visible`/`sealed` as bitsets.
