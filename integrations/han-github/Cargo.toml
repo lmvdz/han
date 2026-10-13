@@ -1,0 +1,33 @@
+[package]
+name = "han-github"
+description = "HAN GitHub integration: a separate process that polls a team's repositories with ETags (read-only, App installation tokens) and surfaces issues in a space as github.issue/1 items and, for agent-ready issues, task suggestions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "han-github"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+han-exec = { path = "../../crates/han-exec", version = "0.1.0" }
+han-node = { path = "../../crates/han-node", version = "0.1.0" }
+octocrab = { version = "=0.54.4", default-features = false, features = ["default-client", "rustls", "rustls-ring", "tracing"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+toml = "0.9"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+http = "1"
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
