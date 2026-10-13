@@ -102,7 +102,22 @@ impl Layout {
             self.vis_a[i] = false;
             self.visible[i] = false;
         }
-        self.visible_index.retain(|x| idx.binary_search(x).is_err());
+        // Both lists are sorted: move the stretches between removed entries down.
+        let vi = &mut self.visible_index;
+        let len = vi.len();
+        let mut w = vi.partition_point(|&x| x < idx[0]);
+        let mut r = w;
+        for &i in &idx {
+            let p = r + vi[r..].partition_point(|&x| x < i);
+            if vi.get(p) != Some(&i) {
+                continue;
+            }
+            vi.copy_within(r..p, w);
+            w += p - r;
+            r = p + 1;
+        }
+        vi.copy_within(r..len, w);
+        vi.truncate(w + len - r);
     }
 }
 
@@ -117,6 +132,8 @@ pub(crate) struct TextObj {
     seals: Vec<Vec<IdRange>>,
     has_copies: bool,
     layout: OnceLock<Arc<Layout>>,
+    /// The visible text, built on first use.
+    text: OnceLock<String>,
 }
 
 impl TextObj {
@@ -134,6 +151,11 @@ impl TextObj {
 
     pub fn has_char(&self, c: &CharId) -> bool {
         self.local(c).is_some()
+    }
+
+    /// Whether some insertion is a merge copy.
+    pub fn has_copies(&self) -> bool {
+        self.has_copies
     }
 
     /// The length of an insertion of this text.
@@ -194,6 +216,7 @@ impl TextObj {
         text: &str,
         origin: Option<CharId>,
     ) {
+        self.text = OnceLock::new();
         let anchor = anchor.and_then(|a| self.local(a));
         let chars: Vec<char> = text.chars().collect();
         let l = self.ins.len() as u32;
@@ -252,6 +275,7 @@ impl TextObj {
     }
 
     pub fn delete(&mut self, r: &IdRange) {
+        self.text = OnceLock::new();
         if let Some(&l) = self.index.get(&r.insertion) {
             let rec = &mut self.ins[l as usize];
             let to = (r.to as usize).min(rec.deleted.len());
@@ -273,6 +297,7 @@ impl TextObj {
     }
 
     pub fn seal(&mut self, ranges: Vec<IdRange>) {
+        self.text = OnceLock::new();
         self.seals.push(ranges);
         self.layout = OnceLock::new();
     }
@@ -289,10 +314,11 @@ impl TextObj {
             total += r.chars.len();
         }
         let mut order = Vec::with_capacity(total);
+        let mut vis_a: Vec<bool> = Vec::with_capacity(total);
         let mut pos = vec![0usize; total];
         // Pre-order with an explicit stack: a character, then its children newest first, then
-        // the next character of its insertion. Runs of characters without children are
-        // emitted in one go.
+        // the next character of its insertion. Runs between children are emitted with
+        // their visibility in one go.
         let mut stack: Vec<Local> = Vec::new();
         let push_children = |stack: &mut Vec<Local>, kids: &[u32]| {
             for &k in kids.iter().rev() {
@@ -308,10 +334,15 @@ impl TextObj {
             let kid = rec.kids.get(rec.kids.partition_point(|(o, _)| *o < k));
             let end = kid.map_or(n - 1, |(o, _)| *o);
             let base = starts[l as usize];
-            for o in k..=end {
-                pos[base + o as usize] = order.len();
-                order.push((l, o));
+            let from = order.len();
+            for (p, i) in pos[base + k as usize..=base + end as usize]
+                .iter_mut()
+                .zip(from..)
+            {
+                *p = i;
             }
+            order.extend((k..=end).map(|o| (l, o)));
+            vis_a.extend(rec.deleted[k as usize..=end as usize].iter().map(|d| !d));
             if end + 1 < n {
                 stack.push((l, end + 1));
             }
@@ -322,7 +353,11 @@ impl TextObj {
 
         let n = order.len();
         let mut sealed = vec![false; n];
-        let mut in_region = vec![0i32; n + 1];
+        let mut in_region = if self.seals.is_empty() {
+            Vec::new()
+        } else {
+            vec![0i32; n + 1]
+        };
         let mut seal_spans = Vec::new();
         for ranges in &self.seals {
             let mut first = usize::MAX;
@@ -346,11 +381,12 @@ impl TextObj {
                 }
             }
         }
-        let mut vis_a = vec![false; n];
-        let mut depth = 0;
-        for (i, &(l, k)) in order.iter().enumerate() {
-            depth += in_region[i];
-            vis_a[i] = sealed[i] || (depth == 0 && !self.ins[l as usize].deleted[k as usize]);
+        if !self.seals.is_empty() {
+            let mut depth = 0;
+            for (i, v) in vis_a.iter_mut().enumerate() {
+                depth += in_region[i];
+                *v = sealed[i] || (depth == 0 && *v);
+            }
         }
         let visible = if self.has_copies {
             // TL-45 (b): the first character visible by (a) of each canonical id. Canonical
@@ -391,7 +427,14 @@ impl TextObj {
         } else {
             vis_a.clone()
         };
-        let visible_index = (0..n).filter(|&i| visible[i]).collect();
+        let mut visible_index = Vec::with_capacity(n);
+        visible_index.extend(
+            visible
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| **v)
+                .map(|(i, _)| i),
+        );
         Layout {
             order,
             pos,
@@ -406,11 +449,18 @@ impl TextObj {
 
     /// The visible text (TL-45).
     pub fn text(&self) -> String {
-        let lay = self.layout();
-        lay.visible_index
-            .iter()
-            .map(|&i| self.char_at(lay.order[i]))
-            .collect()
+        self.text
+            .get_or_init(|| {
+                let lay = self.layout();
+                let mut out = String::with_capacity(lay.visible_index.len());
+                out.extend(
+                    lay.visible_index
+                        .iter()
+                        .map(|&i| self.char_at(lay.order[i])),
+                );
+                out
+            })
+            .clone()
     }
 
     /// The number of visible characters.
