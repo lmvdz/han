@@ -35,8 +35,8 @@ pub use conn::{CallFeed, Conn, Handled};
 pub use error::{Code, WireError};
 pub use fanout::{Hooks, NoHooks};
 pub use home::{
-    Directory, EPOCH, Home, HomeConfig, NoDirectory, OpenError, RateLimit, ServerInfo,
-    profile_policy,
+    Directory, EPOCH, HOSTING_DENIED, Home, HomeConfig, HostingPolicy, NoDirectory, OpenError,
+    RateLimit, ServerInfo, profile_policy,
 };
 pub use identity::{PinKey, PinView, ServerKey};
 pub use store::{MemStore, SqliteStore, Store, StoreError};
