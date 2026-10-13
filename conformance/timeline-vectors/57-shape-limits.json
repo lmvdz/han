@@ -1,0 +1,303 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "57-shape-limits",
+ "description": "Empty or control-character names and labels are malformed; a 1,025-byte key on a plain map and a value nested 17 deep are too_large; a parent counter at or above start is lamport at once, never held; genesis and session must pair",
+ "rules": [
+  "TL-20",
+  "TL-25",
+  "TL-27",
+  "TL-30",
+  "TL-38",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "emptyname": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "",
+     "source": "1@A"
+    }
+   ]
+  },
+  "ctrlname": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "a\tb",
+     "source": "1@A"
+    }
+   ]
+  },
+  "emptylabel": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": ""
+    }
+   ]
+  },
+  "key1025": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+     "value": 1
+    }
+   ]
+  },
+  "deep": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "d",
+     "value": [
+      [
+       [
+        [
+         [
+          [
+           [
+            [
+             [
+              [
+               [
+                [
+                 [
+                  [
+                   [
+                    [
+                     [
+                      1
+                     ]
+                    ]
+                   ]
+                  ]
+                 ]
+                ]
+               ]
+              ]
+             ]
+            ]
+           ]
+          ]
+         ]
+        ]
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  "depth16": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "d",
+     "value": [
+      [
+       [
+        [
+         [
+          [
+           [
+            [
+             [
+              [
+               [
+                [
+                 [
+                  [
+                   [
+                    [
+                     1
+                    ]
+                   ]
+                  ]
+                 ]
+                ]
+               ]
+              ]
+             ]
+            ]
+           ]
+          ]
+         ]
+        ]
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  "impossible": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "9@C"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "x",
+     "value": 1
+    }
+   ]
+  },
+  "tnosession": {
+   "replica": "C",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript"
+    }
+   ]
+  },
+  "datasession": {
+   "replica": "C",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "emptyname",
+     "result": "rejected:malformed"
+    },
+    {
+     "deliver": "ctrlname",
+     "result": "rejected:malformed"
+    },
+    {
+     "deliver": "emptylabel",
+     "result": "rejected:malformed"
+    },
+    {
+     "deliver": "key1025",
+     "result": "rejected:too_large"
+    },
+    {
+     "deliver": "deep",
+     "result": "rejected:too_large"
+    },
+    {
+     "deliver": "depth16",
+     "result": "integrated"
+    },
+    {
+     "deliver": "impossible",
+     "result": "rejected:lamport"
+    },
+    {
+     "expect": {
+      "pending": []
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "tnosession",
+     "result": "rejected:genesis"
+    },
+    {
+     "deliver": "datasession",
+     "result": "rejected:genesis"
+    }
+   ]
+  }
+ ]
+}
