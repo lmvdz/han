@@ -42,7 +42,7 @@ Ops are written as `{"kind": …, fields…}` with the field names of TL-16 (mai
 | `states` | a list of `{at, objects?, absent?, anchors?}`. `at` is a timeline id (its head) or a version. `objects` maps object ids to their observable state (TL-61): `{"value": v}` for a register, `{"entries": {key: [[op id, value], …]}}` for a map (every present key, values greatest first; `{}` when empty), `{"text": s}` for a text's visible text. Only listed objects are checked. `absent` lists objects that must not exist at that version. `digest`, when present, is the state digest of TL-61 (its state lists every object) |
 | `anchors` (in a state) | `{object, make?, anchor, pos}`: making an anchor at `make.pos` with `make.bias` gives `anchor` (`"start"`, `"end"` or `[character, bias]`), and resolving `anchor` gives `pos` (TL-46) |
 | `plan_edits` | local edit planning (TL-47, TL-53): `{at, object, pos, delete, text}` gives either `op` (the exact `text.edit`) or `error` (`out_of_range`, `sealed`) |
-| `plans` | merge planning (TL-70–75, TL-87): `{into, from}` gives `kind` (`merge`, `up_to_date`, or `error:<code>` for a local error such as `merge_order`); for a merge, the `base` version and the `conflicts` in plan order, and for each entry of `results`, applying the clean changes plus the listed `resolutions` (one per conflict, in order: `"target"`, `"incoming"`, `{"text": s}`) gives the listed visible `texts` |
+| `plans` | merge planning (TL-70–75, TL-87): `{into, from}` gives `kind` (`merge`, `up_to_date`, or `error:<code>` for a local error such as `merge_self`); for a merge, the `base` version and the `conflicts` in plan order, and for each entry of `results`, applying the clean changes plus the listed `resolutions` (one per conflict, in order: `"target"`, `"incoming"`, `{"text": s}`) gives the listed visible `texts` |
 | `checkpoints` | `{timeline, list}`: the timeline's checkpoints in op id order with their labels and checkpoint versions (TL-25) |
 | `tree_conflicts` | `{at, tree, keys, duplicates, clashes}`: the tree map's keys in conflict, objects referenced by several paths, and path clashes (TL-86) |
 | `inventory` | `{replica label: [[from, to], …]}`: the hello inventory with adjacent ranges merged (TL-110) |
@@ -121,7 +121,7 @@ Keys: each private key is the 32-byte Ed25519 seed `sha256(UTF-8 seed)`; `public
 | 42-concurrent-merges-show-copies-once | duplicate copies hidden; deleting removes the hidden duplicate too |
 | 43-transcript-history-rules | transcripts: only main, one writer, seals by the host |
 | 44-history-kinds | history kinds on main only; trees and transcripts only in their kinds |
-| 45-merge-order-refused | merge_order |
+| 45-merge-disordered-kept-characters | kept characters out of order: longest order-consistent part kept, the rest a move; never refused |
 | 46-merge-adjacent-lines-stay-clean | edits on neighbouring lines merge cleanly |
 | 47-criss-cross-merge-clean | mutual concurrent merges, then a third: base spans both timelines |
 | 48-criss-cross-conflict-resolved-differently | each side kept its own line: the hunk returns once |
@@ -131,4 +131,12 @@ Keys: each private key is the 32-byte Ed25519 seed `sha256(UTF-8 seed)`; `public
 | 52-merge-register-conflict | register conflict and a value resolution |
 | 53-merge-rename-conflict | rename/rename in a merge |
 | 54-merge-path-conflict | a file and a directory of one name in a merge |
+| 55-merge-move-against-edit | a line treated as moved conflicts with an edit of it |
+| 56-merge-across-three-timelines | imports and origins judged by canonical ids at incoming, across three timelines |
+| 57-shape-limits | name, label, key and depth limits; lamport at once for impossible parents; genesis/session pairing |
+| 58-before-genesis-authorisation-waits | authorisation judged only once the genesis is held |
+| 59-fork-source-vouches | a fork's source vouches like a parent |
+| 60-merge-incoming-move-inside-one-cluster | only characters kept by both sides stay; an incoming move inside a line comes through |
+| 61-merge-move-across-two-clusters | each region rewritten on its own; a move split across an empty and a line cluster |
+| 62-merge-runs-chain-at-one-anchor | runs that would share an anchor chain; a merge naming one anchor twice is invalid |
 | envelopes.json E1–E11 | envelope bytes, the history id from the genesis batch id, batch ids, signatures, replica tables, bad signatures, non-deterministic CBOR, zstd without size, hello and answer bytes, an empty history on a non-genesis batch, an unknown key, and a merge digest (TL-74) with the this-op marker (`digest_preimage`, `merge_digest`) |
