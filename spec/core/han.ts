@@ -400,12 +400,14 @@ export interface WellKnownPeers { peers: { server: ServerName; url: string /* th
 // a hint a client verifies against the server the space id names; a notifier bot is a plain HAN actor. The round-29 Matrix binding's shapes are gone.
 /** N-02 (X9): the peer filter is one pure function, judged per call before the call's own rules, testable by vectors (conformance/carrier-vectors).
  *  `hello` is present after a successful `hello`: the actor and the node ids that vouch for it (the valid keys of its pinned profile, N-01; for `@:S`
- *  the node ids of S's well-known `sequencer`). `space` is the space the call names (`args.space`, the appended entry's `space`, or the streamed item's `space`). */
-export interface AdmitConn { node: NodeId; call: string; space?: SpaceId; hello?: { who: ActorId; nodes: NodeId[] } }
-/** The spaces the node serves, each as much of its SpaceState as admit reads. A profile space's roles name its actor and `@:server`. */
-export type AdmitSpaces = { [space: SpaceId]: Pick<SpaceState, "policy" | "roles"> };
+ *  the node ids of S's well-known `sequencer`). `space` is the space the call names (`args.space`, the appended entry's `space`, or the streamed item's `space`); `kind` is the appended entry's `kind` (appends only). */
+export interface AdmitConn { node: NodeId; call: string; space?: SpaceId; kind?: string; hello?: { who: ActorId; nodes: NodeId[] } }
+/** The spaces the node serves, each as much of its SpaceState as admit reads. A profile space's roles name its actor and `@:server`; an agent's or a service's
+ *  profile space also carries the `operator` its profile names (§4.3), whose `member.set` appends there are a member's (N-02, P-03). */
+export type AdmitSpaces = { [space: SpaceId]: Pick<SpaceState, "policy" | "roles"> & { operator?: ActorId } };
 /** `server`: a node its server's well-known lists, for every call. `member` (round 32, Z7: per space): a registered device of an actor holding a role in the space the call names,
- *  or, for a call naming no space (blobPut), an owner or member of a served space that isn't open-join; the call then judges itself. `open`: anyone, for `hello`, `join`, `cancel`,
+ *  or, for a call naming no space (blobPut), an owner or member of a served space that isn't open-join, or the operator an agent's or a service's profile names, for a
+ *  `member.set` append into that profile space (N-02, P-03); the call then judges itself. `open`: anyone, for `hello`, `join`, `cancel`,
  *  any call on a space not held here (§4.1 step 2 answers), reads of public and profile spaces, and appends to `join: "open"` spaces; rate-limited per node. */
 export type AdmitVerdict = { allow: true; tier: "member" | "server" | "open" } | { allow: false; reason: string };
 export interface PeerFilter {

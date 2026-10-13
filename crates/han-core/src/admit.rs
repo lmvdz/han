@@ -33,6 +33,9 @@ pub struct AdmitConn {
     /// of a streamed item.
     #[serde(default)]
     pub space: Option<SpaceId>,
+    /// For an `append`, the appended entry's `kind`.
+    #[serde(default)]
+    pub kind: Option<String>,
     /// Present after a successful `hello`.
     #[serde(default)]
     pub hello: Option<Hello>,
@@ -48,14 +51,18 @@ pub struct AdmitPolicy {
 }
 
 /// A space the node serves, as much of its state as `admit` reads (`Pick<SpaceState, "policy" |
-/// "roles">`). A profile space's roles name its actor and `@:server`, so serving an actor's
-/// profile gives its devices a standing role here.
+/// "roles">`, and the `operator` an agent's or a service's profile names). A profile space's roles
+/// name its actor and `@:server`, so serving an actor's profile gives its devices a standing role
+/// here.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct AdmitSpace {
     /// The policy.
     pub policy: AdmitPolicy,
     /// Who holds which role.
     pub roles: BTreeMap<ActorId, Role>,
+    /// For an agent's or a service's profile space, the operator its profile names (section 4.3).
+    #[serde(default)]
+    pub operator: Option<ActorId>,
 }
 
 impl From<&SpaceState> for AdmitSpace {
@@ -63,6 +70,7 @@ impl From<&SpaceState> for AdmitSpace {
         AdmitSpace {
             policy: policy_of(&s.policy),
             roles: s.roles.clone(),
+            operator: s.profile.as_ref().and_then(|p| p.operator.clone()),
         }
     }
 }
@@ -107,7 +115,9 @@ const READ_CALLS: [&str; 4] = ["read", "subscribe", "state", "blobGet"];
 /// too). A node that vouches for its hello's actor is admitted as `Server` when the actor is a
 /// server actor; as `Member` for a call on a space where the actor holds a role, or for a call
 /// naming no space when the actor is an owner or member of a served space that isn't open-join
-/// (round 32, Z7: the member tier is judged per space). Anyone else may `join` or `cancel`, make
+/// (round 32, Z7: the member tier is judged per space); and as `Member` for the `append` of a
+/// `member.set` into an agent's or a service's profile space by the operator that profile names
+/// (its confirmation or withdrawal, P-03; Policy still judges it). Anyone else may `join` or `cancel`, make
 /// any call on a space not held here (section 4.1 step 2 answers it), read public and profile
 /// spaces, and append to a space with `join: "open"`.
 pub fn admit(conn: &AdmitConn, spaces: &AdmitSpaces) -> AdmitVerdict {
@@ -134,6 +144,13 @@ pub fn admit(conn: &AdmitConn, spaces: &AdmitSpaces) -> AdmitVerdict {
         })
     {
         return AdmitVerdict::Allow(Tier::Member); // a spaceless call needs a standing role (Z7)
+    }
+    if bound
+        && call == "append"
+        && conn.kind.as_deref() == Some("member.set")
+        && held.is_some_and(|s| s.operator.as_ref() == Some(&hello.who))
+    {
+        return AdmitVerdict::Allow(Tier::Member); // the named operator confirms (P-03, section 4.3)
     }
     if call == "join" || call == "cancel" {
         return AdmitVerdict::Allow(Tier::Open); // N-03 after hello; ending one's own stream
