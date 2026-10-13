@@ -1,0 +1,22 @@
+[package]
+name = "han-tui"
+description = "The terminal face of HAN: the live board, the session pane and the approvals pane over the running node's API (han tui)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# A face: the node API types and the JSON-RPC client only, never the runtime (crates/han-node/tests/layering.rs).
+han-node = { path = "../../crates/han-node", version = "0.1.0", default-features = false }
+ratatui = "0.30"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["time"] }
+unicode-width = "0.2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

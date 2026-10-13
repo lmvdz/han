@@ -45,6 +45,9 @@ rusqlite_migration = { workspace = true, optional = true }
 widestring = { version = "1", optional = true }
 
 [dev-dependencies]
+# The terminal face is tested against a real in-process node (tests/tui.rs). A dev-dependency cycle is allowed:
+# han-tui depends on this crate without the runtime, and only tests depend on han-tui.
+han-tui = { path = "../../apps/han-tui", version = "0.1.0" }
 rusqlite.workspace = true
 proptest = "1"
 tokio = { workspace = true, features = ["test-util"] }

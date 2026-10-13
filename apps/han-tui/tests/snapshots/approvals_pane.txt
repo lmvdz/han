@@ -1,0 +1,26 @@
+ HAN  team · by issue · filter: -
+┌ Board ─────────────────────────────────────────────────────────────────────────────────┐┏ Approvals (1) ━━━━━━━━━━━━━━━━━━━━━━━┓
+│  PERSON     AGENT        STATE · STEP                    CHANGES  OVERLAP    TOK   AGE │┃>git.push · team                      ┃
+│>▾ #41 Board freshness (2)  ⚑ hunk                                                      │┃  by lars-reviewer                    ┃
+│ ● @lars      lars-coder   working: running tests [cargo … 4 files  ⚑ hunk     41k   0s │┃  you can approve                     ┃
+│ ● @ada       ada-bot      working: editing src/board.rs   1 file   ⚑ hunk ×2  41k   20s│┃                                      ┃
+│ ▾ #52 Login flow (2)  1 await you                                                      │┃                                      ┃
+│▌◐ @lars      lars-review… waiting-approval (awaits you):… 1 file              41k   1m │┃                                      ┃
+│ ◌ @bo        bo-runner    stale · last heard 14m ago · w… 1 file              41k   14m│┃                                      ┃
+│ ▾ #60 Docs (2)                                                                         │┃                                      ┃
+│ ✓ @ada       ada-docs     done: wrote the guide           1 file              41k   3h │┃                                      ┃
+│ ○ @lars      lars-notes   idle: nothing to do             1 file              –     2m │┃                                      ┃
+│ ▾ No issue (1)                                                                         │┃                                      ┃
+│ ✗ @bo        bo-scratch   failed: host unreachable        0 files             –     40m│┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+└ 1-7 of 7 ──────────────────────────────────────────────────────────────────────────────┘┗ j/k · Enter opens · Esc closes ━━━━━━┛
+ ● node @lars · space live head 42 ⚑ 1 awaiting you                                          1 effect waits for your approval (a)
