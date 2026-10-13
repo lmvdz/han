@@ -1,38 +1,79 @@
-# HAN — safe agent actions for shared conversations
+# HAN — teams of people and agents that see each other's work
 
-**HAN is an open standard that makes it safe for AI agents to act in the world from shared conversations. In any room where people and agents work together, every real-world action (a push, a payment, a deploy, an email) is authorized once, executed at most once, accounted against a budget, and leaves a record that anyone in the room can verify.**
+**HAN is an open standard, and soon an app, for teams where people and AI coding agents work side by side. Everyone, agents included, sees live what every agent is working on, so nobody has to ask "what are you working on?". Nothing an agent does to the outside world (a push, a PR, a deploy, a payment) happens without an approval that anyone on the team can verify.**
 
-HAN doesn't replace chat. Conversations run on an existing network (Matrix first), and HAN adds a per-room **sequencer** plus the rules agents need:
+## What HAN gives a team
 
-- **One answer to "was this authorized?"** The sequencer orders every agent action into a signed, hash-chained log.
+- **Live visibility.** Every agent session can be watched, read and steered across machines and silos, while the work happens, not after the PR. Owners decide per space who may watch, read or steer.
+- **One answer to "was this authorized?"** A per-space **sequencer** orders every agent action into a signed, hash-chained log.
 - **At most one launch per approved action**, and an honest `unknown` after a crash, never a silent retry.
-- **Accountable agents:** every agent has a human operator who vouches for it, re-checked at every action.
-- **Budgets** reserved before an action and settled after it, delegated down task trees. Agents can't spend outside their allocation.
+- **Accountable agents.** Every agent names a human operator who vouches for it.
+- **Budgets**, reserved before an action, settled after it, and delegated down task trees.
 - **Approvals bound to the exact plan**, with expiry and separation of duties.
-- **Live sessions you can watch, read and steer** across silos, while the work happens, not after the PR. Owners set who may watch, read or steer per space. Every steer is signed and sequenced. An agent can be *guarded*: then it can't approve, govern or steer anyone else (it may still leave), and nothing it proposes or executes runs without its own human's approval, nor does anything a delegate, agent or human, proposes while it is assigned a task the guarded agent gave, until that task closes. A delegate's subtask without a parent is held only by its own host's duties ([§7.5](spec/core/architecture.md)). Guarding is recorded on the work when the work is created, so unguarding it later, or switching owners' forcing off, frees nothing already recorded. Only that human can unguard it (the agent can't), and owners may guard every non-human with `forceGuarded`. Local actions in its sandbox and what it says in messages are host matters ([§7.5](spec/core/architecture.md)).
-- **Replayable policy:** Policy is <!--s:policy_fns_w-->six<!--/s--> pure functions, so any participant re-checks every decision. A cheating sequencer leaves a portable proof.
+- **Guarded agents.** A guarded agent can't approve, govern or steer anyone else, and nothing it, or a delegate working its task, proposes runs without its human's approval. Guarding is recorded on the work when the work is created, so nothing already recorded is freed later. Owners may guard every non-human with `forceGuarded`. The residue Policy can't see is listed in [§7.5](spec/core/architecture.md).
+- **Replayable policy.** Policy is <!--s:policy_fns_w-->six<!--/s--> pure functions, so any participant can re-check every decision. A cheating sequencer leaves a portable proof.
 
-> **Status: design draft (v1, round <!--s:round-->30<!--/s-->).** This is a specification with an executable reference ([ref/](ref/)), a working but minimal implementation ([witnesses/impl-py/](witnesses/impl-py/)) and a clean-room TypeScript implementation written from the spec alone ([witnesses/cleanroom-ts/](witnesses/cleanroom-ts/)). There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](spec/decisions/grading-rubric.md)) scored <!--s:scores-->rounds 1–6 from 57.8 to 76.6 / 100, rounds 8–16 (after the scope change) 67.8, 67.5, 69.8, 69.2, 71.1, 72.5, 72.7, 73.1, 72.2, round 18 73.4 (round 17 was folded into it), round 19 73.9, round 21 73.7, round 22 74.0, round 23 73.0, round 24 74.7, round 25 74.3, round 26 74.9, round 27 76.5, round 28 77.8 and round 29 **77.9** (round 20 not graded yet)<!--/s-->. See [HISTORY.md](spec/decisions/HISTORY.md). Expect breaking changes.
+## Where it's going
 
-**What witnesses/impl-py/ contains.** A Python sequencer (SQLite WAL store, generic WebSocket binding, a Matrix application service), client with outbox, executor, agent host (a scripted agent and a Claude Code driver), verifier, federation between servers, and a CLI: <!--s:impl_n-->230<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default. The Matrix binding is tested on a real Synapse, without end-to-end encryption. **The honest gaps:** the TypeScript and Python implementations have been run against each other ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations; both servers pass all <!--s:wv_n-->113<!--/s--> wire vectors); no power-cut or `replicated`-durability test; `guarded` has no OS sandbox on Windows, so it is advisory there, and <!--s:advisory_claim-->the host says so in its `status` items (`test_host_p15.py::test_guarded_status_says_it_is_advisory_without_a_sandbox`)<!--/s-->; <!--s:gate_claim-->the implementation's gate runs on a `PreToolUse` hook that sees every call, with `canUseTool` as a second check (`test_host_claude_gate.py`)<!--/s--> (§8.4); no moves between real servers; no E2EE in the Matrix binding. [Architecture §10](spec/core/architecture.md) lists every rule with its check, and says plainly where there is none.
+The specification is mature. The next step is a product, planned in [PLAN.md](PLAN.md):
 
-## Read
+- **The MVP: team awareness.** 2–4 people, each running several coding agents. A live board shows who is on which GitHub issue and what each agent is doing. You can drill into any session's live work timeline. Agents query each other's sessions, and overlap alerts fire before two agents collide.
+- **No harness lock-in.** Agents run through ACP (Agent Client Protocol), with pi first; any ACP agent should work.
+- **The sandbox is the gate.** Agents get no network and no credentials. Their only way out is HAN's `propose`, and a separate executor acts only on valid approvals.
+- **One protocol over QUIC**, dialled by key (iroh), so teammates' machines and cloud runners reach each other without servers or port forwarding. Matrix and chat tools become integrations. This change lands in spec round 30; until then, [§8](spec/core/architecture.md) still describes the Matrix and WebSocket bindings.
+- **A Rust implementation:** one `han` binary with a terminal UI first, and a Tauri desktop app after.
 
-| File | What it is |
+## Status
+
+> **Design draft (v1, round <!--s:round-->30<!--/s-->).** The repository holds:
+> - a specification;
+> - an executable reference ([ref/](ref/));
+> - a working but minimal Python implementation ([witnesses/impl-py/](witnesses/impl-py/));
+> - a clean-room TypeScript implementation written from the spec alone ([witnesses/cleanroom-ts/](witnesses/cleanroom-ts/)).
+>
+> There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](spec/decisions/grading-rubric.md)) scored <!--s:scores-->rounds 1–6 from 57.8 to 76.6 / 100, rounds 8–16 (after the scope change) 67.8, 67.5, 69.8, 69.2, 71.1, 72.5, 72.7, 73.1, 72.2, round 18 73.4 (round 17 was folded into it), round 19 73.9, round 21 73.7, round 22 74.0, round 23 73.0, round 24 74.7, round 25 74.3, round 26 74.9, round 27 76.5, round 28 77.8 and round 29 **77.9** (round 20 not graded yet)<!--/s-->. See [HISTORY.md](spec/decisions/HISTORY.md). Expect breaking changes.
+
+**What the Python witness contains:**
+- a sequencer (SQLite WAL store, generic WebSocket binding, a Matrix application service);
+- a client with an outbox;
+- an executor;
+- an agent host (a scripted agent and a Claude Code driver);
+- a verifier, federation between servers, and a CLI;
+- <!--s:impl_n-->230<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
+
+**The honest gaps:**
+- **Interop:** the TypeScript and Python implementations have been run against each other ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations), and both servers pass all <!--s:wv_n-->113<!--/s--> wire vectors.
+- **Durability:** there is no power-cut or `replicated`-durability test.
+- **Windows:** `guarded` has no OS sandbox on Windows, so it is advisory there, and <!--s:advisory_claim-->the host says so in its `status` items (`test_host_p15.py::test_guarded_status_says_it_is_advisory_without_a_sandbox`)<!--/s-->.
+- **The gate:** <!--s:gate_claim-->the implementation's gate runs on a `PreToolUse` hook that sees every call, with `canUseTool` as a second check (`test_host_claude_gate.py`)<!--/s--> (§8.4).
+- **Moves:** none between real servers.
+- **Encryption:** no E2EE in the Matrix binding.
+
+[Architecture §10](spec/core/architecture.md) lists every rule with its check, and says plainly where there is none.
+
+## Repository
+
+| Path | What it is |
 |---|---|
-| [goal.md](spec/goal.md) | why HAN exists, what "v1 done" means, and what HAN deliberately is not |
-| [architecture.md](spec/core/architecture.md) | the specification: entries and receipts, the <!--s:calls_core_w-->four<!--/s--> sequencer calls, modules, rules (`R-`, `P-`, `X-`, `T-`), the trust model, the Matrix binding, and a rule-by-rule verification table (§10) |
-| [han.ts](spec/core/han.ts) | exact types (normative for shapes) |
-| [coverage.md](spec/core/coverage.md) | how every guarantee of the earlier v0.4 design was kept, moved, weakened or dropped |
-| [ref/](ref/) | executable reference Policy and sequencer/verifier (real Ed25519), conformance vectors, mutation suites, a fuzzer and a model checker |
-| [witnesses/impl-py/](witnesses/impl-py/) | a minimal working implementation and its tests (`ref/list_tests.py` lists them with their rule tags) |
+| [spec/goal.md](spec/goal.md) | why HAN exists, what "v1 done" means, and what HAN deliberately is not |
+| [spec/core/architecture.md](spec/core/architecture.md) | the specification: entries and receipts, the <!--s:calls_core_w-->four<!--/s--> sequencer calls, modules, rules (`R-`, `P-`, `X-`, `T-`), the trust model, bindings, and a rule-by-rule verification table (§10) |
+| [spec/core/han.ts](spec/core/han.ts) | exact types (normative for shapes) |
+| [spec/core/coverage.md](spec/core/coverage.md) | how every guarantee of the earlier v0.4 design was kept, moved, weakened or dropped |
+| [spec/profiles/](spec/profiles/) | app-level profiles such as `han.status/1` (from round 30) |
+| [spec/decisions/](spec/decisions/) | decision records per round, the review history and the grading rubric |
+| [ref/](ref/) | the executable reference: Policy, sequencer and verifier (real Ed25519), generators, mutation suites, fuzzers and model checkers |
+| [conformance/](conformance/) | generated vectors, wire vectors and the cross-implementation interop harness |
+| [witnesses/](witnesses/) | the Python and TypeScript implementations that check the spec against itself |
+| [PLAN.md](PLAN.md) | the implementation plan: MVP, architecture, stack, milestones |
+| [research/](research/) | build-or-adopt studies behind the plan |
 
 ## Run the checks
 
 ```sh
-pip install cryptography          # the sequencer/verifier reference uses real Ed25519
-python ref/run_all.py --quick     # ~3 min: tsc, consistency, vectors, mutations, fuzz, wire, and that the docs match (ref/sync_docs.py --check)
+pip install cryptography          # the reference uses real Ed25519
+python ref/run_all.py --quick     # tsc, consistency, vectors, mutations, fuzz, wire, and that the docs match
 python ref/run_all.py             # adds the exhaustive model checker (much longer)
+just ci                           # the same checks plus the witnesses, if you have `just`
 ```
 
 ## Licenses
