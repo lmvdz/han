@@ -1,5 +1,5 @@
 # Every task of the repository. `just --list` shows them.
-# Needs: python 3.11+ with `cryptography`, node 22 with npm, and (test-py) the venv at witnesses/impl-py/.venv.
+# Needs: python 3.11+ with `cryptography`, node 22 with npm, a Rust toolchain (rust-toolchain.toml) with cargo-deny, and (test-py) the venv at witnesses/impl-py/.venv.
 # To recreate the venv: python -m venv witnesses/impl-py/.venv, then install `witnesses/impl-py[dev]` into it (pip install -e "witnesses/impl-py[dev]").
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
@@ -48,6 +48,20 @@ ts-build:
     npm install --no-audit --no-fund --no-package-lock
     npm run build
 
+# build the Rust workspace
+rs-build:
+    cargo build --workspace --locked
+
+# Rust: format and clippy checks, then every test (han-core replays the wire vectors and golden transcripts)
+rs-test:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo test --workspace --locked
+
+# Rust dependency policy: advisories, bans, licences, sources (needs `cargo install cargo-deny --locked`)
+rs-deny:
+    cargo deny check
+
 # derive the counts in the docs from the checks (use `--check` to only compare)
 docs-sync *args:
     python ref/sync_docs.py {{args}}
@@ -58,4 +72,4 @@ nightly: ts-build
     python ref/model_guard.py --depth 4 --all-mutations
 
 # the full pull-request set
-ci: check-spec vectors fuzz test-py test-ts interop
+ci: check-spec vectors fuzz test-py test-ts interop rs-build rs-test rs-deny
