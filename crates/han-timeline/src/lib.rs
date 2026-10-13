@@ -31,5 +31,5 @@ pub use op::{
 pub use state::{ObjectState, State, TreeConflicts};
 pub use store::{Directory, KeyInfo, MemoryStore, Scope, Store};
 pub use sync::{Answer, Hello, Inventory};
-pub use text::{Anchor, Bias};
+pub use text::{Anchor, Bias, SharedText};
 pub use value::Value;

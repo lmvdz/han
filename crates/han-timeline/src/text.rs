@@ -98,6 +98,57 @@ pub enum Bias {
     Right,
 }
 
+/// A text's visible string, shared rather than copied ([`crate::State::text_shared`]). It reads
+/// as a `&str` and is cheap to clone and to send between threads.
+///
+/// Holding one keeps that version's text in memory after the history has dropped the state it
+/// came from: don't keep many versions' texts around.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SharedText(Arc<String>);
+
+impl SharedText {
+    /// The text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether two shared texts are the same allocation (no copy was made between them).
+    pub fn ptr_eq(a: &SharedText, b: &SharedText) -> bool {
+        Arc::ptr_eq(&a.0, &b.0)
+    }
+}
+
+impl std::ops::Deref for SharedText {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SharedText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SharedText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for SharedText {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for SharedText {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
 /// The derived layout of a text: order and visibility.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Layout {
@@ -662,18 +713,30 @@ impl TextObj {
                 .clone();
         }
         self.text
-            .get_or_init(|| {
-                let lay = self.layout();
-                let mut out = String::with_capacity(lay.visible_index.len());
-                out.extend(
-                    lay.visible_index
-                        .iter()
-                        .map(|&i| self.char_at(lay.order[i])),
-                );
-                Arc::new(out)
-            })
+            .get_or_init(|| Arc::new(self.render()))
             .as_ref()
             .clone()
+    }
+
+    /// The visible text, shared: built once, cached until the text changes, and handed out
+    /// without copying.
+    pub fn text_shared(&self) -> SharedText {
+        SharedText(self.text.get_or_init(|| Arc::new(self.render())).clone())
+    }
+
+    /// Builds the visible string.
+    fn render(&self) -> String {
+        if self.compact_layout() {
+            return self.run_text(self.visible_runs());
+        }
+        let lay = self.layout();
+        let mut out = String::with_capacity(lay.visible_index.len());
+        out.extend(
+            lay.visible_index
+                .iter()
+                .map(|&i| self.char_at(lay.order[i])),
+        );
+        out
     }
 
     /// The number of visible characters.
@@ -1037,6 +1100,50 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The shared text equals `text()`, is one allocation across reads, and follows edits.
+    #[test]
+    fn shared_text_equals_text_and_is_not_copied() {
+        let rep = Arc::new(ReplicaId::new("@r:x.example", "k", 0));
+        for big in [false, true] {
+            let mut t = TextObj::new(false);
+            let first = InsertionId {
+                op: OpId::new(1, rep.clone()),
+                index: 0,
+            };
+            let body = if big {
+                "line of text\n".repeat(400)
+            } else {
+                "hello\n".into()
+            };
+            t.insert(first.clone(), None, &body, None);
+            let a = t.text_shared();
+            let b = t.text_shared();
+            assert_eq!(a.as_str(), t.text());
+            assert!(SharedText::ptr_eq(&a, &b), "a second read must not copy");
+            t.insert(
+                InsertionId {
+                    op: OpId::new(2, rep.clone()),
+                    index: 0,
+                },
+                Some(&CharId {
+                    insertion: first.clone(),
+                    offset: 0,
+                }),
+                "X",
+                None,
+            );
+            t.delete(&IdRange {
+                insertion: first,
+                from: 1,
+                to: 2,
+            });
+            let c = t.text_shared();
+            assert_eq!(c.as_str(), t.text(), "big {big}");
+            assert!(!SharedText::ptr_eq(&a, &c), "an edit makes a new text");
+            assert_eq!(a.as_str(), body, "an older shared text keeps its version");
         }
     }
 }
