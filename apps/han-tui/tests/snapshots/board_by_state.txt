@@ -1,0 +1,26 @@
+ HAN  team · by state · filter: -
+┏ Board ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  PERSON     AGENT        HARNESS    ISSUE        STATE · STEP                             CHANGES  OVERLAP    TESTS  TOK   AGE ┃
+┃>▾ waiting-approval (1)  1 await you                                                                                            ┃
+┃▌◐ @lars      lars-review… pi         #52          waiting-approval (awaits you): push han… 1 file              30/2✗  41k   1m ┃
+┃ ▾ failed (1)                                                                                                                   ┃
+┃ ✗ @bo        bo-scratch   pi                      failed: host unreachable                 0 files             –      –     40m┃
+┃ ▾ stale (1)                                                                                                                    ┃
+┃ ◌ @bo        bo-runner    pi         #52          stale · last heard 14m ago · waiting fo… 1 file              –      41k   14m┃
+┃ ▾ working (2)  ⚑ hunk                                                                                                          ┃
+┃ ● @lars      lars-coder   pi         #41          working: running tests [cargo test]      4 files  ⚑ hunk     12/0✓  41k   0s ┃
+┃ ● @ada       ada-bot      pi(adv)    #41          working: editing src/board.rs            1 file   ⚑ hunk ×2  –      41k   20s┃
+┃ ▾ idle (1)                                                                                                                     ┃
+┃ ○ @lars      lars-notes   pi         #60          idle: nothing to do                      1 file              –      –     2m ┃
+┃ ▾ done (1)                                                                                                                     ┃
+┃ ✓ @ada       ada-docs     pi         #60          done: wrote the guide                    1 file              –      41k   3h ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┗ 1-7 of 7 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ ● node @lars · space live head 42                                                                               grouped by state

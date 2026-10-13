@@ -1,6 +1,6 @@
 [package]
 name = "han"
-description = "The han command line: run the device node (han node), show the board (han board), run a home (han seq), dial one (han dial), and run the wire conformance vectors (han conform)."
+description = "The han command line: run the device node (han node), show the board (han board, or han tui for the live terminal face), run a home (han seq), dial one (han dial), and run the wire conformance vectors (han conform)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ han-node.workspace = true
 han-seq.workspace = true
 han-exec = { path = "../../crates/han-exec", version = "0.1.0" }
 han-host = { path = "../../crates/han-host", version = "0.1.0" }
+han-tui = { path = "../han-tui", version = "0.1.0" }
 han-vcs = { path = "../../crates/han-vcs", version = "0.1.0" }
 getrandom.workspace = true
 serde_json.workspace = true

@@ -1,0 +1,26 @@
+ HAN  team · by issue · filter: -
+┏ Board ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  PERSON     AGENT        HARNESS    STATE · STEP                                          CHANGES  OVERLAP    TESTS  TOK   AGE ┃
+┃>▾ #41 Board freshness (2)  ⚑ hunk                                                                                              ┃
+┃ ● @lars      lars-coder   pi         working: running tests [cargo test]                   4 files  ⚑ hunk     12/0✓  41k   0s ┃
+┃ ● @ada       ada-bot      pi(adv)    working: editing src/board.rs                         1 file   ⚑ hunk ×2  –      41k   20s┃
+┃ ▾ #52 Login flow (2)  1 await you                                                                                              ┃
+┃▌◐ @lars      lars-review… pi         waiting-approval (awaits you): push han/52-login      1 file              30/2✗  41k   1m ┃
+┃ ◌ @bo        bo-runner    pi         stale · last heard 14m ago · waiting for CI           1 file              –      41k   14m┃
+┃ ▾ #60 Docs (2)                                                                                                                 ┃
+┃ ✓ @ada       ada-docs     pi         done: wrote the guide                                 1 file              –      41k   3h ┃
+┃ ○ @lars      lars-notes   pi         idle: nothing to do                                   1 file              –      –     2m ┃
+┃ ▾ No issue (1)                                                                                                                 ┃
+┃ ✗ @bo        bo-scratch   pi         failed: host unreachable                              0 files             –      –     40m┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┗ 1-7 of 7 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ ● node @lars · space live head 42                                                                             ? help · : command

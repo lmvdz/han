@@ -1,0 +1,26 @@
+ HAN  team · by person · filter: -
+┏ Board ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  PERSON     AGENT        HARNESS    ISSUE        STATE · STEP                             CHANGES  OVERLAP    TESTS  TOK   AGE ┃
+┃>▾ @ada (2)  ⚑ hunk                                                                                                             ┃
+┃ ● @ada       ada-bot      pi(adv)    #41          working: editing src/board.rs            1 file   ⚑ hunk ×2  –      41k   20s┃
+┃ ✓ @ada       ada-docs     pi         #60          done: wrote the guide                    1 file              –      41k   3h ┃
+┃ ▾ @bo (2)                                                                                                                      ┃
+┃ ◌ @bo        bo-runner    pi         #52          stale · last heard 14m ago · waiting fo… 1 file              –      41k   14m┃
+┃ ✗ @bo        bo-scratch   pi                      failed: host unreachable                 0 files             –      –     40m┃
+┃ ▾ @lars (3)  ⚑ hunk  1 await you                                                                                               ┃
+┃ ● @lars      lars-coder   pi         #41          working: running tests [cargo test]      4 files  ⚑ hunk     12/0✓  41k   0s ┃
+┃▌◐ @lars      lars-review… pi         #52          waiting-approval (awaits you): push han… 1 file              30/2✗  41k   1m ┃
+┃ ○ @lars      lars-notes   pi         #60          idle: nothing to do                      1 file              –      –     2m ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┃                                                                                                                                ┃
+┗ 1-7 of 7 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ ● node @lars · space live head 42                                                                              grouped by person

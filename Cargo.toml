@@ -11,6 +11,7 @@ members = [
     "crates/han-exec",
     "crates/han-host",
     "apps/han",
+    "apps/han-tui",
     "integrations/han-github",
 ]
 

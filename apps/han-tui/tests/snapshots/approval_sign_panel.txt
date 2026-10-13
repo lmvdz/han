@@ -1,0 +1,26 @@
+ HAN  team · by issue · filter: -
+┌ Board ─────────────────────────────────────────────────────────────────────────────────┐┏ Approvals (1) ━━━━━━━━━━━━━━━━━━━━━━━┓
+│  PERSON     AGENT╔ git.push · team ═════════════════════════════════════════════════════════════════════════╗                  ┃
+│>▾ #41 Board fresh║WHY GATED  push of a han/* branch (space rule)                                            ║                  ┃
+│ ● @lars      lars║                                                                                          ║                  ┃
+│ ● @ada       ada-║ACTION     git.push                                                                       ║                  ┃
+│ ▾ #52 Login flow ║DIGEST     9f3c 41aa 07be d2e1 aabb ccdd eeff 0011 2233 4455 6677 8899 aabb ccdd eeff     ║                  ┃
+│▌◐ @lars      lars║           0011                                                                           ║                  ┃
+│ ◌ @bo        bo-r║                                                                                          ║                  ┃
+│ ▾ #60 Docs (2)   ║WHO        proposed by lars-reviewer · executor @git:han.example                          ║                  ┃
+│ ✓ @ada       ada-║EXPIRES    no expiry                                                                      ║                  ┃
+│ ○ @lars      lars║                                                                                          ║                  ┃
+│ ▾ No issue (1)   ║APPROVALS  have: none yet                                                                 ║                  ┃
+│ ✗ @bo        bo-s║           needed from: @lars:han.example                                                 ║                  ┃
+│                  ║           you can approve                                                                ║                  ┃
+│                  ║                                                                                          ║                  ┃
+│                  ║─ sign ─────────────────────────────────────────────────────────────────────────────────  ║                  ┃
+│                  ║You are signing an approval of:                                                           ║                  ┃
+│                  ║  git.push                                                                                ║                  ┃
+│                  ║  9f3c 41aa 07be d2e1 aabb ccdd eeff 0011 2233 4455 6677 8899 aabb ccdd eeff 0011         ║                  ┃
+│                  ║as @lars on this device                                                                   ║                  ┃
+│                  ║[Enter] Sign approval    [Esc] Back                                                       ║                  ┃
+│                  ╚══════════════════════════════════════════════════════════════════════════════════════════╝                  ┃
+│                                                                                        │┃                                      ┃
+└ 1-7 of 7 ──────────────────────────────────────────────────────────────────────────────┘┗ j/k · Enter opens · Esc closes ━━━━━━┛
+ ● node @lars · space live head 42 ⚑ 1 awaiting you                                          1 effect waits for your approval (a)

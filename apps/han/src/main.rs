@@ -1,5 +1,5 @@
 //! `han`: one binary for every role of a HAN installation. M3 adds `node` (the device daemon) and `board` (a
-//! plain-text board over the node's pipe); M2 has `seq` (run a home), `dial` (a small client) and `conform`
+//! plain-text board over the node's pipe); M5 adds `tui` (the live terminal face); M2 has `seq` (run a home), `dial` (a small client) and `conform`
 //! (the wire vectors over QUIC).
 
 mod agent;
@@ -12,6 +12,7 @@ mod keys;
 mod node;
 mod rolenode;
 mod seq;
+mod tui;
 mod update;
 
 use clap::{Parser, Subcommand};
@@ -33,6 +34,8 @@ enum Cmd {
     Node(node::NodeArgs),
     /// Print a space's board as text, from the running node.
     Board(board::BoardArgs),
+    /// The live board in the terminal: sessions, the session pane, approvals. Needs the running node.
+    Tui(tui::TuiArgs),
     /// Run a home: the sequencer of one server on a QUIC endpoint.
     Seq(seq::SeqArgs),
     /// Dial a home and make calls.
@@ -85,6 +88,7 @@ async fn run(cli: Cli) {
     let result = match cli.command {
         Cmd::Node(a) => node::run(a).await,
         Cmd::Board(a) => board::run(a).await,
+        Cmd::Tui(a) => tui::run(a).await,
         Cmd::Seq(a) => seq::run(a).await,
         Cmd::Dial(a) => dial::run(a).await,
         Cmd::Conform(a) => conform::run(a).await,
