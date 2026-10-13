@@ -1,0 +1,165 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "45-merge-order-refused",
+ "description": "A target whose copies put two base characters in the opposite order from the base cannot be planned: the planner refuses with merge_order",
+ "rules": [
+  "TL-72"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "ab",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "c"
+      ]
+     ]
+    }
+   ]
+  },
+  "odd": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "3@A"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         0,
+         1
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:1",
+         "a",
+         "2@A#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "odd",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "ba"
+         }
+        }
+       }
+      ],
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "error:merge_order"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

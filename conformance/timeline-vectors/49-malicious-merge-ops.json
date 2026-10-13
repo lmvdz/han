@@ -1,0 +1,355 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "49-malicious-merge-ops",
+ "description": "Receivers reject merge ops whose origin is itself a copy, whose copy text differs from its origin, that import an object from outside the incoming version, or that name incoming counters at or above their start",
+ "rules": [
+  "TL-72",
+  "TL-76",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "B"
+      ]
+     ]
+    }
+   ]
+  },
+  "good": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         2,
+         3
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:1",
+         "B",
+         "4@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "s1new": {
+   "replica": "B",
+   "start": 6,
+   "parents": [
+    "4@B"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.create",
+     "text": "new",
+     "transcript": false
+    }
+   ]
+  },
+  "noncanon": {
+   "replica": "A",
+   "start": 10,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         "2@A#0:3",
+         "B",
+         "5@A#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "wrongtext": {
+   "replica": "A",
+   "start": 11,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         "2@A#0:3",
+         "Q",
+         "4@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "outside": {
+   "replica": "A",
+   "start": 12,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "6@B",
+       "create": true,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         null,
+         "new",
+         "6@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "counters": {
+   "replica": "C",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "6@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "6@B",
+       "create": true,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         null,
+         "new",
+         "6@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "good"
+    },
+    {
+     "deliver": "s1new"
+    },
+    {
+     "deliver": "noncanon",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "wrongtext",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "outside",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "counters",
+     "result": "rejected:lamport"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "a\nB\nc\n"
+         }
+        },
+        "absent": [
+         "6@B"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

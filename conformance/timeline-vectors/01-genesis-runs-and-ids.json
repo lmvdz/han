@@ -1,0 +1,171 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "01-genesis-runs-and-ids",
+ "description": "A genesis batch creates main; a second batch continues the run; op ids are counter@replica and heads are derived from tags",
+ "rules": [
+  "TL-03",
+  "TL-11",
+  "TL-15",
+  "TL-20",
+  "TL-24",
+  "TL-60"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "a"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "b"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k2",
+     "value": 1
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "2@A"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "2@A",
+             "a"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b1",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "4@A"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "3@A",
+             "b"
+            ]
+           ],
+           "k2": [
+            [
+             "4@A",
+             1
+            ]
+           ]
+          }
+         }
+        }
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "2@A",
+             "a"
+            ]
+           ]
+          }
+         }
+        }
+       },
+       {
+        "at": [],
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

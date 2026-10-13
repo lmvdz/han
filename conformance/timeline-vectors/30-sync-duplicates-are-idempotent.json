@@ -1,0 +1,179 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "30-sync-duplicates-are-idempotent",
+ "description": "Delivering the same batch again, integrated or still held, changes nothing",
+ "rules": [
+  "TL-104",
+  "TL-111"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    }
+   ]
+  },
+  "b2": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 2
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 3
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "deliver": "b1",
+     "result": "integrated"
+    },
+    {
+     "deliver": "b1",
+     "result": "duplicate"
+    },
+    {
+     "deliver": "b0",
+     "result": "duplicate"
+    },
+    {
+     "deliver": "b3",
+     "result": "held"
+    },
+    {
+     "deliver": "b3",
+     "result": "held"
+    },
+    {
+     "expect": {
+      "pending": [
+       "b3"
+      ]
+     }
+    },
+    {
+     "deliver": "b2",
+     "result": "integrated"
+    },
+    {
+     "deliver": "b2",
+     "result": "duplicate"
+    },
+    {
+     "deliver": "b3",
+     "result": "duplicate"
+    },
+    {
+     "expect": {
+      "pending": [],
+      "inventory": {
+       "A": [
+        [
+         1,
+         2
+        ],
+        [
+         4,
+         4
+        ]
+       ],
+       "B": [
+        [
+         3,
+         3
+        ]
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "n": [
+            [
+             "4@A",
+             3
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

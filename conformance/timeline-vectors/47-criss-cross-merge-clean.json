@@ -1,0 +1,390 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "47-criss-cross-merge-clean",
+ "description": "Main and the session merge each other concurrently, then both work on: the third merge's base is the join of both lines (spanning two timelines), so only the new lines come in",
+ "rules": [
+  "TL-70",
+  "TL-72"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\nd\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "mainA": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       0,
+       1
+      ]
+     ],
+     "inserts": [
+      [
+       null,
+       "A"
+      ]
+     ]
+    }
+   ]
+  },
+  "s1D": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       6,
+       7
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:5",
+       "D"
+      ]
+     ]
+    }
+   ]
+  },
+  "m1": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         6,
+         7
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:5",
+         "D",
+         "4@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "m2": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "4@B"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "1@A",
+     "incoming": [
+      "4@A"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         0,
+         1
+        ]
+       ],
+       "inserts": [
+        [
+         null,
+         "A",
+         "4@A#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "mainB": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "B"
+      ]
+     ]
+    }
+   ]
+  },
+  "s1C": {
+   "replica": "B",
+   "start": 6,
+   "parents": [
+    "5@B"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       4,
+       5
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:3",
+       "C"
+      ]
+     ]
+    }
+   ]
+  },
+  "m3": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "6@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "6@B"
+     ],
+     "base": [
+      "4@A",
+      "4@B"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         4,
+         5
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:3",
+         "C",
+         "6@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "mainA"
+    },
+    {
+     "deliver": "s1D"
+    },
+    {
+     "deliver": "m1"
+    },
+    {
+     "deliver": "m2"
+    },
+    {
+     "deliver": "mainB"
+    },
+    {
+     "deliver": "s1C"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "A\nB\nc\nD\n"
+         }
+        }
+       },
+       {
+        "at": "3@A",
+        "objects": {
+         "2@A": {
+          "text": "A\nb\nC\nD\n"
+         }
+        }
+       }
+      ],
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "merge",
+        "base": [
+         "4@A",
+         "4@B"
+        ],
+        "conflicts": [],
+        "results": [
+         {
+          "resolutions": [],
+          "texts": {
+           "2@A": "A\nB\nC\nD\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "m3",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "A\nB\nC\nD\n"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

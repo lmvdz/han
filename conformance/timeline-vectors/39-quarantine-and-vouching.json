@@ -1,0 +1,304 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "39-quarantine-and-vouching",
+ "description": "Batches from an unauthorised key are quarantined, out of every state, until an authorised batch depends on them (directly or through other quarantined batches), in any arrival order",
+ "rules": [
+  "TL-103",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "writers": [
+  "A",
+  "B"
+ ],
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "x": {
+   "replica": "C",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "c"
+    }
+   ]
+  },
+  "y": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@C"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k2",
+     "value": "a"
+    }
+   ]
+  },
+  "z": {
+   "replica": "C",
+   "start": 5,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "z",
+     "value": 1
+    }
+   ]
+  },
+  "x2": {
+   "replica": "C",
+   "start": 6,
+   "parents": [
+    "2@C"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "c2"
+    }
+   ]
+  },
+  "y2": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "6@C"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k3",
+     "value": "a2"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "x",
+     "result": "quarantined"
+    },
+    {
+     "expect": {
+      "quarantined": [
+       "x"
+      ],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "y",
+     "result": "integrated"
+    },
+    {
+     "deliver": "z",
+     "result": "quarantined"
+    },
+    {
+     "expect": {
+      "quarantined": [
+       "z"
+      ],
+      "inventory": {
+       "A": [
+        [
+         1,
+         1
+        ],
+        [
+         3,
+         3
+        ]
+       ],
+       "C": [
+        [
+         2,
+         2
+        ]
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "2@C",
+             "c"
+            ]
+           ],
+           "k2": [
+            [
+             "3@A",
+             "a"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "y",
+     "result": "held"
+    },
+    {
+     "deliver": "x",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "quarantined": [],
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "2@C",
+             "c"
+            ]
+           ],
+           "k2": [
+            [
+             "3@A",
+             "a"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "x",
+     "result": "quarantined"
+    },
+    {
+     "deliver": "x2",
+     "result": "quarantined"
+    },
+    {
+     "deliver": "y2",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "quarantined": [],
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "6@C",
+             "c2"
+            ]
+           ],
+           "k3": [
+            [
+             "7@A",
+             "a2"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,264 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "09-text-deletes-are-tombstones",
+ "description": "Deletes hide only what they name: overlapping concurrent deletes union, and an insert made concurrently inside a deleted range survives",
+ "rules": [
+  "TL-44",
+  "TL-45"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello",
+     "transcript": false
+    }
+   ]
+  },
+  "da": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       1,
+       4
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  },
+  "ib": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:2",
+       "X"
+      ]
+     ]
+    }
+   ]
+  },
+  "dc": {
+   "replica": "C",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       3,
+       5
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "da"
+    },
+    {
+     "deliver": "ib"
+    },
+    {
+     "deliver": "dc"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hX"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "ho"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "helXlo"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "dc"
+    },
+    {
+     "deliver": "da"
+    },
+    {
+     "deliver": "ib"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hX"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "ho"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "helXlo"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "ib"
+    },
+    {
+     "deliver": "dc"
+    },
+    {
+     "deliver": "da"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hX"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "ho"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "helXlo"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

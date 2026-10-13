@@ -1,0 +1,201 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "37-merge-insert-at-same-line-gap-conflicts",
+ "description": "Different lines inserted at the same gap conflict as an empty-range hunk; an insert inside a later line is a separate clean change",
+ "rules": [
+  "TL-72",
+  "TL-75"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "s\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "main": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "m\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "inline": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "4@B"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:4",
+       "!"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "main"
+    },
+    {
+     "deliver": "inline"
+    },
+    {
+     "expect": {
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "merge",
+        "base": [
+         "2@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "text",
+          "object": "2@A",
+          "lines": [
+           1,
+           1
+          ],
+          "base": "",
+          "target": "m\n",
+          "incoming": "s\n"
+         }
+        ],
+        "results": [
+         {
+          "resolutions": [
+           "target"
+          ],
+          "texts": {
+           "2@A": "a\nm\nb\nc!\n"
+          }
+         },
+         {
+          "resolutions": [
+           "incoming"
+          ],
+          "texts": {
+           "2@A": "a\ns\nb\nc!\n"
+          }
+         },
+         {
+          "resolutions": [
+           {
+            "text": "m\ns\n"
+           }
+          ],
+          "texts": {
+           "2@A": "a\nm\ns\nb\nc!\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

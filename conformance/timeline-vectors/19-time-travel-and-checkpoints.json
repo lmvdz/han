@@ -1,0 +1,350 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "19-time-travel-and-checkpoints",
+ "description": "Any version can be materialised: the root, past versions, a concurrent version, a two-headed head; checkpoints name their parent version",
+ "rules": [
+  "TL-25",
+  "TL-60",
+  "TL-13"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "v1",
+     "transcript": false
+    }
+   ]
+  },
+  "c1": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": "first"
+    }
+   ]
+  },
+  "e": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       1,
+       2
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:0",
+       "2"
+      ]
+     ]
+    }
+   ]
+  },
+  "c2": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": "second"
+    }
+   ]
+  },
+  "conc": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "!"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "c1"
+    },
+    {
+     "deliver": "e"
+    },
+    {
+     "deliver": "c2"
+    },
+    {
+     "deliver": "conc"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "first",
+          "version": [
+           "2@A"
+          ]
+         },
+         {
+          "id": "5@A",
+          "label": "second",
+          "version": [
+           "4@A"
+          ]
+         }
+        ]
+       }
+      ],
+      "states": [
+       {
+        "at": [],
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        },
+        "absent": [
+         "2@A"
+        ]
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v1"
+         }
+        }
+       },
+       {
+        "at": [
+         "4@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v2"
+         }
+        }
+       },
+       {
+        "at": [
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v1!"
+         }
+        }
+       },
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "v2!"
+         }
+        }
+       },
+       {
+        "at": [
+         "4@A",
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v2!"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "c1"
+    },
+    {
+     "deliver": "conc"
+    },
+    {
+     "deliver": "e"
+    },
+    {
+     "deliver": "c2"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "first",
+          "version": [
+           "2@A"
+          ]
+         },
+         {
+          "id": "5@A",
+          "label": "second",
+          "version": [
+           "4@A"
+          ]
+         }
+        ]
+       }
+      ],
+      "states": [
+       {
+        "at": [],
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        },
+        "absent": [
+         "2@A"
+        ]
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v1"
+         }
+        }
+       },
+       {
+        "at": [
+         "4@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v2"
+         }
+        }
+       },
+       {
+        "at": [
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v1!"
+         }
+        }
+       },
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "v2!"
+         }
+        }
+       },
+       {
+        "at": [
+         "4@A",
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "v2!"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

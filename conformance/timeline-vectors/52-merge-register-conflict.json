@@ -1,0 +1,187 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "52-merge-register-conflict",
+ "description": "Both sides set a register differently since the base: a register conflict; the recorded merge resolves it with a value of its own",
+ "rules": [
+  "TL-71",
+  "TL-75"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "register.create",
+     "value": "r0"
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "s"
+    }
+   ]
+  },
+  "main": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "t"
+    }
+   ]
+  },
+  "merge": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "register",
+       "object": "2@A",
+       "create": false,
+       "value": "both"
+      }
+     ],
+     "conflicts": [
+      {
+       "kind": "register",
+       "object": "2@A",
+       "resolution": {
+        "value": "both"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "main"
+    },
+    {
+     "expect": {
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "merge",
+        "base": [
+         "2@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "register",
+          "object": "2@A",
+          "base": "r0",
+          "target": "t",
+          "incoming": "s"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "merge",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "value": "both"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

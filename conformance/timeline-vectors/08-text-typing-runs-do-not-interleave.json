@@ -1,0 +1,231 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "08-text-typing-runs-do-not-interleave",
+ "description": "Two people typing one character per op at the same place produce two contiguous runs, newest run first",
+ "rules": [
+  "TL-43"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "ab",
+     "transcript": false
+    }
+   ]
+  },
+  "a1": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "x"
+      ]
+     ]
+    }
+   ]
+  },
+  "a2": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "5@A#0:0",
+       "y"
+      ]
+     ]
+    }
+   ]
+  },
+  "p1": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "p"
+      ]
+     ]
+    }
+   ]
+  },
+  "p2": {
+   "replica": "B",
+   "start": 6,
+   "parents": [
+    "5@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "5@B#0:0",
+       "q"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "a1"
+    },
+    {
+     "deliver": "a2"
+    },
+    {
+     "deliver": "p1"
+    },
+    {
+     "deliver": "p2"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "abpqxy"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "p1"
+    },
+    {
+     "deliver": "a1"
+    },
+    {
+     "deliver": "p2"
+    },
+    {
+     "deliver": "a2"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "abpqxy"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "a1"
+    },
+    {
+     "deliver": "p1"
+    },
+    {
+     "deliver": "a2"
+    },
+    {
+     "deliver": "p2"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "abpqxy"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

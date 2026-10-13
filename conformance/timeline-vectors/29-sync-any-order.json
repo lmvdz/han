@@ -1,0 +1,196 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "29-sync-any-order",
+ "description": "Batches delivered newest first are held back until their parents arrive, then integrated; the result equals causal delivery",
+ "rules": [
+  "TL-102",
+  "TL-111"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    }
+   ]
+  },
+  "b2": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 2
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 3
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b3",
+     "result": "held"
+    },
+    {
+     "deliver": "b2",
+     "result": "held"
+    },
+    {
+     "expect": {
+      "pending": [
+       "b2",
+       "b3"
+      ]
+     }
+    },
+    {
+     "deliver": "b1",
+     "result": "held"
+    },
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "pending": [],
+      "heads": {
+       "1@A": [
+        "4@A"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "n": [
+            [
+             "4@A",
+             3
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b2",
+     "result": "held"
+    },
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "pending": [
+       "b2"
+      ]
+     }
+    },
+    {
+     "deliver": "b3",
+     "result": "held"
+    },
+    {
+     "deliver": "b1",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "n": [
+            [
+             "4@A",
+             3
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

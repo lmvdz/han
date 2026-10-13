@@ -1,0 +1,202 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "16-seal-validation",
+ "description": "Seals on non-transcript text, over deleted characters, or skipping visible text are invalid_op; a seal over the visible text across a tombstone is valid",
+ "rules": [
+  "TL-50",
+  "TL-51",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello",
+     "transcript": true
+    },
+    {
+     "kind": "text.create",
+     "text": "plain",
+     "transcript": false
+    },
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       1,
+       2
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  },
+  "notranscript": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "3@A",
+     "ranges": [
+      [
+       "3@A#0",
+       0,
+       2
+      ]
+     ]
+    }
+   ]
+  },
+  "deleted": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       3
+      ]
+     ]
+    }
+   ]
+  },
+  "gap": {
+   "replica": "B",
+   "start": 6,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       1
+      ],
+      [
+       "2@A#0",
+       3,
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  "ok": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       1
+      ],
+      [
+       "2@A#0",
+       2,
+       4
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "notranscript",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "deleted",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "gap",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "ok",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hllo"
+         },
+         "3@A": {
+          "text": "plain"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

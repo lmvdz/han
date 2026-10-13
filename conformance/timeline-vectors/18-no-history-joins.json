@@ -1,0 +1,252 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "18-no-history-joins",
+ "description": "A batch on a timeline may only have parents on that timeline; forks start within their source's reach; a tag must name a timeline and a create must open its batch",
+ "rules": [
+  "TL-20",
+  "TL-21",
+  "TL-22",
+  "TL-23",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "base\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1edit": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:4",
+       "more\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "mainset": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "join": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A",
+    "4@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 2
+    }
+   ]
+  },
+  "forkwrong": {
+   "replica": "C",
+   "start": 5,
+   "parents": [
+    "4@B"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "x",
+     "source": "1@A"
+    }
+   ]
+  },
+  "forkold": {
+   "replica": "C",
+   "start": 6,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "y",
+     "source": "3@A"
+    }
+   ]
+  },
+  "notatimeline": {
+   "replica": "B",
+   "start": 7,
+   "parents": [
+    "4@B"
+   ],
+   "timeline": "4@B",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 3
+    }
+   ]
+  },
+  "createlate": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "4@B"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 3
+    },
+    {
+     "kind": "timeline.create",
+     "name": "z",
+     "source": "3@A"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1edit"
+    },
+    {
+     "deliver": "mainset"
+    },
+    {
+     "deliver": "join",
+     "result": "rejected:timeline"
+    },
+    {
+     "deliver": "forkwrong",
+     "result": "rejected:timeline"
+    },
+    {
+     "deliver": "forkold",
+     "result": "integrated"
+    },
+    {
+     "deliver": "notatimeline",
+     "result": "rejected:timeline"
+    },
+    {
+     "deliver": "createlate",
+     "result": "rejected:timeline"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "4@A"
+       ],
+       "3@A": [
+        "4@B"
+       ],
+       "6@C": [
+        "6@C"
+       ]
+      },
+      "states": [
+       {
+        "at": "6@C",
+        "objects": {
+         "2@A": {
+          "text": "base\n"
+         },
+         "root": {
+          "entries": {}
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

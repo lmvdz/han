@@ -1,0 +1,132 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "40-creating-batch-ops-are-on-the-timeline",
+ "description": "Every op of the batch that creates a timeline is on it, so a later batch on that timeline may take the creating batch's last op as its parent",
+ "rules": [
+  "TL-21",
+  "TL-23"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "f": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "g": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "2@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 2
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "f"
+    },
+    {
+     "deliver": "g",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "1@A"
+       ],
+       "2@A": [
+        "4@B"
+       ]
+      },
+      "states": [
+       {
+        "at": "2@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "4@B",
+             2
+            ]
+           ]
+          }
+         }
+        }
+       },
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

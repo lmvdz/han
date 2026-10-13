@@ -1,0 +1,200 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "32-sync-hello-and-answer",
+ "description": "The inventory lists held counter ranges per replica without spanning gaps of other replicas; an answer holds every batch the peer's hello does not cover, ascending by start; a hello from A's own device may span counters A never used",
+ "rules": [
+  "TL-110",
+  "TL-111"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    }
+   ]
+  },
+  "b2": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 2
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "3@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 3
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "inventory": {
+       "A": [
+        [
+         1,
+         2
+        ],
+        [
+         5,
+         5
+        ]
+       ],
+       "B": [
+        [
+         3,
+         3
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "answer": {
+       "hello": {},
+       "envelopes": [
+        "b0",
+        "b1",
+        "b2",
+        "b3"
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "answer": {
+       "hello": {
+        "A": [
+         [
+          1,
+          1
+         ]
+        ]
+       },
+       "envelopes": [
+        "b1",
+        "b2",
+        "b3"
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "answer": {
+       "hello": {
+        "A": [
+         [
+          1,
+          5
+         ]
+        ]
+       },
+       "envelopes": [
+        "b2"
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "answer": {
+       "hello": {
+        "A": [
+         [
+          1,
+          5
+         ]
+        ],
+        "B": [
+         [
+          3,
+          3
+         ]
+        ]
+       },
+       "envelopes": []
+      }
+     }
+    }
+   ]
+  }
+ ]
+}
