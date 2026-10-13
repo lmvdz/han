@@ -33,7 +33,10 @@ the deterministic CBOR checks (decode + re-encode compare, `cbor.rs`).
   (`HashMap<InsertionId, u32>`). `Layout` (cached in a `OnceLock<Arc<_>>`): `order`, flat
   `pos` + `first`, `vis_a`, `visible`, `visible_index`, `sealed`, `seal_spans`. Patched in
   place for a newest insert or a delete when the text has no seals and no copies; rebuilt by
-  `compute()` otherwise. `text()` caches the visible string.
+  `compute()` otherwise. `text()` caches the visible string. Large texts (an insertion of
+  4,096+ chars) with no seals and no copies use a run-based path instead (`compact_layout`,
+  `visible_runs`, `visible_ranges`; `local.rs` plans edits from runs); the unit test
+  `compact_runs_equal_the_dense_layout` checks it against the full layout.
 - `merge.rs`: planner, runs only in `plan_merge`/`resolve` (not in the benchmark).
 
 ## Invariants every change must keep
@@ -53,4 +56,4 @@ the deterministic CBOR checks (decode + re-encode compare, `cbor.rs`).
 - zstd: batches under ~100 bytes never shrink; skip the compressor call for tiny payloads.
 - `Envelope::decode` → `batch_id` hashes the preimage, built by re-encoding; hash the bytes in
   place.
-- `Layout` vectors: `vis_a`/`visible`/`sealed` as bitsets; `order` as runs instead of per char.
+- `Layout` vectors for small or seal/copy texts: `vis_a`/`visible`/`sealed` as bitsets.
