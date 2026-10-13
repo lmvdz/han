@@ -36,7 +36,7 @@ pub use error::{Code, WireError};
 pub use fanout::{Hooks, NoHooks};
 pub use home::{
     Directory, EPOCH, HOSTING_DENIED, Home, HomeConfig, HostingPolicy, NoDirectory, OpenError,
-    RateLimit, ServerInfo, profile_policy,
+    RateLimit, RemoteProfile, ServerInfo, profile_policy,
 };
 pub use identity::{PinKey, PinView, ServerKey};
 pub use store::{MemStore, SqliteStore, Store, StoreError};

@@ -63,6 +63,27 @@ pub struct HomeConfig {
 pub trait Directory: Send + Sync + 'static {
     /// The nodes and keys of `server`, if known.
     fn server(&self, server: &str) -> Option<ServerInfo>;
+
+    /// The profile of `actor` of another server as last read and verified (section 4.1 step 4), if any.
+    /// It never blocks: a carrier that can reach the actor's home reads it in the background.
+    fn profile(&self, _actor: &str) -> Option<RemoteProfile> {
+        None
+    }
+
+    /// A hint that the home needs a fresh profile of `actor` of another server: start reading it and
+    /// return at once (the home answers `unavailable` until [`Directory::profile`] has it). Called with the
+    /// home's lock held, so it must not call back into the home.
+    fn want_profile(&self, _actor: &str) {}
+}
+
+/// The profile of an actor of another server, as the directory holds it.
+#[derive(Clone, Debug)]
+pub struct RemoteProfile {
+    /// The view, pinned at the head of the profile space as read.
+    pub view: PinView,
+    /// Whether it was read within 300 s (R-10). Only a fresh view is pinned or authenticates a `hello`; a
+    /// stale one is the last thing known, enough to keep a connection open until it is re-read (X14).
+    pub fresh: bool,
 }
 
 /// What a home knows of another server.
@@ -105,6 +126,9 @@ pub const HOSTING_DENIED: &str =
 /// Remote profile fetches a stranger's request may trigger: at most this many per window.
 const FETCH_CALLS: u32 = 20;
 const FETCH_WINDOW_MS: u64 = 60_000;
+
+/// What a client is told to wait while a remote profile is read.
+pub(crate) const PROFILE_RETRY_MS: u64 = 1000;
 
 /// A per-author rate limit (section 4.1 step 6): the `retryAfterMs` to answer with, or `None` when under it.
 pub trait RateLimit: Send + Sync + 'static {
@@ -479,6 +503,27 @@ impl Home {
         }
     }
 
+    /// The answer when the profile of `actor` cannot be had now. One of another server is being read in the
+    /// background if the hosting rule lets this home fetch it (the carrier calls
+    /// [`Home::may_fetch_profile`] before it does); a stranger gets `denied` and nothing is fetched.
+    pub(crate) fn profile_missing(&self, g: &Inner, actor: &str) -> WireError {
+        let foreign =
+            !actor.starts_with("@:") && grammar::server_of(actor).is_some_and(|s| s != self.server);
+        if foreign && !self.hosting_allows(g, actor) {
+            return WireError::denied(HOSTING_DENIED);
+        }
+        WireError::unavailable("the profile cannot be fetched now").retry_after(PROFILE_RETRY_MS)
+    }
+
+    /// G-08: a server's `hello` proof as `@:S` to `dialed`, which `node` answers (`han/1`): the id of the
+    /// server key that signed it and the proof. A home dialling another to read a profile says `hello` with it.
+    pub fn hello_proof(&self, challenge: &str, dialed: &str, node: &str) -> (String, String) {
+        (
+            self.key_id.clone(),
+            crate::auth::make_proof(&self.key, challenge, dialed, Some(node)),
+        )
+    }
+
     fn charge_fetch(&self, g: &mut Inner) -> Result<()> {
         let now = self.steady_ms();
         let slot = &mut g.fetch_rate;
@@ -556,7 +601,7 @@ impl Home {
             Some(s) if s == self.server => g.own_nodes.clone(),
             Some(s) => g.directory.server(s).map(|i| i.nodes).unwrap_or_default(),
             None => self
-                .profile_view(g, actor, &self.now_str())
+                .profile_view_in(g, actor, &self.now_str(), false)
                 .map(|v| v.valid_nodes())
                 .unwrap_or_default(),
         }
@@ -566,6 +611,18 @@ impl Home {
 
     /// Identity.profile: the view of `actor` now, or `None` if this home cannot produce it.
     pub(crate) fn profile_view(&self, g: &Inner, actor: &str, now: &str) -> Option<PinView> {
+        self.profile_view_in(g, actor, now, true)
+    }
+
+    /// Like [`Home::profile_view`]; with `fresh_only` false, the last view read of an actor of another
+    /// server counts even when it is older than 300 s (it asks for a new one).
+    fn profile_view_in(
+        &self,
+        g: &Inner,
+        actor: &str,
+        now: &str,
+        fresh_only: bool,
+    ) -> Option<PinView> {
         if let Some(server) = actor.strip_prefix("@:") {
             let keys = if server == self.server {
                 g.server_keys.clone()
@@ -593,7 +650,12 @@ impl Home {
             });
         }
         if grammar::server_of(actor) != Some(self.server.as_str()) {
-            return None;
+            // an actor of another server: its profile is read from its home (section 4.1 step 4)
+            let known = g.directory.profile(actor);
+            if known.as_ref().is_none_or(|p| !p.fresh) {
+                g.directory.want_profile(actor);
+            }
+            return known.filter(|p| p.fresh || !fresh_only).map(|p| p.view);
         }
         let space = g.spaces.get(&format!("profile:{actor}"))?;
         let profile = space.state.profile.as_ref()?;
@@ -712,10 +774,7 @@ impl Home {
         let now_secs = self.now_secs();
         let now = format_time(now_secs); // read once: the pin loop, Policy's ctx.time and the receipt time
         let Some(author) = self.profile_view(g, &entry.author, &now) else {
-            if hosted_create {
-                self.charge_fetch(g)?; // the carrier fetches on this answer: bounded
-            }
-            return Err(WireError::unavailable("profile"));
+            return Err(self.profile_missing(g, &entry.author));
         };
         if !author.keys.contains_key(&entry.key_id) {
             return Err(WireError::denied("no valid key")); // R-12: nothing to verify against
@@ -729,7 +788,7 @@ impl Home {
         let state = g.spaces.get(&entry.space).map(|s| &*s.state);
         let pinned = self
             .pin(g, state, &pe, &now)?
-            .ok_or_else(|| WireError::unavailable("profile"))?;
+            .ok_or_else(|| WireError::unavailable("profile").retry_after(PROFILE_RETRY_MS))?;
         let ctx = Ctx::new(&now, policy_profiles(&pinned))?;
         // 5 Policy; an owner's early abandon counts as allowed here and is refused in step 7 (R-16)
         let wait_ms = self.abandon_wait_ms(g, state, &pe, &entry, &pinned, now_secs)?;

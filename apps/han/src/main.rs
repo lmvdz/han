@@ -13,6 +13,7 @@ mod node;
 mod rolenode;
 mod seq;
 mod tui;
+mod update;
 
 use clap::{Parser, Subcommand};
 
@@ -54,6 +55,8 @@ enum Cmd {
     },
     /// Run the executor role: claim approved effects and run them (holds the credentials).
     Exec(exec::ExecArgs),
+    /// Check a signed release manifest for a newer version. Never installs anything.
+    Update(update::UpdateArgs),
     /// Print the public key (the node id) of a key file, creating the file if it does not exist.
     Key { file: std::path::PathBuf },
 }
@@ -92,6 +95,7 @@ async fn run(cli: Cli) {
         Cmd::Agent(a) => agent::run(a).await,
         Cmd::Exec(a) => exec::run(a).await,
         Cmd::Host(a) => host::run(*a).await,
+        Cmd::Update(a) => update::run(a).await,
         Cmd::Shim { .. } => Ok(()),
         Cmd::Key { file } => keys::load_or_create(&file)
             .map(|seed| println!("{}", keys::signing_key(seed).public_key().to_base64url()))

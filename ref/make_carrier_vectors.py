@@ -14,6 +14,7 @@ FILES = {}
 def key(name): return W.Key("han-carrier-" + name)
 ALICE, BOB, SRV, SRVB, STRANGER = key("alice"), key("bob"), key("server-a"), key("server-b"), key("stranger")
 A, B, Z = "@alice:a.example", "@bob:b.example", "@zed:c.example"
+CODER = "@coder:a.example"   # an agent whose profile names A as its operator
 
 def pol(**kw):
     p = {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "any", "approvals": [], "separateApprover": False,
@@ -28,15 +29,18 @@ SPACES = {
     "club:a.example": {"policy": pol(join="open"), "roles": {A: "owner", Z: "member"}},
     "lab:a.example": {"policy": pol(), "roles": {A: "owner", B: "guest"}},
     "profile:@alice:a.example": {"policy": pol(visibility="public", join="closed"), "roles": {A: "owner", "@:a.example": "owner"}},
+    "profile:@coder:a.example": {"policy": pol(visibility="public", join="closed"), "roles": {CODER: "owner", "@:a.example": "owner"}, "operator": A},
+    "profile:@bot:a.example": {"policy": pol(visibility="public", join="closed"), "roles": {"@bot:a.example": "owner", "@:a.example": "owner"}, "operator": Z},
 }
-def conn(node, call, space=None, who=None, nodes=None):
+def conn(node, call, space=None, who=None, nodes=None, kind=None):
     c = {"node": node.pub if isinstance(node, W.Key) else node, "call": call}
     if space: c["space"] = space
+    if kind: c["kind"] = kind
     if who: c["hello"] = {"who": who, "nodes": [n.pub for n in nodes]}
     return c
 OPEN, MEMBER, SERVER, NO = {"allow": True, "tier": "open"}, {"allow": True, "tier": "member"}, {"allow": True, "tier": "server"}, {"allow": False}
-FILES["admit"] = {"name": "admit", "rules": ["N-02", "G-07", "X9", "X12", "Z7"], "function": "admit(conn, spaces)",
-    "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor), or as member for a call on a space where the actor holds a role (round 32, Z7: judged per space), or for a call naming no space when the actor is an owner or member of a served space that isn't open-join; anyone else only for join, cancel, any call naming a space not held here (routing answers it), reads of public and profile spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
+FILES["admit"] = {"name": "admit", "rules": ["N-02", "G-07", "X9", "X12", "Z7", "P-03"], "function": "admit(conn, spaces)",
+    "description": "the peer filter: any node may say hello; nothing else before it; a node that vouches for its hello actor is admitted as server (a server actor), or as member for a call on a space where the actor holds a role (round 32, Z7: judged per space), or for a call naming no space when the actor is an owner or member of a served space that isn't open-join, or for the append of a member.set (`conn.kind`) into an agent's or a service's profile space by the operator that profile names (`spaces[...].operator`, P-03); anyone else only for join, cancel, any call naming a space not held here (routing answers it), reads of public and profile spaces, and appends to open-join spaces; `expect` compares allow and tier (the reason is informative)",
     "spaces": SPACES, "cases": [
     {"name": "hello from any node", "conn": conn(STRANGER, "hello"), "expect": OPEN},
     {"name": "join before hello (X12)", "conn": conn(STRANGER, "join", "team:a.example"), "expect": NO},
@@ -74,6 +78,16 @@ FILES["admit"] = {"name": "admit", "rules": ["N-02", "G-07", "X9", "X12", "Z7"],
     {"name": "a stranger watches a session", "conn": conn(BOB, "watch", "pub:a.example", B, [BOB]), "expect": NO},
     {"name": "a stranger uploads", "conn": conn(BOB, "blobPut", None, B, [BOB]), "expect": NO},
     {"name": "a stranger invites", "conn": conn(BOB, "invite", "team:a.example", B, [BOB]), "expect": NO},
+    {"name": "the named operator confirms its agent: a member.set in the agent's profile (P-03, §4.3)", "conn": conn(ALICE, "append", "profile:@coder:a.example", A, [ALICE], "member.set"), "expect": MEMBER},
+    {"name": "another actor's member.set in that profile", "conn": conn(BOB, "append", "profile:@coder:a.example", B, [BOB], "member.set"), "expect": NO},
+    {"name": "another actor's other append in that profile", "conn": conn(BOB, "append", "profile:@coder:a.example", B, [BOB], "key.add"), "expect": NO},
+    {"name": "the operator's other kinds in that profile", "conn": conn(ALICE, "append", "profile:@coder:a.example", A, [ALICE], "key.add"), "expect": NO},
+    {"name": "the operator's message in that profile", "conn": conn(ALICE, "append", "profile:@coder:a.example", A, [ALICE], "message"), "expect": NO},
+    {"name": "the operator's actor on a node its profile doesn't list", "conn": conn(STRANGER, "append", "profile:@coder:a.example", A, [ALICE], "member.set"), "expect": NO},
+    {"name": "the operator of one agent confirms another's", "conn": conn(ALICE, "append", "profile:@bot:a.example", A, [ALICE], "member.set"), "expect": NO},
+    {"name": "a member.set in a human's profile, which names no operator", "conn": conn(BOB, "append", "profile:@alice:a.example", B, [BOB], "member.set"), "expect": NO},
+    {"name": "the operator's other calls there stay as they were: a profile read is open", "conn": conn(ALICE, "state", "profile:@coder:a.example", A, [ALICE]), "expect": OPEN},
+    {"name": "the operator's signal there is refused", "conn": conn(ALICE, "signal", "profile:@coder:a.example", A, [ALICE]), "expect": NO},
     {"name": "the actor whose profile is served here is a member", "conn": conn(ALICE, "blobPut", None, A, [ALICE]),
      "spaces": {"profile:@alice:a.example": SPACES["profile:@alice:a.example"]}, "expect": MEMBER},
 ]}

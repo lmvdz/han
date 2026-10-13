@@ -12,6 +12,7 @@ members = [
     "crates/han-host",
     "apps/han",
     "apps/han-tui",
+    "integrations/han-github",
 ]
 
 [workspace.package]

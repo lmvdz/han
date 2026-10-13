@@ -25,16 +25,18 @@ READ_CALLS = ("read", "subscribe", "state", "blobGet")       # the calls a stran
 # ───────────────────────── N-02: admit (X9) ─────────────────────────
 def admit(conn: dict, spaces: dict) -> dict:
     """N-02, the peer filter, judged per call before the call's own checks (G-07 (3)).
-    conn:   {node, call, space?, hello?: {who, nodes}}: the peer's node id (its TLS key); the call's name; the space it names (`args.space`,
-            `entry.space` of an append, or `item.space` of a stream); and after a successful `hello` the authenticated actor and the node ids
+    conn:   {node, call, space?, kind?, hello?: {who, nodes}}: the peer's node id (its TLS key); the call's name; the space it names (`args.space`,
+            `entry.space` of an append, or `item.space` of a stream); for an append, the entry's `kind`; and after a successful `hello` the authenticated actor and the node ids
             that vouch for it: the `valid` keys of its pinned profile (N-01), or for a server actor `@:S` the `sequencer` node ids of S's
             /.well-known/han.
-    spaces: {SpaceId: {policy: {visibility, join, ...}, roles: {actor: role}}}: the spaces this node serves (han.ts `AdmitSpaces`, a
-            Pick of each SpaceState). A profile space's roles are its actor and `@:server`, so serving an actor's profile makes its
-            devices standing members here.
+    spaces: {SpaceId: {policy: {visibility, join, ...}, roles: {actor: role}, operator?}}: the spaces this node serves (han.ts `AdmitSpaces`,
+            a Pick of each SpaceState, and for an agent's or a service's profile space the `operator` its profile names). A profile space's
+            roles are its actor and `@:server`, so serving an actor's profile makes its devices standing members here.
     The member tier is judged per space (round 32, Z7): a call that names a space is a member's when the actor holds a role in that
     space; a call that names none (blobPut) needs a standing role: owner or member of a served space that isn't open-join. A role in
-    another space admits nothing, and a guest or open-join role reaches only that space.
+    another space admits nothing, and a guest or open-join role reaches only that space. One call is a member's without a role: the
+    `append` of a `member.set` into an agent's or a service's profile space by the operator that profile names, its confirmation or
+    withdrawal (P-03, §4.3); Policy still judges the entry.
     Returns {allow: True, tier} with tier "member" (the call's own rules judge it), "server" (likewise, for a server's node), or "open"
     (a stranger's call, rate-limited per node by the host), or {allow: False, reason}. Nothing else is read."""
     call, hello = conn["call"], conn.get("hello")
@@ -48,6 +50,8 @@ def admit(conn: dict, spaces: dict) -> dict:
         return {"allow": True, "tier": "member"}                                     # a registered device of a role holder of this space (Z7)
     if bound and sp is None and any(x["roles"].get(who) in ("owner", "member") and x["policy"]["join"] != "open" for x in spaces.values()):
         return {"allow": True, "tier": "member"}                                     # a spaceless call needs a standing role (Z7)
+    if bound and call == "append" and conn.get("kind") == "member.set" and s is not None and s.get("operator") == who:
+        return {"allow": True, "tier": "member"}                                     # the named operator confirms (P-03, §4.3)
     if call in ("join", "cancel"): return {"allow": True, "tier": "open"}            # N-03 after hello; ending one's own stream
     if sp is not None and s is None: return {"allow": True, "tier": "open"}          # a space not held here: §4.1 step 2 answers, nothing else
     if call in READ_CALLS and sp is not None:
