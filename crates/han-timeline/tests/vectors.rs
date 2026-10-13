@@ -764,6 +764,9 @@ impl Run<'_> {
                 .collect();
             let draft = plan.resolve(&resolutions).unwrap();
             let state = self.history.preview(&draft).unwrap();
+            for (o, want) in plan.expected_texts(&resolutions).unwrap() {
+                assert_eq!(state.text(&o), Some(want), "{ctx}: step 7 reading of {r}");
+            }
             for (obj, text) in r["texts"].as_object().unwrap() {
                 assert_eq!(
                     state.text(&l.object(&json!(obj))).as_deref(),

@@ -140,9 +140,6 @@ pub enum Error {
     /// A timeline merged into itself.
     #[error("merge_self")]
     MergeSelf,
-    /// Kept characters in different orders on the two sides.
-    #[error("merge_order")]
-    MergeOrder,
     /// A conflict without a resolution, or a resolution that does not fit its conflict.
     #[error("unresolved")]
     Unresolved,
