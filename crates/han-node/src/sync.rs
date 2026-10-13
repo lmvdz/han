@@ -235,6 +235,25 @@ impl<T: Transport> Inner<T> {
         Ok(())
     }
 
+    /// A live `han.timeline/1` item: one batch of the session's work timeline.
+    fn timeline_item(&self, space: &str, item: &Value) {
+        if item["type"].as_str() != Some("profile")
+            || item["name"].as_str() != Some(crate::timeline::TIMELINE_PROFILE)
+        {
+            return;
+        }
+        let Some(session) = item["session"].as_str() else {
+            return;
+        };
+        let Some(actor) = self.engine().session_actor(space, session) else {
+            return;
+        };
+        let time = item["time"].as_str().unwrap_or("");
+        if self.timelines.receive(session, &actor, time, &item["body"]) {
+            self.engine().timeline_changed();
+        }
+    }
+
     /// A live `han.status/1` item of `session`.
     fn status_item(&self, space: &str, item: &Value) {
         if item["type"].as_str() != Some("profile") || item["name"].as_str() != Some("han.status/1")
@@ -472,5 +491,6 @@ async fn watch_session<T: Transport>(
     let Ok(mut stream) = started else { return };
     while let Some(Ok(item)) = stream.next().await {
         inner.status_item(&space, &item);
+        inner.timeline_item(&space, &item);
     }
 }

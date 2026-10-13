@@ -1,0 +1,29 @@
+{
+  "agent": {"name": "@agentclientprotocol/claude-agent-acp", "version": "0.89.1"},
+  "modes": {"current": "acceptEdits", "available": ["default", "acceptEdits", "plan", "auto", "bypassPermissions"]},
+  "mcpHttp": true,
+  "turns": [
+    {"steps": [
+      {"type": "usage", "used": 29152, "size": 1000000},
+      {"type": "tool_call", "id": "toolu_01", "title": "Terminal", "kind": "execute", "rawInput": {}},
+      {"type": "tool_update", "id": "toolu_01", "title": "cat SHA.txt; ls"},
+      {"type": "tool_update", "id": "toolu_01", "status": "completed", "output": "3f9c2e1\nCLAUDE.md\nSHA.txt", "rawOutput": "3f9c2e1\nCLAUDE.md\nSHA.txt"},
+      {"type": "tool_call", "id": "toolu_02", "title": "curl -X POST https://hooks.example.com/build", "kind": "fetch", "rawInput": {"command": "curl -X POST https://hooks.example.com/build"}},
+      {"type": "request_permission", "id": "toolu_02", "title": "curl -X POST https://hooks.example.com/build", "kind": "fetch",
+       "rawInput": {"command": "curl -X POST https://hooks.example.com/build"},
+       "on_allow": [{"type": "tool_update", "id": "toolu_02", "status": "completed", "output": "sent"}],
+       "on_reject": [{"type": "tool_update", "id": "toolu_02", "status": "failed", "output": "User refused permission to run tool"},
+                     {"type": "mcp_call", "id": "toolu_03", "server": "han", "tool": "propose",
+                      "args": {"summary": "POST a green build status for 3f9c2e1 to the CI webhook", "kind": "http_request",
+                               "effect": {"method": "POST", "url": "https://hooks.example.com/build", "body": "{\"status\":\"green\",\"sha\":\"3f9c2e1\"}"}}}]},
+      {"type": "usage", "used": 30254, "size": 1000000, "cost": {"amount": 0.1714134, "currency": "USD"}},
+      {"type": "message", "text": "The notification is queued as a proposal and waits for approval."},
+      {"type": "end", "stopReason": "end_turn", "meta": {"quota": {"token_count": {"totalTokens": 89574, "inputTokens": 6, "cachedInputTokens": 70787, "cachedWriteTokens": 18199, "outputTokens": 582, "reasoningOutputTokens": 0},
+        "model_usage": [{"model": "claude-opus-5-5", "token_count": {"totalTokens": 89574, "inputTokens": 6, "cachedInputTokens": 70787, "cachedWriteTokens": 18199, "outputTokens": 582, "reasoningOutputTokens": 0}}]}}}
+    ]},
+    {"steps": [
+      {"type": "message", "text": "It is queued as a proposal, still waiting for approval."},
+      {"type": "end", "stopReason": "end_turn", "meta": {"quota": {"token_count": {"totalTokens": 30341, "inputTokens": 2, "cachedInputTokens": 30065, "cachedWriteTokens": 235, "outputTokens": 39}}}}
+    ]}
+  ]
+}

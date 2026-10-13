@@ -1,0 +1,51 @@
+[package]
+name = "han-host"
+description = "HAN agent host: one ACP client driving any harness inside a sandbox (MXC, bubblewrap), an egress proxy with key injection and an allow-list, status derivation, R-24 steer modes, secret masking, and worktree mirroring into han-timeline."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-client-protocol = "=3.3.0"
+async-trait = "0.1"
+base64.workspace = true
+futures = "0.3"
+getrandom.workspace = true
+han-core.workspace = true
+han-mcp = { path = "../han-mcp", version = "0.1.0" }
+han-node = { path = "../han-node", version = "0.1.0", default-features = false }
+han-timeline = { path = "../han-timeline", version = "0.1.0" }
+han-vcs = { path = "../han-vcs", version = "0.1.0" }
+notify = "8.2"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "io-std"] }
+tracing.workspace = true
+tokio-util = { version = "0.7", features = ["compat"] }
+toml = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+interprocess = { version = "2.4", features = ["tokio"] }
+mxc-sdk = "=1.0.0"
+widestring = "1"
+
+[dev-dependencies]
+han-exec = { path = "../han-exec", version = "0.1.0" }
+han-net = { path = "../han-net", version = "0.1.0" }
+han-seq = { path = "../han-seq", version = "0.1.0" }
+han-node = { path = "../han-node", version = "0.1.0", features = ["runtime"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+tempfile = "3"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

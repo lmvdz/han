@@ -12,6 +12,9 @@ han-core.workspace = true
 han-net.workspace = true
 han-node.workspace = true
 han-seq.workspace = true
+han-exec = { path = "../../crates/han-exec", version = "0.1.0" }
+han-host = { path = "../../crates/han-host", version = "0.1.0" }
+han-vcs = { path = "../../crates/han-vcs", version = "0.1.0" }
 getrandom.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["signal"] }

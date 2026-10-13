@@ -130,6 +130,10 @@ pub enum Command {
     SessionOpen {
         /// The space.
         space: String,
+        /// `auto` (default) or `guarded` (R-24: an agent that chooses guarding).
+        #[serde(default)]
+        #[ts(optional)]
+        steer_mode: Option<String>,
         /// The task it works.
         #[serde(default)]
         #[ts(optional)]
@@ -205,6 +209,129 @@ pub enum Command {
         /// The proposal's entry id.
         proposal: String,
     },
+    /// Proposes an effect (`effect.propose`): the only way an agent's work reaches the world. The node
+    /// computes `planDigest = sha256(JCS(plan))` and puts the plan in the content.
+    EffectPropose {
+        /// The space.
+        space: String,
+        /// Who may claim and run it.
+        executor: String,
+        /// The plan as JSON text: `{action, target, args?}` (han.ts `Plan`; `action` is also the body's).
+        plan: String,
+        /// The task it is charged to (R-24: the driving task, when a task drives the turn).
+        #[serde(default)]
+        #[ts(optional)]
+        task: Option<String>,
+        /// The cost unit and amount, in a budgeted space.
+        #[serde(default)]
+        #[ts(optional)]
+        cost: Option<(String, u64)>,
+        /// Whether a failed attempt may be retried.
+        #[serde(default)]
+        repeatable: bool,
+        /// No claim at or after this time.
+        #[serde(default)]
+        #[ts(optional)]
+        expires_at: Option<String>,
+    },
+    /// Claims an effect for this node's executor instance (`effect.claim`, X-03). `attempt` and `window` come
+    /// from the state the executor read (the `Effects` view); a stale value is `denied` and is re-read.
+    EffectClaim {
+        /// The space.
+        space: String,
+        /// The proposal.
+        proposal: String,
+        /// One more than the number of earlier claims.
+        attempt: u64,
+        /// The space's `launchWindow` in seconds.
+        window: u64,
+    },
+    /// Reports how a claimed attempt ended (`effect.outcome`, X-05).
+    EffectOutcome {
+        /// The space.
+        space: String,
+        /// The claim's entry id.
+        claim: String,
+        /// `succeeded`, `failed`, `cancelled` or `unknown`.
+        result: String,
+        /// `yes`, `no` or `unknown`.
+        started: String,
+        /// What it cost, with `started: yes` only.
+        #[serde(default)]
+        #[ts(optional)]
+        cost: Option<(String, u64)>,
+    },
+    /// Replaces the space's policy (`policy.set`); an owner's command.
+    PolicySet {
+        /// The space.
+        space: String,
+        /// The whole policy as JSON text.
+        policy: String,
+    },
+    /// Publishes a profile item other than `han.status/1` on a session's stream (for example a
+    /// `han.timeline/1` batch). Only the session's actor may publish (T-07).
+    StreamPublish {
+        /// The space.
+        space: String,
+        /// The session.
+        session: String,
+        /// The profile's name, such as `han.timeline/1`.
+        name: String,
+        /// The item's body as JSON text (at most 64 KiB with its envelope).
+        body: String,
+    },
+}
+
+/// Who may send a command (SR-06). The node API's local pipe serves faces; han-mcp's connection (an agent's
+/// tools) gets only [`CommandClass::Agent`] commands, and an executor only [`CommandClass::Agent`] and
+/// [`CommandClass::Executor`] ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandClass {
+    /// Only a face acting for the device's person: approvals, membership, devices, policy, agents.
+    Face,
+    /// Also an agent's host and tools: its own sessions, tasks, status, leases and proposals.
+    Agent,
+    /// Also an executor: claims and outcomes.
+    Executor,
+}
+
+impl Command {
+    /// The class of the command. The match is exhaustive with no wildcard arm, so a new variant must be
+    /// classified before the crate builds (SR-06).
+    pub fn class(&self) -> CommandClass {
+        match self {
+            Command::SpaceCreate { .. }
+            | Command::SpaceJoin { .. }
+            | Command::SpaceFollow { .. }
+            | Command::Invite { .. }
+            | Command::MemberSet { .. }
+            | Command::AgentCreate { .. }
+            | Command::AgentStart { .. }
+            | Command::AgentStop { .. }
+            | Command::TaskCancel { .. }
+            | Command::DeviceOffer
+            | Command::DevicePair { .. }
+            | Command::DeviceRevoke { .. }
+            | Command::EffectApprove { .. }
+            | Command::EffectCancel { .. }
+            | Command::PolicySet { .. } => CommandClass::Face,
+            Command::TaskCreate { .. }
+            | Command::TaskUpdate { .. }
+            | Command::SessionOpen { .. }
+            | Command::SessionClose { .. }
+            | Command::SessionInput { .. }
+            | Command::StatusPublish { .. }
+            | Command::StreamPublish { .. }
+            | Command::LeaseSet { .. }
+            | Command::EffectPropose { .. } => CommandClass::Agent,
+            Command::EffectClaim { .. } | Command::EffectOutcome { .. } => CommandClass::Executor,
+        }
+    }
+
+    /// Whether an agent's tools may send it (SR-06).
+    pub fn is_agent_allowed(&self) -> bool {
+        self.class() == CommandClass::Agent
+    }
 }
 
 /// How a call ended, when it did not fail.
