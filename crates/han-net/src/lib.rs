@@ -35,5 +35,5 @@ pub use mem::{MemNetwork, MemTransport};
 pub use profile::{ProfileDirectory, RemoteProfiles, verify_profile_chain};
 pub use quic::{ALPN, IrohOptions, IrohTransport, RelayChoice};
 pub use server::{ServeOptions, ServerHandle, serve};
-pub use ticket::InviteTicket;
+pub use ticket::{HomeTicket, InviteTicket};
 pub use transport::{Connection, Transport};

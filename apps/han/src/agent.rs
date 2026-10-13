@@ -9,9 +9,10 @@
 
 use std::path::PathBuf;
 
+use crate::home::{HomeChoice, HomeOpts};
 use clap::{Args, Subcommand};
 use han_node::NodeApi;
-use han_node::api::{CallResult, Command, HomeRef};
+use han_node::api::{CallResult, Command};
 use han_node::rpc::{RpcClient, default_endpoint};
 
 /// Options of `han agent`.
@@ -46,15 +47,8 @@ enum AgentCmd {
     Confirm {
         /// The agent.
         agent: String,
-        /// The home of the agent's profile: ServerName.
-        #[arg(long)]
-        home_server: String,
-        /// The home's node id.
-        #[arg(long)]
-        home_node: String,
-        /// The home's relays.
-        #[arg(long)]
-        home_relay: Vec<String>,
+        #[command(flatten)]
+        home: HomeOpts,
         /// The operator (this node's actor).
         #[arg(long)]
         operator: String,
@@ -76,6 +70,8 @@ enum AgentCmd {
         /// The issue, `github:owner/repo#123`.
         #[arg(long)]
         issue: Option<String>,
+        #[command(flatten)]
+        home: HomeOpts,
     },
     /// Stops an agent's sessions, or one `host-<agent>#<issue>`.
     Stop {
@@ -119,18 +115,16 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         AgentCmd::Confirm {
             agent,
-            home_server,
-            home_node,
-            home_relay,
+            home,
             operator,
         } => {
             let profile = format!("profile:{agent}");
-            let home = HomeRef {
-                server: home_server,
-                node: home_node,
-                addrs: vec![],
-                relays: home_relay,
-            };
+            // The agent's profile lives at the agent's own server.
+            let choice = home
+                .resolve(Some(agent.as_str()))?
+                .ok_or("give --home <ticket>, or --home-node (and --home-server)")?;
+            pin(&client, &choice).await?;
+            let home = choice.home;
             let _ = client
                 .call(Command::SpaceFollow {
                     home,
@@ -164,7 +158,11 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             harness,
             repo,
             issue,
+            home,
         } => {
+            if let Some(choice) = home.resolve(Some(agent.as_str()))? {
+                pin(&client, &choice).await?;
+            }
             client
                 .call(Command::AgentStart {
                     space,
@@ -180,6 +178,18 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             client.call(Command::AgentStop { target }).await?;
             println!("stopped");
         }
+    }
+    Ok(())
+}
+
+/// Hands the node a home named by ticket or keys, so it dials and trusts it with no HTTPS well-known.
+async fn pin(client: &RpcClient, choice: &HomeChoice) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(t) = &choice.pin {
+        client
+            .call(Command::HomePin {
+                ticket: t.to_text(),
+            })
+            .await?;
     }
     Ok(())
 }

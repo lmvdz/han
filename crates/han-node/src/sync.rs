@@ -141,7 +141,17 @@ impl<T: Transport> Inner<T> {
         {
             return Ok(k.clone());
         }
-        let keys = self.server_keys.keys(server).await?;
+        // ticket-pinned trust: a home joined by ticket has no well-known to fetch
+        let pinned = self
+            .pins
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(server)
+            .map(|t| t.keys.clone());
+        let keys = match pinned {
+            Some(keys) => keys,
+            None => self.server_keys.keys(server).await?,
+        };
         self.key_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner())

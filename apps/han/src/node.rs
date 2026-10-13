@@ -8,12 +8,14 @@ use std::sync::Arc;
 use clap::Args;
 use han_net::wellknown::Fetcher;
 use han_net::{IrohOptions, IrohTransport, Transport};
+use han_node::api::{Command, NodeApi};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore, KeyringStore};
 use han_node::rpc::{default_endpoint, serve};
 use han_node::supervisor::ProcessSpawner;
 use han_node::{Node, NodeConfig, NodeParts, WellKnownKeys};
 use han_seq::SystemClock;
 
+use crate::home::HomeOpts;
 use crate::seq::relay_choice;
 
 /// Options of `han node`.
@@ -41,6 +43,8 @@ pub struct NodeArgs {
     /// The pipe or socket to serve the node API on, if it is not the default of `--data`.
     #[arg(long)]
     endpoint: Option<String>,
+    #[command(flatten)]
+    home: HomeOpts,
 }
 
 pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -68,6 +72,19 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
         server_keys: Arc::new(WellKnownKeys::new(Fetcher::new())),
         supervisor: Arc::new(ProcessSpawner::new(std::env::current_exe()?)),
     })?;
+
+    // A home named by ticket or node address is kept in the data directory, so a restart needs no flag.
+    if let Some(choice) = args.home.resolve(Some(&args.actor))? {
+        match choice.pin {
+            Some(t) => {
+                node.call(Command::HomePin {
+                    ticket: t.to_text(),
+                })
+                .await?;
+            }
+            None => return Err("--home-node needs --home-key (or use --home with a ticket)".into()),
+        }
+    }
 
     let endpoint = args
         .endpoint

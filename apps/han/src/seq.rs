@@ -7,7 +7,9 @@ use std::sync::Arc;
 use clap::Args;
 use han_core::types::Durability;
 use han_net::wellknown::{document, serve_http, wellknown_routes};
-use han_net::{IrohOptions, IrohTransport, RelayChoice, ServeOptions, Transport, serve};
+use han_net::{
+    HomeTicket, IrohOptions, IrohTransport, RelayChoice, ServeOptions, Transport, serve,
+};
 use han_seq::{Home, HomeConfig, HostingPolicy, SqliteStore, SystemClock};
 
 use crate::keys;
@@ -59,6 +61,30 @@ fn parse_hosting(spec: &str) -> Result<HostingPolicy, String> {
             _ => Err("want known, open or allow:<actor-or-server>,...".into()),
         },
     }
+}
+
+/// Where a running home keeps its ticket, in its data directory.
+const TICKET_FILE: &str = "home.ticket";
+
+/// Options of `han ticket`.
+#[derive(Args)]
+pub struct TicketArgs {
+    /// The data directory of the running `han seq`.
+    #[arg(long, default_value = "han-data")]
+    data: PathBuf,
+}
+
+/// `han ticket`: prints the home ticket `han seq` wrote, which teammates pass to `--home`.
+pub fn ticket(args: &TicketArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let path = args.data.join(TICKET_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "{}: {e} (is `han seq` running with this --data?)",
+            path.display()
+        )
+    })?;
+    println!("{}", text.trim());
+    Ok(())
 }
 
 pub fn relay_choice(spec: &str) -> RelayChoice {
@@ -126,6 +152,24 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&home),
         ServeOptions::default(),
     );
+    // The home ticket stands in for the HTTPS well-known where a home has none (a placeholder ServerName).
+    let mut ticket_addr = transport.addr();
+    if ticket_addr.addrs.is_empty() && ticket_addr.relays.is_empty() {
+        ticket_addr = transport.loopback_addr();
+    }
+    let ticket = HomeTicket {
+        server: home.server().to_owned(),
+        node: ticket_addr,
+        keys: home.server_keys(),
+    }
+    .to_text();
+    std::fs::write(
+        args.data.join(TICKET_FILE),
+        format!(
+            "{ticket}
+"
+        ),
+    )?;
     let (doc_home, doc_transport) = (Arc::clone(&home), transport.clone());
     let routes = wellknown_routes(move || {
         let mut addr = doc_transport.addr();
@@ -148,6 +192,7 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
         println!("relay {r}");
     }
     println!("http {}", http.local_addr());
+    println!("ticket {ticket}");
     tokio::signal::ctrl_c().await?;
     transport.shutdown().await;
     Ok(())
