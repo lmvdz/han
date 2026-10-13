@@ -725,4 +725,113 @@ mod tests {
             }
         }
     }
+
+    /// The run-based path for large texts (no seals, no copies) gives exactly what the full
+    /// layout gives: text, length, the character at each position, and identity ranges.
+    #[test]
+    fn compact_runs_equal_the_dense_layout() {
+        let reps: Vec<Arc<ReplicaId>> = (0..3)
+            .map(|i| Arc::new(ReplicaId::new(format!("@r{i}:x.example"), "k", 0)))
+            .collect();
+        let mut seed = 7u64;
+        let mut rnd = |n: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as usize) % n.max(1)
+        };
+        const PIECES: [&str; 6] = [
+            "a", "bc", "
+", "é", "🙂x", "line
+",
+        ];
+        for round in 0..12 {
+            let mut t = TextObj::new(false);
+            let mut counter = 10u64;
+            let big: String = (0..5000)
+                .map(|i| {
+                    [
+                        "x", "é", "
+", "🙂",
+                    ][i % 4 * (round % 2)]
+                })
+                .collect();
+            let first = InsertionId {
+                op: OpId::new(counter, reps[0].clone()),
+                index: 0,
+            };
+            t.insert(first.clone(), None, &big, None);
+            let mut ids: Vec<(InsertionId, u32)> = vec![(first, big.chars().count() as u32)];
+            for step in 0..200u32 {
+                if rnd(3) == 0 {
+                    let (id, len) = ids[rnd(ids.len())].clone();
+                    let from = rnd(len as usize) as u32;
+                    let to = (from + 1 + rnd(40) as u32).min(len);
+                    t.delete(&IdRange {
+                        insertion: id,
+                        from,
+                        to,
+                    });
+                } else {
+                    counter += 1;
+                    let c = if rnd(5) == 0 { counter / 2 } else { counter };
+                    let id = InsertionId {
+                        op: OpId::new(c, reps[rnd(3)].clone()),
+                        index: step,
+                    };
+                    let anchor = (rnd(8) != 0).then(|| {
+                        let (aid, alen) = ids[rnd(ids.len())].clone();
+                        CharId {
+                            insertion: aid,
+                            offset: rnd(alen as usize) as u32,
+                        }
+                    });
+                    let text: String = (0..1 + rnd(3)).map(|_| PIECES[rnd(PIECES.len())]).collect();
+                    t.insert(id.clone(), anchor.as_ref(), &text, None);
+                    ids.push((id, text.chars().count() as u32));
+                }
+                assert!(t.compact_layout(), "round {round} step {step}");
+                let dense = t.compute();
+                let at = |p: usize| dense.order[dense.visible_index[p]];
+                let want: String = (0..dense.visible_index.len())
+                    .map(|p| t.char_at(at(p)))
+                    .collect();
+                assert_eq!(t.text(), want, "round {round} step {step}: text");
+                assert_eq!(
+                    t.len(),
+                    dense.visible_index.len(),
+                    "round {round} step {step}: len"
+                );
+                for _ in 0..5 {
+                    let n = dense.visible_index.len();
+                    let p = rnd(n + 1);
+                    assert_eq!(
+                        t.visible_char(p),
+                        (p < n).then(|| at(p)),
+                        "round {round} step {step}: char {p}"
+                    );
+                    let q = (p + rnd(30)).min(n);
+                    let mut ranges: Vec<IdRange> = Vec::new();
+                    for x in p..q {
+                        let c = t.char_id(at(x));
+                        match ranges.last_mut() {
+                            Some(last) if last.insertion == c.insertion && last.to == c.offset => {
+                                last.to += 1
+                            }
+                            _ => ranges.push(IdRange {
+                                insertion: c.insertion,
+                                from: c.offset,
+                                to: c.offset + 1,
+                            }),
+                        }
+                    }
+                    assert_eq!(
+                        t.visible_ranges(p, q),
+                        ranges,
+                        "round {round} step {step}: ranges {p}..{q}"
+                    );
+                }
+            }
+        }
+    }
 }
