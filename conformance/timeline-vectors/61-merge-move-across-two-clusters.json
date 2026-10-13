@@ -1,0 +1,214 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "61-merge-move-across-two-clusters",
+ "description": "The incoming side moved y to the front: its re-insert falls in an empty cluster at the line's start and its delete in the line's cluster; each region is rewritten on its own, giving yx, and y keeps its identity because the other cluster deletes the target's y",
+ "rules": [
+  "TL-72"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "xy\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "move": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "1@A",
+     "incoming": [
+      "2@A"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         1,
+         2
+        ]
+       ],
+       "inserts": [
+        [
+         null,
+         "y",
+         "2@A#0:1"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "merge": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         1,
+         2
+        ]
+       ],
+       "inserts": [
+        [
+         null,
+         "y",
+         "2@A#0:1"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "move",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "3@A",
+        "objects": {
+         "2@A": {
+          "text": "yx\n"
+         }
+        }
+       }
+      ],
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "merge",
+        "base": [
+         "2@A"
+        ],
+        "conflicts": [],
+        "results": [
+         {
+          "resolutions": [],
+          "texts": {
+           "2@A": "yx\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "merge",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "yx\n"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
