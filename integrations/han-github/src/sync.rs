@@ -113,7 +113,7 @@ impl<S: Source> Syncer<S> {
             source,
             space: cfg.space.clone(),
             label: cfg.tasks.label.clone(),
-            to: cfg.tasks.to.clone(),
+            to: cfg.tasks.addressees(),
             max_pages: cfg.max_pages,
             repos: cfg
                 .repos

@@ -126,7 +126,9 @@ fn a_stranger_who_has_said_hello_cannot_create_a_space() {
         (Code::Denied, HOSTING_DENIED)
     );
     assert_eq!(
-        home.may_fetch_profile("@eve:c.example").unwrap_err().code,
+        home.may_fetch_profile("@eve:c.example", None)
+            .unwrap_err()
+            .code,
         Code::Denied
     );
 }
@@ -143,7 +145,7 @@ fn a_member_of_a_hosted_space_is_known() {
     let home = home(false);
     create(&home, "x1:a.localhost", ALICE, "k1", &key(5)).unwrap();
     assert_eq!(
-        home.may_fetch_profile(STRANGER).unwrap_err().code,
+        home.may_fetch_profile(STRANGER, None).unwrap_err().code,
         Code::Denied
     );
     let body = Value::Object(
@@ -164,7 +166,7 @@ fn a_member_of_a_hosted_space_is_known() {
     );
     home.append(&e, c.as_ref()).unwrap();
     // the rule now passes for it: the refusal left is P-03 (a server actor is no owner), not the hosting rule
-    home.may_fetch_profile(STRANGER).unwrap();
+    home.may_fetch_profile(STRANGER, None).unwrap();
     let err = create(&home, "x2:a.localhost", STRANGER, "b1", &key(9)).unwrap_err();
     assert_ne!(err.message, HOSTING_DENIED);
 }
@@ -224,7 +226,7 @@ fn fetches_for_strangers_are_bounded() {
     home.set_hosting(HostingPolicy::Open);
     let mut limited = None;
     for _ in 0..100 {
-        if let Err(e) = home.may_fetch_profile("@eve:c.example") {
+        if let Err(e) = home.may_fetch_profile("@eve:c.example", None) {
             limited = Some(e);
             break;
         }
@@ -232,4 +234,20 @@ fn fetches_for_strangers_are_bounded() {
     let e = limited.expect("a budget");
     assert_eq!(e.code, Code::Limit);
     assert!(e.retry_after_ms.is_some());
+}
+
+#[test]
+fn a_fetch_for_a_known_authors_entry_is_allowed_but_a_strangers_own_is_not() {
+    let home = home(false);
+    create(&home, "x1:a.localhost", ALICE, "k1", &key(5)).unwrap();
+    let foreign = "@x:b.example";
+    // a known author's invite needs the target's profile: allowed
+    home.may_fetch_profile(foreign, Some(ALICE)).unwrap();
+    // nothing asked by a stranger, or on a stranger's behalf, is
+    for requester in [None, Some(STRANGER), Some(foreign)] {
+        assert_eq!(
+            home.may_fetch_profile(foreign, requester).unwrap_err().code,
+            Code::Denied
+        );
+    }
 }

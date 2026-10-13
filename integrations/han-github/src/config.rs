@@ -76,16 +76,34 @@ pub struct Tasks {
     /// The label that asks for a task (default `agent-ready`).
     #[serde(default = "default_label")]
     pub label: String,
-    /// The task's assignees (actor ids): the agents or people the suggestion is addressed to. Empty: no task
-    /// is ever created (issues are only surfaced).
+    /// The team's shared agent pool (actor ids of agents or services, such as runner agents): an
+    /// `agent-ready` issue becomes a task addressed to the pool, and any one pool agent claims it with its
+    /// own signed task. Empty (and no `to`): no task is ever created (issues are only surfaced).
+    #[serde(default)]
+    pub pool: Vec<String>,
+    /// Extra addressees (actor ids), merged into `pool`: a task goes to both lists, without duplicates.
     #[serde(default)]
     pub to: Vec<String>,
+}
+
+impl Tasks {
+    /// Whom a task is addressed to: `pool`, then `to`, each actor once.
+    pub fn addressees(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for a in self.pool.iter().chain(&self.to) {
+            if !out.contains(a) {
+                out.push(a.clone());
+            }
+        }
+        out
+    }
 }
 
 impl Default for Tasks {
     fn default() -> Self {
         Tasks {
             label: default_label(),
+            pool: Vec::new(),
             to: Vec::new(),
         }
     }

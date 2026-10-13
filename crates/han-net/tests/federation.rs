@@ -125,7 +125,8 @@ struct Fed {
     b: Side,
 }
 
-/// a and b, each knowing the other's document; Bob (keys d1 and d2) lives at b and Alice at a. a lets b's actors in.
+/// a and b, each knowing the other's document; Bob (keys d1 and d2) lives at b and Alice at a. a hosts only the
+/// actors it knows, so Bob's profile is fetched only because Alice, who is known, invites him.
 async fn federation(revalidate_every: Duration, b_doc_key: u8) -> Fed {
     let (ta, tb) = (endpoint(30).await, endpoint(60).await);
     let (addr_a, addr_b) = (ta.loopback_addr(), tb.loopback_addr());
@@ -134,8 +135,6 @@ async fn federation(revalidate_every: Duration, b_doc_key: u8) -> Fed {
     let doc_b = doc(B, b_doc_key, &addr_b);
     let a = side(A, 30, ta, &[doc_b], &[(ALICE, 31)], revalidate_every).await;
     let b = side(B, 60, tb, &[doc_a], &[(BOB, 51)], revalidate_every).await;
-    a.home
-        .set_hosting(HostingPolicy::AllowList(vec![B.to_owned()]));
     // b knows a's keys and nodes, so it accepts a's hello as `@:a`
     b.dir.wellknown().refresh(A).await.unwrap();
     Fed { a, b }
@@ -406,6 +405,10 @@ async fn a_forged_profile_chain_is_refused() {
 async fn a_home_given_the_wrong_keys_for_b_pins_nothing() {
     // a believes b's server key is key(99); b signs with key(60): every receipt fails
     let fed = federation(Duration::from_secs(3600), 99).await;
+    // these read profiles that no entry of a known author asks for, so b's actors are let in by the list
+    fed.a
+        .home
+        .set_hosting(HostingPolicy::AllowList(vec![B.to_owned()]));
     let err = fed.a.dir.ensure_profile(BOB).await.unwrap_err();
     assert!(
         matches!(err, NetError::Protocol(_) | NetError::Dial(_)),
@@ -423,10 +426,19 @@ async fn a_home_given_the_wrong_keys_for_b_pins_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn strangers_cost_no_fetch_and_a_flood_is_rate_limited() {
     let fed = federation(Duration::from_secs(3600), 60).await;
-    // a stranger of a third server: denied, nothing fetched
     let eve = "@eve:c.localhost";
+    // nobody known asks for it, so b's actors are strangers too: denied, nothing fetched
     assert_eq!(
-        fed.a.home.may_fetch_profile(eve).unwrap_err().code,
+        fed.a.home.may_fetch_profile(BOB, None).unwrap_err().code,
+        Code::Denied
+    );
+    fed.a.home.may_fetch_profile(BOB, Some(ALICE)).unwrap();
+    fed.a
+        .home
+        .set_hosting(HostingPolicy::AllowList(vec![B.to_owned()]));
+    // a stranger of a third server: denied, nothing fetched
+    assert_eq!(
+        fed.a.home.may_fetch_profile(eve, None).unwrap_err().code,
         Code::Denied
     );
     let t = endpoint(70).await;
@@ -448,7 +460,7 @@ async fn strangers_cost_no_fetch_and_a_flood_is_rate_limited() {
     let w = limited.expect("the budget runs out");
     assert!(w.retry_after_ms.is_some());
     assert_eq!(
-        fed.a.home.may_fetch_profile(BOB).unwrap_err().code,
+        fed.a.home.may_fetch_profile(BOB, None).unwrap_err().code,
         Code::Limit
     );
 }
