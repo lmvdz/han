@@ -139,4 +139,5 @@ Keys: each private key is the 32-byte Ed25519 seed `sha256(UTF-8 seed)`; `public
 | 60-merge-incoming-move-inside-one-cluster | only characters kept by both sides stay; an incoming move inside a line comes through |
 | 61-merge-move-across-two-clusters | each region rewritten on its own; a move split across an empty and a line cluster |
 | 62-merge-runs-chain-at-one-anchor | runs that would share an anchor chain; a merge naming one anchor twice is invalid |
+| 63-merge-empty-region-anchors-by-position | an empty target region is placed at its gap by position, not through a moved copy |
 | envelopes.json E1–E11 | envelope bytes, the history id from the genesis batch id, batch ids, signatures, replica tables, bad signatures, non-deterministic CBOR, zstd without size, hello and answer bytes, an empty history on a non-genesis batch, an unknown key, and a merge digest (TL-74) with the this-op marker (`digest_preimage`, `merge_digest`) |
