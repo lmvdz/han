@@ -17,8 +17,9 @@ const ALICE: &str = "@alice:a.localhost";
 async fn a_face_drives_the_node_over_the_pipe() {
     let world = World::new(&[(ALICE, 31)]);
     let node = world.node(ALICE, 31);
-    let endpoint = default_endpoint(&world.dir.join("rpc-test"));
-    std::fs::create_dir_all(&world.dir).unwrap();
+    let dir = world.dir.join("rpc-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let endpoint = default_endpoint(&dir);
     let api: Arc<dyn NodeApi> = Arc::new(node.clone());
     let _server = serve(api, &endpoint).unwrap();
 
@@ -120,8 +121,9 @@ async fn garbage_gets_a_json_rpc_error_not_a_crash() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let world = World::new(&[(ALICE, 31)]);
     let node = world.node(ALICE, 31);
-    std::fs::create_dir_all(&world.dir).unwrap();
-    let endpoint = default_endpoint(&world.dir.join("rpc-garbage"));
+    let dir = world.dir.join("rpc-garbage");
+    std::fs::create_dir_all(&dir).unwrap();
+    let endpoint = default_endpoint(&dir);
     let _server = serve(Arc::new(node.clone()), &endpoint).unwrap();
     #[cfg(windows)]
     let name = {
