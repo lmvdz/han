@@ -26,10 +26,11 @@ MAX_STATE_ITEMS = 1000     # han.ts Limits.maxStateItems: items of each paged ma
 MAX_FRAME_BYTES = 1310720  # han.ts Limits.maxFrameBytes
 FRAME_RESERVE = 256        # bytes kept for the `next` member of a state reply: `,"next":"` + a cursor of at most 10 offsets of 16 digits and the head (§3)
 MAX_INT = 2 ** 53 - 1      # G-07 (1a): an integer outside [-MAX_INT, MAX_INT] anywhere in a frame
-CALLS = ("hello", "append", "read", "state", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel")     # the 4 + 8 calls of §3 and §8.3
+CALLS = ("hello", "append", "read", "state", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel", "invite", "join")   # the 4 calls of §3 and the 10 of §8.2 (BindingCalls)
 TEST_CALLS = ("test.clock", "test.limits")     # G-11: control calls of test mode, and of nothing else
 MIN_TEST_FRAME_BYTES = 1024     # G-11 test.limits: the lowest maxFrameBytes a test may set
 MAX_CLOCK_SKEW = 60        # han.ts Limits.maxClockSkewSeconds: the one future-time tolerance (R-03a)
+MAX_FRAME_DEPTH = 128      # §2 (round 31, X18): a frame nests at most 128 arrays and objects, the frame object itself counted
 
 def secs(t: str) -> int:
     """Seconds since the epoch of a HAN Time string."""
@@ -49,15 +50,63 @@ def unb64(s: str) -> bytes:
     return b
 
 class Key:
-    """Deterministic test key from a seed string."""
+    """Deterministic test key from a seed string: the private key is sha256(UTF-8 seed), 32 raw bytes, the same derivation as
+    conformance/wire-vectors/config.json (round 31, X18: until round 30 this class prefixed "key:", which the vectors never did)."""
     def __init__(self, seed: str):
-        self.sk = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(("key:" + seed).encode()).digest())
+        self.sk = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(seed.encode()).digest())
         self.pub = b64(self.sk.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
     def sign(self, msg: bytes) -> str: return b64(self.sk.sign(msg))
 
+# ── strict Ed25519 (§2, round 31 X18): `verify_strict` semantics ──
+_P = 2 ** 255 - 19
+_D = -121665 * pow(121666, _P - 2, _P) % _P
+_L = 2 ** 252 + 27742317777372353535851937790883648493
+_SQRT_M1 = pow(2, (_P - 1) // 4, _P)
+
+def _decode_point(b: bytes):
+    """RFC 8032 §5.1.3 decoding, canonical only: y < p, and x = 0 never with the sign bit set. None if it isn't a curve point."""
+    if len(b) != 32: return None
+    y = int.from_bytes(b, "little") & ((1 << 255) - 1)
+    sign = b[31] >> 7
+    if y >= _P: return None
+    x2 = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P) % _P
+    x = pow(x2, (_P + 3) // 8, _P)
+    if (x * x - x2) % _P: x = x * _SQRT_M1 % _P
+    if (x * x - x2) % _P: return None
+    if x == 0 and sign: return None
+    if x & 1 != sign: x = _P - x
+    return x, y
+
+def _padd(a, b):
+    (x1, y1), (x2, y2) = a, b
+    t = _D * x1 * x2 * y1 * y2 % _P
+    return ((x1 * y2 + x2 * y1) * pow(1 + t, _P - 2, _P) % _P, (y1 * y2 + x1 * x2) * pow(1 - t, _P - 2, _P) % _P)
+
+def small_order(pt) -> bool:
+    """Whether [8]pt is the identity: the eight points of order dividing 8."""
+    for _ in range(3): pt = _padd(pt, pt)
+    return pt == (0, 1)
+
+def strict_key(raw: bytes) -> str | None:
+    """A public key HAN accepts (§2): 32 bytes, the canonical encoding of a curve point that is not of small order. Else the reason."""
+    if len(raw) != 32: return "publicKey length"
+    pt = _decode_point(raw)
+    if pt is None: return "publicKey is not a curve point"
+    if small_order(pt): return "publicKey of small order"
+    return None
+
 def verify_sig(pub: str, sig: str, msg: bytes) -> bool:
+    """Ed25519 with `verify_strict` semantics (§2): the key passes strict_key; the signature is 64 bytes whose R is a canonical point
+    not of small order and whose S is below the group order L; then the cofactorless equation [S]B = R + [k]A."""
     try:
-        Ed25519PublicKey.from_public_bytes(unb64(pub)).verify(unb64(sig), msg); return True
+        a, sg = unb64(pub), unb64(sig)
+    except ValueError:
+        return False
+    if strict_key(a) or len(sg) != 64: return False
+    r = _decode_point(sg[:32])
+    if r is None or small_order(r) or int.from_bytes(sg[32:], "little") >= _L: return False
+    try:
+        Ed25519PublicKey.from_public_bytes(a).verify(sg, msg); return True
     except (InvalidSignature, ValueError):
         return False
 
@@ -78,9 +127,12 @@ def validate_header(entry: dict) -> str | None:
     keys = [b["publicKey"]] if entry["kind"] == "key.add" else [b["profile"]["key"]["publicKey"]] if entry["kind"] == "space.create" and "profile" in b else []
     for k in keys:
         try:
-            if len(unb64(k)) != 32: return "publicKey length"
+            raw = unb64(k)
         except ValueError:
             return "publicKey not canonical base64url"
+        if len(raw) != 32: return "publicKey length"
+        err = strict_key(raw)                                  # §2 (round 31, X18): a curve point, not of small order
+        if err: return err
     return None
 
 # ── content (R-09, §5) — mirrored from han.ts Contents ──
@@ -232,6 +284,15 @@ def _pairs(pairs):
         d[k] = v
     return d
 def _bad(_): raise _NotIJson("fraction or exponent")
+def _int_form(t):
+    if t == "-0": raise _NotIJson("-0")                         # §2: `-0` is not I-JSON for HAN (round 31, X18)
+    return int(t)
+
+def depth(v) -> int:
+    """§2 (round 31, X18): a scalar has depth 0; an array or object 1 + the largest depth of its members (1 when empty)."""
+    if isinstance(v, dict): return 1 + max((depth(x) for x in v.values()), default=0)
+    if isinstance(v, list): return 1 + max((depth(x) for x in v), default=0)
+    return 0
 
 def has_big_int(v) -> bool:
     """G-07 (1a): an integer outside [-(2^53-1), 2^53-1] anywhere in the value (a bool is not a number)."""
@@ -245,10 +306,10 @@ def frame_verdict(text: str, test_mode: bool = False):
     """G-07 cases (1), (1a), (2) for one text message. None: it is a request frame, go on to authentication and args. Else (id, closes):
     the id of the `invalid` error to send and whether the connection is closed after it. `test.clock` and `test.limits` are calls only in test mode (G-11)."""
     try:
-        v = json.loads(text, object_pairs_hook=_pairs, parse_float=_bad, parse_constant=_bad)
+        v = json.loads(text, object_pairs_hook=_pairs, parse_float=_bad, parse_constant=_bad, parse_int=_int_form)
     except (ValueError, RecursionError):
         return 0, True
-    if not isinstance(v, dict): return 0, True                                  # (1) an array, a scalar, null
+    if not isinstance(v, dict) or depth(v) > MAX_FRAME_DEPTH: return 0, True    # (1) an array, a scalar, null, or nested too deep
     rid = v.get("id")
     usable = isinstance(rid, int) and not isinstance(rid, bool) and 1 <= rid <= MAX_INT
     if has_big_int(v): return (rid, False) if usable else (0, True)             # (1a)

@@ -1,0 +1,4 @@
+[timing] 1555218 states explored; ALL PROPERTIES HOLD (attempts<=1, crashes<=1, ticks<=4 of +0.9s/+9.1s; executor clock offsets [0.0, -10.0] s, arbitrary claim delay, stall<=10s on the executor clock, whole-second receipts, launchWindow changed 20→15 or 30 s at any time, abandon)
+[drift] 246464 states explored; ALL PROPERTIES HOLD (attempts<=1, crashes<=1, ticks<=4 of +0.9s/+9.1s/+10.9s; clocks ((0, (6, 5), (4, 5)),) (home 1.2x fast, executor 0.8x slow: drift exaggerated to ±20%), arbitrary claim delay, stall<=10s on the executor clock, whole-second receipts, abandon)
+[single] 1324239 states explored; ALL PROPERTIES HOLD (attempts<=2, crashes<=1, ticks<=2 of +5s/+25s; revocation of membership and key, cancel, abandon)
+[limit] 221 states explored; ALL PROPERTIES HOLD (attempts<=3, crashes<=2, ticks<=0 of ; MAX_ATTEMPTS lowered to 2; a crash after each claim re-opens the effect)

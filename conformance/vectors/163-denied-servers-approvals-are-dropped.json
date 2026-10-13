@@ -1,0 +1,550 @@
+{
+ "name": "denied-servers-approvals-are-dropped",
+ "rules": [
+  "P-08",
+  "P-07 E3",
+  "P-04"
+ ],
+ "description": "X7 (W12, the reviewer's p5_deny): the policy.set that denies a server drops the open approvals of its actors, so E3 never uses an approval whose author's server is denied; a consumed one a not-started outcome returns is dropped too",
+ "profiles": {
+  "@g:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@z:d.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "member",
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "5ebd0079c5e0a3cfb68b852800701452b0e9cd7e453584adc22c3a8c0b92888f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@z:d.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-z",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@g:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "491f33c13aa4ebf97cc4bf89c4683c08aa060b7ed7507c6f72e989ffaf2b0f67",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a406275bfea42f88bbd5f07689850a624c5ad40c90dba9e5284701f3192b17ef",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@z:d.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+     "planDigest": "491f33c13aa4ebf97cc4bf89c4683c08aa060b7ed7507c6f72e989ffaf2b0f67"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-az",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "135b37663ddda88e0d15ebfde1302e83c1327298b3c286b985f317d24ccb2526",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-f",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "8e20ae85cc53bf053326a01643080a7bd581230d20bd3a5be7d7f6cc00d97ca5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@z:d.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1",
+     "planDigest": "135b37663ddda88e0d15ebfde1302e83c1327298b3c286b985f317d24ccb2526"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-az2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "738c3bcb27decc3f4b1019752a4ed2f7d78a8b95f236c02de30c1e9fc766e6c2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cf",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow",
+   "check": {
+    "effects.8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1.claims.0.approval": "8e20ae85cc53bf053326a01643080a7bd581230d20bd3a5be7d7f6cc00d97ca5"
+   }
+  },
+  {
+   "entry": {
+    "id": "9d72a9dc7acc599b9aca830199c90f6a7436a698a827976ef6031ef98d2f81ab",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "member",
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": [
+        "d.example"
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-deny",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow",
+   "check": {
+    "effects.4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de.approvals": [],
+    "effects.8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1.approvals": [
+     {
+      "id": "8e20ae85cc53bf053326a01643080a7bd581230d20bd3a5be7d7f6cc00d97ca5",
+      "author": "@z:d.example",
+      "keyId": "k1",
+      "consumedBy": "738c3bcb27decc3f4b1019752a4ed2f7d78a8b95f236c02de30c1e9fc766e6c2",
+      "actorKind": "human"
+     }
+    ]
+   },
+   "note": "p5: Z's open approval goes; its consumed one stays with the claim"
+  },
+  {
+   "entry": {
+    "id": "5c87f5ca5c70f049df249208c4b250763166dd767f00442b83f89a51c215c1ca",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@z:d.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+     "planDigest": "491f33c13aa4ebf97cc4bf89c4683c08aa060b7ed7507c6f72e989ffaf2b0f67"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-az3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "denied",
+   "note": "a denied server's actor approves nothing"
+  },
+  {
+   "entry": {
+    "id": "a545521b7543ff51ad4ccf676499bd8f8a736397507be594330433ad9e963df5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ce",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "denied",
+   "note": "E3: no usable approval"
+  },
+  {
+   "entry": {
+    "id": "59f94fa389c715def35334cff7cf2c1f772f8cb09ef2edcb3ad731cee2e5b549",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "738c3bcb27decc3f4b1019752a4ed2f7d78a8b95f236c02de30c1e9fc766e6c2",
+     "result": "failed",
+     "started": "no"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-of",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow",
+   "check": {
+    "effects.8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1.approvals": [],
+    "effects.8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1.phase": "open"
+   },
+   "note": "returned, its author's server denied: dropped"
+  },
+  {
+   "entry": {
+    "id": "fa5853767dccee9ea28ae6cc47e9e2b6905728dcd37182dcbe95d5edd7f8d932",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@g:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+     "planDigest": "491f33c13aa4ebf97cc4bf89c4683c08aa060b7ed7507c6f72e989ffaf2b0f67"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ag",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "dcf4435a5e5090f52e2ce2623da85afcb7341cb4d12c94f106aab53056ff5cf5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ce2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow",
+   "check": {
+    "effects.4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de.claims.0.approval": "fa5853767dccee9ea28ae6cc47e9e2b6905728dcd37182dcbe95d5edd7f8d932"
+   }
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "ag": "fa5853767dccee9ea28ae6cc47e9e2b6905728dcd37182dcbe95d5edd7f8d932",
+  "az": "a406275bfea42f88bbd5f07689850a624c5ad40c90dba9e5284701f3192b17ef",
+  "az2": "8e20ae85cc53bf053326a01643080a7bd581230d20bd3a5be7d7f6cc00d97ca5",
+  "az3": "5c87f5ca5c70f049df249208c4b250763166dd767f00442b83f89a51c215c1ca",
+  "ce": "a545521b7543ff51ad4ccf676499bd8f8a736397507be594330433ad9e963df5",
+  "ce2": "dcf4435a5e5090f52e2ce2623da85afcb7341cb4d12c94f106aab53056ff5cf5",
+  "cf": "738c3bcb27decc3f4b1019752a4ed2f7d78a8b95f236c02de30c1e9fc766e6c2",
+  "deny": "9d72a9dc7acc599b9aca830199c90f6a7436a698a827976ef6031ef98d2f81ab",
+  "e": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+  "f": "8e7ef91e0b6a6ef4806a8c51f6759abaf1ac8e13636262bd38538a9c694cd8a1",
+  "g": "867b51df1de9e76bd1e13fe50cab6b87476129af389ddf47204fc654f21092d8",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "of": "59f94fa389c715def35334cff7cf2c1f772f8cb09ef2edcb3ad731cee2e5b549",
+  "z": "5ebd0079c5e0a3cfb68b852800701452b0e9cd7e453584adc22c3a8c0b92888f"
+ }
+}

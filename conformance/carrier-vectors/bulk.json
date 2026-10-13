@@ -1,0 +1,91 @@
+{
+ "name": "bulk",
+ "rules": [
+  "X15",
+  "G-07",
+  "§2"
+ ],
+ "description": "a bulk batch's signature covers \"han/bulk/1\\n\" ‖ UTF-8(profile) ‖ \"\\n\" ‖ data (its exact CBOR bytes, hex here) and is made by a valid key of the author's pinned profile (`view`)",
+ "view": {
+  "actor": "@alice:a.example",
+  "keys": {
+   "d1": {
+    "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+    "status": "valid"
+   },
+   "d0": {
+    "publicKey": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+    "status": "revoked"
+   }
+  }
+ },
+ "message": "68616e2f62756c6b2f310a68616e2e74696d656c696e652f310aa201016474657874000000",
+ "cases": [
+  {
+   "name": "genuine",
+   "batch": {
+    "author": "@alice:a.example",
+    "keyId": "d1",
+    "profile": "han.timeline/1",
+    "data": "a201016474657874000000",
+    "sig": "ZabJYBTm-j62MlqxJ9oL3vNSENhQvmuZIthKSKvvtFeVYlM_HcCD5tRH3H-r8Jlzs_XY_eCqaB_cfpltoqIGAw"
+   },
+   "valid": true
+  },
+  {
+   "name": "another profile name",
+   "batch": {
+    "author": "@alice:a.example",
+    "keyId": "d1",
+    "profile": "han.timeline/2",
+    "data": "a201016474657874000000",
+    "sig": "ZabJYBTm-j62MlqxJ9oL3vNSENhQvmuZIthKSKvvtFeVYlM_HcCD5tRH3H-r8Jlzs_XY_eCqaB_cfpltoqIGAw"
+   },
+   "valid": false
+  },
+  {
+   "name": "one byte changed",
+   "batch": {
+    "author": "@alice:a.example",
+    "keyId": "d1",
+    "profile": "han.timeline/1",
+    "data": "a201016474657874000001",
+    "sig": "ZabJYBTm-j62MlqxJ9oL3vNSENhQvmuZIthKSKvvtFeVYlM_HcCD5tRH3H-r8Jlzs_XY_eCqaB_cfpltoqIGAw"
+   },
+   "valid": false
+  },
+  {
+   "name": "a revoked key",
+   "batch": {
+    "author": "@alice:a.example",
+    "keyId": "d0",
+    "profile": "han.timeline/1",
+    "data": "a201016474657874000000",
+    "sig": "DWNLVW_WJJVknGdVsAfyCOTAD2MhaotTm2uKlAQuj-Nvy5a4Y63LvMvsjyzkxEZB4bVdjjyFF96gnAsZF2ziCw"
+   },
+   "valid": false
+  },
+  {
+   "name": "a key not in the profile",
+   "batch": {
+    "author": "@alice:a.example",
+    "keyId": "d9",
+    "profile": "han.timeline/1",
+    "data": "a201016474657874000000",
+    "sig": "ZabJYBTm-j62MlqxJ9oL3vNSENhQvmuZIthKSKvvtFeVYlM_HcCD5tRH3H-r8Jlzs_XY_eCqaB_cfpltoqIGAw"
+   },
+   "valid": false
+  },
+  {
+   "name": "the name and the data run together (no separator)",
+   "batch": {
+    "author": "@alice:a.example",
+    "keyId": "d1",
+    "profile": "han.timeline/1",
+    "data": "a201016474657874000000",
+    "sig": "QGXTgUvDwxN3jeqP1RPT0i9UAMIKk1NAoxYItbt66NM7gKxWEupF9msN9niSE_XsjMu39Ij7vgyLXNSUjZcsDA"
+   },
+   "valid": false
+  }
+ ]
+}

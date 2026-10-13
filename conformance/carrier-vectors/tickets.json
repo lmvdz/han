@@ -1,0 +1,76 @@
+{
+ "name": "tickets",
+ "rules": [
+  "N-03",
+  "X13"
+ ],
+ "description": "a ticket is \"han1\" + base64url(JCS({server, node: NodeAddr, space, secret})), exactly; `server` is the ServerName to dial (X13); `expect` is the parsed ticket or \"invalid\"",
+ "cases": [
+  {
+   "name": "well formed",
+   "text": "han1eyJub2RlIjp7ImFkZHJzIjpbIjE5Mi4wLjIuMTo3MDAwIl0sIm5vZGUiOiJXWWRkOTMzNFRsQWtMSkZqSzhfUUVIRVRhNkxicGQyV2VqSFMxeUZiOHRVIiwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJzZXJ2ZXIiOiJhLmV4YW1wbGUiLCJzcGFjZSI6InRlYW06YS5leGFtcGxlIn0",
+   "expect": {
+    "server": "a.example",
+    "node": {
+     "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+     "addrs": [
+      "192.0.2.1:7000"
+     ],
+     "relays": [
+      "https://relay.example/"
+     ]
+    },
+    "space": "team:a.example",
+    "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+   }
+  },
+  {
+   "name": "after a move: server names the new home, the space id the first",
+   "text": "han1eyJub2RlIjp7ImFkZHJzIjpbIjE5Mi4wLjIuMTo3MDAwIl0sIm5vZGUiOiJCWHlPSDY2RVNqVGtidVluNk51UVpYY2NEXy1PTW1KUFpiZ3ZRbTg5ZnYwIiwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJzZXJ2ZXIiOiJiLmV4YW1wbGUiLCJzcGFjZSI6InRlYW06YS5leGFtcGxlIn0",
+   "expect": {
+    "server": "b.example",
+    "node": {
+     "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+     "addrs": [
+      "192.0.2.1:7000"
+     ],
+     "relays": [
+      "https://relay.example/"
+     ]
+    },
+    "space": "team:a.example",
+    "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+   }
+  },
+  {
+   "name": "round 30's ticket, no server",
+   "text": "han1eyJub2RlIjoiV1lkZDkzMzRUbEFrTEpGaks4X1FFSEVUYTZMYnBkMldlakhTMXlGYjh0VSIsInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJzcGFjZSI6InRlYW06YS5leGFtcGxlIn0",
+   "expect": "invalid"
+  },
+  {
+   "name": "not JCS (members out of order)",
+   "text": "han1eyJzZXJ2ZXIiOiJhLmV4YW1wbGUiLCJub2RlIjp7Im5vZGUiOiJXWWRkOTMzNFRsQWtMSkZqSzhfUUVIRVRhNkxicGQyV2VqSFMxeUZiOHRVIiwiYWRkcnMiOlsiMTkyLjAuMi4xOjcwMDAiXSwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNwYWNlIjoidGVhbTphLmV4YW1wbGUiLCJzZWNyZXQiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4In0",
+   "expect": "invalid"
+  },
+  {
+   "name": "padded base64url",
+   "text": "han1eyJub2RlIjp7ImFkZHJzIjpbIjE5Mi4wLjIuMTo3MDAwIl0sIm5vZGUiOiJXWWRkOTMzNFRsQWtMSkZqSzhfUUVIRVRhNkxicGQyV2VqSFMxeUZiOHRVIiwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJzZXJ2ZXIiOiJhLmV4YW1wbGUiLCJzcGFjZSI6InRlYW06YS5leGFtcGxlIn0=",
+   "expect": "invalid"
+  },
+  {
+   "name": "another prefix",
+   "text": "han2eyJub2RlIjp7ImFkZHJzIjpbIjE5Mi4wLjIuMTo3MDAwIl0sIm5vZGUiOiJXWWRkOTMzNFRsQWtMSkZqSzhfUUVIRVRhNkxicGQyV2VqSFMxeUZiOHRVIiwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJzZXJ2ZXIiOiJhLmV4YW1wbGUiLCJzcGFjZSI6InRlYW06YS5leGFtcGxlIn0",
+   "expect": "invalid"
+  },
+  {
+   "name": "a secret of 31 bytes",
+   "text": "han1eyJub2RlIjp7ImFkZHJzIjpbIjE5Mi4wLjIuMTo3MDAwIl0sIm5vZGUiOiJXWWRkOTMzNFRsQWtMSkZqSzhfUUVIRVRhNkxicGQyV2VqSFMxeUZiOHRVIiwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNlY3JldCI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsInNlcnZlciI6ImEuZXhhbXBsZSIsInNwYWNlIjoidGVhbTphLmV4YW1wbGUifQ",
+   "expect": "invalid"
+  },
+  {
+   "name": "a profile space",
+   "text": "han1eyJub2RlIjp7ImFkZHJzIjpbIjE5Mi4wLjIuMTo3MDAwIl0sIm5vZGUiOiJXWWRkOTMzNFRsQWtMSkZqSzhfUUVIRVRhNkxicGQyV2VqSFMxeUZiOHRVIiwicmVsYXlzIjpbImh0dHBzOi8vcmVsYXkuZXhhbXBsZS8iXX0sInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJzZXJ2ZXIiOiJhLmV4YW1wbGUiLCJzcGFjZSI6InByb2ZpbGU6QGFsaWNlOmEuZXhhbXBsZSJ9",
+   "expect": "invalid"
+  }
+ ]
+}
