@@ -1,0 +1,26 @@
+{
+  "agent": {"name": "claude-agent-acp", "version": "0.89.1"},
+  "modes": {"current": "acceptEdits", "available": ["default", "acceptEdits", "plan"]},
+  "turns": [
+    {"steps": [
+      {"type": "message", "text": "Ready to work on the task."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "request_permission", "id": "toolu_net1", "title": "curl -X POST https://hooks.example.com/build", "kind": "fetch",
+       "rawInput": {"command": "curl -X POST https://hooks.example.com/build"},
+       "on_allow": [{"type": "tool_update", "id": "toolu_net1", "status": "completed", "output": "sent"}],
+       "on_reject": [{"type": "tool_update", "id": "toolu_net1", "status": "failed", "output": "User refused permission to run tool"}]},
+      {"type": "request_permission", "id": "toolu_edit1", "title": "edit notes.md", "kind": "edit", "locations": ["notes.md"],
+       "rawInput": {"path": "notes.md"},
+       "on_allow": [{"type": "write_file", "path": "notes.md", "content": "steered\n"}, {"type": "tool_update", "id": "toolu_edit1", "status": "completed", "output": "ok"}],
+       "on_reject": [{"type": "tool_update", "id": "toolu_edit1", "status": "failed", "output": "refused"}]},
+      {"type": "message", "text": "Done what I could."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "message", "text": "Carrying on."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

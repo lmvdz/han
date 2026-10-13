@@ -1,0 +1,27 @@
+{
+  "agent": {"name": "pi-acp", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "usage", "used": 0, "size": 200000},
+      {"type": "message", "text": "Hello. Offered tools: read, bash, edit, write, mcp__han__propose"},
+      {"type": "usage", "used": 1765, "size": 200000},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "plan", "entries": [{"content": "Fix the token check in auth", "status": "in_progress"}, {"content": "Push the branch", "status": "pending"}]},
+      {"type": "tool_call", "id": "toolu_edit1", "title": "write src/auth/token.rs", "kind": "edit", "locations": ["src/auth/token.rs"], "rawInput": {"path": "src/auth/token.rs"}},
+      {"type": "write_file", "path": "src/auth/token.rs", "content": "pub fn check(t: &str) -> bool {\n    !t.is_empty()\n}\n"},
+      {"type": "tool_update", "id": "toolu_edit1", "status": "completed", "output": "Wrote src/auth/token.rs"},
+      {"type": "tool_call", "id": "toolu_bash1", "title": "echo hi-from-tool > made.txt", "kind": "execute", "rawInput": {"command": "echo hi-from-tool > made.txt"}},
+      {"type": "tool_update", "id": "toolu_bash1", "status": "in_progress", "meta": {"terminal_output": {"data": "made.txt\n"}}},
+      {"type": "write_file", "path": "made.txt", "content": "hi-from-tool\n"},
+      {"type": "tool_update", "id": "toolu_bash1", "status": "completed", "meta": {"terminal_exit": {"exit_code": 0}}},
+      {"type": "edit_file", "path": "src/auth/token.rs", "find": "!t.is_empty()", "replace": "t.len() >= 8"},
+      {"type": "mcp_call", "id": "toolu_prop1", "server": "han", "tool": "propose", "args": {"summary": "Push the auth fix branch", "kind": "git_push", "effect": {"branch": "han/12-pi"}}},
+      {"type": "usage", "used": 2007, "size": 200000},
+      {"type": "message", "text": "The push is proposed and waits for approval."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

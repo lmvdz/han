@@ -79,6 +79,7 @@ fn node_db_migrates_keeps_its_format_and_survives_a_reopen() {
 async fn the_supervisor_seam_starts_and_watches_a_process() {
     let none = NoSupervisor;
     let spec = |name: &str| RoleSpec {
+        env: Vec::new(),
         role: Role::Host,
         name: name.into(),
         args: vec![],
@@ -97,6 +98,72 @@ async fn the_supervisor_seam_starts_and_watches_a_process() {
     }
     assert!(ended, "the child ended and the supervisor noticed");
     assert!(spawner.stop("nobody").is_err());
+}
+
+/// Run as a child by `a_role_starts_with_a_cleared_environment`: writes its environment to `HAN_DUMP_TO`.
+#[test]
+#[ignore]
+fn env_dump_child() {
+    if let Some(to) = std::env::var_os("HAN_DUMP_TO") {
+        let all: Vec<String> = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
+        std::fs::write(
+            to,
+            all.join(
+                "
+",
+            ),
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_role_starts_with_a_cleared_environment() {
+    // SR-08: the parent holds a canary secret; the child sees only the allow-list and what the spec passes.
+    // `set_var` is unsafe in edition 2024 and the workspace forbids unsafe code, so the canary is a
+    // variable cargo already sets for every test process and that is not on the allow-list.
+    assert!(
+        std::env::var_os("CARGO_PKG_NAME").is_some(),
+        "cargo sets it"
+    );
+    let dir = std::env::temp_dir().join(format!("han-env-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("env.txt");
+    let spawner = ProcessSpawner::new(std::env::current_exe().unwrap());
+    spawner
+        .start(RoleSpec {
+            role: Role::Host,
+            name: "dump".into(),
+            args: vec![
+                "env_dump_child".into(),
+                "--exact".into(),
+                "--include-ignored".into(),
+            ],
+            env: vec![("HAN_DUMP_TO".into(), out.to_string_lossy().into_owned())],
+        })
+        .unwrap();
+    for _ in 0..400 {
+        if out.exists() && matches!(spawner.status().as_slice(), [(_, RoleStatus::Exited(_))]) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let env = std::fs::read_to_string(&out).expect("the child wrote its environment");
+    for line in env.lines() {
+        let key = line.split('=').next().unwrap_or("");
+        assert!(
+            han_node::supervisor::ENV_ALLOW
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(key))
+                || key == "HAN_DUMP_TO"
+                // set by the test harness inside the child itself
+                || key == "RUST_TEST_THREADS"
+                || key.is_empty(),
+            "the child inherited {key}"
+        );
+    }
+    assert!(!env.contains("CARGO_PKG_NAME="));
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn gen_path() -> std::path::PathBuf {

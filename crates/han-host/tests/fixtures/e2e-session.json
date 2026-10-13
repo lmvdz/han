@@ -1,0 +1,27 @@
+{
+  "agent": {"name": "pi-acp", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "plan", "entries": [{"content": "Add the login check under src/auth", "status": "in_progress"}, {"content": "Run the tests", "status": "pending"}, {"content": "Push the branch", "status": "pending"}]},
+      {"type": "tool_call", "id": "toolu_w1", "title": "write src/auth/login.rs", "kind": "edit", "locations": ["src/auth/login.rs"], "rawInput": {"path": "src/auth/login.rs"}},
+      {"type": "write_file", "path": "src/auth/login.rs", "content": "pub fn login(user: &str, token: &str) -> bool {\n    !user.is_empty() && token.len() >= 8\n}\n"},
+      {"type": "tool_update", "id": "toolu_w1", "status": "completed", "output": "Wrote src/auth/login.rs"},
+      {"type": "sleep", "ms": 700},
+      {"type": "tool_call", "id": "toolu_e1", "title": "edit README.md", "kind": "edit", "locations": ["README.md"], "rawInput": {"path": "README.md"}},
+      {"type": "edit_file", "path": "README.md", "find": "demo", "replace": "demo with login"},
+      {"type": "tool_update", "id": "toolu_e1", "status": "completed", "output": "Edited README.md"},
+      {"type": "sleep", "ms": 700},
+      {"type": "tool_call", "id": "toolu_t1", "title": "cargo test", "kind": "execute", "rawInput": {"command": "cargo test"}},
+      {"type": "tool_update", "id": "toolu_t1", "status": "completed", "output": "running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored"},
+      {"type": "usage", "used": 4100, "size": 200000},
+      {"type": "mcp_call", "id": "toolu_p1", "server": "han", "tool": "propose", "args": {"summary": "Push the login check on the session branch", "kind": "git_push", "effect": {}}},
+      {"type": "message", "text": "The push is proposed and waits for approval; it has not run."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "message", "text": "Noted."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

@@ -149,7 +149,7 @@ async fn errors_are_the_closed_set() {
             .failed()
             .is_some_and(|e| matches!(e, NodeError::NotFound { .. }))
     );
-    // the timeline is a seam until M4
+    // a session nothing was mirrored for yet has an empty timeline, and no patches
     let mut t = Watched::open(
         &alice,
         Query::Timeline {
@@ -158,11 +158,21 @@ async fn errors_are_the_closed_set() {
             window: window(),
         },
     );
-    t.drain();
+    assert!(t.rows().is_empty() && t.mirror.failed().is_none());
+    let mut p = Watched::open(
+        &alice,
+        Query::Patches {
+            session: "00".repeat(32),
+            from: None,
+            to: "11".repeat(32),
+            window: window(),
+        },
+    );
+    p.drain();
     assert!(
-        t.mirror
+        p.mirror
             .failed()
-            .is_some_and(|e| matches!(e, NodeError::Unavailable { .. }))
+            .is_some_and(|e| matches!(e, NodeError::NotFound { .. }))
     );
     alice.shutdown();
     bob.shutdown();
@@ -226,6 +236,7 @@ async fn a_restart_rebuilds_the_views_from_node_db() {
         &call(
             &alice,
             Command::SessionOpen {
+                steer_mode: None,
                 space: space.clone(),
                 task: None,
                 title: None,

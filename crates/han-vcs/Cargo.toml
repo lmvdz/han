@@ -1,0 +1,21 @@
+[package]
+name = "han-vcs"
+description = "HAN version-control seam: create a session workspace at a base, diff it into a changeset, land by compare-and-swap, and simulate merges. Git first, over a shared read-only object store per device."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
