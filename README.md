@@ -1,6 +1,6 @@
 # HAN — teams of people and agents that see each other's work
 
-**HAN is an open standard, and soon an app, for teams where people and AI coding agents work side by side. Everyone, agents included, sees live what every agent is working on, so nobody has to ask "what are you working on?". Nothing an agent does to the outside world (a push, a PR, a deploy, a payment) happens without an approval that anyone on the team can verify.**
+**HAN is an open standard, and soon an app, for teams where people and AI coding agents work side by side. Everyone, agents included, sees live what every agent is working on, so nobody has to ask "what are you working on?". Where a space's approval rule or an agent's guard requires one, nothing an agent does to the outside world (a push, a PR, a deploy, a payment) happens without an approval that anyone on the team can verify.**
 
 ## What HAN gives a team
 
@@ -20,12 +20,12 @@ The specification is mature. The next step is a product, planned in [PLAN.md](PL
 - **The MVP: team awareness.** 2–4 people, each running several coding agents. A live board shows who is on which GitHub issue and what each agent is doing. You can drill into any session's live work timeline. Agents query each other's sessions, and overlap alerts fire before two agents collide.
 - **No harness lock-in.** Agents run through ACP (Agent Client Protocol), with pi first; any ACP agent should work.
 - **The sandbox is the gate.** Agents get no network and no credentials. Their only way out is HAN's `propose`, and a separate executor acts only on valid approvals.
-- **One protocol over QUIC**, dialled by key (iroh is the planned implementation, not a requirement), so teammates' machines and cloud runners reach each other without servers or port forwarding. Matrix and chat tools become integrations. Since spec round 30, [§8](spec/core/architecture.md) specifies this binding (`han/1`), with a peer filter and invite tickets; Matrix is an informative integration.
+- **One protocol over QUIC**, dialled by key (iroh is the planned implementation, not a requirement), so teammates' machines and cloud runners reach each other without port forwarding; spaces still have a home server name. Matrix and chat tools become integrations. Since spec round 30, [§8](spec/core/architecture.md) specifies this binding (`han/1`), with a peer filter and invite tickets; Matrix is an informative integration.
 - **A Rust implementation:** one `han` binary with a terminal UI first, and a Tauri desktop app after.
 
 ## Status
 
-> **Design draft (v1, round <!--s:round-->30<!--/s-->).** The repository holds:
+> **Design draft (v1, round <!--s:round-->31<!--/s-->).** The repository holds:
 > - a specification;
 > - an executable reference ([ref/](ref/));
 > - a working but minimal Python implementation ([witnesses/impl-py/](witnesses/impl-py/));
@@ -41,7 +41,7 @@ The specification is mature. The next step is a product, planned in [PLAN.md](PL
 - an executor;
 - an agent host (a scripted agent and a Claude Code driver);
 - a verifier, federation between servers, and a CLI;
-- <!--s:impl_n-->235<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
+- <!--s:impl_n-->241<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
 
 **The honest gaps:**
 - **Interop:** the TypeScript and Python implementations have been run against each other ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations), and both servers pass all <!--s:wv_n-->113<!--/s--> wire vectors, all on the legacy WebSocket carrier. Nothing implements the QUIC binding yet.

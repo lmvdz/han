@@ -1,0 +1,450 @@
+{
+ "name": "wellknown",
+ "rules": [
+  "§4.3",
+  "N-01",
+  "X10"
+ ],
+ "description": "/.well-known/han: {server, sequencer: NodeAddr[] (1–16), keys}; a NodeAddr is a strict node id, at most 16 direct addresses (canonical IPv4, or IPv6 in brackets, then :port 1–65535) and 16 https relay URLs, at least one of the two",
+ "cases": [
+  {
+   "name": "address and relay",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "relay only",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "IPv6 only",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "[2001:db8::1]:443"
+      ],
+      "relays": []
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "two nodes",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     },
+     {
+      "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": []
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "neither address nor relay",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [],
+      "relays": []
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "no node",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "round 30's bare node ids",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "the same node twice",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     },
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "a host name, not an address",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "a.example:443"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "an IPv4 address out of range",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.256:443"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "IPv6 without brackets",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "2001:db8::1:443"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "non-canonical IPv6",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "[2001:DB8::1]:443"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "port 0",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:0"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "port 65536",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:65536"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "a plain http relay",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "http://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "a node id that is no curve point",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": []
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "an extra member",
+   "doc": {
+    "server": "a.example",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ],
+    "url": "wss://a.example/han"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "a ServerName of 254 characters",
+   "doc": {
+    "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sequencer": [
+     {
+      "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "addrs": [
+       "192.0.2.1:7000"
+      ],
+      "relays": [
+       "https://relay.example/"
+      ]
+     }
+    ],
+    "keys": [
+     {
+      "keyId": "h1",
+      "publicKey": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+      "from": "2026-01-01T00:00:00Z"
+     }
+    ]
+   },
+   "expect": "invalid"
+  }
+ ]
+}

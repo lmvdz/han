@@ -1,0 +1,170 @@
+{
+ "name": "control",
+ "rules": [
+  "G-07",
+  "G-08",
+  "N-03"
+ ],
+ "description": "the client's checks of the control stream before it says hello: one bare Challenge (exactly challenge, server, versions, time), its server equal to the dialed ServerName, the node reached one of dialed's; and the bytes a hello proof signs",
+ "challenges": [
+  {
+   "name": "well formed",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "ok"
+  },
+  {
+   "name": "a second frame on the control stream",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}",
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  },
+  {
+   "name": "an id on the challenge",
+   "frames": [
+    "{\"id\": 0, \"challenge\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\", \"server\": \"a.example\", \"versions\": [1], \"time\": \"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  },
+  {
+   "name": "another server's name",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"b.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  },
+  {
+   "name": "a node dialed's well-known doesn't list",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  },
+  {
+   "name": "a ticket's node for its server (N-03)",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0",
+   "nodes": [
+    "BXyOH66ESjTkbuYn6NuQZXccD_-OMmJPZbgvQm89fv0"
+   ],
+   "expect": "ok"
+  },
+  {
+   "name": "a challenge of 21 characters",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  },
+  {
+   "name": "a challenge of 128 characters",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "ok"
+  },
+  {
+   "name": "no version 1",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[2],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  },
+  {
+   "name": "versions 1 and 2",
+   "frames": [
+    "{\"challenge\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"server\":\"a.example\",\"versions\":[1,2],\"time\":\"2026-10-10T12:00:00Z\"}"
+   ],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "ok"
+  },
+  {
+   "name": "no challenge yet",
+   "frames": [],
+   "dialed": "a.example",
+   "node": "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU",
+   "nodes": [
+    "WYdd9334TlAkLJFjK8_QEHETa6Lbpd2WejHS1yFb8tU"
+   ],
+   "expect": "abort"
+  }
+ ],
+ "proofs": [
+  {
+   "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "dialed": "a.example",
+   "message": "68616e2d68656c6c6f2d76310a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c65",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "proof": "qYjFCLxrDO4J_FP78wq0_dosWwfS-hhm1fqPROpdwAuAu2tu0OYZ9wHP99RL0qi-ppL9m1fahwMF4kmsP-VlAQ",
+   "valid": true
+  },
+  {
+   "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "dialed": "a.example",
+   "message": "68616e2d68656c6c6f2d76310a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a612e6578616d706c65",
+   "publicKey": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY",
+   "proof": "qYjFCLxrDO4J_FP78wq0_dosWwfS-hhm1fqPROpdwAuAu2tu0OYZ9wHP99RL0qi-ppL9m1fahwMF4kmsP-VlAQ",
+   "valid": false,
+   "note": "another key"
+  },
+  {
+   "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "dialed": "b.example",
+   "message": "68616e2d68656c6c6f2d76310a414141414141414141414141414141414141414141414141414141414141414141414141414141414141410a622e6578616d706c65",
+   "publicKey": "IqVXulzq9WrCk7PV5qUuNOloPN2w4PJRMuQViBuD6QY",
+   "proof": "qYjFCLxrDO4J_FP78wq0_dosWwfS-hhm1fqPROpdwAuAu2tu0OYZ9wHP99RL0qi-ppL9m1fahwMF4kmsP-VlAQ",
+   "valid": false,
+   "note": "signed for a.example"
+  }
+ ]
+}

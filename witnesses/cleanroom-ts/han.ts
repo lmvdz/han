@@ -178,15 +178,15 @@ export interface SpaceState {
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02): held at seq k iff a kept interval has from ≤ k < to (no `to` while it lasts); at most the 64 most recent per actor, older ones are dropped (seqs before the oldest kept `from` are then not readable for a former member)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number; seq: Seq;
-                     accepted: ActorId[];           // P-15: the assignees that accepted it (a non-final task.update), in order; the author if it assigned itself, from creation
-                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, then carried(author), then the author if guarded when the task was created; fixed then, never shrinks; a task whose list with its author would exceed MAX_GUARDED_FOR is denied
+                     accepted: ActorId[];           // P-05, P-15: the assignees that accepted it (task.update "accepted"; the author if it assigned itself, from creation), in order; an assignee leaves with its own final update (a closed task still takes it), an owner's force-close (task.cancel, or a final update by an owner who isn't an assignee) empties it
+                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, or carried(author) when it has no parent, then the author if guarded when the task was created; fixed then, never shrinks; at most MAX_GUARDED_FOR − 2 (17) agents, else the task is denied
                      parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then carried(proposer) (the guardedFor of the open tasks it accepted), then the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; a proposal whose list with its proposer and executor would exceed MAX_GUARDED_FOR is denied
+      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, or carried(proposer) when it names none, then carried(executor), then the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
       claims: {
@@ -232,7 +232,7 @@ export interface PolicyConstants {
   MAX_OPEN_APPROVALS: 16;      // countable open approvals by other authors a proposal may hold when a new one by a non-guard arrives: an approval counts while it is an E3 candidate (unconsumed, unexpired, matching the current rule and separateApprover, its author holding a role) and isn't by one of its guards; a guard's is never capped and never counts (P-08)
   MAX_OPEN_SESSIONS: 64;       // open sessions per actor per space (P-15)
   MAX_ATTEMPTS: 64;            // claims per effect: the 65th effect.claim is `denied`, the executor proposes again (P-07 E5)
-  MAX_GUARDED_FOR: 19;         // P-15, checked: a task whose guardedFor with its author, or a proposal whose guardedFor with its proposer and executor, would hold more agents is denied (each counted whether guarded or not), so a claim never needs more than 19 guards
+  MAX_GUARDED_FOR: 19;         // P-15, checked: a proposal whose guardedFor with its proposer and executor would hold more agents is denied (each counted whether guarded or not), so a claim never needs more than 19 guards; a task's guardedFor may hold at most MAX_GUARDED_FOR − 2 (17), so a proposer and an executor always fit
   MAX_UNCONSUMED_APPROVALS: 36;   // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 by authors that are never guards (one more returned by a not-started outcome; an approval's fold keeps only countable ones besides the guards'), plus one per possible guard (MAX_GUARDED_FOR; operators never change)
   MAX_APPROVALS: 55;           // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 + 2 × MAX_GUARDED_FOR, each guard holding one unconsumed and one consumed approval
   ROLE_INTERVALS: 64;          // role intervals kept per actor (P-02)
@@ -279,8 +279,8 @@ export type ReplyFrame =
 // QUIC + TLS 1.3, ALPN "han/1", dialled by node id (G-07). A frame is one I-JSON object, sent as a 4-byte big-endian length then its UTF-8 bytes
 // (≤ maxFrameBytes). The server opens a unidirectional control stream and sends a bare `Challenge` (no id) on it. Each call is one bidirectional stream
 // opened by the client: one request frame, then the reply (`ok`/`error`, or `read`'s items and `end`). The deliveries of `read` with `follow`, `subscribe`
-// and `watch` go on a unidirectional stream the server opens for that call. The client's first call is `hello` (a joining node: `hello` then `join`, N-02);
-// any other call before it is `denied`. Request ids are integers in [1, 2^53), chosen by the client; a streaming call whose id is still open is `invalid`.
+// and `watch` go on a unidirectional stream the server opens for that call. The client's first call is `hello`; any other call before it, `join` included,
+// is `denied` (G-07 (3), X12); after it, admit (N-02) decides which calls reach their rules. Request ids are integers in [1, 2^53), chosen by the client; a streaming call whose id is still open is `invalid`.
 // A request frame is exactly {id, call, args} (args an object, closed per call). A frame that is not an I-JSON object is answered `{ id: 0, error: invalid }`
 // and the server closes the connection; an integer of 2^53 or more anywhere is answered `invalid` on the request's own id when that is usable (the connection
 // stays open), else `{ id: 0 }` and a close; an object that is not a request frame is answered `invalid` with its own id when that is usable, else 0 (G-07).
@@ -375,6 +375,7 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
   | { type: "output"; text: string }                                         // what the session shows: watch
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
   | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01)
+  | { type: "profile"; name: string /* a profile's name, e.g. "han.status/1" */; body: Json /* defined by that profile; never authority */ }   // watch, like status (X11)
 );
 // ───────────────────────── nodes, invites, well-known (§4.3, §8.2) ─────────────────────────
 /** N-01: a node id is a device's Ed25519 public key, in the same base64url form as a profile key's `publicKey` (43 characters, canonical).
@@ -382,13 +383,32 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
 export type NodeId = string;
 /** N-03: what an inviter hands a joining person: a node id of the space's home, the space, and a one-time secret (32 random bytes, base64url).
  *  Passed on as the text "han1" + base64url(JCS(ticket)). The home keeps only sha256(secret), registered with `invite`. */
-export interface InviteTicket { node: NodeId; space: SpaceId; secret: string }
+export interface InviteTicket { server: ServerName /* the ServerName to put in `dialed` (G-08): the space's home when the ticket was made */; node: NodeAddr; space: SpaceId; secret: string }
+/** §4.3, N-01 (X10): how to dial a node from the docs alone: its node id, its direct addresses ("ip:port"; IPv6 in brackets) and its relay URLs
+ *  (https), at most 16 of each and at least one of the two. Every implementation MUST dial from these; it MAY also use other discovery. */
+export interface NodeAddr { node: NodeId; addrs: string[]; relays: string[] }
 /** §4.3, D13: `GET /.well-known/han` and `GET /.well-known/han-peers` over HTTPS, both `200 application/json`; an absent optional member is omitted, never null. */
 export interface ServerKey { keyId: KeyId; publicKey: string; from: Time; until?: Time; compromised?: true }
-export interface WellKnownHan { server: ServerName; sequencer: NodeId[] /* the node ids of the server's HAN nodes, at least one (round 29: the WebSocket URL, D7) */; keys: ServerKey[] }
+export interface WellKnownHan { server: ServerName; sequencer: NodeAddr[] /* the server's HAN nodes, 1–16, with their addresses (X10; round 29: the WebSocket URL, D7) */; keys: ServerKey[] }
 export interface WellKnownPeers { peers: { server: ServerName; url: string /* that peer's /.well-known/han */ }[] }
 // §8.3 (informative, not part of the standard): a Matrix room may carry the state event "org.han.space" { spaceId: SpaceId; node: NodeId } (state key ""),
 // a hint a client verifies against the server the space id names; a notifier bot is a plain HAN actor. The round-29 Matrix binding's shapes are gone.
+/** N-02 (X9): the peer filter is one pure function, judged per call before the call's own rules, testable by vectors (conformance/carrier-vectors).
+ *  `hello` is present after a successful `hello`: the actor and the node ids that vouch for it (the valid keys of its pinned profile, N-01; for `@:S`
+ *  the node ids of S's well-known `sequencer`). `space` is the space the call names (`args.space`, or the appended entry's `space`). */
+export interface AdmitConn { node: NodeId; call: string; space?: SpaceId; hello?: { who: ActorId; nodes: NodeId[] } }
+/** The spaces the node serves, each as much of its SpaceState as admit reads. A profile space's roles name its actor and `@:server`. */
+export type AdmitSpaces = { [space: SpaceId]: Pick<SpaceState, "policy" | "roles"> };
+/** `member`: a registered device of an actor holding a role in a space the node serves; `server`: a node its server's well-known lists; both reach every
+ *  call, which then judges itself. `open`: anyone, for `hello`, `join`, `cancel`, reads of public and profile spaces (and of spaces not held here, which
+ *  §4.1 step 2 answers), and appends to `join: "open"` spaces; rate-limited per node. */
+export type AdmitVerdict = { allow: true; tier: "member" | "server" | "open" } | { allow: false; reason: string };
+export interface PeerFilter {
+  admit(conn: AdmitConn, spaces: AdmitSpaces): AdmitVerdict;
+}
+/** X15: one batch of bulk data a profile defines, on a unidirectional stream as the CBOR map {1: author, 2: keyId, 3: profile, 4: data, 5: sig}.
+ *  `sig` = Ed25519 (strict, §2) by a valid key of `author` over "han/bulk/1\n" ‖ UTF-8(profile) ‖ "\n" ‖ data, `data` being the batch's exact CBOR bytes. */
+export interface BulkBatch { author: ActorId; keyId: KeyId; profile: string; data: Uint8Array; sig: Sig }
 /** M7: what HAN needs from a transport (T-01…T-07). The QUIC binding `han/1` (§8.2) implements it. */
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order

@@ -1,0 +1,222 @@
+{
+ "name": "header",
+ "rules": [
+  "§2",
+  "R-09",
+  "R-25",
+  "X18"
+ ],
+ "description": "Entry header checks the Log makes (step 3): a nonce is 26 characters of [a-z2-7] (130 bits), every character free, the last one's two low bits included; a public key in a key.add is a strict Ed25519 key (§2), else invalid at parse. `expect` ok or invalid",
+ "cases": [
+  {
+   "name": "key.add of a genuine key",
+   "entry": {
+    "v": 1,
+    "space": "profile:@alice:a.example",
+    "kind": "key.add",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "d2",
+     "publicKey": "8qJmWFG16n60IUyDj24oddRNUwncOOf16-mEflJ8jlY"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "key.add of a small-order key",
+   "entry": {
+    "v": 1,
+    "space": "profile:@alice:a.example",
+    "kind": "key.add",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "d2",
+     "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "key.add of a key that is no curve point",
+   "entry": {
+    "v": 1,
+    "space": "profile:@alice:a.example",
+    "kind": "key.add",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "d2",
+     "publicKey": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "key.add of 31 bytes",
+   "entry": {
+    "v": 1,
+    "space": "profile:@alice:a.example",
+    "kind": "key.add",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {
+     "keyId": "d2",
+     "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "last character a (low bits 0)",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "last character 7 (low bits 11)",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaa7",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "last character z",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaz",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "ok"
+  },
+  {
+   "name": "25 characters",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "27 characters",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "uppercase",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  },
+  {
+   "name": "a digit outside 2-7",
+   "entry": {
+    "v": 1,
+    "space": "team:a.example",
+    "kind": "message",
+    "author": "@alice:a.example",
+    "keyId": "k1",
+    "body": {},
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaa1",
+    "time": "2026-10-10T12:00:00Z",
+    "sig": "x"
+   },
+   "expect": "invalid"
+  }
+ ]
+}
