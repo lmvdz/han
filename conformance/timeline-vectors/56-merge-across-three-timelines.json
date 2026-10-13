@@ -1,0 +1,314 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "56-merge-across-three-timelines",
+ "description": "An object created on s2 reaches s1 by a merge and main by a second merge: its import and its origins are judged by canonical ids at the incoming version, so both merges are valid",
+ "rules": [
+  "TL-76",
+  "TL-71",
+  "TL-73"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s2": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s2",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s2work": {
+   "replica": "C",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.create",
+     "text": "x\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "doc",
+     "value": {
+      "obj": "4@C"
+     }
+    }
+   ]
+  },
+  "m1": {
+   "replica": "B",
+   "start": 6,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "2@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "5@C"
+     ],
+     "base": [
+      "1@A"
+     ],
+     "changes": [
+      {
+       "type": "map",
+       "object": "root",
+       "create": false,
+       "tree": false,
+       "sets": [
+        [
+         "doc",
+         {
+          "obj": "4@C"
+         }
+        ]
+       ],
+       "deletes": []
+      },
+      {
+       "type": "text",
+       "object": "4@C",
+       "create": true,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         null,
+         "x\n",
+         "4@C#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "s1work": {
+   "replica": "B",
+   "start": 7,
+   "parents": [
+    "6@B"
+   ],
+   "timeline": "2@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@C",
+     "deletes": [],
+     "inserts": [
+      [
+       "6@B#0:1",
+       "y\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "m2": {
+   "replica": "A",
+   "start": 8,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "2@A",
+     "incoming": [
+      "7@B"
+     ],
+     "base": [
+      "1@A"
+     ],
+     "changes": [
+      {
+       "type": "map",
+       "object": "root",
+       "create": false,
+       "tree": false,
+       "sets": [
+        [
+         "doc",
+         {
+          "obj": "4@C"
+         }
+        ]
+       ],
+       "deletes": []
+      },
+      {
+       "type": "text",
+       "object": "4@C",
+       "create": true,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         null,
+         "x\n",
+         "4@C#0:0"
+        ],
+        [
+         "8@A#0:1",
+         "y\n",
+         "7@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "s2"
+    },
+    {
+     "deliver": "s2work"
+    },
+    {
+     "deliver": "m1",
+     "result": "integrated"
+    },
+    {
+     "deliver": "s1work"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "2@A",
+        "objects": {
+         "4@C": {
+          "text": "x\ny\n"
+         }
+        }
+       }
+      ],
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "2@A",
+        "kind": "merge",
+        "base": [
+         "1@A"
+        ],
+        "conflicts": [],
+        "results": [
+         {
+          "resolutions": [],
+          "texts": {
+           "4@C": "x\ny\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "m2",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "doc": [
+            [
+             "8@A",
+             {
+              "obj": "4@C"
+             }
+            ]
+           ]
+          }
+         },
+         "4@C": {
+          "text": "x\ny\n"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

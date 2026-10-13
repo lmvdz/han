@@ -1,0 +1,346 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "62-merge-runs-chain-at-one-anchor",
+ "description": "A new incoming line before line b (its own clean cluster) and a text resolution of line b would both anchor after the same line end: the second run chains after the first, giving N then Z; a merge naming one anchor twice is invalid_op",
+ "rules": [
+  "TL-72",
+  "TL-48",
+  "TL-75"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nbc\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       3,
+       4
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "N\n"
+      ],
+      [
+       "2@A#0:2",
+       "X"
+      ]
+     ]
+    }
+   ]
+  },
+  "main": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "T"
+      ]
+     ]
+    }
+   ]
+  },
+  "chained": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         3,
+         5
+        ],
+        [
+         "4@A#0",
+         0,
+         1
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:1",
+         "N\n",
+         "4@B#0:0"
+        ],
+        [
+         "5@A#0:1",
+         "Z\n",
+         null
+        ]
+       ]
+      }
+     ],
+     "conflicts": [
+      {
+       "kind": "text",
+       "object": "2@A",
+       "lines": [
+        1,
+        2
+       ],
+       "resolution": {
+        "text": "Z\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "sameanchor": {
+   "replica": "C",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         3,
+         5
+        ],
+        [
+         "4@A#0",
+         0,
+         1
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:1",
+         "N\n",
+         "4@B#0:0"
+        ],
+        [
+         "2@A#0:1",
+         "Z\n",
+         null
+        ]
+       ]
+      }
+     ],
+     "conflicts": [
+      {
+       "kind": "text",
+       "object": "2@A",
+       "lines": [
+        1,
+        2
+       ],
+       "resolution": {
+        "text": "Z\n"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "main"
+    },
+    {
+     "expect": {
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "3@A",
+        "kind": "merge",
+        "base": [
+         "2@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "text",
+          "object": "2@A",
+          "lines": [
+           1,
+           2
+          ],
+          "base": "bc\n",
+          "target": "Tc\n",
+          "incoming": "bX\n"
+         }
+        ],
+        "results": [
+         {
+          "resolutions": [
+           "target"
+          ],
+          "texts": {
+           "2@A": "a\nN\nTc\n"
+          }
+         },
+         {
+          "resolutions": [
+           "incoming"
+          ],
+          "texts": {
+           "2@A": "a\nN\nbX\n"
+          }
+         },
+         {
+          "resolutions": [
+           {
+            "text": "Z\n"
+           }
+          ],
+          "texts": {
+           "2@A": "a\nN\nZ\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "sameanchor",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "chained",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "a\nN\nZ\n"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

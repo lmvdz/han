@@ -1,9 +1,10 @@
 {
  "format": "han-timeline-vector/1",
- "name": "45-merge-order-refused",
- "description": "A target whose copies put two base characters in the opposite order from the base cannot be planned: the planner refuses with merge_order",
+ "name": "55-merge-move-against-edit",
+ "description": "Main's order of lines a and b disagrees with the base while the session edits line b: the line main treated as moved conflicts with the edit, and each resolution reads as its side",
  "rules": [
-  "TL-72"
+  "TL-72",
+  "TL-75"
  ],
  "replicas": {
   "A": [
@@ -37,7 +38,7 @@
     },
     {
      "kind": "text.create",
-     "text": "ab",
+     "text": "a\nb\nc\n",
      "transcript": false
     }
    ]
@@ -54,27 +55,6 @@
      "kind": "timeline.create",
      "name": "s1",
      "source": "1@A"
-    }
-   ]
-  },
-  "s1": {
-   "replica": "B",
-   "start": 4,
-   "parents": [
-    "3@A"
-   ],
-   "timeline": "3@A",
-   "ops": [
-    {
-     "kind": "text.edit",
-     "target": "2@A",
-     "deletes": [],
-     "inserts": [
-      [
-       "2@A#0:1",
-       "c"
-      ]
-     ]
     }
    ]
   },
@@ -105,19 +85,46 @@
         [
          "2@A#0",
          0,
-         1
+         2
         ]
        ],
        "inserts": [
         [
-         "2@A#0:1",
-         "a",
+         "2@A#0:3",
+         "a\n",
          "2@A#0:0"
         ]
        ]
       }
      ],
      "conflicts": []
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "B"
+      ]
+     ]
     }
    ]
   }
@@ -135,26 +142,59 @@
      "deliver": "s1"
     },
     {
-     "deliver": "odd",
-     "result": "integrated"
+     "deliver": "odd"
     },
     {
      "expect": {
-      "states": [
-       {
-        "at": "1@A",
-        "objects": {
-         "2@A": {
-          "text": "ba"
-         }
-        }
-       }
-      ],
       "plans": [
        {
         "into": "1@A",
         "from": "3@A",
-        "kind": "error:merge_order"
+        "kind": "merge",
+        "base": [
+         "3@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "text",
+          "object": "2@A",
+          "lines": [
+           1,
+           2
+          ],
+          "base": "b\n",
+          "target": "",
+          "incoming": "B\n"
+         }
+        ],
+        "results": [
+         {
+          "resolutions": [
+           "target"
+          ],
+          "texts": {
+           "2@A": "b\na\nc\n"
+          }
+         },
+         {
+          "resolutions": [
+           "incoming"
+          ],
+          "texts": {
+           "2@A": "b\na\nB\nc\n"
+          }
+         },
+         {
+          "resolutions": [
+           {
+            "text": "X\n"
+           }
+          ],
+          "texts": {
+           "2@A": "b\na\nX\nc\n"
+          }
+         }
+        ]
        }
       ]
      }
