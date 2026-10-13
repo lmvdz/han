@@ -285,9 +285,8 @@ impl Store for SqliteStore {
     fn load(&self, space: &str) -> StoreResult<Vec<Stored>> {
         self.with_space(space, false, |conn| {
             let mut stmt = conn.prepare("SELECT record, pins FROM records ORDER BY seq")?;
-            let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             let mut out = Vec::new();
             for row in rows {
                 let (record, pins) = row?;

@@ -10,7 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use han_core::base64url;
-use iroh::endpoint::{Connection as IrohConnection, QuicTransportConfig, RecvStream as IrohRecv, SendStream as IrohSend, VarInt, presets};
+use iroh::endpoint::{
+    Connection as IrohConnection, QuicTransportConfig, RecvStream as IrohRecv,
+    SendStream as IrohSend, VarInt, presets,
+};
 use iroh::protocol::{IncomingFilter, IncomingFilterOutcome};
 use iroh::{Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -238,7 +241,11 @@ impl Transport for IrohTransport {
 
     async fn dial(&self, addr: &NodeAddr) -> Result<IrohConn> {
         let target = to_endpoint_addr(addr)?;
-        let conn = self.endpoint.connect(target, ALPN).await.map_err(dial_err)?;
+        let conn = self
+            .endpoint
+            .connect(target, ALPN)
+            .await
+            .map_err(dial_err)?;
         Ok(IrohConn(conn))
     }
 
@@ -283,7 +290,9 @@ impl Connection for IrohConn {
     }
 
     async fn accept_uni(&self) -> Result<IrohRecvStream> {
-        Ok(IrohRecvStream(self.0.accept_uni().await.map_err(closed_err)?))
+        Ok(IrohRecvStream(
+            self.0.accept_uni().await.map_err(closed_err)?,
+        ))
     }
 
     fn close(&self, code: u32, reason: &str) {
@@ -296,7 +305,11 @@ impl Connection for IrohConn {
 }
 
 impl AsyncWrite for IrohSendStream {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
         AsyncWrite::poll_write(Pin::new(&mut self.0), cx, buf)
     }
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
@@ -308,7 +321,11 @@ impl AsyncWrite for IrohSendStream {
 }
 
 impl AsyncRead for IrohRecvStream {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
         AsyncRead::poll_read(Pin::new(&mut self.0), cx, buf)
     }
 }

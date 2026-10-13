@@ -39,10 +39,17 @@ async fn wire_vectors_over_quic() {
     .await
     .unwrap();
     let runner = WireRunner::new(client_t, addr, Some(http.local_addr()), config);
-    let report = runner.run(&dir, std::env::var("WIRE_ONLY").ok().as_deref()).await.unwrap();
+    let report = runner
+        .run(&dir, std::env::var("WIRE_ONLY").ok().as_deref())
+        .await
+        .unwrap();
     for (id, why) in &report.failed {
         eprintln!("FAIL {id}: {why}");
     }
     eprintln!("wire vectors over QUIC: {}", report.summary());
-    assert!(report.failed.is_empty(), "{} vectors failed", report.failed.len());
+    assert!(
+        report.failed.is_empty(),
+        "{} vectors failed",
+        report.failed.len()
+    );
 }

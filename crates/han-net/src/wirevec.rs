@@ -60,8 +60,10 @@ pub struct TestConfig {
 impl TestConfig {
     /// Reads `config.json`.
     pub fn load(path: &Path) -> std::io::Result<TestConfig> {
-        let bad = |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_owned());
-        let raw = json::parse_with(&std::fs::read(path)?, Numbers::Any).map_err(|e| bad(&e.to_string()))?;
+        let bad =
+            |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_owned());
+        let raw = json::parse_with(&std::fs::read(path)?, Numbers::Any)
+            .map_err(|e| bad(&e.to_string()))?;
         let text = |v: &Value, k: &str| v[k].as_str().map(str::to_owned).ok_or_else(|| bad(k));
         let mut actors = Vec::new();
         for a in raw["actors"].as_array().ok_or_else(|| bad("actors"))? {
@@ -90,12 +92,21 @@ impl TestConfig {
 
     /// Starts a home in test mode (G-11): ServerName and key from the config, a test clock at the config
     /// clock, and the profile spaces of the listed actors provisioned.
-    pub fn home(&self, store: Arc<dyn Store>) -> std::result::Result<Arc<Home>, Box<dyn std::error::Error>> {
+    pub fn home(
+        &self,
+        store: Arc<dyn Store>,
+    ) -> std::result::Result<Arc<Home>, Box<dyn std::error::Error>> {
         let start = grammar::epoch_seconds(&self.clock).ok_or("config clock")?;
         let clock = Arc::new(TestClock::new(u64::try_from(start)?));
-        let key = SigningKey::from_seed(Sha256::digest(
-            self.raw["serverKey"]["seed"].as_str().ok_or("seed")?.as_bytes(),
-        ).into());
+        let key = SigningKey::from_seed(
+            Sha256::digest(
+                self.raw["serverKey"]["seed"]
+                    .as_str()
+                    .ok_or("seed")?
+                    .as_bytes(),
+            )
+            .into(),
+        );
         let home = Home::open_test(
             HomeConfig {
                 server: self.server.clone(),
@@ -107,8 +118,14 @@ impl TestConfig {
             store,
         )?;
         for a in &self.actors {
-            home.register(&a.actor, &a.kind, &a.key_id, &a.public_key, a.operator.as_deref())
-                .map_err(|e| format!("register {}: {e}", a.actor))?;
+            home.register(
+                &a.actor,
+                &a.kind,
+                &a.key_id,
+                &a.public_key,
+                a.operator.as_deref(),
+            )
+            .map_err(|e| format!("register {}: {e}", a.actor))?;
         }
         Ok(Arc::new(home))
     }
@@ -154,7 +171,12 @@ type Fail = String;
 
 impl<T: Transport> WireRunner<T> {
     /// A runner that dials `server` from `transport`; `http` is where the well-known documents are served.
-    pub fn new(transport: T, server: NodeAddr, http: Option<SocketAddr>, config: TestConfig) -> Self {
+    pub fn new(
+        transport: T,
+        server: NodeAddr,
+        http: Option<SocketAddr>,
+        config: TestConfig,
+    ) -> Self {
         let wall = config.clock.clone();
         WireRunner {
             transport,
@@ -168,7 +190,11 @@ impl<T: Transport> WireRunner<T> {
     }
 
     /// Runs the files of `index.json` in `dir`, in order. `only` selects vector ids or file names containing it.
-    pub async fn run(&self, dir: &Path, only: Option<&str>) -> std::result::Result<Report, Box<dyn std::error::Error>> {
+    pub async fn run(
+        &self,
+        dir: &Path,
+        only: Option<&str>,
+    ) -> std::result::Result<Report, Box<dyn std::error::Error>> {
         let index = json::parse_with(&std::fs::read(dir.join("index.json"))?, Numbers::Any)?;
         let mut report = Report::default();
         for file in index["files"].as_array().ok_or("index files")? {
@@ -179,7 +205,11 @@ impl<T: Transport> WireRunner<T> {
                 None => vec![doc.clone()],
             };
             for v in vectors {
-                let id = v["id"].as_str().or_else(|| v["name"].as_str()).unwrap_or(name).to_owned();
+                let id = v["id"]
+                    .as_str()
+                    .or_else(|| v["name"].as_str())
+                    .unwrap_or(name)
+                    .to_owned();
                 if only.is_some_and(|o| !id.contains(o) && !name.contains(o)) {
                     continue;
                 }
@@ -200,7 +230,8 @@ impl<T: Transport> WireRunner<T> {
     async fn open(&self) -> Result<Conn<T::Conn>> {
         let conn = self.transport.dial(&self.server).await?;
         let raw = RawConn::open(conn).await?;
-        let challenge = challenge_of(raw.challenge_frame()).ok_or_else(|| NetError::Protocol("challenge".into()))?;
+        let challenge = challenge_of(raw.challenge_frame())
+            .ok_or_else(|| NetError::Protocol("challenge".into()))?;
         Ok(Conn {
             raw,
             challenge,
@@ -212,20 +243,43 @@ impl<T: Transport> WireRunner<T> {
 
     fn proof(&self, who: &str, challenge: &str, dialed: &str) -> Option<String> {
         // An actor the config does not know signs with the first actor's key (as ref/run_wire_vectors.py does).
-        let a = self.config.actor(who).or_else(|| self.config.actors.first())?;
+        let a = self
+            .config
+            .actor(who)
+            .or_else(|| self.config.actors.first())?;
         Some(han_seq::auth::make_proof(&a.key, challenge, dialed))
     }
 
-    async fn authenticate(&self, c: &mut Conn<T::Conn>, who: &str) -> std::result::Result<(), Fail> {
-        let proof = self.proof(who, &c.challenge, &self.config.server).ok_or("unknown actor")?;
-        let key_id = self.config.actor(who).map(|a| a.key_id.clone()).unwrap_or_default();
+    async fn authenticate(
+        &self,
+        c: &mut Conn<T::Conn>,
+        who: &str,
+    ) -> std::result::Result<(), Fail> {
+        let proof = self
+            .proof(who, &c.challenge, &self.config.server)
+            .ok_or("unknown actor")?;
+        let key_id = self
+            .config
+            .actor(who)
+            .map(|a| a.key_id.clone())
+            .unwrap_or_default();
         let hello = obj([
             ("id", Value::Int(1)),
             ("call", s("hello")),
-            ("args", obj([("who", s(who)), ("keyId", s(&key_id)), ("proof", s(&proof)), ("version", Value::Int(1))])),
+            (
+                "args",
+                obj([
+                    ("who", s(who)),
+                    ("keyId", s(&key_id)),
+                    ("proof", s(&proof)),
+                    ("version", Value::Int(1)),
+                ]),
+            ),
         ]);
         c.raw.send(&text(&hello)).await.map_err(|e| e.to_string())?;
-        let reply = recv_json(c, Duration::from_secs(5)).await.ok_or("no hello reply")?;
+        let reply = recv_json(c, Duration::from_secs(5))
+            .await
+            .ok_or("no hello reply")?;
         if reply.get("ok").is_none() {
             return Err(format!("set-up hello failed: {}", text(&reply)));
         }
@@ -235,11 +289,18 @@ impl<T: Transport> WireRunner<T> {
     /// The runner's own connection, authenticated as `@alice`, for `test.clock` and `test.limits`.
     async fn control(&self, call: &str, args: Value) -> std::result::Result<Value, Fail> {
         let mut c = self.open().await.map_err(|e| e.to_string())?;
-        let alice = self.config.actors.first().map(|a| a.actor.clone()).ok_or("no actors")?;
+        let alice = self
+            .config
+            .actors
+            .first()
+            .map(|a| a.actor.clone())
+            .ok_or("no actors")?;
         self.authenticate(&mut c, &alice).await?;
         let req = obj([("id", Value::Int(2)), ("call", s(call)), ("args", args)]);
         c.raw.send(&text(&req)).await.map_err(|e| e.to_string())?;
-        let reply = recv_json(&mut c, Duration::from_secs(5)).await.ok_or("no control reply")?;
+        let reply = recv_json(&mut c, Duration::from_secs(5))
+            .await
+            .ok_or("no control reply")?;
         c.raw.close();
         Ok(reply)
     }
@@ -259,7 +320,8 @@ impl<T: Transport> WireRunner<T> {
             tokio::time::sleep(Duration::from_millis(30)).await;
             for (label, c) in &mut conns {
                 while let Some(Inbound::Frame(f)) = c.raw.recv(Duration::from_millis(1)).await {
-                    c.queue.push_back(json::parse(f.as_bytes()).unwrap_or(Value::Null));
+                    c.queue
+                        .push_back(json::parse(f.as_bytes()).unwrap_or(Value::Null));
                 }
                 if let Some(extra) = c.queue.front() {
                     result = Err(format!("{label}: unexpected frame {}", text(extra)));
@@ -292,13 +354,20 @@ impl<T: Transport> WireRunner<T> {
         let label = step["conn"].as_str().ok_or("conn")?.to_owned();
         if !conns.contains_key(&label) {
             let mut c = self.open().await.map_err(|e| e.to_string())?;
-            let first = steps.iter().find(|s| s["conn"].as_str() == Some(&label)).unwrap_or(step);
+            let first = steps
+                .iter()
+                .find(|s| s["conn"].as_str() == Some(&label))
+                .unwrap_or(step);
             let first_is_hello = first["send"]["call"].as_str() == Some("hello");
-            let first_is_challenge = first.get("expect").is_some_and(|e| e.get("challenge").is_some());
+            let first_is_challenge = first
+                .get("expect")
+                .is_some_and(|e| e.get("challenge").is_some());
             if grammar::is_actor_id(&label) && !first_is_hello && !first_is_challenge {
                 self.authenticate(&mut c, &label).await?;
             } else if first_is_challenge {
-                c.queue.push_back(json::parse(c.raw.challenge_frame().as_bytes()).map_err(|e| e.to_string())?);
+                c.queue.push_back(
+                    json::parse(c.raw.challenge_frame().as_bytes()).map_err(|e| e.to_string())?,
+                );
             }
             conns.insert(label.clone(), c);
         }
@@ -307,21 +376,31 @@ impl<T: Transport> WireRunner<T> {
         if let Some(frame) = step.get("send") {
             let frame = self.expand(frame, &c.challenge)?;
             if frame["call"].as_str() == Some("append")
-                && let (Some(id), Ok(eid)) = (frame["id"].as_u64(), han_seq::build::entry_id(&frame["args"]["entry"]))
+                && let (Some(id), Ok(eid)) = (
+                    frame["id"].as_u64(),
+                    han_seq::build::entry_id(&frame["args"]["entry"]),
+                )
             {
                 c.entries.insert(id, eid);
             }
             let wire = text(&frame);
             c.raw.send(&wire).await.map_err(|e| e.to_string())?;
             if matches!(frame["call"].as_str(), Some("subscribe" | "watch"))
-                || (frame["call"].as_str() == Some("read") && frame["args"]["follow"] == Value::Bool(true))
+                || (frame["call"].as_str() == Some("read")
+                    && frame["args"]["follow"] == Value::Bool(true))
             {
                 tokio::time::sleep(Duration::from_millis(250)).await; // settleMs: the registration has happened
             }
         } else if let Some(raw) = step.get("send_raw") {
-            c.raw.send(raw.as_str().ok_or("send_raw")?).await.map_err(|e| e.to_string())?;
+            c.raw
+                .send(raw.as_str().ok_or("send_raw")?)
+                .await
+                .map_err(|e| e.to_string())?;
         } else if let Some(hex) = step.get("send_binary") {
-            c.raw.send_payload(&from_hex(hex.as_str().ok_or("send_binary")?)).await.map_err(|e| e.to_string())?;
+            c.raw
+                .send_payload(&from_hex(hex.as_str().ok_or("send_binary")?))
+                .await
+                .map_err(|e| e.to_string())?;
         } else if let Some(g) = step.get("generate") {
             self.generate(c, g).await?;
         } else if let Some(want) = step.get("expect") {
@@ -345,11 +424,21 @@ impl<T: Transport> WireRunner<T> {
         self.expand_in(v, challenge, &who, offset)
     }
 
-    fn expand_in(&self, v: &Value, challenge: &str, who: &str, offset: u64) -> std::result::Result<Value, Fail> {
+    fn expand_in(
+        &self,
+        v: &Value,
+        challenge: &str,
+        who: &str,
+        offset: u64,
+    ) -> std::result::Result<Value, Fail> {
         Ok(match v {
-            Value::Str(t) if t == "<proof>" => s(&self.proof(who, challenge, &self.config.server).ok_or("proof")?),
+            Value::Str(t) if t == "<proof>" => s(&self
+                .proof(who, challenge, &self.config.server)
+                .ok_or("proof")?),
             Value::Str(t) if t.starts_with("<proof challenge=") => {
-                let other = t.trim_start_matches("<proof challenge=").trim_end_matches('>');
+                let other = t
+                    .trim_start_matches("<proof challenge=")
+                    .trim_end_matches('>');
                 s(&self.proof(who, other, &self.config.server).ok_or("proof")?)
             }
             Value::Str(t) if t.starts_with("<proof dialed=") => {
@@ -368,8 +457,14 @@ impl<T: Transport> WireRunner<T> {
                 s(&data)
             }
             Value::Str(t) if t.starts_with("<repeat ") => {
-                let mut parts = t.trim_start_matches("<repeat ").trim_end_matches('>').split(' ');
-                let (c, n) = (parts.next().unwrap_or("a"), parts.next().and_then(|n| n.parse().ok()).unwrap_or(0));
+                let mut parts = t
+                    .trim_start_matches("<repeat ")
+                    .trim_end_matches('>')
+                    .split(' ');
+                let (c, n) = (
+                    parts.next().unwrap_or("a"),
+                    parts.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+                );
                 s(&c.repeat(n))
             }
             Value::Object(m) => Value::Object(
@@ -378,7 +473,9 @@ impl<T: Transport> WireRunner<T> {
                     .collect::<std::result::Result<_, Fail>>()?,
             ),
             Value::Array(a) => Value::Array(
-                a.iter().map(|x| self.expand_in(x, challenge, who, offset)).collect::<std::result::Result<_, Fail>>()?,
+                a.iter()
+                    .map(|x| self.expand_in(x, challenge, who, offset))
+                    .collect::<std::result::Result<_, Fail>>()?,
             ),
             other => other.clone(),
         })
@@ -405,7 +502,10 @@ impl<T: Transport> WireRunner<T> {
             match c.raw.recv(left).await {
                 Some(Inbound::Frame(f)) => {
                     if f.len() as u64 > limit {
-                        return Err(format!("a server frame over the lowered limit ({} > {limit})", f.len()));
+                        return Err(format!(
+                            "a server frame over the lowered limit ({} > {limit})",
+                            f.len()
+                        ));
                     }
                     let v = json::parse_with(f.as_bytes(), Numbers::IntegersOnly)
                         .map_err(|e| format!("a frame that is not I-JSON: {e}"))?;
@@ -417,21 +517,33 @@ impl<T: Transport> WireRunner<T> {
                         return Err(format!("connection closed ({last}); wanted {}", text(want)));
                     }
                     c.closed = true;
-                    deadline = deadline.min(tokio::time::Instant::now() + Duration::from_millis(300));
+                    deadline =
+                        deadline.min(tokio::time::Instant::now() + Duration::from_millis(300));
                 }
                 None => {}
             }
         }
     }
 
-    fn matches(&self, want: &Value, got: &Value, c: &Conn<T::Conn>) -> std::result::Result<(), Fail> {
+    fn matches(
+        &self,
+        want: &Value,
+        got: &Value,
+        c: &Conn<T::Conn>,
+    ) -> std::result::Result<(), Fail> {
         match (want, got) {
-            (Value::Str(m), _) if m.starts_with('<') && m.ends_with('>') && !m.starts_with("<b64u") => {
+            (Value::Str(m), _)
+                if m.starts_with('<') && m.ends_with('>') && !m.starts_with("<b64u") =>
+            {
                 self.matcher(m, got, c)
             }
             (Value::Object(w), Value::Object(g)) => {
                 if w.len() != g.len() {
-                    return Err(format!("members differ: want {:?}, got {:?}", w.keys().collect::<Vec<_>>(), g.keys().collect::<Vec<_>>()));
+                    return Err(format!(
+                        "members differ: want {:?}, got {:?}",
+                        w.keys().collect::<Vec<_>>(),
+                        g.keys().collect::<Vec<_>>()
+                    ));
                 }
                 for (k, wv) in w {
                     let gv = g.get(k).ok_or_else(|| format!("missing {k}"))?;
@@ -447,7 +559,9 @@ impl<T: Transport> WireRunner<T> {
                 Ok(())
             }
             (Value::Array(w), Value::Array(g)) if w.len() == g.len() => {
-                w.iter().zip(g).enumerate().try_for_each(|(i, (a, b))| self.matches(a, b, c).map_err(|e| format!("[{i}]: {e}")))
+                w.iter().zip(g).enumerate().try_for_each(|(i, (a, b))| {
+                    self.matches(a, b, c).map_err(|e| format!("[{i}]: {e}"))
+                })
             }
             _ if want == got => Ok(()),
             _ => Err(format!("want {}, got {}", text(want), text(got))),
@@ -464,25 +578,47 @@ impl<T: Transport> WireRunner<T> {
                 .map(|_| ())
                 .ok_or_else(|| "challenge: not 43 characters of canonical base64url".into()),
             "challenge-shape" => g
-                .filter(|g| (22..=128).contains(&g.len()) && g.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+                .filter(|g| {
+                    (22..=128).contains(&g.len())
+                        && g.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                })
                 .map(|_| ())
                 .ok_or_else(|| "challenge shape".into()),
-            "posint" => got.as_u64().filter(|n| *n > 0).map(|_| ()).ok_or_else(|| "posint".into()),
+            "posint" => got
+                .as_u64()
+                .filter(|n| *n > 0)
+                .map(|_| ())
+                .ok_or_else(|| "posint".into()),
             "url-of-the-binding" => {
                 // `han/1` replaces the WebSocket URL by node ids (D13a): the `sequencer` list of NodeAddrs.
-                let ok = got.as_array().is_some_and(|l| !l.is_empty() && l.iter().all(|n| crate::addr::node_addr_verdict(n).is_none()));
-                ok.then_some(()).ok_or_else(|| "sequencer: a list of NodeAddrs".into())
+                let ok = got.as_array().is_some_and(|l| {
+                    !l.is_empty()
+                        && l.iter()
+                            .all(|n| crate::addr::node_addr_verdict(n).is_none())
+                });
+                ok.then_some(())
+                    .ok_or_else(|| "sequencer: a list of NodeAddrs".into())
             }
             "profile-bootstrap" => {
                 let mut parts = inner.split(' ').skip(1);
-                self.bootstrap(got, parts.next().unwrap_or_default(), parts.next().unwrap_or_default())
+                self.bootstrap(
+                    got,
+                    parts.next().unwrap_or_default(),
+                    parts.next().unwrap_or_default(),
+                )
             }
             other => Err(format!("unknown matcher {other}")),
         }
     }
 
     /// `<receipt>`, `<receipt seq=N>`, `<receipt seq=N time=T>`.
-    fn receipt(&self, m: &str, got: &Value, entry_id: Option<&str>) -> std::result::Result<(), Fail> {
+    fn receipt(
+        &self,
+        m: &str,
+        got: &Value,
+        entry_id: Option<&str>,
+    ) -> std::result::Result<(), Fail> {
         let r: Receipt = json::from_value(got).map_err(|e| format!("receipt: {e}"))?;
         let pk = self.server_public()?;
         r.verify(&pk).map_err(|_| "homeSig does not verify")?;
@@ -492,7 +628,11 @@ impl<T: Transport> WireRunner<T> {
         if entry_id.is_some_and(|e| e != r.id) {
             return Err("receipt id is not the id of the entry sent".into());
         }
-        for part in m.trim_start_matches("<receipt").trim_end_matches('>').split_whitespace() {
+        for part in m
+            .trim_start_matches("<receipt")
+            .trim_end_matches('>')
+            .split_whitespace()
+        {
             match part.split_once('=') {
                 Some(("seq", n)) if n.parse() == Ok(r.seq) => {}
                 Some(("time", t)) if t == r.time => {}
@@ -546,9 +686,16 @@ impl<T: Transport> WireRunner<T> {
         let url = format!("http://{http}{path}");
         let body = reqwest::get(&url).await.map_err(|e| e.to_string())?;
         let status = body.status().as_u16().to_string();
-        let ctype = body.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+        let ctype = body
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
         let bytes = body.bytes().await.map_err(|e| e.to_string())?;
-        if step["expect_status"].as_str() != Some(&status) && step["expect_status"].as_i64().map(|n| n.to_string()) != Some(status.clone()) {
+        if step["expect_status"].as_str() != Some(&status)
+            && step["expect_status"].as_i64().map(|n| n.to_string()) != Some(status.clone())
+        {
             return Err(format!("status {status}"));
         }
         if !ctype.starts_with(step["expect_type"].as_str().unwrap_or("application/json")) {
@@ -561,17 +708,26 @@ impl<T: Transport> WireRunner<T> {
     /// Like `matches`, for documents that sit outside a connection.
     fn match_free(&self, want: &Value, got: &Value) -> std::result::Result<(), Fail> {
         match (want, got) {
-            (Value::Str(m), _) if m.starts_with('<') && m.ends_with('>') => match m.trim_matches(['<', '>']) {
-                "url-of-the-binding" => got
-                    .as_array()
-                    .filter(|l| !l.is_empty() && l.iter().all(|n| crate::addr::node_addr_verdict(n).is_none()))
-                    .map(|_| ())
-                    .ok_or_else(|| "sequencer: a list of NodeAddrs".into()),
-                other => Err(format!("unknown matcher {other}")),
-            },
-            (Value::Object(w), Value::Object(g)) if w.len() == g.len() => w
-                .iter()
-                .try_for_each(|(k, wv)| self.match_free(wv, g.get(k).ok_or_else(|| format!("missing {k}"))?).map_err(|e| format!("{k}: {e}"))),
+            (Value::Str(m), _) if m.starts_with('<') && m.ends_with('>') => {
+                match m.trim_matches(['<', '>']) {
+                    "url-of-the-binding" => got
+                        .as_array()
+                        .filter(|l| {
+                            !l.is_empty()
+                                && l.iter()
+                                    .all(|n| crate::addr::node_addr_verdict(n).is_none())
+                        })
+                        .map(|_| ())
+                        .ok_or_else(|| "sequencer: a list of NodeAddrs".into()),
+                    other => Err(format!("unknown matcher {other}")),
+                }
+            }
+            (Value::Object(w), Value::Object(g)) if w.len() == g.len() => {
+                w.iter().try_for_each(|(k, wv)| {
+                    self.match_free(wv, g.get(k).ok_or_else(|| format!("missing {k}"))?)
+                        .map_err(|e| format!("{k}: {e}"))
+                })
+            }
             (Value::Array(w), Value::Array(g)) if w.len() == g.len() => {
                 w.iter().zip(g).try_for_each(|(a, b)| self.match_free(a, b))
             }
@@ -589,16 +745,26 @@ impl<T: Transport> WireRunner<T> {
         }
         let advance = c["steadyAdvance"].as_u64();
         if let Some(a) = advance {
-            args.insert("steadyAdvance".to_owned(), Value::Int(i64::try_from(a).unwrap_or(0)));
+            args.insert(
+                "steadyAdvance".to_owned(),
+                Value::Int(i64::try_from(a).unwrap_or(0)),
+            );
         }
         let reply = self.control("test.clock", Value::Object(args)).await?;
         if let Some(w) = c["wall"].as_str() {
             *wall = w.to_owned();
         }
         *steady += advance.unwrap_or(0);
-        let want = obj([("wall", s(&wall)), ("steady", Value::Int(i64::try_from(*steady).unwrap_or(0)))]);
+        let want = obj([
+            ("wall", s(&wall)),
+            ("steady", Value::Int(i64::try_from(*steady).unwrap_or(0))),
+        ]);
         if reply.get("ok") != Some(&want) {
-            return Err(format!("test.clock: want {}, got {}", text(&want), text(&reply)));
+            return Err(format!(
+                "test.clock: want {}, got {}",
+                text(&want),
+                text(&reply)
+            ));
         }
         Ok(())
     }
@@ -610,9 +776,16 @@ impl<T: Transport> WireRunner<T> {
         if let Some(n) = l["maxFrameBytes"].as_u64() {
             *limit = n;
         }
-        let want = obj([("maxFrameBytes", Value::Int(i64::try_from(*limit).unwrap_or(0)))]);
+        let want = obj([(
+            "maxFrameBytes",
+            Value::Int(i64::try_from(*limit).unwrap_or(0)),
+        )]);
         if reply.get("ok") != Some(&want) {
-            return Err(format!("test.limits: want {}, got {}", text(&want), text(&reply)));
+            return Err(format!(
+                "test.limits: want {}, got {}",
+                text(&want),
+                text(&reply)
+            ));
         }
         Ok(())
     }
@@ -620,14 +793,20 @@ impl<T: Transport> WireRunner<T> {
     /// `generate`: appends the runner builds itself (README, "Steps").
     async fn generate(&self, c: &mut Conn<T::Conn>, g: &Value) -> std::result::Result<(), Fail> {
         let count = g["count"].as_u64().ok_or("count")?;
-        let (head, first) = (g["head"].as_u64().ok_or("head")?, g["firstId"].as_u64().ok_or("firstId")?);
+        let (head, first) = (
+            g["head"].as_u64().ok_or("head")?,
+            g["firstId"].as_u64().ok_or("firstId")?,
+        );
         let author = g["author"].as_str().ok_or("author")?;
         let a = self.config.actor(author).ok_or("author")?;
         let start = grammar::epoch_seconds(&self.config.clock).ok_or("clock")?;
         for k in 0..count {
             let sub = |v: &Value| -> Value { subst(v, k) };
             let content = g.get("content").map(sub);
-            let nonce_in = g["nonce"].as_str().ok_or("nonce")?.replace("{k}", &k.to_string());
+            let nonce_in = g["nonce"]
+                .as_str()
+                .ok_or("nonce")?
+                .replace("{k}", &k.to_string());
             let digest = Sha256::digest(format!("wire-vector-nonce-{nonce_in}").as_bytes());
             let nonce: String = base32(&digest).chars().take(26).collect();
             let mut entry = han_core::Entry {
@@ -647,15 +826,27 @@ impl<T: Transport> WireRunner<T> {
             entry.sign(&a.key).map_err(|e| e.to_string())?;
             let eid = entry.id().map_err(|e| e.to_string())?;
             let id = first + k;
-            let mut args = BTreeMap::from([("entry".to_owned(), json::to_value(&entry).map_err(|e| e.to_string())?)]);
+            let mut args = BTreeMap::from([(
+                "entry".to_owned(),
+                json::to_value(&entry).map_err(|e| e.to_string())?,
+            )]);
             if let Some(content) = content {
                 args.insert("content".to_owned(), content);
             }
-            let req = obj([("id", Value::Int(i64::try_from(id).unwrap_or(0))), ("call", s("append")), ("args", Value::Object(args))]);
+            let req = obj([
+                ("id", Value::Int(i64::try_from(id).unwrap_or(0))),
+                ("call", s("append")),
+                ("args", Value::Object(args)),
+            ]);
             c.entries.insert(id, eid);
             c.raw.send(&text(&req)).await.map_err(|e| e.to_string())?;
-            let want = obj([("id", Value::Int(i64::try_from(id).unwrap_or(0))), ("ok", s(&format!("<receipt seq={}>", head + k + 1)))]);
-            self.expect(c, &want).await.map_err(|e| format!("generated append {k}: {e}"))?;
+            let want = obj([
+                ("id", Value::Int(i64::try_from(id).unwrap_or(0))),
+                ("ok", s(&format!("<receipt seq={}>", head + k + 1))),
+            ]);
+            self.expect(c, &want)
+                .await
+                .map_err(|e| format!("generated append {k}: {e}"))?;
         }
         Ok(())
     }
@@ -664,7 +855,9 @@ impl<T: Transport> WireRunner<T> {
 fn subst(v: &Value, k: u64) -> Value {
     match v {
         Value::Str(t) => Value::Str(t.replace("{k}", &k.to_string())),
-        Value::Object(m) => Value::Object(m.iter().map(|(a, b)| (a.clone(), subst(b, k))).collect()),
+        Value::Object(m) => {
+            Value::Object(m.iter().map(|(a, b)| (a.clone(), subst(b, k))).collect())
+        }
         Value::Array(l) => Value::Array(l.iter().map(|b| subst(b, k)).collect()),
         other => other.clone(),
     }
@@ -689,7 +882,9 @@ fn base32(bytes: &[u8]) -> String {
 }
 
 fn from_hex(h: &str) -> Vec<u8> {
-    (0..h.len() / 2).filter_map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect()
+    (0..h.len() / 2)
+        .filter_map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok())
+        .collect()
 }
 
 fn hex_prefix(data: &str) -> String {
@@ -721,7 +916,9 @@ fn mask(mut v: Value) -> Value {
 }
 
 fn challenge_of(frame: &str) -> Option<String> {
-    json::parse(frame.as_bytes()).ok()?["challenge"].as_str().map(str::to_owned)
+    json::parse(frame.as_bytes()).ok()?["challenge"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 async fn recv_json<C: Connection>(c: &mut Conn<C>, within: Duration) -> Option<Value> {
@@ -735,14 +932,10 @@ async fn expect_close<C: Connection>(c: &mut Conn<C>) -> std::result::Result<(),
     if c.closed {
         return Ok(());
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        match c.raw.recv(left).await {
-            Some(Inbound::Closed) => return Ok(()),
-            Some(Inbound::Frame(f)) => return Err(format!("expected the connection to close, got {f}")),
-            None => return Err("the connection did not close".into()),
-        }
+    match c.raw.recv(Duration::from_secs(5)).await {
+        Some(Inbound::Closed) => Ok(()),
+        Some(Inbound::Frame(f)) => Err(format!("expected the connection to close, got {f}")),
+        None => Err("the connection did not close".into()),
     }
 }
 
@@ -755,5 +948,8 @@ fn s(t: &str) -> Value {
 }
 
 fn text(v: &Value) -> String {
-    json::canonicalize(v).ok().and_then(|b| String::from_utf8(b).ok()).unwrap_or_default()
+    json::canonicalize(v)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default()
 }

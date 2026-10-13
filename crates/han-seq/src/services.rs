@@ -72,7 +72,9 @@ impl BlobState {
     }
 
     fn uploaded_by(&self, hash: &str, actor: &str) -> bool {
-        self.uploads.get(hash).is_some_and(|m| m.contains_key(actor))
+        self.uploads
+            .get(hash)
+            .is_some_and(|m| m.contains_key(actor))
     }
 }
 
@@ -154,13 +156,21 @@ impl Home {
 
     fn mark_supplied(&self, g: &mut Inner, space: &str, hash: &str) {
         if g.blobs.supplied.insert((space.to_owned(), hash.to_owned())) {
-            let _ = self.store.put(NS_SUPPLIED, &format!("{space}|{hash}"), b"1");
+            let _ = self
+                .store
+                .put(NS_SUPPLIED, &format!("{space}|{hash}"), b"1");
         }
     }
 
     /// `blobPut` (G-01): one part of an upload. Completion counts only this uploader's own bytes, and they
     /// must hash-match.
-    pub(crate) fn blob_put(&self, who: &str, r: &BlobRef, offset: u64, data: &[u8]) -> Result<Value> {
+    pub(crate) fn blob_put(
+        &self,
+        who: &str,
+        r: &BlobRef,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<Value> {
         if data.len() > MAX_BLOB_PART_BYTES {
             return Err(WireError::invalid("blobPut part over maxBlobPartBytes"));
         }
@@ -175,7 +185,12 @@ impl Home {
         let b = &mut g.blobs;
         if !b.parts.contains_key(&key) {
             let mine = b.parts.keys().filter(|(_, a)| a == who).count();
-            let bytes: usize = b.parts.iter().filter(|((_, a), _)| a == who).map(|(_, v)| v.len()).sum();
+            let bytes: usize = b
+                .parts
+                .iter()
+                .filter(|((_, a), _)| a == who)
+                .map(|(_, v)| v.len())
+                .sum();
             if mine >= MAX_OPEN_UPLOADS || bytes >= MAX_UPLOAD_BYTES {
                 return Err(WireError::limit("too many uploads in progress", 1000));
             }
@@ -210,13 +225,21 @@ impl Home {
         if self.store.put(NS_BLOB, &r.hash, &bytes).is_err()
             || self
                 .store
-                .put(NS_UPLOAD, &format!("{}|{who}", r.hash), at.to_string().as_bytes())
+                .put(
+                    NS_UPLOAD,
+                    &format!("{}|{who}", r.hash),
+                    at.to_string().as_bytes(),
+                )
                 .is_err()
         {
             return Err(WireError::unavailable("storage failure"));
         }
         g.blobs.held.insert(r.hash.clone());
-        g.blobs.uploads.entry(r.hash.clone()).or_default().insert(who.to_owned(), at);
+        g.blobs
+            .uploads
+            .entry(r.hash.clone())
+            .or_default()
+            .insert(who.to_owned(), at);
         Ok(have(r.size, true))
     }
 
@@ -235,7 +258,10 @@ impl Home {
         let g = self.lock();
         self.route(&g, space)?;
         let not_found = || WireError::not_found("blob not available"); // never confirms that a blob exists
-        let sp = g.spaces.get(space).ok_or_else(|| WireError::not_found("no such space"))?;
+        let sp = g
+            .spaces
+            .get(space)
+            .ok_or_else(|| WireError::not_found("no such space"))?;
         let state = &sp.state;
         // access (1): a record the caller may read references it, or it is a context blob of a live session
         // the caller may read, or it is the caller's own recent upload
@@ -253,7 +279,10 @@ impl Home {
             .into_iter()
             .flatten()
             .any(|sid| {
-                state.sessions.get(sid).is_some_and(|s| g.blobs.uploaded_by(&r.hash, &s.actor))
+                state
+                    .sessions
+                    .get(sid)
+                    .is_some_and(|s| g.blobs.uploaded_by(&r.hash, &s.actor))
                     && session_access(state, who, sid).read
             });
         let own = g
@@ -264,7 +293,10 @@ impl Home {
             .is_some_and(|at| self.clock.now_ms().saturating_sub(*at) < OWN_BLOB_MS)
             && can_read(state, who, state.head);
         // supply (2): this home holds the bytes for that space
-        let supplied = g.blobs.supplied.contains(&(space.to_owned(), r.hash.clone()));
+        let supplied = g
+            .blobs
+            .supplied
+            .contains(&(space.to_owned(), r.hash.clone()));
         if !((referenced && supplied) || context || own) {
             return Err(not_found());
         }
@@ -280,7 +312,9 @@ impl Home {
         if offset > size {
             return Err(WireError::invalid("offset past the end"));
         }
-        let want = length.unwrap_or(MAX_BLOB_RANGE_BYTES as u64).min(MAX_BLOB_RANGE_BYTES as u64);
+        let want = length
+            .unwrap_or(MAX_BLOB_RANGE_BYTES as u64)
+            .min(MAX_BLOB_RANGE_BYTES as u64);
         let end = (offset + want).min(size);
         let slice = &data[usize::try_from(offset).unwrap_or(0)..usize::try_from(end).unwrap_or(0)];
         Ok(jv::obj([
@@ -295,10 +329,16 @@ impl Home {
         if let Some(why) = stream_item::verdict(item) {
             return Err(WireError::invalid(format!("StreamItem: {why}")));
         }
-        let (space, session) = (item["space"].as_str().unwrap_or_default(), item["session"].as_str().unwrap_or_default());
+        let (space, session) = (
+            item["space"].as_str().unwrap_or_default(),
+            item["session"].as_str().unwrap_or_default(),
+        );
         let mut g = self.lock();
         self.route(&g, space)?;
-        let sp = g.spaces.get(space).ok_or_else(|| WireError::not_found("no such session"))?;
+        let sp = g
+            .spaces
+            .get(space)
+            .ok_or_else(|| WireError::not_found("no such session"))?;
         let sess = sp
             .state
             .sessions
@@ -322,15 +362,25 @@ impl Home {
         }
         let record = jv::obj([("n", jv::int(n)), ("item", item.clone())]);
         self.store
-            .put(NS_STREAM, &format!("{space}|{session}"), jv::text(&record).as_bytes())
+            .put(
+                NS_STREAM,
+                &format!("{space}|{session}"),
+                jv::text(&record).as_bytes(),
+            )
             .map_err(|_| WireError::unavailable("storage failure"))?;
         g.streams.last.insert(key.clone(), (n, item.clone()));
         let is_context = item["type"].as_str() == Some("context");
         if is_context && let Some(hash) = item["blob"]["hash"].as_str() {
-            let sessions = g.streams.context.entry((space.to_owned(), hash.to_owned())).or_default();
+            let sessions = g
+                .streams
+                .context
+                .entry((space.to_owned(), hash.to_owned()))
+                .or_default();
             if !sessions.iter().any(|s| s == session) {
                 sessions.push(session.to_owned());
-                let _ = self.store.put(NS_CONTEXT, &format!("{space}|{hash}|{session}"), b"1");
+                let _ = self
+                    .store
+                    .put(NS_CONTEXT, &format!("{space}|{hash}|{session}"), b"1");
             }
             if g.blobs.uploaded_by(hash, who) {
                 self.mark_supplied(&mut g, space, hash); // supply: the session's actor's own upload
@@ -354,7 +404,10 @@ impl Home {
     pub(crate) fn watch(&self, who: &str, conn: u64, space: &str, session: &str) -> Result<Feed> {
         let mut g = self.lock();
         self.route(&g, space)?;
-        let sp = g.spaces.get(space).ok_or_else(|| WireError::not_found("no such session"))?;
+        let sp = g
+            .spaces
+            .get(space)
+            .ok_or_else(|| WireError::not_found("no such session"))?;
         if !sp.state.sessions.contains_key(session) {
             return Err(WireError::not_found("no such session"));
         }
@@ -376,24 +429,39 @@ impl Home {
     }
 
     /// `invite` (N-03): registers the hash of a ticket's secret. Never in the log.
-    pub(crate) fn invite(&self, who: &str, space: &str, hash: &str, expires_at: &str) -> Result<()> {
+    pub(crate) fn invite(
+        &self,
+        who: &str,
+        space: &str,
+        hash: &str,
+        expires_at: &str,
+    ) -> Result<()> {
         let g = self.lock();
         self.route(&g, space)?;
-        let sp = g.spaces.get(space).ok_or_else(|| WireError::not_found("no such space"))?;
+        let sp = g
+            .spaces
+            .get(space)
+            .ok_or_else(|| WireError::not_found("no such space"))?;
         let may = match sp.state.roles.get(who) {
             Some(Role::Owner) => true,
             Some(Role::Member) => sp.state.policy.members_may_invite,
             _ => false,
         };
         if !may {
-            return Err(WireError::denied("only an owner (or a member, if allowed) invites"));
+            return Err(WireError::denied(
+                "only an owner (or a member, if allowed) invites",
+            ));
         }
         let (now, until) = (self.now_secs(), parse_time(expires_at));
         let until = until
             .filter(|u| *u > now && *u <= now + MAX_INVITE_SECS)
             .ok_or_else(|| WireError::invalid("expiresAt is at most 7 days ahead"))?;
         self.store
-            .put(NS_INVITE, &format!("{space}|{hash}"), until.to_string().as_bytes())
+            .put(
+                NS_INVITE,
+                &format!("{space}|{hash}"),
+                until.to_string().as_bytes(),
+            )
             .map_err(|_| WireError::unavailable("storage failure"))
     }
 
@@ -402,7 +470,10 @@ impl Home {
     pub(crate) fn join(&self, who: &str, space: &str, secret: &[u8]) -> Result<()> {
         let mut g = self.lock();
         self.route(&g, space)?;
-        let sp = g.spaces.get(space).ok_or_else(|| WireError::not_found("no such space"))?;
+        let sp = g
+            .spaces
+            .get(space)
+            .ok_or_else(|| WireError::not_found("no such space"))?;
         let key = format!("{space}|{}", ids::sha256_hex(secret));
         let live = self
             .store
@@ -423,7 +494,10 @@ impl Home {
         let item = jv::obj([
             ("type", jv::s("signal")),
             ("from", jv::s(&format!("@:{}", self.server))),
-            ("body", jv::obj([("type", jv::s("join")), ("actor", jv::s(who))])),
+            (
+                "body",
+                jv::obj([("type", jv::s("join")), ("actor", jv::s(who))]),
+            ),
         ]);
         if let Some(subs) = g.subs.by_space.get_mut(space) {
             subs.retain(|sub| {
@@ -449,11 +523,13 @@ mod tests {
     #[test]
     fn blob_ref_positions() {
         let hash = "ab".repeat(32);
-        let r = json::parse(
-            format!(r#"{{"hash":"{hash}","size":3,"type":"text/plain"}}"#).as_bytes(),
-        )
-        .unwrap();
-        let content = jv::obj([("blobs", Value::Array(vec![r.clone()])), ("plan", jv::obj([("argsBlob", r)]))]);
+        let r =
+            json::parse(format!(r#"{{"hash":"{hash}","size":3,"type":"text/plain"}}"#).as_bytes())
+                .unwrap();
+        let content = jv::obj([
+            ("blobs", Value::Array(vec![r.clone()])),
+            ("plan", jv::obj([("argsBlob", r)])),
+        ]);
         assert_eq!(blob_refs("message", Some(&content)).len(), 1);
         assert_eq!(blob_refs("effect.propose", Some(&content)).len(), 2);
     }

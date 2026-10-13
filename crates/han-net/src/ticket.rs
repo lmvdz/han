@@ -45,7 +45,9 @@ impl InviteTicket {
         }
         let ok = v["server"].as_str().is_some_and(grammar::is_server_name)
             && node_addr_verdict(&v["node"]).is_none()
-            && v["space"].as_str().is_some_and(|s| grammar::is_space_id(s) && !s.starts_with("profile:"))
+            && v["space"]
+                .as_str()
+                .is_some_and(|s| grammar::is_space_id(s) && !s.starts_with("profile:"))
             && v["secret"]
                 .as_str()
                 .and_then(|s| base64url::decode(s).ok())

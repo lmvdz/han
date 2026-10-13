@@ -175,9 +175,12 @@ pub fn page(
     for m in 0..PAGED.len() {
         next[m] = offsets[m] + taken[m];
     }
-    let more = present
-        .iter()
-        .any(|&m| next[m] < order.lists[m].len().min(map_of(view, m).map_or(0, BTreeMap::len)));
+    let more = present.iter().any(|&m| {
+        next[m]
+            < order.lists[m]
+                .len()
+                .min(map_of(view, m).map_or(0, BTreeMap::len))
+    });
     Page {
         state,
         offsets: next,

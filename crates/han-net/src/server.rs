@@ -10,8 +10,8 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::addr::NodeId;
-use crate::frame::{read_frame, write_frame};
 use crate::error::NetError;
+use crate::frame::{read_frame, write_frame};
 use crate::transport::{Connection, SendStream, Transport, close};
 
 /// How a server behaves.
@@ -132,6 +132,7 @@ async fn run_connection<C: Connection>(conn: C, home: Arc<Home>, opts: &ServeOpt
     let mut n = 0u64;
     let mut tick = tokio::time::interval(opts.revalidate_every);
     tick.tick().await;
+    let mut changes = home.watch_changes();
     loop {
         tokio::select! {
             accepted = conn.accept_bi() => {
@@ -147,6 +148,12 @@ async fn run_connection<C: Connection>(conn: C, home: Arc<Home>, opts: &ServeOpt
                 tokio::spawn(call.run(send, recv));
             }
             () = conn.closed() => break,
+            _ = changes.changed() => {
+                if !hconn.still_vouched() {
+                    conn.close(close::REVOKED, "revoked");
+                    break;
+                }
+            }
             _ = tick.tick() => {
                 if !hconn.still_vouched() {
                     conn.close(close::REVOKED, "revoked");

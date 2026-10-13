@@ -10,9 +10,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use han_core::grammar;
 use han_core::json::{self, Value};
 use han_core::sign::is_node_id;
-use han_core::grammar;
 use han_seq::{Directory, Home, ServerInfo, ServerKey};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -51,19 +51,27 @@ pub fn wellknown_verdict(doc: &Value) -> Option<&'static str> {
     let Value::Object(m) = doc else {
         return Some("members");
     };
-    if m.len() != 3 || !["server", "sequencer", "keys"].iter().all(|k| m.contains_key(*k)) {
+    if m.len() != 3
+        || !["server", "sequencer", "keys"]
+            .iter()
+            .all(|k| m.contains_key(*k))
+    {
         return Some("members");
     }
     if !doc["server"].as_str().is_some_and(grammar::is_server_name) {
         return Some("server");
     }
-    let Some(seq) = doc["sequencer"].as_array().filter(|l| (1..=16).contains(&l.len())) else {
+    let Some(seq) = doc["sequencer"]
+        .as_array()
+        .filter(|l| (1..=16).contains(&l.len()))
+    else {
         return Some("sequencer: 1 to 16 nodes");
     };
     if seq.iter().any(|n| node_addr_verdict(n).is_some()) {
         return Some("sequencer: a NodeAddr");
     }
-    let nodes: std::collections::HashSet<&str> = seq.iter().filter_map(|n| n["node"].as_str()).collect();
+    let nodes: std::collections::HashSet<&str> =
+        seq.iter().filter_map(|n| n["node"].as_str()).collect();
     if nodes.len() != seq.len() {
         return Some("sequencer: a node twice");
     }
@@ -74,8 +82,14 @@ pub fn wellknown_verdict(doc: &Value) -> Option<&'static str> {
         let Value::Object(km) = k else {
             return Some("key members");
         };
-        let required = ["keyId", "publicKey", "from"].iter().all(|f| km.contains_key(*f));
-        if !required || km.keys().any(|f| !["keyId", "publicKey", "from", "until", "compromised"].contains(&f.as_str())) {
+        let required = ["keyId", "publicKey", "from"]
+            .iter()
+            .all(|f| km.contains_key(*f));
+        if !required
+            || km.keys().any(|f| {
+                !["keyId", "publicKey", "from", "until", "compromised"].contains(&f.as_str())
+            })
+        {
             return Some("key members");
         }
         let key_ok = k["keyId"].as_str().is_some_and(grammar::is_key_id)
@@ -85,11 +99,16 @@ pub fn wellknown_verdict(doc: &Value) -> Option<&'static str> {
             return Some("key");
         }
         if let Some(until) = km.get("until")
-            && !until.as_str().is_some_and(|u| grammar::is_time(u) && u > k["from"].as_str().unwrap_or(""))
+            && !until
+                .as_str()
+                .is_some_and(|u| grammar::is_time(u) && u > k["from"].as_str().unwrap_or(""))
         {
             return Some("key until");
         }
-        if km.get("compromised").is_some_and(|c| *c != Value::Bool(true)) {
+        if km
+            .get("compromised")
+            .is_some_and(|c| *c != Value::Bool(true))
+        {
             return Some("key compromised");
         }
     }
@@ -174,7 +193,10 @@ pub async fn serve_http(addr: SocketAddr, routes: Routes) -> std::io::Result<Htt
                 }
                 let text = String::from_utf8_lossy(&head);
                 let mut parts = text.lines().next().unwrap_or_default().split(' ');
-                let (method, target) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default());
+                let (method, target) = (
+                    parts.next().unwrap_or_default(),
+                    parts.next().unwrap_or_default(),
+                );
                 let path = target.split('?').next().unwrap_or_default();
                 let response = match (method, routes(path)) {
                     ("GET", Some(body)) => format!(
@@ -236,7 +258,8 @@ impl Fetcher {
         if let Some(why) = wellknown_verdict(&doc) {
             return Err(NetError::Protocol(format!("well-known: {why}")));
         }
-        let parsed: WellKnown = json::from_value(&doc).map_err(|e| NetError::Protocol(e.to_string()))?;
+        let parsed: WellKnown =
+            json::from_value(&doc).map_err(|e| NetError::Protocol(e.to_string()))?;
         if parsed.server != server {
             return Err(NetError::Protocol("well-known names another server".into()));
         }
@@ -251,9 +274,16 @@ impl Fetcher {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| NetError::Dial(e.to_string()))?;
-        let response = client.get(url).send().await.map_err(|e| NetError::Dial(e.to_string()))?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| NetError::Dial(e.to_string()))?;
         if response.status() != reqwest::StatusCode::OK {
-            return Err(NetError::Protocol(format!("GET {url}: {}", response.status())));
+            return Err(NetError::Protocol(format!(
+                "GET {url}: {}",
+                response.status()
+            )));
         }
         let json_type = response
             .headers()
@@ -261,9 +291,14 @@ impl Fetcher {
             .and_then(|v| v.to_str().ok())
             .is_some_and(|t| t.starts_with("application/json"));
         if !json_type {
-            return Err(NetError::Protocol(format!("GET {url}: not application/json")));
+            return Err(NetError::Protocol(format!(
+                "GET {url}: not application/json"
+            )));
         }
-        let bytes = response.bytes().await.map_err(|e| NetError::Dial(e.to_string()))?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| NetError::Dial(e.to_string()))?;
         if bytes.len() > MAX_DOC_BYTES {
             return Err(NetError::Protocol("document too large".into()));
         }

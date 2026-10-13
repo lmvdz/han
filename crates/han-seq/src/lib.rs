@@ -9,7 +9,6 @@
 //!
 //! There is no network and no async runtime here: han-net carries the frames.
 
-mod services;
 pub mod auth;
 pub mod build;
 mod calls;
@@ -21,9 +20,11 @@ mod home;
 pub mod identity;
 mod jv;
 mod paging;
+mod services;
 pub mod store;
 pub mod stream_item;
 pub mod time;
+pub mod verify;
 
 pub use calls::{
     MAX_BLOB_PART_BYTES, MAX_BLOB_RANGE_BYTES, MAX_CLOCK_SKEW_SECONDS, MAX_FOLLOWS,

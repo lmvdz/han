@@ -118,7 +118,10 @@ impl<C: Connection> RawConn<C> {
 
     /// Waits for the next frame, or `None` after `timeout`.
     pub async fn recv(&mut self, timeout: Duration) -> Option<Inbound> {
-        tokio::time::timeout(timeout, self.inbox.recv()).await.ok().flatten()
+        tokio::time::timeout(timeout, self.inbox.recv())
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Closes the connection.
@@ -128,7 +131,9 @@ impl<C: Connection> RawConn<C> {
 
     /// Whether the connection has closed.
     pub async fn is_closed(&self, within: Duration) -> bool {
-        tokio::time::timeout(within, self.conn.closed()).await.is_ok()
+        tokio::time::timeout(within, self.conn.closed())
+            .await
+            .is_ok()
     }
 
     pub(crate) fn into_parts(self) -> (C, mpsc::UnboundedReceiver<Inbound>) {
@@ -173,7 +178,10 @@ impl CallStream {
 
     /// Like [`CallStream::next`], giving up after `timeout`.
     pub async fn next_within(&mut self, timeout: Duration) -> Option<Result<Value>> {
-        tokio::time::timeout(timeout, self.next()).await.ok().flatten()
+        tokio::time::timeout(timeout, self.next())
+            .await
+            .ok()
+            .flatten()
     }
 }
 
@@ -230,7 +238,9 @@ impl<C: Connection> Client<C> {
                 if id == 0 {
                     routes.clear(); // an error with id 0 fails every open request (G-07)
                 } else if let Some(tx) = routes.get(&id) {
-                    let last = frame.get("ok").is_some() || frame.get("error").is_some() || frame.get("end").is_some();
+                    let last = frame.get("ok").is_some()
+                        || frame.get("error").is_some()
+                        || frame.get("end").is_some();
                     let _ = tx.send(frame);
                     if last {
                         routes.remove(&id);
@@ -261,14 +271,19 @@ impl<C: Connection> Client<C> {
     async fn start(&self, call: &str, args: Value) -> Result<CallStream> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending.lock().unwrap_or_else(|p| p.into_inner()).insert(id, tx);
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, tx);
         let request = han_seq_obj([
             ("id", Value::Int(i64::try_from(id).unwrap_or(i64::MAX))),
             ("call", Value::Str(call.to_owned())),
             ("args", args),
         ]);
-        let text = String::from_utf8(json::canonicalize(&request).map_err(|e| NetError::Protocol(e.to_string()))?)
-            .map_err(|e| NetError::Protocol(e.to_string()))?;
+        let text = String::from_utf8(
+            json::canonicalize(&request).map_err(|e| NetError::Protocol(e.to_string()))?,
+        )
+        .map_err(|e| NetError::Protocol(e.to_string()))?;
         let (mut send, mut recv) = self.conn.open_bi().await?;
         write_frame(&mut send, &text).await?;
         send.finish().await?;
@@ -281,7 +296,8 @@ impl<C: Connection> Client<C> {
                 let id = v["id"].as_u64().unwrap_or(0);
                 let mut routes = routes.lock().unwrap_or_else(|p| p.into_inner());
                 if let Some(tx) = routes.get(&id) {
-                    let last = v.get("ok").is_some() || v.get("error").is_some() || v.get("end").is_some();
+                    let last =
+                        v.get("ok").is_some() || v.get("error").is_some() || v.get("end").is_some();
                     let _ = tx.send(v);
                     if last {
                         routes.remove(&id);
@@ -352,7 +368,10 @@ impl<C: Connection> Client<C> {
                 "read",
                 han_seq_obj([
                     ("space", Value::Str(space.to_owned())),
-                    ("after", Value::Int(i64::try_from(after).unwrap_or(i64::MAX))),
+                    (
+                        "after",
+                        Value::Int(i64::try_from(after).unwrap_or(i64::MAX)),
+                    ),
                 ]),
             )
             .await?;
@@ -369,7 +388,10 @@ impl<C: Connection> Client<C> {
             "read",
             han_seq_obj([
                 ("space", Value::Str(space.to_owned())),
-                ("after", Value::Int(i64::try_from(after).unwrap_or(i64::MAX))),
+                (
+                    "after",
+                    Value::Int(i64::try_from(after).unwrap_or(i64::MAX)),
+                ),
                 ("follow", Value::Bool(true)),
             ]),
         )
