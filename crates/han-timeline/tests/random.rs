@@ -464,6 +464,13 @@ fn scenario(seed: u64, kind: HistoryKind, steps: usize) -> BTreeMap<&'static str
     if kind == HistoryKind::Worktree {
         genesis_ops.push(Op::MapCreate { tree: true });
     }
+    // A large text, so the engine's paths for big texts are exercised as well.
+    genesis_ops.push(Op::TextCreate {
+        text: "a large line of text, with é and 🙂
+"
+        .repeat(160),
+        transcript: false,
+    });
     let (first, genesis) = History::create(
         MemoryStore::default(),
         SPACE,

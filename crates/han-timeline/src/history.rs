@@ -1,7 +1,7 @@
 //! A history: integration of untrusted envelopes (§14), materialisation (§10), timelines and
 //! checkpoints (§4), and local writes.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::envelope::{self, Compression, Envelope, Signer};
@@ -124,6 +124,10 @@ pub struct History<S: Store = MemoryStore> {
     integrated: HashSet<BatchId>,
     held: BTreeMap<BatchId, Pending>,
     quarantine: BTreeMap<BatchId, Pending>,
+    /// Held-back batches waiting for an op, by replica and counter (one missing op each).
+    waits: HashMap<Arc<ReplicaId>, BTreeMap<u64, Vec<BatchId>>>,
+    /// Held-back batches whose dependencies are all held, in integration order.
+    ready: BTreeSet<(u64, Arc<ReplicaId>, BatchId)>,
     faults: Vec<FaultProof>,
     max_counter: u64,
     hold_limit: usize,
@@ -157,6 +161,8 @@ impl<S: Store> History<S> {
             integrated: HashSet::new(),
             held: BTreeMap::new(),
             quarantine: BTreeMap::new(),
+            waits: HashMap::new(),
+            ready: BTreeSet::new(),
             faults: Vec::new(),
             max_counter: 0,
             hold_limit: DEFAULT_HOLD_LIMIT,
@@ -202,14 +208,15 @@ impl<S: Store> History<S> {
             time: None,
             step: None,
         };
-        let envelope = envelope::seal(space, None, &batch, signer, Compression::Zstd);
+        let (envelope, raw) = envelope::seal_raw(space, None, &batch, signer, Compression::Zstd);
         let env = Envelope::decode(&envelope).map_err(|e| Error::Rejected(e.into()))?;
-        let id = env.batch_id();
+        let id = env.received_id(&envelope);
+        debug_assert_eq!(id, env.batch_id(), "in-place batch id must equal TL-93's");
         store
             .set_format_version(FORMAT_VERSION)
             .map_err(store_err)?;
         let mut history = History::empty(store, space, id);
-        let written = history.commit_local(batch, envelope)?;
+        let written = history.commit_local(batch, envelope, raw)?;
         Ok((history, written))
     }
 
@@ -328,9 +335,9 @@ impl<S: Store> History<S> {
             return report(fail.verdict, Vec::new());
         }
         if p.auth == Some(false) {
-            self.quarantine.insert(id, p);
+            self.quarantine_batch(p);
         } else {
-            self.held.insert(id, p);
+            self.hold(p);
         }
         let mut events = Vec::new();
         self.run(dir, &mut events)?;
@@ -359,25 +366,43 @@ impl<S: Store> History<S> {
         bytes: &[u8],
         dir: Option<&dyn Directory>,
     ) -> Result<Pending, (Option<BatchId>, Verdict)> {
+        self.pending_raw(bytes, dir, None)
+    }
+
+    fn pending_raw(
+        &self,
+        bytes: &[u8],
+        dir: Option<&dyn Directory>,
+        local_raw: Option<Vec<u8>>,
+    ) -> Result<Pending, (Option<BatchId>, Verdict)> {
         let reject = |r: Reason| (None, Verdict::Rejected(r));
         let env = Envelope::decode(bytes).map_err(|e| reject(e.into()))?;
         if env.space != self.space || env.history.is_some_and(|h| h != self.id) {
             return Err(reject(Reason::WrongHistory));
         }
-        let id = env.batch_id();
+        let id = env.received_id(bytes);
+        debug_assert_eq!(id, env.batch_id(), "in-place batch id must equal TL-93's");
         let mut key_valid = true;
         if let Some(dir) = dir {
             let info = dir
                 .key(&env.actor, &env.key)
                 .ok_or((Some(id), Verdict::Rejected(Reason::UnknownKey)))?;
-            if !env.verify(&info.public_key) {
+            if !env.verify_id(&info.public_key, &id) {
                 return Err((Some(id), Verdict::Rejected(Reason::BadSignature)));
             }
             key_valid = info.valid;
         }
-        let (batch, raw) = env
-            .batch()
-            .map_err(|e| (Some(id), Verdict::Rejected(e.into())))?;
+        let decoded = match local_raw {
+            Some(raw) => {
+                if raw.len() > envelope::MAX_BATCH {
+                    Err(crate::codec::DecodeError::TooLarge)
+                } else {
+                    crate::codec::decode_batch(&raw, &env.actor, &env.key).map(|batch| (batch, raw))
+                }
+            }
+            None => env.batch(),
+        };
+        let (batch, raw) = decoded.map_err(|e| (Some(id), Verdict::Rejected(e.into())))?;
         // TL-101 step 7, Counters: judged at once, so a batch that could never be integrated is
         // never held back (TL-04, TL-76).
         let late = |v: &Version| v.heads().iter().any(|h| h.counter >= batch.start);
@@ -466,76 +491,153 @@ impl<S: Store> History<S> {
     }
 
     fn deps_held(&self, batch: &Batch) -> bool {
+        self.first_missing(batch).is_none()
+    }
+
+    /// A dependency the receiver does not hold yet, if any.
+    fn first_missing(&self, batch: &Batch) -> Option<OpId> {
         Self::dependencies(batch)
-            .iter()
-            .all(|d| self.graph.locate(d).is_some())
+            .into_iter()
+            .find(|d| self.graph.locate(d).is_none())
     }
 
-    /// Whether an authorised batch the receiver holds depends on quarantined batch `q`.
-    fn needed_by_authorised(&self, q: &Pending) -> bool {
-        let (rep, from, to) = (&q.batch.replica, q.batch.start, q.batch.end());
-        self.held
+    /// The quarantined batch holding op `d`, if any.
+    fn quarantined_holding(&self, d: &OpId) -> Option<BatchId> {
+        self.quarantine
             .values()
-            .filter(|h| h.auth == Some(true))
-            .any(|h| {
-                Self::dependencies(&h.batch)
-                    .iter()
-                    .any(|d| d.replica == *rep && d.counter >= from && d.counter <= to)
+            .find(|q| {
+                q.batch.replica == d.replica
+                    && q.batch.start <= d.counter
+                    && d.counter <= q.batch.end()
             })
+            .map(|q| q.id)
     }
 
-    /// Vouches for quarantined batches and integrates held batches until nothing changes, then
-    /// enforces the buffer limits.
+    /// Holds a batch back: queued when its dependencies are held, otherwise filed under the
+    /// first one missing. An authorised batch vouches for the quarantined batches it needs
+    /// (TL-103), transitively.
+    fn hold(&mut self, p: Pending) {
+        let id = p.id;
+        let vouches: Vec<BatchId> = if p.auth == Some(true) && !self.quarantine.is_empty() {
+            Self::dependencies(&p.batch)
+                .iter()
+                .filter_map(|d| self.quarantined_holding(d))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.file(&p);
+        self.held.insert(id, p);
+        for v in vouches {
+            if let Some(mut q) = self.quarantine.remove(&v) {
+                q.auth = Some(true);
+                self.hold(q);
+            }
+        }
+    }
+
+    /// Files a held batch as ready or under its first missing dependency.
+    fn file(&mut self, p: &Pending) {
+        match self.first_missing(&p.batch) {
+            None => {
+                self.ready
+                    .insert((p.batch.start, p.batch.replica.clone(), p.id));
+            }
+            Some(d) => self
+                .waits
+                .entry(d.replica)
+                .or_default()
+                .entry(d.counter)
+                .or_default()
+                .push(p.id),
+        }
+    }
+
+    /// Puts a batch in quarantine, unless an authorised held-back batch already depends on it.
+    fn quarantine_batch(&mut self, q: Pending) {
+        let needed = self.held.values().any(|h| {
+            h.auth == Some(true)
+                && Self::dependencies(&h.batch).iter().any(|d| {
+                    d.replica == q.batch.replica
+                        && d.counter >= q.batch.start
+                        && d.counter <= q.batch.end()
+                })
+        });
+        if needed {
+            let mut q = q;
+            q.auth = Some(true);
+            self.hold(q);
+        } else {
+            self.quarantine.insert(q.id, q);
+        }
+    }
+
+    /// Once the genesis is held, judges the batches held back before it (TL-101 step 4), so
+    /// an authorised one vouches for what it needs.
+    fn judge_waiting(&mut self, dir: &dyn Directory) {
+        let ids: Vec<BatchId> = self
+            .held
+            .iter()
+            .filter(|(_, h)| h.auth.is_none())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            if let Some(mut h) = self.held.remove(&id) {
+                h.auth = self.authorisation(&h, dir);
+                self.hold(h);
+            }
+        }
+    }
+
+    /// Re-files the held batches that waited for an op of a newly integrated batch.
+    fn wake(&mut self, replica: &Arc<ReplicaId>, from: u64, to: u64) {
+        let Some(by_counter) = self.waits.get_mut(replica) else {
+            return;
+        };
+        let counters: Vec<u64> = by_counter.range(from..=to).map(|(c, _)| *c).collect();
+        let mut woken = Vec::new();
+        for c in counters {
+            woken.extend(by_counter.remove(&c).unwrap_or_default());
+        }
+        for id in woken {
+            if let Some(p) = self.held.remove(&id) {
+                self.file(&p);
+                self.held.insert(id, p);
+            }
+        }
+    }
+
+    /// Integrates ready held-back batches until none is left, then enforces the buffer limits.
     fn run(
         &mut self,
         dir: &dyn Directory,
         events: &mut Vec<(BatchId, Verdict)>,
     ) -> Result<(), Error> {
-        loop {
-            let mut progress = false;
-            let vouched: Vec<BatchId> = self
-                .quarantine
-                .values()
-                .filter(|q| self.needed_by_authorised(q))
-                .map(|q| q.id)
-                .collect();
-            for id in vouched {
-                if let Some(mut q) = self.quarantine.remove(&id) {
-                    q.auth = Some(true);
-                    self.held.insert(id, q);
-                    progress = true;
-                }
+        while let Some((_, _, id)) = self.ready.pop_first() {
+            let Some(mut h) = self.held.remove(&id) else {
+                continue;
+            };
+            if h.auth.is_none() {
+                h.auth = self.authorisation(&h, dir);
             }
-            let mut ready: Vec<(u64, Arc<ReplicaId>, BatchId)> = self
-                .held
-                .values()
-                .filter(|h| self.deps_held(&h.batch))
-                .map(|h| (h.batch.start, h.batch.replica.clone(), h.id))
-                .collect();
-            ready.sort();
-            for (_, _, id) in ready {
-                let Some(mut h) = self.held.remove(&id) else {
-                    continue;
-                };
-                if h.auth.is_none() {
-                    h.auth = self.authorisation(&h, dir);
-                }
-                if h.auth == Some(false) {
-                    self.quarantine.insert(id, h);
-                    progress = true;
-                    continue;
-                }
-                let verdict = match self.integrate(h, true) {
-                    Ok(()) => Verdict::Integrated,
-                    Err(Ok(v)) => v,
-                    Err(Err(e)) => return Err(e),
-                };
-                events.push((id, verdict));
-                progress = true;
+            if h.auth == Some(false) {
+                self.quarantine_batch(h);
+                continue;
             }
-            if !progress {
-                break;
-            }
+            let (replica, from, to) = (h.batch.replica.clone(), h.batch.start, h.batch.end());
+            let genesis = h.batch.parents.is_root();
+            let verdict = match self.integrate(h, true) {
+                Ok(()) => {
+                    if genesis {
+                        self.judge_waiting(dir);
+                    }
+                    self.wake(&replica, from, to);
+                    Verdict::Integrated
+                }
+                Err(Ok(v)) => v,
+                Err(Err(e)) => return Err(e),
+            };
+            events.push((id, verdict));
         }
         // Drop the greatest start first (TL-102, TL-103).
         let greatest = |m: &BTreeMap<BatchId, Pending>| {
@@ -869,15 +971,22 @@ impl<S: Store> History<S> {
         Ok(self.max_counter.max(hw) + 1)
     }
 
-    fn commit_local(&mut self, batch: Batch, envelope: Vec<u8>) -> Result<Written, Error> {
+    fn commit_local(
+        &mut self,
+        batch: Batch,
+        envelope: Vec<u8>,
+        raw: Vec<u8>,
+    ) -> Result<Written, Error> {
         self.store
             .raise_high_water(&batch.replica.actor, &batch.replica.key, batch.end())
             .map_err(store_err)?;
         let ops = (0..batch.ops.len()).map(|i| batch.op_id(i)).collect();
-        let p = self.pending(&envelope, None).map_err(|(_, v)| match v {
-            Verdict::Rejected(r) => Error::Rejected(r),
-            _ => Error::Rejected(Reason::Malformed),
-        })?;
+        let p = self
+            .pending_raw(&envelope, None, Some(raw))
+            .map_err(|(_, v)| match v {
+                Verdict::Rejected(r) => Error::Rejected(r),
+                _ => Error::Rejected(Reason::Malformed),
+            })?;
         let id = p.id;
         if !self.deps_held(&p.batch) {
             return Err(Error::UnknownOp);
@@ -927,14 +1036,14 @@ impl<S: Store> History<S> {
             time: None,
             step: None,
         };
-        let envelope = envelope::seal(
+        let (envelope, raw) = envelope::seal_raw(
             &self.space,
             Some(self.id),
             &batch,
             signer,
             Compression::Zstd,
         );
-        self.commit_local(batch, envelope)
+        self.commit_local(batch, envelope, raw)
     }
 
     /// Writes `ops` as one batch on `timeline`, after its head (TL-24). `step` names the tool
@@ -964,14 +1073,14 @@ impl<S: Store> History<S> {
             time: None,
             step,
         };
-        let envelope = envelope::seal(
+        let (envelope, raw) = envelope::seal_raw(
             &self.space,
             Some(self.id),
             &batch,
             signer,
             Compression::Zstd,
         );
-        self.commit_local(batch, envelope)
+        self.commit_local(batch, envelope, raw)
     }
 
     /// Forks `source` at `at` (its head when `None`) into a new timeline named `name` (TL-22,

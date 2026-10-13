@@ -309,3 +309,22 @@ fn transcripts_are_written_only_by_the_sessions_actor() {
     assert!(asked.iter().all(|a| a.contains(SESSION)), "{asked:?}");
     assert!(asked.iter().any(|a| a.starts_with("@bob:b.example")));
 }
+
+#[test]
+fn batches_held_before_the_genesis_still_vouch() {
+    let w = world();
+    let mut dir = Dir::new(&[&w.a, &w.c]);
+    dir.members.remove(w.c.actor());
+    let mut h = History::open(MemoryStore::default(), SPACE, w.id).unwrap();
+    // Both wait for the genesis: authorisation cannot be judged without the history's kind.
+    assert_eq!(deliver(&mut h, &w.x, &dir), Verdict::Held);
+    assert_eq!(deliver(&mut h, &w.y, &dir), Verdict::Held);
+    // Then carol's x is unauthorised, but alice's y depends on it and vouches.
+    let r = h.receive(&w.genesis, &dir).unwrap();
+    assert_eq!(r.verdict, Verdict::Integrated);
+    assert!(
+        h.held_back().is_empty() && h.quarantined().is_empty(),
+        "{r:?}"
+    );
+    assert_eq!(root_keys(&h), vec!["k", "y"]);
+}
