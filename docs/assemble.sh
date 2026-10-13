@@ -7,3 +7,6 @@ mkdir -p docs/src/core docs/src/profiles docs/src/decisions
 cp spec/core/*.md docs/src/core/
 cp spec/profiles/*.md docs/src/profiles/
 cp spec/decisions/*.md docs/src/decisions/
+mkdir -p docs/src/ui
+cp spec/ui/*.md docs/src/ui/
+cp spec/profiles/*.md docs/src/profiles/ 2>/dev/null || true
