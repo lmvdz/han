@@ -58,6 +58,14 @@ fn rng(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Varies every workload: set `BENCH_SEED` to get a different but repeatable run.
+fn seed() -> u64 {
+    std::env::var("BENCH_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
 fn report(what: &str, n: usize, start: Instant) {
     let total = start.elapsed();
     println!(
@@ -89,7 +97,7 @@ fn local_ops(n: usize) {
     let a = signer("alice");
     let (mut h, main, text) = new_history(&a, "hello\n");
     let at = At::Timeline(main.clone());
-    let mut s = 1u64;
+    let mut s = 1u64 ^ seed().wrapping_mul(0x9e37_79b9);
     let start = Instant::now();
     for i in 0..n {
         let op = if i % 4 == 3 {
@@ -126,7 +134,7 @@ fn out_of_order(n: usize) {
         copies.push(c);
     }
     let at = At::Timeline(main.clone());
-    let mut s = 3u64;
+    let mut s = 3u64 ^ seed().wrapping_mul(0x9e37_79b9);
     for i in 0..n {
         let w = (rng(&mut s) % 3) as usize;
         if i % 10 == 9 {
@@ -193,7 +201,13 @@ fn big_text() {
     let start = Instant::now();
     for i in 0..100 {
         let op = h
-            .plan_edit(&at, &obj, (i * 9973) % text.len(), 1, "Z")
+            .plan_edit(
+                &at,
+                &obj,
+                (i * 9973 + seed() as usize * 7919) % text.len(),
+                1,
+                "Z",
+            )
             .unwrap()
             .unwrap();
         h.write(&a, 0, &main, vec![op], None).unwrap();
