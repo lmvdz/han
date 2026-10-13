@@ -49,6 +49,8 @@ pub struct NodeConfig {
     pub flush_every: Duration,
     /// How often the node moves the views' clock when it runs by itself.
     pub tick_every: Duration,
+    /// Fetches `/.well-known/han`, to confirm a ticket's node before it is dialed (Z4).
+    pub fetcher: han_net::wellknown::Fetcher,
 }
 
 impl NodeConfig {
@@ -64,6 +66,7 @@ impl NodeConfig {
             retry: Duration::from_secs(1),
             flush_every: Duration::from_secs(5),
             tick_every: Duration::from_secs(5),
+            fetcher: han_net::wellknown::Fetcher::new(),
         }
     }
 }
@@ -714,12 +717,9 @@ impl<T: Transport> Node<T> {
             Command::SpaceJoin { ticket } => {
                 let t = InviteTicket::parse(&ticket)
                     .ok_or_else(|| NodeError::invalid("not an invite ticket"))?;
-                let trusted = han_net::dial::trusted_nodes_for_ticket(
-                    &han_net::wellknown::Fetcher::new(),
-                    &t,
-                )
-                .await
-                .map_err(|e| NodeError::invalid(e.to_string()))?;
+                let trusted = han_net::dial::trusted_nodes_for_ticket(&inner.cfg.fetcher, &t)
+                    .await
+                    .map_err(|e| NodeError::invalid(e.to_string()))?;
                 if inner.engine().has_space(&t.space) {
                     return Err(NodeError::conflict("the space is already followed"));
                 }

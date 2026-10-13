@@ -8,11 +8,10 @@
 //!   call stream (handled in stream order), one unidirectional stream per live call, the peer filter (N-02)
 //!   at connection and call time.
 //! * [`Client`] and [`RawConn`] dial a node, check the Challenge, say `hello` and make calls.
-//! * [`wellknown`], [`ticket`], [`control`], [`bulk`]: the documents and formats of section 4.3, N-03 and X15.
+//! * [`wellknown`], [`ticket`], [`control`], [`typed`]: the documents and formats of section 4.3, N-03 and the typed one-way streams of G-07.
 //! * [`wirevec`]: a runner for the wire conformance vectors over any transport.
 
 pub mod addr;
-pub mod bulk;
 pub mod client;
 pub mod control;
 pub mod dial;
@@ -23,6 +22,7 @@ pub mod quic;
 pub mod server;
 pub mod ticket;
 pub mod transport;
+pub mod typed;
 pub mod wellknown;
 pub mod wirevec;
 
