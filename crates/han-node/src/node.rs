@@ -1,0 +1,1100 @@
+//! The node: the runtime of one device. It owns the device key, the database, the views engine and the links
+//! to homes, and implements the node API (`call` and `view`).
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+
+use han_core::json::{self, Value};
+use han_core::{SigningKey, base64url, grammar, ids};
+use han_net::client::args;
+use han_net::{Client, InviteTicket, NodeAddr, Transport};
+use han_seq::Clock;
+use han_seq::ServerKey;
+use han_seq::build::{EntrySpec, entry_id, sign_entry, space_policy};
+use han_seq::time::format_time;
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
+
+use crate::api::{
+    BoxFuture, CallResult, Command, HomeRef, NodeApi, NodeError, Query, RoleInfo, ViewEvent,
+    ViewStream,
+};
+use crate::db::{NodeDb, OutboxRow};
+use crate::keys::{DEVICE_KEY, KeyStore};
+use crate::supervisor::{Role, RoleSpec, RoleStatus, Supervisor, SupervisorError};
+use crate::sync::{LinkCmd, LinkHandle, ServerKeys, is_final, map_net_error, run_link};
+pub use crate::views::Freshness;
+use crate::views::{Engine, NodeInfo};
+
+/// How a node is set up.
+#[derive(Clone, Debug)]
+pub struct NodeConfig {
+    /// The actor this device acts as (a person, or an agent's host).
+    pub actor: String,
+    /// The id of this device's key in the actor's profile.
+    pub key_id: String,
+    /// Where `node.db` lives; in memory when absent.
+    pub data_dir: Option<PathBuf>,
+    /// When silence turns sessions stale and failed, unless a space says otherwise.
+    pub freshness: Freshness,
+    /// Per-space thresholds (PLAN 6.4: configurable per space).
+    pub space_freshness: HashMap<String, Freshness>,
+    /// How long a command waits for the link to its home before it is queued in the outbox.
+    pub connect_wait: Duration,
+    /// The first wait before dialing a home again; it doubles up to 30 s.
+    pub retry: Duration,
+    /// How often a link looks for entries in the outbox to send.
+    pub flush_every: Duration,
+    /// How often the node moves the views' clock when it runs by itself.
+    pub tick_every: Duration,
+}
+
+impl NodeConfig {
+    /// A configuration for `actor` with device key id `d1` and the defaults.
+    pub fn new(actor: &str) -> Self {
+        NodeConfig {
+            actor: actor.to_owned(),
+            key_id: "d1".into(),
+            data_dir: None,
+            freshness: Freshness::default(),
+            space_freshness: HashMap::new(),
+            connect_wait: Duration::from_secs(3),
+            retry: Duration::from_secs(1),
+            flush_every: Duration::from_secs(5),
+            tick_every: Duration::from_secs(5),
+        }
+    }
+}
+
+/// What a node is built from. The network, the clock and the key store are injected (PLAN section 5), so a
+/// whole team can run in one process on a simulated network.
+pub struct NodeParts<T: Transport> {
+    /// The setup.
+    pub config: NodeConfig,
+    /// The device's endpoint; its node id must be the device key's public key (N-01).
+    pub transport: T,
+    /// Time.
+    pub clock: Arc<dyn Clock>,
+    /// Where the device key lives.
+    pub keys: Arc<dyn KeyStore>,
+    /// Where the keys that sign a home's receipts come from.
+    pub server_keys: Arc<dyn ServerKeys>,
+    /// What runs child roles.
+    pub supervisor: Arc<dyn Supervisor>,
+}
+
+pub(crate) struct Inner<T: Transport> {
+    pub cfg: NodeConfig,
+    pub key: SigningKey,
+    pub transport: T,
+    pub clock: Arc<dyn Clock>,
+    pub db: NodeDb,
+    engine: Arc<Mutex<Engine>>,
+    pub server_keys: Arc<dyn ServerKeys>,
+    pub key_cache: Mutex<HashMap<String, Vec<ServerKey>>>,
+    key_store: Arc<dyn KeyStore>,
+    supervisor: Arc<dyn Supervisor>,
+    links: Mutex<HashMap<String, (HomeRef, LinkHandle<T>)>>,
+    space_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    ticker: Mutex<Option<JoinHandle<()>>>,
+}
+
+/// The runtime of one device.
+pub struct Node<T: Transport> {
+    inner: Arc<Inner<T>>,
+}
+
+impl<T: Transport> Clone for Node<T> {
+    fn clone(&self) -> Self {
+        Node {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+pub(crate) enum Outcome {
+    Sent(han_core::Receipt),
+    Rejected(NodeError),
+    Offline,
+}
+
+fn unavailable(e: impl std::fmt::Display) -> NodeError {
+    NodeError::unavailable(e.to_string())
+}
+
+fn obj<const N: usize>(pairs: [(&str, Value); N]) -> Value {
+    Value::Object(
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect::<BTreeMap<_, _>>(),
+    )
+}
+
+fn s(t: &str) -> Value {
+    Value::Str(t.to_owned())
+}
+
+fn int(n: u64) -> Value {
+    Value::Int(i64::try_from(n.min(han_core::json::MAX_SAFE_INT as u64)).unwrap_or(i64::MAX))
+}
+
+fn strs(items: &[String]) -> Value {
+    Value::Array(items.iter().map(|x| s(x)).collect())
+}
+
+fn random_id(len: usize) -> String {
+    const ALPHABET: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut bytes = vec![0u8; len];
+    // The system random source failing is not recoverable.
+    getrandom::fill(&mut bytes).expect("system random source");
+    bytes
+        .iter()
+        .map(|b| ALPHABET[usize::from(*b) % ALPHABET.len()] as char)
+        .collect()
+}
+
+impl<T: Transport> Inner<T> {
+    pub(crate) fn engine(&self) -> MutexGuard<'_, Engine> {
+        self.engine.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub(crate) fn spaces_on(&self, server: &str) -> Vec<String> {
+        self.engine().spaces_on(server)
+    }
+
+    fn space_lock(&self, space: &str) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            self.space_locks
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .entry(space.to_owned())
+                .or_default(),
+        )
+    }
+
+    fn now_secs(&self) -> i64 {
+        i64::try_from(self.clock.now_ms() / 1000).unwrap_or(0)
+    }
+
+    /// Copies the outbox of `space` into the views.
+    fn refresh_outbox(&self, space: &str) {
+        match self.db.outbox_recent(space, 200) {
+            Ok(items) => self.engine().set_outbox(space, items),
+            Err(e) => tracing::warn!("node.db: {e}"),
+        }
+    }
+
+    /// The client of the link to `server`, waiting up to `wait` for the link to come up.
+    async fn client_for(
+        &self,
+        server: &str,
+        wait: Duration,
+    ) -> Result<Arc<Client<T::Conn>>, NodeError> {
+        let mut rx = self
+            .links
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(server)
+            .map(|(_, l)| l.client.clone())
+            .ok_or_else(|| NodeError::unavailable(format!("no link to {server}")))?;
+        let found = if wait.is_zero() {
+            rx.borrow().clone()
+        } else {
+            let up = async {
+                loop {
+                    let current = rx.borrow().clone();
+                    if let Some(c) = current {
+                        return Some(c);
+                    }
+                    if rx.changed().await.is_err() {
+                        return None;
+                    }
+                }
+            };
+            tokio::time::timeout(wait, up).await.ok().flatten()
+        };
+        found.ok_or_else(|| NodeError::unavailable(format!("{server} cannot be reached now")))
+    }
+
+    /// Sends what waits in the outbox of `space`, in order. Returns what became of row `want`.
+    pub(crate) async fn flush_space(
+        &self,
+        space: &str,
+        want: Option<u64>,
+        wait: Duration,
+    ) -> Option<Outcome> {
+        let lock = self.space_lock(space);
+        let _guard = lock.lock().await;
+        let rows = match self.db.outbox_pending(space) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("node.db: {e}");
+                return Some(Outcome::Offline);
+            }
+        };
+        let mut mine = None;
+        if !rows.is_empty() {
+            let server = self.engine().home_of(space)?;
+            match self.client_for(&server, wait).await {
+                Err(_) => {
+                    mine = Some(Outcome::Offline);
+                }
+                Ok(client) => mine = self.send_rows(&server, &client, rows, want).await,
+            }
+            self.refresh_outbox(space);
+        }
+        if mine.is_none()
+            && let Some(id) = want
+        {
+            // Another flusher may have sent it already.
+            mine = match self.db.outbox_get(id) {
+                Ok(Some(row)) => match row.state.as_str() {
+                    "sent" => row
+                        .receipt
+                        .and_then(|r| serde_json::from_str(&r).ok())
+                        .map(Outcome::Sent),
+                    "rejected" => Some(Outcome::Rejected(NodeError::denied(
+                        row.error.unwrap_or_default(),
+                    ))),
+                    _ => Some(Outcome::Offline),
+                },
+                _ => Some(Outcome::Offline),
+            };
+        }
+        mine
+    }
+
+    async fn send_rows(
+        &self,
+        server: &str,
+        client: &Client<T::Conn>,
+        rows: Vec<OutboxRow>,
+        want: Option<u64>,
+    ) -> Option<Outcome> {
+        let mut mine = None;
+        for row in rows {
+            let result = client.append(&row.entry, row.content.as_ref()).await;
+            match result {
+                Ok(receipt) => {
+                    if let Err(why) = self.verify_receipt(server, &receipt, &row.entry_id).await {
+                        // A receipt that does not verify is not an answer: the entry stays queued.
+                        let _ = self.db.outbox_attempt(row.id, &why);
+                        if want == Some(row.id) {
+                            mine = Some(Outcome::Rejected(unavailable(why)));
+                        }
+                        break;
+                    }
+                    let text = serde_json::to_string(&receipt).unwrap_or_default();
+                    if let Err(e) = self.db.outbox_sent(row.id, &text) {
+                        tracing::warn!("node.db: {e}");
+                    }
+                    if want == Some(row.id) {
+                        mine = Some(Outcome::Sent(receipt));
+                    }
+                }
+                Err(e) => {
+                    let err = map_net_error(&e);
+                    if is_final(&err) {
+                        let _ = self.db.outbox_rejected(row.id, &err.to_string());
+                        if want == Some(row.id) {
+                            mine = Some(Outcome::Rejected(err));
+                        }
+                    } else {
+                        let _ = self.db.outbox_attempt(row.id, &err.to_string());
+                        if want == Some(row.id) || mine.is_none() {
+                            mine = Some(Outcome::Offline);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        mine
+    }
+}
+
+impl<T: Transport> Node<T> {
+    /// Starts a node: opens `node.db`, rebuilds the views from what it holds, and dials the homes of the
+    /// followed spaces in the background.
+    pub fn start(parts: NodeParts<T>) -> Result<Node<T>, NodeError> {
+        let NodeParts {
+            config,
+            transport,
+            clock,
+            keys,
+            server_keys,
+            supervisor,
+        } = parts;
+        if !grammar::is_actor_id(&config.actor) {
+            return Err(NodeError::invalid("the node's actor is not an ActorId"));
+        }
+        let seed = keys
+            .load_or_create(DEVICE_KEY)
+            .map_err(|e| NodeError::unavailable(e.to_string()))?;
+        let key = SigningKey::from_seed(seed);
+        let node_id = key.public_key().to_base64url();
+        if transport.node_id() != node_id {
+            return Err(NodeError::invalid(
+                "the endpoint's node id is not the device key's public key (N-01)",
+            ));
+        }
+        let db = match &config.data_dir {
+            Some(dir) => {
+                std::fs::create_dir_all(dir).map_err(unavailable)?;
+                NodeDb::open(&dir.join("node.db"))
+            }
+            None => NodeDb::in_memory(),
+        }
+        .map_err(unavailable)?;
+        let mut engine = Engine::new(&config.actor, config.freshness);
+        engine.tick(
+            clock.steady_ms(),
+            i64::try_from(clock.now_ms() / 1000).unwrap_or(0),
+        );
+        engine.set_node_info(NodeInfo {
+            node_id,
+            roles: Vec::new(),
+        });
+        let follows = db.follows().map_err(unavailable)?;
+        for f in &follows {
+            engine.add_space(
+                &f.space,
+                &f.home.server,
+                config.space_freshness.get(&f.space).copied(),
+            );
+            for rec in db.records(&f.space).map_err(unavailable)? {
+                engine.apply_record(&f.space, &rec);
+            }
+            for st in db.statuses(&f.space).map_err(unavailable)? {
+                engine.apply_status(&f.space, st);
+            }
+        }
+        let inner = Arc::new(Inner {
+            cfg: config,
+            key,
+            transport,
+            clock,
+            db,
+            engine: Arc::new(Mutex::new(engine)),
+            server_keys,
+            key_cache: Mutex::new(HashMap::new()),
+            key_store: keys,
+            supervisor,
+            links: Mutex::new(HashMap::new()),
+            space_locks: Mutex::new(HashMap::new()),
+            ticker: Mutex::new(None),
+        });
+        let node = Node { inner };
+        for f in &follows {
+            node.inner.refresh_outbox(&f.space);
+            node.ensure_link(&f.home, vec![f.home.node.clone()]);
+        }
+        let weak = Arc::downgrade(&node.inner);
+        let every = node.inner.cfg.tick_every;
+        let ticker = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                let Some(inner) = weak.upgrade() else { return };
+                Node { inner }.tick();
+            }
+        });
+        *node.inner.ticker.lock().unwrap_or_else(|p| p.into_inner()) = Some(ticker);
+        Ok(node)
+    }
+
+    /// Stops the node's tasks: the links, and the clock of the views. Child roles die with their supervisor.
+    pub fn shutdown(&self) {
+        if let Some(t) = self
+            .inner
+            .ticker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
+            t.abort();
+        }
+        for (_, (_, link)) in self
+            .inner
+            .links
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .drain()
+        {
+            link.task.abort();
+        }
+    }
+
+    /// This device's node id.
+    pub fn node_id(&self) -> String {
+        self.inner.key.public_key().to_base64url()
+    }
+
+    /// The actor this device acts as.
+    pub fn actor(&self) -> &str {
+        &self.inner.cfg.actor
+    }
+
+    /// Moves the views' clock to the injected clock's reading (the node does this by itself every
+    /// `tick_every`; a simulation calls it after moving its clock).
+    pub fn tick(&self) {
+        let inner = &self.inner;
+        let roles: Vec<RoleInfo> = inner
+            .supervisor
+            .status()
+            .into_iter()
+            .map(|(name, st)| RoleInfo {
+                name,
+                state: match st {
+                    RoleStatus::Running => "running".into(),
+                    RoleStatus::Exited(_) => "exited".into(),
+                },
+            })
+            .collect();
+        let mut engine = inner.engine();
+        engine.set_node_info(NodeInfo {
+            node_id: self.node_id(),
+            roles,
+        });
+        engine.tick(inner.clock.steady_ms(), inner.now_secs());
+    }
+
+    /// How many views are open on this node.
+    pub fn open_views(&self) -> usize {
+        self.inner.engine().open_views()
+    }
+
+    /// A fresh read of a view's window, as a snapshot event: what a snapshot plus its diffs must equal.
+    pub fn read(&self, query: &Query) -> Result<ViewEvent, NodeError> {
+        self.inner.engine().read(query)
+    }
+
+    /// Sends what waits in the outbox of every space now (links also do this on their own).
+    pub async fn flush(&self) {
+        let spaces: Vec<String> = self
+            .inner
+            .db
+            .follows()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| f.space)
+            .collect();
+        for space in spaces {
+            self.inner.flush_space(&space, None, Duration::ZERO).await;
+        }
+    }
+
+    // ───────────────────────── links ─────────────────────────
+
+    fn ensure_link(&self, home: &HomeRef, trusted: Vec<String>) {
+        let mut links = self.inner.links.lock().unwrap_or_else(|p| p.into_inner());
+        if links.contains_key(&home.server) {
+            return;
+        }
+        let (cmds_tx, cmds_rx) = mpsc::unbounded_channel();
+        let (client_tx, client_rx) = watch::channel(None);
+        let task = tokio::spawn(run_link(
+            Arc::clone(&self.inner),
+            home.clone(),
+            trusted,
+            cmds_tx.clone(),
+            cmds_rx,
+            client_tx,
+        ));
+        links.insert(
+            home.server.clone(),
+            (
+                home.clone(),
+                LinkHandle {
+                    cmds: cmds_tx,
+                    client: client_rx,
+                    task,
+                },
+            ),
+        );
+    }
+
+    fn home_ref(&self, server: &str) -> Option<HomeRef> {
+        self.inner
+            .links
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(server)
+            .map(|(h, _)| h.clone())
+    }
+
+    /// Starts following `space`; false if it already is followed.
+    fn follow(&self, home: &HomeRef, trusted: Vec<String>, space: &str) -> Result<bool, NodeError> {
+        let new = self.inner.db.add_follow(space, home).map_err(unavailable)?;
+        if !new {
+            return Ok(false);
+        }
+        self.inner.engine().add_space(
+            space,
+            &home.server,
+            self.inner.cfg.space_freshness.get(space).copied(),
+        );
+        self.ensure_link(home, trusted);
+        if let Some((_, link)) = self
+            .inner
+            .links
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&home.server)
+        {
+            let _ = link.cmds.send(LinkCmd::AddSpace(space.to_owned()));
+        }
+        Ok(true)
+    }
+
+    fn unfollow(&self, space: &str) {
+        let _ = self.inner.db.remove_follow(space);
+        self.inner.engine().remove_space(space);
+    }
+
+    // ───────────────────────── writing the log ─────────────────────────
+
+    /// Signs an entry as this device's actor, queues it in the outbox and tries to send it.
+    async fn append(
+        &self,
+        space: &str,
+        kind: &str,
+        body: Value,
+        content: Option<Value>,
+    ) -> Result<CallResult, NodeError> {
+        let inner = &self.inner;
+        let seen = inner
+            .engine()
+            .head(space)
+            .ok_or_else(|| NodeError::not_found(format!("space {space} is not followed")))?;
+        let (entry, content) = sign_entry(
+            EntrySpec {
+                space: space.to_owned(),
+                kind: kind.to_owned(),
+                author: inner.cfg.actor.clone(),
+                key_id: inner.cfg.key_id.clone(),
+                body,
+                content,
+                refs: vec![],
+                seen,
+                time_secs: inner.now_secs(),
+            },
+            &inner.key,
+        )
+        .map_err(|e| NodeError::invalid(e.to_string()))?;
+        let id = entry_id(&entry).map_err(|e| NodeError::invalid(e.to_string()))?;
+        let row = inner
+            .db
+            .outbox_insert(space, &id, &entry, content.as_ref())
+            .map_err(unavailable)?;
+        inner.refresh_outbox(space);
+        match inner
+            .flush_space(space, Some(row), inner.cfg.connect_wait)
+            .await
+        {
+            Some(Outcome::Sent(r)) => {
+                // Read your own writes: the record comes back on the subscription; wait for it, so that
+                // the next command (and the views) see what this one did.
+                let deadline = tokio::time::Instant::now() + inner.cfg.connect_wait;
+                while inner.engine().head(space).unwrap_or(0) < r.seq
+                    && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Ok(CallResult::Receipt {
+                    space: r.space,
+                    seq: r.seq,
+                    id: r.id,
+                    time: r.time,
+                })
+            }
+            Some(Outcome::Rejected(e)) => Err(e),
+            _ => Ok(CallResult::Queued {
+                outbox_id: row,
+                space: space.to_owned(),
+                id,
+            }),
+        }
+    }
+
+    async fn client_of(&self, space: &str) -> Result<(String, Arc<Client<T::Conn>>), NodeError> {
+        let server = self
+            .inner
+            .engine()
+            .home_of(space)
+            .ok_or_else(|| NodeError::not_found(format!("space {space} is not followed")))?;
+        let client = self
+            .inner
+            .client_for(&server, self.inner.cfg.connect_wait)
+            .await?;
+        Ok((server, client))
+    }
+
+    /// A task that is known and still open; `conflict` if it is closed, `not_found` if unknown.
+    fn check_task_open(&self, space: &str, task: &str) -> Result<(), NodeError> {
+        let engine = self.inner.engine();
+        match engine.task_open(space, task) {
+            Some(true) => Ok(()),
+            Some(false) => Err(NodeError::conflict("the task is closed")),
+            None if engine.has_space(space) => Err(NodeError::not_found("no such task")),
+            None => Ok(()), // an unknown space is reported by the append
+        }
+    }
+
+    fn require_followed(&self, space: &str) -> Result<(), NodeError> {
+        if self.inner.engine().has_space(space) {
+            Ok(())
+        } else {
+            Err(NodeError::not_found(format!(
+                "space {space} is not followed"
+            )))
+        }
+    }
+
+    /// An entry in this actor's profile space (`key.add`, `key.revoke`), which the device follows on demand.
+    async fn profile_append(&self, kind: &str, body: Value) -> Result<CallResult, NodeError> {
+        let actor = self.inner.cfg.actor.clone();
+        let space = format!("profile:{actor}");
+        if !self.inner.engine().has_space(&space) {
+            let server = grammar::server_of(&actor).unwrap_or_default().to_owned();
+            let home = self
+                .home_ref(&server)
+                .ok_or_else(|| NodeError::unavailable("no link to this actor's home"))?;
+            self.follow(&home, vec![home.node.clone()], &space)?;
+        }
+        // The profile's records must have arrived before an entry can say what it has seen.
+        let deadline = tokio::time::Instant::now() + self.inner.cfg.connect_wait;
+        while self.inner.engine().head(&space).unwrap_or(0) == 0
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        self.append(&space, kind, body, None).await
+    }
+
+    async fn execute(&self, cmd: Command) -> Result<CallResult, NodeError> {
+        let inner = &self.inner;
+        match cmd {
+            Command::SpaceCreate {
+                home,
+                name,
+                visibility,
+                join,
+            } => {
+                if !["members", "public"].contains(&visibility.as_str())
+                    || !["invite", "open", "closed"].contains(&join.as_str())
+                {
+                    return Err(NodeError::invalid(
+                        "visibility or join is not one of the policy's",
+                    ));
+                }
+                if !grammar::is_server_name(&home.server) {
+                    return Err(NodeError::invalid("not a ServerName"));
+                }
+                let space = format!("{}:{}", random_id(10), home.server);
+                self.follow(&home, vec![home.node.clone()], &space)?;
+                let created = self
+                    .append(
+                        &space,
+                        "space.create",
+                        obj([("policy", space_policy(&visibility, &join))]),
+                        Some(obj([("name", s(&name))])),
+                    )
+                    .await;
+                match created {
+                    Err(e) => {
+                        self.unfollow(&space);
+                        Err(e)
+                    }
+                    Ok(_) => Ok(CallResult::Space { space }),
+                }
+            }
+            Command::SpaceJoin { ticket } => {
+                let t = InviteTicket::parse(&ticket)
+                    .ok_or_else(|| NodeError::invalid("not an invite ticket"))?;
+                let trusted = han_net::dial::trusted_nodes_for_ticket(
+                    &han_net::wellknown::Fetcher::new(),
+                    &t,
+                )
+                .await
+                .map_err(|e| NodeError::invalid(e.to_string()))?;
+                if inner.engine().has_space(&t.space) {
+                    return Err(NodeError::conflict("the space is already followed"));
+                }
+                let home = HomeRef {
+                    server: t.server.clone(),
+                    node: t.node.node.clone(),
+                    addrs: t.node.addrs.clone(),
+                    relays: t.node.relays.clone(),
+                };
+                self.ensure_link(&home, trusted);
+                let client = inner
+                    .client_for(&home.server, inner.cfg.connect_wait)
+                    .await?;
+                client
+                    .call(
+                        "join",
+                        args([("space", s(&t.space)), ("secret", s(&t.secret))]),
+                    )
+                    .await
+                    .map_err(|e| map_net_error(&e))?;
+                self.follow(&home, vec![home.node.clone()], &t.space)?;
+                Ok(CallResult::Space { space: t.space })
+            }
+            Command::SpaceFollow { home, space } => {
+                if !grammar::is_space_id(&space) {
+                    return Err(NodeError::invalid("not a SpaceId"));
+                }
+                if !self.follow(&home, vec![home.node.clone()], &space)? {
+                    return Err(NodeError::conflict("the space is already followed"));
+                }
+                Ok(CallResult::Space { space })
+            }
+            Command::Invite { space, ttl_secs } => {
+                let (server, client) = self.client_of(&space).await?;
+                let home = self
+                    .home_ref(&server)
+                    .ok_or_else(|| NodeError::unavailable("no link to the home"))?;
+                let mut secret = [0u8; 32];
+                getrandom::fill(&mut secret).map_err(unavailable)?;
+                let ttl = i64::try_from(ttl_secs.unwrap_or(86_400).clamp(1, 7 * 86_400))
+                    .unwrap_or(86_400);
+                client
+                    .call(
+                        "invite",
+                        args([
+                            ("space", s(&space)),
+                            ("hash", s(&ids::sha256_hex(&secret))),
+                            ("expiresAt", s(&format_time(inner.now_secs() + ttl))),
+                        ]),
+                    )
+                    .await
+                    .map_err(|e| map_net_error(&e))?;
+                let ticket = InviteTicket {
+                    server,
+                    node: NodeAddr {
+                        node: home.node,
+                        addrs: home.addrs,
+                        relays: home.relays,
+                    },
+                    space,
+                    secret: base64url::encode(&secret),
+                };
+                Ok(CallResult::Ticket {
+                    text: ticket.to_text(),
+                })
+            }
+            Command::MemberSet { space, actor, role } => {
+                if !["owner", "member", "guest", "banned", "none"].contains(&role.as_str()) {
+                    return Err(NodeError::invalid("unknown role"));
+                }
+                self.append(
+                    &space,
+                    "member.set",
+                    obj([("actor", s(&actor)), ("role", s(&role))]),
+                    None,
+                )
+                .await
+            }
+            Command::AgentCreate {
+                name,
+                server,
+                operator: _,
+            } => {
+                let actor = format!("@{name}:{server}");
+                if !grammar::is_actor_id(&actor) || name.is_empty() {
+                    return Err(NodeError::invalid("not an ActorId"));
+                }
+                let seed = inner
+                    .key_store
+                    .load_or_create(&format!("agent-{name}-{server}"))
+                    .map_err(unavailable)?;
+                Ok(CallResult::Agent {
+                    actor,
+                    key_id: "k1".into(),
+                    public_key: SigningKey::from_seed(seed).public_key().to_base64url(),
+                })
+            }
+            Command::AgentStart {
+                space,
+                agent,
+                harness,
+                repo,
+                issue,
+            } => {
+                self.require_followed(&space)?;
+                let mut a = vec![
+                    "--space".to_owned(),
+                    space,
+                    "--agent".into(),
+                    agent.clone(),
+                    "--harness".into(),
+                    harness,
+                ];
+                if let Some(r) = repo {
+                    a.extend(["--repo".into(), r]);
+                }
+                if let Some(i) = issue {
+                    a.extend(["--issue".into(), i]);
+                }
+                inner
+                    .supervisor
+                    .start(RoleSpec {
+                        role: Role::Host,
+                        name: format!("host-{agent}"),
+                        args: a,
+                    })
+                    .map_err(|e| match e {
+                        SupervisorError::Running(_) => NodeError::conflict(e.to_string()),
+                        other => NodeError::unavailable(other.to_string()),
+                    })?;
+                Ok(CallResult::Done)
+            }
+            Command::AgentStop { target } => {
+                inner
+                    .supervisor
+                    .stop(&format!("host-{target}"))
+                    .map_err(|e| match e {
+                        SupervisorError::NotRunning(_) => NodeError::not_found(e.to_string()),
+                        other => NodeError::unavailable(other.to_string()),
+                    })?;
+                Ok(CallResult::Done)
+            }
+            Command::TaskCreate {
+                space,
+                to,
+                ask,
+                external,
+            } => {
+                if to.is_empty() {
+                    return Err(NodeError::invalid("a task needs an assignee"));
+                }
+                let mut body = vec![("to", strs(&to))];
+                if let Some(e) = &external {
+                    body.push(("external", s(e)));
+                }
+                self.append(
+                    &space,
+                    "task",
+                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+                    Some(obj([("ask", s(&ask))])),
+                )
+                .await
+            }
+            Command::TaskUpdate { space, task, state } => {
+                self.check_task_open(&space, &task)?;
+                self.append(
+                    &space,
+                    "task.update",
+                    obj([("task", s(&task)), ("state", s(&state))]),
+                    None,
+                )
+                .await
+            }
+            Command::TaskCancel { space, task } => {
+                self.check_task_open(&space, &task)?;
+                self.append(&space, "task.cancel", obj([("task", s(&task))]), None)
+                    .await
+            }
+            Command::SessionOpen { space, task, title } => {
+                let mut body = vec![("steerMode", s("auto"))];
+                if let Some(t) = &task {
+                    body.push(("task", s(t)));
+                }
+                let content = title.map(|t| obj([("title", s(&t))]));
+                self.append(
+                    &space,
+                    "session.open",
+                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+                    content,
+                )
+                .await
+            }
+            Command::SessionClose { space, session } => {
+                self.append(
+                    &space,
+                    "session.close",
+                    obj([("session", s(&session))]),
+                    None,
+                )
+                .await
+            }
+            Command::SessionInput {
+                space,
+                session,
+                text,
+            } => {
+                self.append(
+                    &space,
+                    "session.input",
+                    obj([("session", s(&session))]),
+                    Some(obj([("text", s(&text))])),
+                )
+                .await
+            }
+            Command::StatusPublish { space, status } => {
+                let mut status = *status;
+                let (_, client) = self.client_of(&space).await?;
+                let key = format!("n/{space}/{}", status.session);
+                let n: u64 = inner
+                    .db
+                    .config(&key)
+                    .map_err(unavailable)?
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+                    + 1;
+                if status.seq == 0 {
+                    status.seq = n;
+                }
+                let body =
+                    json::to_value(&status).map_err(|e| NodeError::invalid(e.to_string()))?;
+                let item = obj([
+                    ("space", s(&space)),
+                    ("session", s(&status.session)),
+                    ("n", int(n)),
+                    ("time", s(&format_time(inner.now_secs()))),
+                    ("type", s("profile")),
+                    ("name", s("han.status/1")),
+                    ("body", body),
+                ]);
+                client
+                    .call("stream", args([("item", item)]))
+                    .await
+                    .map_err(|e| map_net_error(&e))?;
+                inner
+                    .db
+                    .set_config(&key, &n.to_string())
+                    .map_err(unavailable)?;
+                Ok(CallResult::Status { n })
+            }
+            Command::LeaseSet {
+                space,
+                paths,
+                ttl_secs,
+                issue,
+            } => {
+                if paths.is_empty()
+                    || paths.len() > 32
+                    || paths.iter().any(|p| p.is_empty() || p.len() > 512)
+                    || !(1..=7 * 86_400).contains(&ttl_secs)
+                {
+                    return Err(NodeError::invalid(
+                        "a lease names 1 to 32 paths and lasts 1 s to 7 days",
+                    ));
+                }
+                let mut body = vec![("paths", strs(&paths)), ("ttl", int(ttl_secs))];
+                if let Some(i) = &issue {
+                    body.push(("issue", s(i)));
+                }
+                self.append(
+                    &space,
+                    crate::model::LEASE_KIND,
+                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+                    None,
+                )
+                .await
+            }
+            Command::DeviceOffer => {
+                let node_id = self.node_id();
+                let digest = ids::sha256_hex(node_id.as_bytes());
+                Ok(CallResult::DeviceCode {
+                    code: format!("hand1-{node_id}"),
+                    check: format!("{}-{}", &digest[..4], &digest[4..8]),
+                    node_id,
+                })
+            }
+            Command::DevicePair { code } => {
+                let public = code
+                    .strip_prefix("hand1-")
+                    .filter(|p| han_core::PublicKey::from_base64url(p).is_ok())
+                    .ok_or_else(|| NodeError::invalid("not a device pairing code"))?;
+                let key_id = format!("d{}", &ids::sha256_hex(public.as_bytes())[..8]);
+                self.profile_append(
+                    "key.add",
+                    obj([("keyId", s(&key_id)), ("publicKey", s(public))]),
+                )
+                .await
+            }
+            Command::DeviceRevoke { key_id } => {
+                if key_id == inner.cfg.key_id {
+                    return Err(NodeError::conflict("a device does not revoke its own key"));
+                }
+                self.profile_append("key.revoke", obj([("keyId", s(&key_id))]))
+                    .await
+            }
+            Command::EffectApprove {
+                space,
+                proposal,
+                note,
+            } => {
+                let found = inner.engine().plan_digest(&space, &proposal);
+                let Some((digest, open)) = found else {
+                    return Err(NodeError::not_found("no such proposal"));
+                };
+                if !open {
+                    return Err(NodeError::conflict(
+                        "the proposal no longer waits for approval",
+                    ));
+                }
+                self.append(
+                    &space,
+                    "effect.approve",
+                    obj([("proposal", s(&proposal)), ("planDigest", s(&digest))]),
+                    note.map(|n| obj([("note", s(&n))])),
+                )
+                .await
+            }
+            Command::EffectCancel { space, proposal } => {
+                let found = inner.engine().plan_digest(&space, &proposal);
+                match found {
+                    None => return Err(NodeError::not_found("no such proposal")),
+                    Some((_, false)) => {
+                        return Err(NodeError::conflict("the proposal is no longer open"));
+                    }
+                    Some(_) => {}
+                }
+                self.append(
+                    &space,
+                    "effect.cancel",
+                    obj([("proposal", s(&proposal))]),
+                    None,
+                )
+                .await
+            }
+        }
+    }
+}
+
+struct Unsubscribe {
+    engine: Arc<Mutex<Engine>>,
+    id: u64,
+}
+
+impl Drop for Unsubscribe {
+    fn drop(&mut self) {
+        self.engine
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .unsubscribe(self.id);
+    }
+}
+
+impl<T: Transport> NodeApi for Node<T> {
+    fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
+        Box::pin(self.execute(cmd))
+    }
+
+    fn view(&self, query: Query) -> ViewStream {
+        let (sink, stream) = ViewStream::channel();
+        let id = self.inner.engine().subscribe(query, sink);
+        match id {
+            Some(id) => stream.guarded(Unsubscribe {
+                engine: Arc::clone(&self.inner.engine),
+                id,
+            }),
+            None => stream,
+        }
+    }
+}
