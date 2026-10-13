@@ -1,0 +1,204 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "14-seal-later-edits",
+ "description": "After a seal, local edits into it are refused (sealed); a peer's op that edits it anyway is accepted and has no effect inside the seal",
+ "rules": [
+  "TL-52",
+  "TL-53",
+  "TL-47"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello world",
+     "transcript": true
+    }
+   ]
+  },
+  "seal": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  "late": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       0,
+       2
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:2",
+       "Q"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "expect": {
+      "plan_edits": [
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 1,
+        "delete": 1,
+        "text": "",
+        "error": "sealed"
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 2,
+        "delete": 0,
+        "text": "x",
+        "error": "sealed"
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 5,
+        "delete": 0,
+        "text": "!",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [],
+         "inserts": [
+          [
+           "2@A#0:4",
+           "!"
+          ]
+         ]
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 0,
+        "delete": 0,
+        "text": ">",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [],
+         "inserts": [
+          [
+           null,
+           ">"
+          ]
+         ]
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 6,
+        "delete": 5,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           6,
+           11
+          ]
+         ],
+         "inserts": []
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "late",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hello world"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

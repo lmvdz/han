@@ -1,0 +1,138 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "31-sync-equivocation-and-overlap",
+ "description": "A second, different batch for the same op ids is an equivocation; a batch overlapping another's range is rejected; the first stays",
+ "rules": [
+  "TL-05",
+  "TL-104"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    }
+   ]
+  },
+  "liar": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 999
+    }
+   ]
+  },
+  "overlap": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "m",
+     "value": 2
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1",
+     "result": "integrated"
+    },
+    {
+     "deliver": "liar",
+     "result": "rejected:equivocation"
+    },
+    {
+     "deliver": "overlap",
+     "result": "rejected:overlap"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "n": [
+            [
+             "2@A",
+             1
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

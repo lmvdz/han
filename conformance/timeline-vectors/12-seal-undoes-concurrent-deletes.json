@@ -1,0 +1,173 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "12-seal-undoes-concurrent-deletes",
+ "description": "A seal freezes its range to what its author saw: a concurrent delete inside it has no effect, while the part of that delete outside the range applies",
+ "rules": [
+  "TL-50",
+  "TL-51",
+  "TL-52"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello world",
+     "transcript": true
+    }
+   ]
+  },
+  "seal": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  "del": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       1,
+       4
+      ],
+      [
+       "2@A#0",
+       5,
+       6
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "deliver": "del"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "helloworld"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "howorld"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "del"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "helloworld"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "howorld"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

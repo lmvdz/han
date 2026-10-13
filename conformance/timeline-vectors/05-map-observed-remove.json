@@ -1,0 +1,199 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "05-map-observed-remove",
+ "description": "A remove deletes only the values its author had seen: a concurrent write survives (add wins); a remove that saw everything makes the key absent",
+ "rules": [
+  "TL-35",
+  "TL-37"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "x"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "root",
+     "key": "k"
+    }
+   ]
+  },
+  "b2": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "y"
+    }
+   ]
+  },
+  "b3": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A",
+    "3@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "root",
+     "key": "k"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "3@A",
+             "y"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "3@A",
+             "y"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {}
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

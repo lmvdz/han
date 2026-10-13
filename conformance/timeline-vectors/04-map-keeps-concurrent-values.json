@@ -1,0 +1,219 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "04-map-keeps-concurrent-values",
+ "description": "Concurrent map writes to one key are all kept, greatest first, until a write that saw them all replaces them",
+ "rules": [
+  "TL-35",
+  "TL-36"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "x"
+    }
+   ]
+  },
+  "b2": {
+   "replica": "B",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "y"
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A",
+    "2@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": "z"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "2@B",
+             "y"
+            ],
+            [
+             "2@A",
+             "x"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "3@A",
+             "z"
+            ]
+           ]
+          }
+         }
+        },
+        "digest": "930d81824509e699e258334756857cd0ac26a77deab6f8ea69cd5606aa524921"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "2@B",
+             "y"
+            ],
+            [
+             "2@A",
+             "x"
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "3@A",
+             "z"
+            ]
+           ]
+          }
+         }
+        },
+        "digest": "930d81824509e699e258334756857cd0ac26a77deab6f8ea69cd5606aa524921"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

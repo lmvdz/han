@@ -1,0 +1,156 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "44-history-kinds",
+ "description": "In a data history, transcript texts and trees are invalid_op; only main's create op carries a history kind, and a genesis without one is refused",
+ "rules": [
+  "TL-27",
+  "TL-15"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "transcript": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.create",
+     "text": "t",
+     "transcript": true
+    }
+   ]
+  },
+  "tree": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.create",
+     "tree": true
+    }
+   ]
+  },
+  "kindagain": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A",
+     "historyKind": "data"
+    }
+   ]
+  },
+  "nokind": {
+   "replica": "C",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null
+    }
+   ]
+  },
+  "ok": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "transcript",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "tree",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "kindagain",
+     "result": "rejected:timeline"
+    },
+    {
+     "deliver": "nokind",
+     "result": "rejected:genesis"
+    },
+    {
+     "deliver": "ok",
+     "result": "integrated"
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "nokind",
+     "result": "rejected:genesis"
+    },
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    }
+   ]
+  }
+ ]
+}

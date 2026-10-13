@@ -1,0 +1,173 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "13-seal-hides-concurrent-inserts-inside",
+ "description": "A concurrent insert strictly inside a sealed range is hidden; inserts just before its first or just after its last character show",
+ "rules": [
+  "TL-52"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello world",
+     "transcript": true
+    }
+   ]
+  },
+  "seal": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  "ins": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       null,
+       "Z"
+      ],
+      [
+       "2@A#0:1",
+       "X"
+      ],
+      [
+       "2@A#0:4",
+       "Y"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "deliver": "ins"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "ZhelloY world"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "ZheXlloY world"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "ins"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "ZhelloY world"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "ZheXlloY world"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

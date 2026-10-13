@@ -1,0 +1,225 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "26-tree-rename-carries-concurrent-edit",
+ "description": "A rename moves the path key to the same content object, so a concurrent edit of the file follows it",
+ "rules": [
+  "TL-83",
+  "TL-85"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "x\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "ren": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "2@A",
+     "key": "src/a.txt"
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/b.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "ed": {
+   "replica": "B",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "y\n"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "ren"
+    },
+    {
+     "deliver": "ed"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "tree": [
+            [
+             "3@A",
+             {
+              "obj": "2@A"
+             }
+            ]
+           ]
+          }
+         },
+         "2@A": {
+          "entries": {
+           "src/b.txt": [
+            [
+             "7@A",
+             {
+              "obj": "4@A",
+              "mode": "100644",
+              "eol": "lf"
+             }
+            ]
+           ]
+          }
+         },
+         "4@A": {
+          "text": "x\ny\n"
+         }
+        },
+        "digest": "a0f3bb33d51c180c22574021ee4b73a0117ebfed081b623abf7bcf1eae234991"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "ed"
+    },
+    {
+     "deliver": "ren"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "tree": [
+            [
+             "3@A",
+             {
+              "obj": "2@A"
+             }
+            ]
+           ]
+          }
+         },
+         "2@A": {
+          "entries": {
+           "src/b.txt": [
+            [
+             "7@A",
+             {
+              "obj": "4@A",
+              "mode": "100644",
+              "eol": "lf"
+             }
+            ]
+           ]
+          }
+         },
+         "4@A": {
+          "text": "x\ny\n"
+         }
+        },
+        "digest": "a0f3bb33d51c180c22574021ee4b73a0117ebfed081b623abf7bcf1eae234991"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

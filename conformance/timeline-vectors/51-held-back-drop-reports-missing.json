@@ -1,0 +1,197 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "51-held-back-drop-reports-missing",
+ "description": "With room for two held-back batches, a third makes the receiver drop the one with the greatest start (missing); it is integrated when delivered again",
+ "rules": [
+  "TL-102"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "hold_limit": 2,
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    }
+   ]
+  },
+  "b2": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 2
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 3
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b3",
+     "result": "held"
+    },
+    {
+     "deliver": "b2",
+     "result": "held"
+    },
+    {
+     "deliver": "b1",
+     "result": "held"
+    },
+    {
+     "expect": {
+      "pending": [
+       "b1",
+       "b2"
+      ],
+      "dropped": [
+       "b3"
+      ]
+     }
+    },
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "n": [
+            [
+             "3@A",
+             2
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b3",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "n": [
+            [
+             "4@A",
+             3
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b2",
+     "result": "held"
+    },
+    {
+     "deliver": "b1",
+     "result": "held"
+    },
+    {
+     "deliver": "b3",
+     "result": "missing"
+    },
+    {
+     "expect": {
+      "pending": [
+       "b1",
+       "b2"
+      ],
+      "dropped": [
+       "b3"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

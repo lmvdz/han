@@ -1,0 +1,288 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "22-merge-registers-and-maps",
+ "description": "Three-way merge of a register and map keys: one-sided changes apply, identical changes converge, a key both sides changed differently is a conflict (kept as target here)",
+ "rules": [
+  "TL-71",
+  "TL-73",
+  "TL-75"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "register.create",
+     "value": "r0"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k1",
+     "value": "b1"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k2",
+     "value": "b2"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k3",
+     "value": "b3"
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 7,
+   "parents": [
+    "6@A"
+   ],
+   "timeline": "6@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k1",
+     "value": "s1"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k2",
+     "value": "s2"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k3",
+     "value": "same"
+    },
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "rs"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k4",
+     "value": "new"
+    }
+   ]
+  },
+  "main": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k2",
+     "value": "t2"
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k3",
+     "value": "same"
+    }
+   ]
+  },
+  "merge": {
+   "replica": "A",
+   "start": 12,
+   "parents": [
+    "8@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "6@A",
+     "incoming": [
+      "11@B"
+     ],
+     "base": [
+      "5@A"
+     ],
+     "changes": [
+      {
+       "type": "map",
+       "object": "root",
+       "create": false,
+       "tree": false,
+       "sets": [
+        [
+         "k1",
+         "s1"
+        ],
+        [
+         "k4",
+         "new"
+        ]
+       ],
+       "deletes": []
+      },
+      {
+       "type": "register",
+       "object": "2@A",
+       "create": false,
+       "value": "rs"
+      }
+     ],
+     "conflicts": [
+      {
+       "kind": "map",
+       "object": "root",
+       "key": "k2",
+       "resolution": "target"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "main"
+    },
+    {
+     "expect": {
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "6@A",
+        "kind": "merge",
+        "base": [
+         "5@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "map",
+          "object": "root",
+          "key": "k2",
+          "base": {
+           "value": "b2"
+          },
+          "target": {
+           "value": "t2"
+          },
+          "incoming": {
+           "value": "s2"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "merge",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k1": [
+            [
+             "12@A",
+             "s1"
+            ]
+           ],
+           "k2": [
+            [
+             "7@A",
+             "t2"
+            ]
+           ],
+           "k3": [
+            [
+             "8@A",
+             "same"
+            ]
+           ],
+           "k4": [
+            [
+             "12@A",
+             "new"
+            ]
+           ]
+          }
+         },
+         "2@A": {
+          "value": "rs"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

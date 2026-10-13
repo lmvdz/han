@@ -1,0 +1,362 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "34-validation-of-ops",
+ "description": "Ops are judged at their parent: unknown or wrong-kind targets, bad ranges, CR, unknown anchors, empty edits and objects from another timeline are invalid_op; a batch may use what its own earlier ops made",
+ "rules": [
+  "TL-17",
+  "TL-32",
+  "TL-40",
+  "TL-42",
+  "TL-44",
+  "TL-48",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "map.create",
+     "tree": false
+    },
+    {
+     "kind": "text.create",
+     "text": "ab",
+     "transcript": false
+    }
+   ]
+  },
+  "s1": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1obj": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "4@A",
+   "ops": [
+    {
+     "kind": "register.create",
+     "value": "on s1"
+    }
+   ]
+  },
+  "nomap": {
+   "replica": "A",
+   "start": 10,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "9@A",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "kind": {
+   "replica": "A",
+   "start": 11,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       null,
+       "x"
+      ]
+     ]
+    }
+   ]
+  },
+  "range": {
+   "replica": "A",
+   "start": 12,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@A",
+     "deletes": [
+      [
+       "3@A#0",
+       1,
+       3
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  },
+  "cr": {
+   "replica": "A",
+   "start": 13,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.create",
+     "text": "a\r\nb",
+     "transcript": false
+    }
+   ]
+  },
+  "crins": {
+   "replica": "A",
+   "start": 14,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@A",
+     "deletes": [],
+     "inserts": [
+      [
+       null,
+       "x\ry"
+      ]
+     ]
+    }
+   ]
+  },
+  "anchor": {
+   "replica": "A",
+   "start": 15,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "3@A#0:5",
+       "x"
+      ]
+     ]
+    }
+   ]
+  },
+  "empty": {
+   "replica": "A",
+   "start": 16,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@A",
+     "deletes": [],
+     "inserts": []
+    }
+   ]
+  },
+  "emptyins": {
+   "replica": "A",
+   "start": 17,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@A",
+     "deletes": [],
+     "inserts": [
+      [
+       null,
+       ""
+      ]
+     ]
+    }
+   ]
+  },
+  "otherline": {
+   "replica": "A",
+   "start": 18,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "5@B",
+     "value": "x"
+    }
+   ]
+  },
+  "laterop": {
+   "replica": "A",
+   "start": 19,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.create",
+     "value": 0
+    },
+    {
+     "kind": "register.set",
+     "target": "19@A",
+     "value": 1
+    },
+    {
+     "kind": "text.edit",
+     "target": "3@A",
+     "deletes": [],
+     "inserts": [
+      [
+       null,
+       "x"
+      ],
+      [
+       "21@A#0:0",
+       "y"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "s1obj"
+    },
+    {
+     "deliver": "nomap",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "kind",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "range",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "cr",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "crins",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "anchor",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "empty",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "emptyins",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "otherline",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "laterop",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "3@A": {
+          "text": "xyab"
+         },
+         "19@A": {
+          "value": 1
+         }
+        },
+        "absent": [
+         "5@B"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
