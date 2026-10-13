@@ -9,3 +9,8 @@ conformance/interop/runs/
 /docs/book/
 /docs/src/*
 !/docs/src/SUMMARY.md
+
+# local secrets: never commit
+.env
+*.env
+.secrets/
