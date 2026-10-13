@@ -9,7 +9,7 @@ use crate::graph::{Closure, Pos};
 use crate::history::{Fail, History, Pending};
 use crate::ids::{CharId, IdRange, InsertionId, MAX_SAFE, ObjectId, OpId};
 use crate::op::{Batch, Change, HistoryKind, MergeOp, Op};
-use crate::state::{Seen, State};
+use crate::state::{Obj, Seen, State};
 use crate::store::Store;
 use crate::text::TextObj;
 use crate::value::{Value, value_op_id};
@@ -409,14 +409,19 @@ impl<S: Store> History<S> {
             .iter()
             .map(|h| self.graph.locate(h).ok_or(INVALID))
             .collect::<Result<_, _>>()?;
-        // An imported object is created in closure(incoming) by an op of the right kind.
-        let imported = |object: &ObjectId, ok: &dyn Fn(&Op) -> bool| -> Result<(), Reason> {
-            let ObjectId::Op(oid) = object else {
-                return Err(INVALID);
-            };
-            let pos = self.graph.locate(oid).ok_or(INVALID)?;
+        // The state at `incoming`, materialised once per merge op.
+        let at_incoming: std::cell::OnceCell<std::sync::Arc<State>> = std::cell::OnceCell::new();
+        let incoming_state = || {
+            at_incoming
+                .get_or_init(|| self.materialise(&incoming).1)
+                .clone()
+        };
+        // An imported object exists in the state at `incoming` (created in closure(incoming),
+        // or imported there by an earlier merge) with the same kind and flags.
+        let imported = |object: &ObjectId, ok: &dyn Fn(&Obj) -> bool| {
+            let si = incoming_state();
             ensure(
-                self.graph.in_past_of(pos, &incoming) && ok(self.graph.op(pos)),
+                matches!(object, ObjectId::Op(_)) && si.objects.get(object).is_some_and(ok),
                 INVALID,
             )
         };
@@ -428,7 +433,7 @@ impl<S: Store> History<S> {
             match c {
                 Change::Register { object, create, .. } => {
                     if *create {
-                        imported(object, &|op| matches!(op, Op::RegisterCreate { .. }))?;
+                        imported(object, &|o| matches!(o, Obj::Register(_)))?;
                         ensure(
                             !state.contains(object) || state.register(object).is_some(),
                             INVALID,
@@ -445,10 +450,7 @@ impl<S: Store> History<S> {
                     deletes,
                 } => {
                     if *create {
-                        imported(
-                            object,
-                            &|op| matches!(op, Op::MapCreate { tree: t } if t == tree),
-                        )?;
+                        imported(object, &|o| matches!(o, Obj::Map(m) if m.tree == *tree))?;
                     }
                     match state.map(object) {
                         Some(existing) => ensure(existing.tree == *tree, INVALID)?,
@@ -477,7 +479,7 @@ impl<S: Store> History<S> {
                     if *create {
                         imported(
                             object,
-                            &|op| matches!(op, Op::TextCreate { transcript: t, .. } if t == transcript),
+                            &|o| matches!(o, Obj::Text(t) if t.transcript == *transcript),
                         )?;
                     }
                     let t = match state.text_obj(object) {
@@ -494,7 +496,7 @@ impl<S: Store> History<S> {
                     check_edit(t, id, deletes, &ins, j, *create)?;
                     for x in inserts {
                         if let Some(o) = &x.origin {
-                            self.check_origin(o, &x.text, object, b, i, state, &incoming)?;
+                            self.check_origin(o, &x.text, object, b, i, state, &incoming_state)?;
                         }
                     }
                     j += inserts.len() as u32;
@@ -516,7 +518,7 @@ impl<S: Store> History<S> {
         b: &Batch,
         i: usize,
         state: &State,
-        incoming: &[Pos],
+        incoming: &dyn Fn() -> std::sync::Arc<State>,
     ) -> Result<(), Reason> {
         let InsertionId { op, index } = &o.insertion;
         let own = *op.replica == *b.replica && op.counter >= b.start && op.counter <= b.end();
@@ -540,8 +542,7 @@ impl<S: Store> History<S> {
         // The character (or a copy of it) exists at the op's parent or at `incoming`.
         let at_parent = state.text_obj(object).is_some_and(|t| t.has_canonical(o));
         let at_incoming = || {
-            self.materialise(incoming)
-                .1
+            incoming()
                 .text_obj(object)
                 .is_some_and(|t| t.has_canonical(o))
         };

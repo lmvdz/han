@@ -494,7 +494,27 @@ impl TextPlanner<'_> {
         DraftAnchor::Start
     }
 
+    /// The order index of a target character.
+    fn pos_of(&self, l: Local) -> isize {
+        self.target.as_ref().map_or(-1, |tt| {
+            tt.t.layout().pos[l.0 as usize][l.1 as usize] as isize
+        })
+    }
+
+    /// The order index after which an anchor puts an insertion (-1 for `start`).
+    fn anchor_pos(&self, a: &DraftAnchor) -> isize {
+        match (a, &self.target) {
+            (DraftAnchor::Char(c), Some(tt)) => tt.t.local(c).map_or(-1, |l| self.pos_of(l)),
+            _ => -1,
+        }
+    }
+
     /// Makes the target region read the incoming region text (TL-72 step 7).
+    ///
+    /// Copies of characters the target shows nowhere go where the recommended anchoring puts
+    /// them, except that a character the target still holds as a hidden character is revived
+    /// right after it when that place lies between the region's neighbours: the copy then keeps
+    /// the order its original has against every other character, in every timeline.
     fn make_equal(&self, t_region: &[usize], i_region: &[usize]) -> RegionEdit {
         let mut edit = RegionEdit::default();
         let incoming: HashSet<&CharId> = i_region.iter().map(|&x| &self.iseq[x].canon).collect();
@@ -506,44 +526,79 @@ impl TextPlanner<'_> {
                 }
             }
         }
-        let shows = |c: &CharId| self.target.as_ref().and_then(|tt| tt.shows.get(c));
-        let mut prev_shown: Option<Local> = None;
-        let mut prev_was_run = false;
+        let Some(&first) = i_region.first() else {
+            return edit;
+        };
+        let tt = self.target.as_ref();
+        let shows = |c: &CharId| tt.and_then(|tt| tt.shows.get(c)).copied();
+        let mut cursor = self.first_anchor(t_region, first);
+        let mut cursor_pos = self.anchor_pos(&cursor);
+        // Nothing may land after the first visible target character past the region.
+        let bound_after = match t_region.last() {
+            Some(&last) => self.pos_of(self.tseq[last].local),
+            None => cursor_pos,
+        };
+        let region_end = tt
+            .and_then(|tt| {
+                let lay = tt.t.layout();
+                let k = lay
+                    .visible_index
+                    .partition_point(|&x| (x as isize) <= bound_after);
+                lay.visible_index.get(k).map(|&x| x as isize)
+            })
+            .unwrap_or(isize::MAX);
+        // For each region character, the order index of the next character the target shows.
+        let mut next_shown = vec![region_end; i_region.len()];
+        for r in (0..i_region.len().saturating_sub(1)).rev() {
+            next_shown[r] = match shows(&self.iseq[i_region[r + 1]].canon) {
+                Some(l) => self.pos_of(l),
+                None => next_shown[r + 1],
+            };
+        }
+        let mut open_run = false;
         for (r, &xi) in i_region.iter().enumerate() {
             let e = &self.iseq[xi];
-            if let Some(&l) = shows(&e.canon) {
-                prev_shown = Some(l);
-                prev_was_run = false;
+            if let (Some(l), Some(tt)) = (shows(&e.canon), tt) {
+                cursor = DraftAnchor::Char(tt.t.char_id(l));
+                cursor_pos = self.pos_of(l);
+                open_run = false;
                 continue;
             }
+            if let Some(tt) = tt
+                && let Some(&h) = tt.holds.get(&e.canon)
+            {
+                let hp = self.pos_of(h);
+                if cursor_pos < hp && hp < next_shown[r] {
+                    edit.inserts.push(DraftInsert {
+                        anchor: DraftAnchor::Char(tt.t.char_id(h)),
+                        text: e.ch.to_string(),
+                        origin: Some(e.canon.clone()),
+                    });
+                    cursor = DraftAnchor::Prev(edit.inserts.len() - 1, 0);
+                    cursor_pos = hp;
+                    open_run = false;
+                    continue;
+                }
+            }
             // Extend the current run when this character continues its origin insertion.
-            if prev_was_run
+            if open_run
                 && let Some(run) = edit.inserts.last_mut()
                 && let Some(o) = &run.origin
                 && o.insertion == e.canon.insertion
                 && o.offset + run.text.chars().count() as u32 == e.canon.offset
             {
                 run.text.push(e.ch);
+                let n = run.text.chars().count() as u32;
+                cursor = DraftAnchor::Prev(edit.inserts.len() - 1, n - 1);
                 continue;
             }
-            let anchor = if r == 0 {
-                self.first_anchor(t_region, xi)
-            } else if prev_was_run {
-                let k = edit.inserts.len() - 1;
-                DraftAnchor::Prev(k, edit.inserts[k].text.chars().count() as u32 - 1)
-            } else {
-                let tt = self.target.as_ref();
-                match (prev_shown, tt) {
-                    (Some(l), Some(tt)) => DraftAnchor::Char(tt.t.char_id(l)),
-                    _ => self.first_anchor(t_region, xi),
-                }
-            };
             edit.inserts.push(DraftInsert {
-                anchor,
+                anchor: cursor.clone(),
                 text: e.ch.to_string(),
                 origin: Some(e.canon.clone()),
             });
-            prev_was_run = true;
+            cursor = DraftAnchor::Prev(edit.inserts.len() - 1, 0);
+            open_run = true;
         }
         edit
     }
