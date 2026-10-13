@@ -12,7 +12,10 @@ forcing switched on and off, unguards, delegation chains grown from guarded agen
 not use (P9), guarded agents leaving, and approvals by agents that become guarded (R2); one seed in four is a crowd of 23
 actors (M9), so the 16-approval cap, a guard approving beyond it (R3) and the 64-assignee bound are reached. Histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
 The run prints the generator's statistics so a reader can see what was exercised, the caps included.
-Usage: python ref/fuzz_diff.py [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 1000 seeds from 0 x 250 steps, about 4 minutes; use --seed-offset for fresh seeds)
+--target ts|rust|both (default ts): the implementation the reference is compared with. `rust` runs the han-conform binary of crates/han-core
+(built with cargo if missing; --rust-bin PATH names another), which speaks the same protocol as the TS runner: it takes a directory of vector
+files and prints `<file>.json#<step>: <message>` per failing step and a `steps pass N fail M; vectors pass A fail B` summary.
+Usage: python ref/fuzz_diff.py [--target ts|rust|both] [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 1000 seeds from 0 x 250 steps, about 4 minutes; use --seed-offset for fresh seeds)
 --keep DIR: where the batches and the divergence repros go (default: a new directory under the system temp). Only the batch*/,
 divergences/ and replay.mjs this script writes are ever removed there; DIR itself is never deleted.
 """
@@ -30,6 +33,8 @@ import fuzz_fold as F
 TS = os.path.join(os.path.dirname(HERE), "witnesses", "cleanroom-ts")
 RUNNER = os.path.join(TS, "dist", "run-vectors.js")
 BATCH = 1000
+ROOT = os.path.dirname(HERE)
+RUST_BIN = os.path.join(ROOT, "target", "release", "han-conform" + (".exe" if os.name == "nt" else ""))
 fmt = F.fmt
 
 def view(a, revoked=False, unconfirmed=False):
@@ -94,20 +99,30 @@ def build(job):
 def write(d, name, vec):
     with open(os.path.join(d, name + ".json"), "w", encoding="utf-8") as f: json.dump(vec, f)
 
-def node_all(d):
+def runners(d, target, rust_bin):
+    """The first divergence per seed from each implementation `target` names, merged (the earliest step wins)."""
+    first = {}
+    for name, cmd in (("ts", ["node", RUNNER, d]), ("rust", [rust_bin, d])):
+        if target not in (name, "both"): continue
+        for k, v in node_all(d, cmd)[0].items():
+            if k not in first or v[0] < first[k][0]: first[k] = v
+    return first
+
+def node_all(d, cmd=None):
     """node(d); when a runner out of step with the reference fails every step, its report outgrows a string, so the directory is run in chunks of 100."""
+    cmd = cmd or ["node", RUNNER, d]
     try:
-        return node(d)
+        return node(d, cmd)
     except RuntimeError:
         files = sorted(os.listdir(d)); first = {}
         for k in range(0, len(files), 100):
             sub = os.path.join(d, f"chunk{k}"); os.makedirs(sub)
             for f in files[k:k + 100]: shutil.move(os.path.join(d, f), sub)
-            first.update(node(sub)[0])
+            first.update(node(sub, cmd[:-1] + [sub])[0])
         return first, None
 
-def node(d):
-    p = subprocess.run(["node", RUNNER, d], capture_output=True, text=True, encoding="utf-8", errors="replace")
+def node(d, cmd=None):
+    p = subprocess.run(cmd or ["node", RUNNER, d], capture_output=True, text=True, encoding="utf-8", errors="replace")
     first = {}
     for line in p.stdout.splitlines():
         m = re.match(r"^(\w+)\.json#(\d+): (.*)$", line)
@@ -164,6 +179,8 @@ def repro_of(v, i):
 
 def main():
     ap = argparse.ArgumentParser(description="Differential fuzz: ref/policy.py against the clean-room TypeScript Policy (decision H5).")
+    ap.add_argument("--target", choices=("ts", "rust", "both"), default="ts", help="the implementation compared with the reference")
+    ap.add_argument("--rust-bin", default=RUST_BIN, help="the han-conform binary for --target rust|both (built with cargo if it is the default and missing)")
     ap.add_argument("--seeds", type=int, default=1000)
     ap.add_argument("--seed-offset", type=int, default=0, help="the first seed (M9): run seeds K .. K+N-1")
     ap.add_argument("--steps", type=int, default=250)
@@ -171,8 +188,11 @@ def main():
     ap.add_argument("--keep", default=None, metavar="DIR", help="directory for the batches and the divergence repros (default: a new directory under the system temp); "
                     "only the batch*/, divergences/ and replay.mjs this script writes are removed from it, never DIR itself")
     a = ap.parse_args()
-    if shutil.which("node") is None or not os.path.exists(RUNNER):
+    if a.target in ("ts", "both") and (shutil.which("node") is None or not os.path.exists(RUNNER)):
         print("SKIP differential fuzz: node or witnesses/cleanroom-ts/dist/run-vectors.js is missing"); return 0
+    if a.target in ("rust", "both") and not os.path.exists(a.rust_bin):
+        if a.rust_bin != RUST_BIN or subprocess.run(["cargo", "build", "--release", "--locked", "-p", "han-core", "--bin", "han-conform"], cwd=ROOT).returncode:
+            print(f"cannot run the Rust target: {a.rust_bin} is missing"); return 1
     t0 = time.time()
     made = a.keep is None
     if made: a.keep = tempfile.mkdtemp(prefix="han-fuzzdiff-")                 # ours, and new: nothing in it to clear
@@ -190,14 +210,14 @@ def main():
         vecs = {}
         for seed, n, al, st_, v in pool.imap_unordered(build, [(s, a.steps, d) for s in range(lo, min(lo + BATCH, end))], 8):
             vecs[f"seed{seed}"] = v; steps_n += n; allowed += al; stats.update(st_)
-        first, _ = node_all(d)
+        first = runners(d, a.target, a.rust_bin)
         for name, (i, msg) in sorted(first.items(), key=lambda kv: int(kv[0][4:])):
             v = vecs[name]
             os.makedirs(os.path.join(a.keep, "divergences"), exist_ok=True)
             write(os.path.join(a.keep, "divergences"), name, dict(repro_of(v, i), note=f"first divergence at step {i}: {msg[:300]}"))
             divergences.append([name, i, msg, None, v["steps"][i]])
         shutil.rmtree(d)
-    if divergences:
+    if divergences and a.target != "rust" and shutil.which("node"):
         ts = ts_states(os.path.join(a.keep, "divergences"), a.keep)
         for dv in divergences:
             if dv[2].startswith("check") and dv[0] in ts:

@@ -73,3 +73,8 @@ nightly: ts-build
 
 # the full pull-request set
 ci: check-spec vectors fuzz test-py test-ts interop rs-build rs-test rs-deny
+
+# differential fuzz, ref against the Rust Policy (builds crates/han-core's han-conform)
+fuzz-rust seeds="200":
+    cargo build --release --locked -p han-core --bin han-conform
+    python ref/fuzz_diff.py --target rust --seeds {{seeds}}

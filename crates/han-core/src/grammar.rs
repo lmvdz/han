@@ -10,9 +10,9 @@ fn lower_alnum(b: u8) -> bool {
     b.is_ascii_lowercase() || b.is_ascii_digit()
 }
 
-/// A lowercase DNS name: dot-separated labels `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`.
+/// A lowercase DNS name of at most 253 characters: dot-separated labels `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`.
 pub fn is_server_name(s: &str) -> bool {
-    !s.is_empty()
+    (1..=253).contains(&s.len())
         && s.split('.').all(|label| {
             let b = label.as_bytes();
             (1..=63).contains(&b.len())
@@ -181,14 +181,14 @@ pub fn epoch_seconds(s: &str) -> Option<i64> {
 /// `[0, 2^53)` only, no floats, at most 32 levels deep.
 pub fn is_opaque_json(v: &Value) -> bool {
     fn go(v: &Value, depth: usize) -> bool {
-        depth <= 32
-            && match v {
-                Value::Null | Value::Bool(_) | Value::Str(_) => true,
-                Value::Int(i) => (0..=MAX_SAFE_INT).contains(i),
-                Value::Float(_) => false,
-                Value::Array(a) => a.iter().all(|x| go(x, depth + 1)),
-                Value::Object(m) => m.values().all(|x| go(x, depth + 1)),
-            }
+        // `depth` is the number of containers around `v`; a 33rd nested container fails, even empty.
+        match v {
+            Value::Null | Value::Bool(_) | Value::Str(_) => true,
+            Value::Int(i) => (0..=MAX_SAFE_INT).contains(i),
+            Value::Float(_) => false,
+            Value::Array(a) => depth < 32 && a.iter().all(|x| go(x, depth + 1)),
+            Value::Object(m) => depth < 32 && m.values().all(|x| go(x, depth + 1)),
+        }
     }
     go(v, 0)
 }
