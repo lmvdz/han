@@ -247,7 +247,7 @@ impl<T: Transport> WireRunner<T> {
             .config
             .actor(who)
             .or_else(|| self.config.actors.first())?;
-        Some(han_seq::auth::make_proof(&a.key, challenge, dialed))
+        Some(han_seq::auth::make_proof(&a.key, challenge, dialed, None))
     }
 
     async fn authenticate(

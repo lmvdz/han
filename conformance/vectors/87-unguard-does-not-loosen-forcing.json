@@ -327,7 +327,10 @@
    "expect": {
     "guard": "@op:b.example",
     "guarded": true,
-    "forced": true
+    "forced": true,
+    "guards": [
+     "@bot:b.example"
+    ]
    }
   },
   {

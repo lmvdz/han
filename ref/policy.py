@@ -375,8 +375,8 @@ def decide(state, entry, ctx) -> dict:
     if state["space"].startswith("profile:"): return _decide_profile(state, entry, ctx)
 
     role = role_of(state, author)
-    if limited(state, ctx, author) and guarded_may_not(state, entry):
-        return deny("a guarded or delegated author may not approve, govern or steer others")     # P-15
+    if guard_status(state, ctx, author)["guarded"] and governs_others(state, ctx, entry):
+        return deny("a guarded author may not approve, govern or steer others")                  # P-15, the Limits (Z1)
     if is_extension(kind):
         need = state["policy"]["extensionsMinRole"]
         return ALLOW if role in READ_ROLES[:READ_ROLES.index(need) + 1] else deny(f"extensions need role {need} or higher")
@@ -485,7 +485,7 @@ def _task_update(state, entry, ctx, role):
     t = state["tasks"].get(entry["body"]["task"])
     if not t: return invalid("no such task")
     final = entry["body"]["state"] in TASK_FINAL
-    if not t["open"] and not (final and entry["author"] in t["accepted"]): return deny("task closed")   # X1: an accepted assignee still closes its own part
+    if not t["open"] and not final: return deny("task closed")          # Z2: a final update still ends carries on a closed task
     if role not in READ_ROLES: return deny("author holds no role")
     if role == "owner" and final and entry["author"] not in t["to"]: return ALLOW         # owner force-close (P-05)
     if entry["author"] in t["to"]:
@@ -578,6 +578,7 @@ def _claim(state, entry, ctx, role):
         res, _ = pick_approval(state, eff, ctx)
         if res == "unpinned": return invalid("approver profile not pinned")
         if res == "none": return deny("E3 no usable approval")
+    if unbounded_guards(state, ctx, eff): return deny("E3 the proposer or executor took on guarding the proposal never counted: propose again")   # Z1
     for g in guards_of(state, ctx, eff):
         if g is None: return deny("E3 a guarded agent has no confirmed operator")
         res, _ = guard_approval(state, eff, g, ctx)
@@ -601,7 +602,7 @@ def _cancel(state, entry, ctx, role):
     if not eff: return invalid("no such proposal")
     a = entry["author"]
     if role not in READ_ROLES: return deny("author holds no role")
-    approved = not guard_status(state, ctx, a)["guarded"] and any(          # a guarded author's approval grants no cancel right (P-04)
+    approved = not guard_status(state, ctx, a)["guarded"] and any(          # a guarded author's approval grants no cancel right (P-04, Z1)
         x["author"] == a for x in eff["approvals"] if x.get("consumedBy") or x in open_approvals(eff, ctx["time"]))
     if not (a == eff["proposer"] or role == "owner" or a in guards_of(state, ctx, eff) or approved):
         return deny("not proposer/approver/owner")
@@ -662,73 +663,83 @@ def _redact(state, entry, ctx, role):
 def is_human(ctx, actor):
     return ctx["profiles"].get(actor, {}).get("actorKind") == "human"
 
-def guarded_may_not(state, entry) -> bool:
-    """P-15: a guarded author, or one that carries a guarded agent's limits (`carried`), may not approve, govern or steer others:
-    `effect.approve`, `member.set` other than leaving (its own role to none), `policy.set`, and a `session.input` into a session that
-    isn't its own. (A carrying author may be an owner, so `policy.set` is listed; `agent.unguard` and redacting another's entry are not
-    governing others.) A session that isn't there is left to the kind's own checks."""
-    k, b = entry["kind"], entry["body"]
-    if k == "member.set" and b == {"actor": entry["author"], "role": "none"}: return False        # leaving is not governing
-    if k in ("effect.approve", "member.set", "policy.set"): return True
-    if k == "session.input": return b["session"] in state["sessions"] and state["sessions"][b["session"]]["actor"] != entry["author"]
+def governs_others(state, ctx, entry) -> bool:
+    """P-15, the Limits: what a guarded author (`guards` not empty) may not do: approve (unless it is one of the effect's guards, Z3:
+    approving is the guard's role), govern (`member.set` other than leaving, `policy.set`, `space.move`, a final update of a task it
+    isn't assigned, a `task.cancel` of another's task) or steer others (`session.input` into another's session). A task, session or
+    proposal that isn't there is left to the kind's own checks, except an approve, which is denied here as before."""
+    k, b, author = entry["kind"], entry["body"], entry["author"]
+    if k == "member.set": return b != {"actor": author, "role": "none"}                    # leaving is not governing
+    if k in ("policy.set", "space.move"): return True
+    if k == "effect.approve":
+        eff = state["effects"].get(b["proposal"])
+        return not eff or author not in guards_of(state, ctx, eff)
+    if k == "session.input": return b["session"] in state["sessions"] and state["sessions"][b["session"]]["actor"] != author
+    t = state["tasks"].get(b.get("task")) if k in ("task.update", "task.cancel") else None
+    if k == "task.update": return bool(t) and b["state"] in TASK_FINAL and author not in t["to"]      # a force-close (Z1, Y3)
+    if k == "task.cancel": return bool(t) and t["author"] != author
     return False
 
 def guard_status(state, ctx, x) -> dict:
-    """P-15, the one guard function: `{guard?, guarded, forced}` for `x` at this entry. `state` needs only `policy` and `guarded`
-    (han.ts GuardInput), so a `state {agent}` reply serves as is (R-24). `guard` is the `operator` in the profile pinned for this
-    entry, if it is confirmed and `x` is not human. `forced`: owners' `forceGuarded` is on and `x` is not human. `guarded`: `x`
-    chose it (sticky) or is forced."""
+    """P-15, the one guard function: `{guard?, guarded, forced, guards}` for `x` at this entry. `state` needs only `policy`, `guarded`
+    and the tasks whose `accepted` lists `x` (han.ts GuardInput), so a `state {agent}` reply serves as is (R-24). `guard` is the
+    `operator` in the profile pinned for this entry, if it is confirmed and `x` is not human. `forced`: owners' `forceGuarded` is on
+    and `x` is not human. `guards` (round 32, Z1): the agents whose guard `x` answers to, `x` itself if it chose guarding (sticky)
+    or is forced, then `carried(x)`, each once; each stands for its guard. `guarded`: `guards` is not empty."""
     p = ctx["profiles"].get(x)
     agent = bool(p) and p["actorKind"] != "human"
     forced = agent and bool(state["policy"]["sessions"].get("forceGuarded"))
-    out = {"guarded": forced or x in state["guarded"], "forced": forced}
+    own = [x] if forced or x in state["guarded"] else []
+    gs = own + [a for a in carried(state, x) if a not in own]
+    out = {"guarded": bool(gs), "forced": forced, "guards": gs}
     if agent and p.get("operatorConfirmed") and p.get("operator"): out["guard"] = p["operator"]
     return out
 
-def guarded_for(state, ctx, recorded, *agents) -> list:
-    """P-15: `recorded` plus each of `agents` that is guarded at this entry, each once. Fold records it on a new task (the parent's
-    list, the author) and effect (the task's list, the proposer, the executor); a claim adds its proposer and executor if guarded now."""
-    out = list(recorded)
-    for a in agents:
-        if a not in out and guard_status(state, ctx, a)["guarded"]: out.append(a)
-    return out
+def guards(state, ctx, x) -> list:
+    """P-15, Z1: guards(x), the agents whose guard x answers to (guard_status)."""
+    return guard_status(state, ctx, x)["guards"]
 
 def carried(state, x) -> list:
-    """P-15: the guarded agents whose limits `x` carries: the union of the `guardedFor` of the tasks whose `accepted` lists `x`, in the
+    """P-15: the guarded agents whose guarding `x` carries: the union of the `guardedFor` of the tasks whose `accepted` lists `x`, in the
     order the tasks were created. An assignee joins `accepted` with `task.update` `accepted` (an author assigning itself, at creation)
-    and leaves it with its own final update; an owner's force-close (`task.cancel`, or a final update by an owner who isn't an
-    assignee) empties it (round 31, X1). Another assignee closing the task ends nothing."""
+    and leaves it with its own final update, or when it leaves the space; a final update by an owner who isn't an assignee (a
+    force-close, on a closed task too) empties it (round 32, Z2). Nothing else ends a carry: not a cancel, nor another's close."""
     out = []
     for t in sorted((t for t in state["tasks"].values() if x in t["accepted"]), key=lambda t: t["seq"]):
         out += [a for a in t["guardedFor"] if a not in out]
     return out
 
-def limited(state, ctx, x) -> bool:
-    """P-15: guarded, or carrying a guarded agent's limits: either way `x` may not approve, govern or steer others."""
-    return guard_status(state, ctx, x)["guarded"] or bool(carried(state, x))
-
 def task_guarded_for(state, ctx, author, parent_id) -> list:
-    """P-15, a task's `guardedFor` at its creation: the parent's list, or `carried(author)` when it has no parent (round 31, X2: only
-    linked work carries; a parent that descends from an accepted task already holds its list); then the author if guarded; each once."""
-    out = list(state["tasks"][parent_id]["guardedFor"]) if parent_id else list(carried(state, author))
-    return guarded_for(state, ctx, out, author)
+    """P-15, a task's `guardedFor` at its creation: the parent's list, then guards(author); each agent once (Z1)."""
+    out = list(state["tasks"][parent_id]["guardedFor"]) if parent_id else []
+    return out + [a for a in guards(state, ctx, author) if a not in out]
 
 def effect_guarded_for(state, ctx, proposer, executor, task_id) -> list:
-    """P-15, an effect's `guardedFor` at its proposal: the named task's list, or `carried(proposer)` when it names none (X2); then
-    `carried(executor)` (X3); then the proposer and the executor, each if guarded now; each agent once."""
-    out = list(state["tasks"][task_id]["guardedFor"]) if task_id else list(carried(state, proposer))
-    out += [a for a in carried(state, executor) if a not in out]
-    return guarded_for(state, ctx, out, proposer, executor)
+    """P-15, an effect's `guardedFor` at its proposal: the named task's list, then guards(proposer), then guards(executor); each
+    agent once (Z1)."""
+    out = list(state["tasks"][task_id]["guardedFor"]) if task_id else []
+    for x in (proposer, executor):
+        out += [a for a in guards(state, ctx, x) if a not in out]
+    return out
 
 def over_bound(recorded, *actors) -> bool:
     """P-15: the proposal bound, counting the proposer and the executor whether guarded or not (round 30, V2)."""
     return len(dict.fromkeys(list(recorded) + list(actors))) > MAX_GUARDED_FOR
 
+def claim_guards(state, ctx, eff) -> list:
+    """P-15, E3 (Z1): guards(proposer) then guards(executor) as they stand at this entry."""
+    return list(dict.fromkeys(guards(state, ctx, eff["proposer"]) + guards(state, ctx, eff["executor"])))
+
+def unbounded_guards(state, ctx, eff) -> list:
+    """E3 (Z1): the agents of claim_guards that the proposal never bounded: neither in `guardedFor` nor the proposer or executor.
+    A claim needing one is denied (propose again), so every guard a claim needs is the guard of an agent the proposal counted."""
+    return [a for a in claim_guards(state, ctx, eff) if a not in eff["guardedFor"] and a not in (eff["proposer"], eff["executor"])]
+
 def guards_of(state, ctx, eff):
     """P-15: whose own approval a claim of `eff` needs besides any rule: the guard (pinned operator) of each agent in its `guardedFor`,
-    and of its proposer and executor if guarded now, each guard once. `None` stands for such an agent with no confirmed operator in
-    the pinned profile (or none pinned yet): nobody can approve for it."""
-    need = guarded_for(state, ctx, eff["guardedFor"], eff["proposer"], eff["executor"])
+    then of each agent of guards(proposer) and guards(executor) now (Z1) that the proposal counted, each guard once. `None` stands for
+    such an agent with no confirmed operator in the pinned profile (or none pinned yet): nobody can approve for it."""
+    need = list(eff["guardedFor"]) + [a for a in claim_guards(state, ctx, eff) if a in (eff["proposer"], eff["executor"]) and a not in eff["guardedFor"]]
     return list(dict.fromkeys(guard_status(state, ctx, a).get("guard") for a in need))
 
 def guard_approval(state, eff, g, ctx):
@@ -823,7 +834,10 @@ def fold(state, record, ctx) -> dict:
         before = s["roles"].get(tgt) in READ_ROLES
         if new == "none": s["roles"].pop(tgt, None)
         else: s["roles"][tgt] = new
-        if new not in READ_ROLES: drop_open_approvals(s, tgt)                  # P-08: they could never count again
+        if new not in READ_ROLES:
+            drop_open_approvals(s, tgt)                                          # P-08: they could never count again
+            for t in s["tasks"].values():                                        # Z2: an actor that leaves carries nothing
+                if tgt in t["accepted"]: t["accepted"] = [a for a in t["accepted"] if a != tgt]
         now = new in READ_ROLES
         if now and not before:
             hist.append({"from": seq})
@@ -853,10 +867,10 @@ def fold(state, record, ctx) -> dict:
     elif kind == "task.update":
         t = s["tasks"][b["task"]]
         was_open = t["open"]
-        if was_open: t["state"] = b["state"]                                     # a closed task only loses the author's acceptance (X1)
+        if was_open: t["state"] = b["state"]                                     # a closed task only loses acceptances (Z2)
         if b["state"] == "accepted" and author not in t["accepted"]:
             t["accepted"].append(author)                                         # P-15, X4: only an explicit accept accepts
-        if b["state"] in TASK_FINAL:                                             # X1: an assignee's own final update ends what it carries;
+        if b["state"] in TASK_FINAL:                                             # Z2: an assignee's own final update ends what it carries;
             t["accepted"] = [a for a in t["accepted"] if a != author] if author in t["to"] else []   # an owner's force-close, all
         if b["state"] in TASK_FINAL and was_open:
             t["open"] = False
@@ -866,7 +880,6 @@ def fold(state, record, ctx) -> dict:
                 _credit(s, t.get("parent"), amount)
     elif kind == "task.cancel":
         s["tasks"][b["task"]]["cancelRequested"] = True
-        if s["roles"].get(author) == "owner": s["tasks"][b["task"]]["accepted"] = []          # X1: an owner's cancel force-closes for everyone
     elif kind == "effect.propose":
         eff = {"proposer": author, "proposerKey": e["keyId"], "executor": b["executor"], "action": b["action"],
                "planDigest": b["planDigest"], "repeatable": b["repeatable"], "cancelRequested": False,

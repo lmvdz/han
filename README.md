@@ -10,7 +10,7 @@
 - **Accountable agents.** Every agent names a human operator. A space can require that operator's confirmation (`allowAgents: "with-operator"`), checked again at every proposal, claim and budgeted task.
 - **Budgets**, reserved before an action, settled after it, and delegated down task trees.
 - **Approvals bound to the exact plan**, with expiry and separation of duties.
-- **Guarded agents.** A guarded agent can't approve, govern or steer anyone else, and nothing it proposes runs without its human's approval. A delegate that accepts its task is bound the same way until the task closes: its work waits for that human, and it can't approve, govern or steer anyone else. Guarding is recorded on the work when the work is created, so nothing already recorded is freed later. Owners may guard every non-human with `forceGuarded`. The residue Policy can't see is listed in [§7.5](spec/core/architecture.md).
+- **Guarded agents.** A guarded agent can't approve, govern or steer anyone else, and nothing it proposes runs without its human's approval. A delegate that accepts its task is guarded the same way until the task closes for it: its work waits for that human, and it can't approve, govern or steer anyone else. Guarding is recorded on the work when the work is created, so nothing already recorded is freed later. Owners may guard every non-human with `forceGuarded`. The residue Policy can't see is listed in [§7.5](spec/core/architecture.md).
 - **Replayable policy.** Policy is <!--s:policy_fns_w-->six<!--/s--> pure functions, so any participant can re-check every decision. A cheating sequencer leaves a portable proof.
 
 ## Where it's going
@@ -25,7 +25,7 @@ The specification is mature. The next step is a product, planned in [PLAN.md](PL
 
 ## Status
 
-> **Design draft (v1, round <!--s:round-->31<!--/s-->).** The repository holds:
+> **Design draft (v1, round <!--s:round-->32<!--/s-->).** The repository holds:
 > - a specification;
 > - an executable reference ([ref/](ref/));
 > - a working but minimal Python implementation ([witnesses/impl-py/](witnesses/impl-py/));
@@ -33,7 +33,7 @@ The specification is mature. The next step is a product, planned in [PLAN.md](PL
 >
 > There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](spec/decisions/grading-rubric.md)) scored <!--s:scores-->rounds 1–6 from 57.8 to 76.6 / 100, rounds 8–16 (after the scope change) 67.8, 67.5, 69.8, 69.2, 71.1, 72.5, 72.7, 73.1, 72.2, round 18 73.4 (round 17 was folded into it), round 19 73.9, round 21 73.7, round 22 74.0, round 23 73.0, round 24 74.7, round 25 74.3, round 26 74.9, round 27 76.5, round 28 77.8, round 29 77.9, round 30 75.6 and round 31 **75.7** (round 20 not graded yet)<!--/s-->. See [HISTORY.md](spec/decisions/HISTORY.md). Expect breaking changes.
 
-**The witnesses are Policy witnesses.** Both implementations pass the Policy vectors and are compared with the reference by differential fuzzing. Their WebSocket servers are frozen at round 29 (the legacy carrier, §8.2) and leave the live interop; interop evidence for the QUIC binding comes with the Rust implementation.
+**The witnesses are Policy witnesses.** Both implementations pass the Policy vectors and are compared with the reference by differential fuzzing, as is the Rust core (`crates/han-core`). Their WebSocket servers are frozen at round 29 (the legacy carrier, §8.2) and leave the live interop; interop evidence for the QUIC binding comes with the Rust implementation.
 
 **What the Python witness contains:**
 - a sequencer (SQLite WAL store, the legacy WebSocket carrier, and the round-29 Matrix application service, which the spec no longer has);

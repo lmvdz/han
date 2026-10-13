@@ -867,19 +867,25 @@ def _():
                    "effect": "ok", "cursor": "ok", "at": "ok", "none": "ok", "follow": "ok",
                    "agent+effect": "invalid", "agent+cursor": "invalid", "agent+at+effect": "invalid", "agent+at": "ok", "agent": "ok"}, str(got)
 
-@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7, P8", "`agent` (an ActorId) gives `{space, head, home, policy, guarded}` with `guarded` cut to that actor and nothing that grows, in one reply whatever maxStateItems is, without `next`; an actor not in it gets `{}`; `at` gives the facts after that record; the reply is guardStatus's input as is; a non-ActorId is `invalid`, a stranger `not_found`")
+@scenario("state {agent} is one agent's guard facts, never cut", "§3 state, G-09, K7, P8, Z1", "`agent` (an ActorId) gives `{space, head, home, policy, guarded, tasks}` with `guarded` cut to that actor and `tasks` to those whose `accepted` lists it with a `guardedFor` (what `carried` reads), in one reply whatever maxStateItems is, without `next`; an actor in neither gets `{}` for both; `at` gives the facts after that record; the reply is guardStatus's input as is; a non-ActorId is `invalid`, a stranger `not_found`")
 def _():
     h = base_home(); h.max_state_items = 1; _fill(h, tasks=2)
     st = h.spaces[S]["state"]
     for i in range(4): _guard_facts(st, f"@a{i}:a.example")
+    t0, t1 = sorted(st["tasks"])[:2]
+    st["tasks"][t0] = dict(st["tasks"][t0], accepted=["@a3:a.example"], guardedFor=["@a2:a.example"])      # @a3 carries @a2's guarding
+    st["tasks"][t1] = dict(st["tasks"][t1], accepted=["@a3:a.example"], guardedFor=[])                     # a task that carries nothing is left out
     ca, a = h.state(S, O, agent="@a2:a.example"); cn, n = h.state(S, O, agent="@nobody:a.example")
+    cc, c3 = h.state(S, O, agent="@a3:a.example")
     ct, early = h.state(S, O, agent="@a2:a.example", at=2)
     bad = (h.state(S, O, agent=5)[0], h.state(S, O, agent="a2")[0], h.state(S, O, agent="@a2:a.example", effect="0" * 64)[0], h.state(S, O, agent="@a2:a.example", at=99)[0], h.state(S, Z, agent="@a2:a.example")[0])
-    shape = lambda r, f: set(r["state"]) == {"space", "head", "home", "policy", "guarded"} and "next" not in r and r["state"]["guarded"] == f
+    shape = lambda r, f, t={}: set(r["state"]) == {"space", "head", "home", "policy", "guarded", "tasks"} and "next" not in r and r["state"]["guarded"] == f and r["state"]["tasks"] == t
     agent = {"actor": "@a2:a.example", "seq": 1, "actorKind": "agent", "operator": O, "operatorConfirmed": True, "keys": {}}
     ctx = {"time": "2026-10-10T12:00:00Z", "profiles": {"@a2:a.example": agent}}
-    return (ca == cn == ct == "ok" and shape(a, {"@a2:a.example": True}) and shape(n, {}) and early["state"]["head"] == 2 and early["state"]["guarded"] == {}
-            and P.guard_status(a["state"], ctx, "@a2:a.example") == {"guard": O, "guarded": True, "forced": False}
+    return (ca == cn == ct == cc == "ok" and shape(a, {"@a2:a.example": True}) and shape(n, {}) and early["state"]["head"] == 2 and early["state"]["guarded"] == {}
+            and shape(c3, {"@a3:a.example": True}, {t0: st["tasks"][t0]})
+            and P.guard_status(a["state"], ctx, "@a2:a.example") == {"guard": O, "guarded": True, "forced": False, "guards": ["@a2:a.example"]}
+            and P.guard_status(c3["state"], ctx, "@a3:a.example") == {"guarded": True, "forced": False, "guards": ["@a3:a.example", "@a2:a.example"]}
             and bad == ("invalid", "invalid", "invalid", "invalid", "not_found")), f"{a} {n} {early} {bad}"
 
 @scenario("a notice is never replayed", "G-03, G-09, F4", "a notice for an actor with no live subscription to its profile is dropped; one that subscribes later sees none of it; a live subscription gets its notices once; after it ends, notices are dropped again")

@@ -25,13 +25,13 @@ async def test_f1_agent_confirmed_after_joining_is_guarded_by_force_with_the_pin
     await mkspace(a, policy=pol); await member(a, CAROL); await member(a, BOT)
     before = (await c.append(*c.make_entry("task", S, {"to": [BOT]}, {"ask": "before the confirmation"})))["id"]       # P-07: no denial for lack of an operator
     prof0 = (await a.read_state("profile:" + BOT))["profile"]
-    assert P.guard_status(await state(a), {"profiles": {BOT: prof0}}, BOT) == {"guarded": True, "forced": True}       # forced, and no guard yet
+    assert P.guard_status(await state(a), {"profiles": {BOT: prof0}}, BOT) == {"guarded": True, "forced": True, "guards": [BOT]}       # forced, and no guard yet
     await a.append(*a.make_entry("member.set", "profile:" + BOT, {"actor": ALICE, "role": "owner"}))     # the operator confirms, after bot joined
     r = await c.append(*c.make_entry("task", S, {"to": [BOT]}, {"ask": "after the confirmation"}))
     st = await state(a)
     prof = (await a.read_state("profile:" + BOT))["profile"]
     assert "agents" not in st and "held" not in st and "lastOutside" not in st and st["guarded"] == {} and r["seq"] == st["head"]
-    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": True}
+    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": True, "guards": [BOT]}
     assert st["tasks"][before]["guardedFor"] == [] and st["tasks"][r["id"]]["guardedFor"] == []          # the author is human
 
 # ── F2 (round 27): agent.unguard ──

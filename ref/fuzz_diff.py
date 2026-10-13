@@ -13,7 +13,7 @@ not use (P9), guarded agents leaving, and approvals by agents that become guarde
 actors (M9), so the 16-approval cap, a guard approving beyond it (R3) and the 64-assignee bound are reached. Histories are built in parallel worker processes and the TS runner takes 1000 seeds a call.
 The run prints the generator's statistics so a reader can see what was exercised, the caps included.
 --target ts|rust|both (default ts): the implementation the reference is compared with. `rust` runs the han-conform binary of crates/han-core
-(built with cargo if missing; --rust-bin PATH names another), which speaks the same protocol as the TS runner: it takes a directory of vector
+(built with cargo before every run; --rust-bin PATH names another, used as is), which speaks the same protocol as the TS runner: it takes a directory of vector
 files and prints `<file>.json#<step>: <message>` per failing step and a `steps pass N fail M; vectors pass A fail B` summary.
 Usage: python ref/fuzz_diff.py [--target ts|rust|both] [--seeds N] [--seed-offset K] [--steps N] [--keep DIR] [--workers N]      (default 1000 seeds from 0 x 250 steps, about 4 minutes; use --seed-offset for fresh seeds)
 --keep DIR: where the batches and the divergence repros go (default: a new directory under the system temp). Only the batch*/,
@@ -180,7 +180,7 @@ def repro_of(v, i):
 def main():
     ap = argparse.ArgumentParser(description="Differential fuzz: ref/policy.py against the clean-room TypeScript Policy (decision H5).")
     ap.add_argument("--target", choices=("ts", "rust", "both"), default="ts", help="the implementation compared with the reference")
-    ap.add_argument("--rust-bin", default=RUST_BIN, help="the han-conform binary for --target rust|both (built with cargo if it is the default and missing)")
+    ap.add_argument("--rust-bin", default=RUST_BIN, help="the han-conform binary for --target rust|both (rebuilt with cargo every run when it is the default)")
     ap.add_argument("--seeds", type=int, default=1000)
     ap.add_argument("--seed-offset", type=int, default=0, help="the first seed (M9): run seeds K .. K+N-1")
     ap.add_argument("--steps", type=int, default=250)
@@ -190,8 +190,11 @@ def main():
     a = ap.parse_args()
     if a.target in ("ts", "both") and (shutil.which("node") is None or not os.path.exists(RUNNER)):
         print("SKIP differential fuzz: node or witnesses/cleanroom-ts/dist/run-vectors.js is missing"); return 0
-    if a.target in ("rust", "both") and not os.path.exists(a.rust_bin):
-        if a.rust_bin != RUST_BIN or subprocess.run(["cargo", "build", "--release", "--locked", "-p", "han-core", "--bin", "han-conform"], cwd=ROOT).returncode:
+    if a.target in ("rust", "both"):                     # the default binary is (re)built every run, so a stale one is never compared (round 32)
+        if a.rust_bin == RUST_BIN and subprocess.run(["cargo", "build", "--release", "--locked", "-p", "han-core", "--bin", "han-conform"], cwd=ROOT,
+                                                     capture_output=True).returncode:
+            print("cannot build the Rust target (cargo build -p han-core --bin han-conform failed)"); return 1
+        if not os.path.exists(a.rust_bin):
             print(f"cannot run the Rust target: {a.rust_bin} is missing"); return 1
     t0 = time.time()
     made = a.keep is None

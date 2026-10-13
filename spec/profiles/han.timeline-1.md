@@ -369,7 +369,7 @@ References: an **op ref** is `[r, c]` (replica table index, counter); a **versio
 
 Merge changes: `{0: 1, 1: object, 2: create, 3: value}` (register); `{0: 2, 1: object, 2: create, 3: tree, 4: sets, 5: deletes}` (map); `{0: 3, 1: object, 2: create, 3: transcript, 4: deletes, 5: inserts}` (text), each insert `[anchor, text, origin]` with origin a character ref or null. A merge conflict record: `{0: kind, 1: object, 2: key or null, 3: [a, b] base lines or null, 4: resolution}` with kinds 1 register, 2 map, 3 text, 4 modify/delete, 5 rename, 6 path, and resolution 1 `target`, 2 `incoming`, 3 value/text. `object` is the register, map, text or tree map. `key` is the map key for map conflicts, the path for modify/delete, the shorter of the two paths for a path conflict, and null for register, text and rename conflicts; `lines` is set only for text conflicts. Receivers record these for review and never interpret them. Fields not listed are `malformed`.
 
-**TL-93 Envelope.** Every batch travels in a HAN-signed envelope, the CBOR map:
+**TL-93 Envelope.** Every batch travels in a HAN-signed envelope, the CBOR map below; it is the batch format of the `han/1` stream type `han.timeline/1` (architecture.md G-07, typed streams), which gives it framing only, so this envelope is the one signature a batch carries:
 
 | Key | Field | |
 |---|---|---|
@@ -422,7 +422,7 @@ A receiver MUST NOT integrate an unauthorised batch on its own: it **quarantines
 
 ## 15. Sync
 
-**TL-110 Two messages.** Sync is anti-entropy in two messages, over any transport that carries bytes (a `han/1` unidirectional stream with CBOR, architecture.md G-07, or any other):
+**TL-110 Two messages.** Sync is anti-entropy in two messages, over any transport that carries bytes (on `han/1`, a typed stream of type `han.timeline/1`, architecture.md G-07, each message one frame; or any other):
 1. **hello** `{1: 1, 2: space, 3: history, 4: inventory, 5: maxBytes?}`: the inventory is an array of `[[actor, key, lane], [[from, to]…]]` in ascending replica order, each with ascending, non-overlapping, non-adjacent inclusive counter ranges (overlapping, unordered or adjacent ranges make the hello `malformed`) that cover every integrated batch of that replica. For the sender's **own** replicas (the replicas of its own device keys), a range MAY also cover counters that no batch of that replica uses, since the sender knows it wrote no other. For every other replica, the ranges MUST be exactly the union of the counter ranges of its integrated batches, merging only ranges whose counters are consecutive: a sender cannot know that another replica's gap is unused, and claiming it would hide a batch from the sender. `maxBytes` is the largest answer the sender wants (default 4 MiB, at least 64 KiB).
 2. **answer** `{1: 1, 2: space, 3: history, 4: envelopes, 5: more}`: the encoded envelopes of every integrated batch whose counter range the hello does not cover entirely, in ascending `start`, then replica, order (a causal order, TL-76), cut at an envelope boundary so the answer fits `maxBytes` (but at least one envelope); `more` is true when it was cut.
 

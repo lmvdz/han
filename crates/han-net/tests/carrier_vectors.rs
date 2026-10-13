@@ -1,18 +1,18 @@
 //! The carrier vectors that han-net owns (`conformance/carrier-vectors`): `control`, `wellknown`, `tickets`,
-//! `stream-items`, `bulk` and `frames`. The peer filter, strict Ed25519, the header checks and the hello proof
+//! `stream-items`, `typed-streams` and `frames`. The peer filter, strict Ed25519, the header checks and the hello proof
 //! bytes are han-core's and replayed there.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use han_core::json::{self, Numbers, Value};
-use han_net::bulk::{BulkBatch, bulk_message};
 use han_net::control::challenge_verdict;
+use han_net::dial::dial_verdict;
 use han_net::frame::{read_frame, write_frame};
 use han_net::ticket::InviteTicket;
+use han_net::typed::{self, TypedStream, Verdict};
 use han_net::wellknown::wellknown_verdict;
-use han_seq::{PinKey, stream_item};
+use han_seq::stream_item;
 
 fn load(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -114,41 +114,64 @@ fn stream_item_vectors() {
 }
 
 #[test]
-fn bulk_vectors() {
-    let v = load("bulk.json");
-    let keys: BTreeMap<String, PinKey> = v["view"]["keys"]
-        .as_object()
-        .unwrap()
-        .iter()
-        .map(|(id, k)| (id.clone(), json::from_value(k).unwrap()))
-        .collect();
-    let all = cases(&v, "cases");
-    assert!(!all.is_empty());
-    let first = &all[0]["batch"];
-    assert_eq!(
-        to_hex(&bulk_message(
-            s(first, "profile"),
-            &from_hex(s(first, "data"))
-        )),
-        s(&v, "message")
-    );
-    for c in all {
-        let b = &c["batch"];
-        let batch = BulkBatch {
-            author: s(b, "author").to_owned(),
-            key_id: s(b, "keyId").to_owned(),
-            profile: s(b, "profile").to_owned(),
-            data: from_hex(s(b, "data")),
-            sig: s(b, "sig").to_owned(),
-        };
+fn stream_item_bodies_are_checked_by_faces() {
+    let v = load("stream-items.json");
+    assert!(!cases(&v, "bodies").is_empty());
+    for c in cases(&v, "bodies") {
+        let got = stream_item::status_body_verdict(&c["body"]);
         assert_eq!(
-            Value::Bool(batch.verify(&keys)),
-            c["valid"],
-            "{}",
+            got.is_none(),
+            s(c, "expect") == "ok",
+            "{}: {got:?}",
             s(c, "name")
         );
-        // the CBOR envelope round-trips
-        assert_eq!(BulkBatch::from_cbor(&batch.to_cbor()), Some(batch));
+    }
+}
+
+#[test]
+fn dial_vectors() {
+    let v = load("control.json");
+    assert!(!cases(&v, "dials").is_empty());
+    for c in cases(&v, "dials") {
+        let got = dial_verdict(s(c, "server"), s(c, "node"), &c["wellknown"]);
+        assert_eq!(
+            got.is_none(),
+            s(c, "expect") == "ok",
+            "{}: {got:?}",
+            s(c, "name")
+        );
+    }
+}
+
+#[tokio::test]
+async fn typed_stream_vectors() {
+    let v = load("typed-streams.json");
+    assert!(!cases(&v, "encode").is_empty());
+    for c in cases(&v, "encode") {
+        let frames: Vec<Vec<u8>> = cases(c, "frames")
+            .iter()
+            .map(|f| from_hex(f.as_str().unwrap()))
+            .collect();
+        let out = typed::encode(s(c, "type"), &frames).await.unwrap();
+        assert_eq!(to_hex(&out), s(c, "hex"));
+    }
+    assert!(!cases(&v, "cases").is_empty());
+    for c in cases(&v, "cases") {
+        let name = s(c, "name");
+        let finished = c["finished"] == Value::Bool(true);
+        let got = typed::decode(&from_hex(s(c, "hex")), finished).await;
+        match &c["expect"] {
+            Value::Str(w) if w == "more" => assert_eq!(got, Verdict::More, "{name}"),
+            Value::Str(w) if w == "close" => assert_eq!(got, Verdict::Close, "{name}"),
+            want => {
+                let frames: Vec<Vec<u8>> = cases(want, "frames")
+                    .iter()
+                    .map(|f| from_hex(f.as_str().unwrap()))
+                    .collect();
+                let kind = s(want, "type").to_owned();
+                assert_eq!(got, Verdict::Stream(TypedStream { kind, frames }), "{name}");
+            }
+        }
     }
 }
 
@@ -199,7 +222,7 @@ async fn frame_vectors() {
     );
     for c in cases(&v, "requests") {
         let test_mode = c.get("test_mode") == Some(&Value::Bool(true));
-        let (conn, _challenge) = if test_mode { &test_home } else { &home }.connect("x");
+        let (conn, _challenge) = if test_mode { &test_home } else { &home }.connect("x", "s");
         let handled = conn.handle(s(c, "text"));
         match &c["expect"] {
             Value::Null => assert!(!handled.close, "{}", s(c, "text")),

@@ -1,15 +1,15 @@
 //! Replays the parts of `conformance/carrier-vectors` that han-core owns: the peer filter
 //! (`admit.json`), frames and request frames (`frames.json`), the header and key checks
-//! (`header.json`), strict Ed25519 (`ed25519.json`) and the hello proof bytes (`control.json`,
-//! `proofs`). Well-known documents, tickets, stream items, bulk batches and the control stream's
-//! challenge belong to the carrier crate (M2).
+//! (`header.json`), strict Ed25519 (`ed25519.json`) and the `han/1` hello proof bytes
+//! (`control.json`, `proofs`). Well-known documents, tickets and the dial check, the hello binding,
+//! stream items, typed streams and the control stream's challenge belong to the carrier crate (M2).
 
 use std::path::{Path, PathBuf};
 
 use han_core::admit::{AdmitConn, AdmitSpaces, AdmitVerdict, Tier, admit};
 use han_core::frame::{Decoded, Rejected, decode_frame, encode_frame, request_verdict};
 use han_core::json::{self, Numbers, Value};
-use han_core::sign::{HELLO_DOMAIN, PublicKey, is_node_id};
+use han_core::sign::{PublicKey, han1_hello_message, is_node_id};
 use han_core::{Entry, Error};
 
 fn load(name: &str) -> Value {
@@ -133,10 +133,20 @@ fn ed25519_vectors() {
 fn hello_proof_vectors() {
     let v = load("control.json");
     for c in items(&v, "proofs") {
-        let message = format!("{HELLO_DOMAIN}{}\n{}", s(c, "challenge"), s(c, "dialed"));
-        assert_eq!(to_hex(message.as_bytes()), s(c, "message"));
-        let valid = PublicKey::from_base64url(s(c, "publicKey"))
-            .is_ok_and(|k| k.verify(message.as_bytes(), s(c, "proof")).is_ok());
+        let message = han1_hello_message(s(c, "challenge"), s(c, "dialed"), s(c, "node"));
+        assert_eq!(to_hex(&message), s(c, "message"));
+        let key = PublicKey::from_base64url(s(c, "publicKey")).ok();
+        let valid = key
+            .as_ref()
+            .is_some_and(|k| k.verify(&message, s(c, "proof")).is_ok());
         assert_eq!(Value::Bool(valid), c["valid"], "{:?}", c.get("note"));
+        if let Some(other) = c.get("checkedAs").and_then(Value::as_str) {
+            let there = han1_hello_message(s(c, "challenge"), s(c, "dialed"), other);
+            assert!(
+                !key.is_some_and(|k| k.verify(&there, s(c, "proof")).is_ok()),
+                "{:?}",
+                c.get("note")
+            );
+        }
     }
 }

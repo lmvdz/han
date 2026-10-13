@@ -21,8 +21,8 @@ use std::process::ExitCode;
 
 use han_core::json::{self, Numbers, Value};
 use han_core::policy::{
-    ActorSet, Ctx, GuardInput, PolicyDoc, PolicyEntry, ProfileView, Record, SpaceState, Verdict,
-    can_read, decide, fold, guard_status, relevant_actors, session_access,
+    ActorSet, Ctx, GuardInput, PolicyDoc, PolicyEntry, ProfileView, Record, SpaceState, Task,
+    Verdict, can_read, decide, fold, guard_status, relevant_actors, session_access,
 };
 
 type Profiles = BTreeMap<String, ProfileView>;
@@ -206,10 +206,15 @@ fn run_step(
                 .map_err(|e| e.to_string())?;
             let guarded: ActorSet = json::from_value(view.get("guarded").unwrap_or(&Value::Null))
                 .map_err(|e| e.to_string())?;
+            let tasks: BTreeMap<String, Task> = match view.get("tasks") {
+                Some(t) => json::from_value(t).map_err(|e| e.to_string())?,
+                None => BTreeMap::new(),
+            };
             guard_status(
                 GuardInput {
                     policy: &policy,
                     guarded: &guarded,
+                    tasks: &tasks,
                 },
                 &ctx,
                 str_of(q, "actor"),

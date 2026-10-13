@@ -246,14 +246,14 @@ async def test_e2_session_less_agent_is_guarded_by_force(env):
     st = await state(cl["alice"])
     prof = (await cl["alice"].read_state("profile:" + BOT))["profile"]
     assert st["guarded"] == {} and st["tasks"][tid]["guardedFor"] == []                    # forced, not chosen; the author is human
-    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": True}       # H8: the operator of the pinned profile
+    assert P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": True, "forced": True, "guards": [BOT]}       # H8: the operator of the pinned profile
 
 async def test_e2_unforced_session_less_agent_is_not_guarded(env):
     cl, botc = await world(env)
     tid = (await cl["carol"].append(*cl["carol"].make_entry("task", S, {"to": [BOT]}, {"ask": "push deploy"})))["id"]
     st = await state(cl["alice"])
     prof = (await cl["alice"].read_state("profile:" + BOT))["profile"]
-    assert st["guarded"] == {} and P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": False, "forced": False}
+    assert st["guarded"] == {} and P.guard_status(st, {"profiles": {BOT: prof}}, BOT) == {"guard": ALICE, "guarded": False, "forced": False, "guards": []}
 
 async def test_e2_host_runs_a_forced_agents_task_strict(env):
     """E2, F1, R-24: the forced agent is guarded at the task's seq, so the host runs the outside instruction strict; its proposal names the
