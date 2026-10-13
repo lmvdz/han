@@ -288,11 +288,12 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 | Rule | Decision |
 |---|---|
 | Effects and state | **Effect v4** (effect.website) owns every side effect, I/O, stream, service and typed error in the frontend. The node API's `view()` stream becomes an Effect `Stream`, exposed to React as **atoms** (Effect's `atom-react`: `useAtomValue`, `useAtomSuspense`, `RegistryProvider`; confirm the exact package name at build time). `call()` commands run as Effect programs. This replaces zustand and supersedes `research/gui.md`'s "skip Effect" |
-| No `useEffect` | `useEffect` and `useLayoutEffect` are banned in app code by lint: ESLint `no-restricted-imports` (from `react`) plus `no-restricted-syntax` for `React.useEffect(...)` and `React.useLayoutEffect(...)`. CI fails on any use. No escape hatch in app code |
+| Lint and format | **oxlint** and **oxfmt** (Oxc). Confirm at GUI start that oxlint's React-hooks and React Compiler rules cover what we need; add a minimal ESLint only for a rule oxlint lacks |
+| No `useEffect` | `useEffect` and `useLayoutEffect` are banned in app code: oxlint `no-restricted-imports` forbids importing them from `react`, and forbids the default and namespace imports of `react`, so `React.useEffect(...)` can't be written. CI fails on any use. No escape hatch in app code |
 | What replaces it | values derived during render; event handlers; atoms for anything external (subscriptions, live views, timers); Suspense and error boundaries for loading and failure; React 19 Actions (`useActionState`, `useOptimistic`) for commands; **ref callbacks with cleanup** (React 19) to mount imperative widgets such as the diff viewer or a terminal |
 | Memoisation | the React Compiler handles it; no hand-written `useMemo`/`useCallback` unless a measured hot path needs it |
 | Rendering performance | windowed lists for the board and streams (views are already windowed by the node API); one subscription per view, owned by its atom, never per component; no state copied from props |
-| Types | node API types generated from Rust (specta or ts-rs) and decoded at the boundary with Effect `Schema`, so a bad frame is a typed error, not a crash |
+| Types | node API types generated from Rust (specta or ts-rs), plus a generated Effect `Schema` that decodes every frame from Tauri, so a bad frame is a typed error, not a crash |
 | Clean room | these rules are part of the UI specs Team B implements from (§8) |
 
 ### 6.7 GitHub and the executor
