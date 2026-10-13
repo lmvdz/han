@@ -426,4 +426,107 @@ mod tests {
         p.extend(compress(b"abc", Compression::Raw));
         assert!(decompress(&p).is_err());
     }
+
+    /// `received_id` hashes the received bytes in place, so it must equal TL-93's batch id for
+    /// every envelope decode accepts, and decode must refuse every non-canonical spelling of an
+    /// envelope before an id could be taken from it.
+    #[test]
+    fn received_id_equals_batch_id_and_non_canonical_envelopes_are_refused() {
+        let mut seed = 0x5eed_u64;
+        let mut rnd = |n: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as usize) % n.max(1)
+        };
+        // Lengths around every CBOR head boundary.
+        const LENS: [usize; 9] = [0, 1, 23, 24, 255, 256, 1000, 65_535, 65_536];
+        for case in 0..200 {
+            let word = |n: usize| -> String { "abcdefghij".chars().cycle().take(n).collect() };
+            // Valid grammar of varied lengths: a server name of up to 243 characters (DNS caps it at
+            // 253), so the space id still passes 256 bytes.
+            let server: String = (0..1 + case % 4)
+                .map(|_| word(1 + case % 60))
+                .collect::<Vec<_>>()
+                .join(".");
+            let env = Envelope {
+                space: format!("{}:{server}", word(1 + case % 26)),
+                history: (case % 2 == 1).then_some(BatchId([case as u8; 32])),
+                actor: format!("@{}:{server}", word(case % 65)),
+                key: word(1 + case % 64),
+                payload: (0..LENS[case % LENS.len()])
+                    .map(|i| (i * 31 + case) as u8)
+                    .collect(),
+                sig: [case as u8; 64],
+            };
+            let bytes = env.encode();
+            let decoded = Envelope::decode(&bytes).unwrap_or_else(|e| panic!("case {case}: {e:?}"));
+            assert_eq!(decoded, env, "case {case}");
+            assert_eq!(decoded.received_id(&bytes), env.batch_id(), "case {case}");
+
+            // The same envelope spelled non-canonically: entries as (key, value) encodings.
+            let Cbor::Map(entries) = Cbor::decode(&bytes).unwrap() else {
+                panic!("not a map")
+            };
+            let parts: Vec<(Vec<u8>, Vec<u8>)> = entries
+                .iter()
+                .map(|(k, v)| (k.encode(), v.encode()))
+                .collect();
+            let join = |head: &[u8], parts: &[(Vec<u8>, Vec<u8>)], tail: &[u8]| {
+                let mut out = head.to_vec();
+                for (k, v) in parts {
+                    out.extend_from_slice(k);
+                    out.extend_from_slice(v);
+                }
+                out.extend_from_slice(tail);
+                out
+            };
+            assert_eq!(join(&[0xa7], &parts, &[]), bytes, "case {case}: rebuilt");
+            let mut variants: Vec<(&str, Vec<u8>)> = Vec::new();
+            // A value with a longer head than needed.
+            let i = rnd(parts.len());
+            let mut longer = parts.clone();
+            let v = &longer[i].1;
+            let (major, info) = (v[0] & 0xe0, v[0] & 0x1f);
+            if info < 24 {
+                longer[i].1 = [vec![major | 24, info], v[1..].to_vec()].concat();
+            } else if info == 24 {
+                longer[i].1 = [vec![major | 25, 0, v[1]], v[2..].to_vec()].concat();
+            } else if info == 25 {
+                longer[i].1 = [vec![major | 26, 0, 0, v[1], v[2]], v[3..].to_vec()].concat();
+            } else {
+                longer[i].1 = [
+                    vec![major | 27, 0, 0, 0, 0, v[1], v[2], v[3], v[4]],
+                    v[5..].to_vec(),
+                ]
+                .concat();
+            }
+            variants.push(("longer head", join(&[0xa7], &longer, &[])));
+            // A key with a longer head.
+            let mut key_head = parts.clone();
+            key_head[i].0 = vec![0x18, key_head[i].0[0]];
+            variants.push(("longer key head", join(&[0xa7], &key_head, &[])));
+            // Two entries swapped.
+            let j = (i + 1 + rnd(parts.len() - 1)) % parts.len();
+            let mut swapped = parts.clone();
+            swapped.swap(i, j);
+            variants.push(("reordered keys", join(&[0xa7], &swapped, &[])));
+            // An extra key, and a repeated key.
+            let mut extra = parts.clone();
+            extra.push((vec![0x08], vec![0xf6]));
+            variants.push(("extra key", join(&[0xa8], &extra, &[])));
+            let mut repeated = parts.clone();
+            repeated.insert(i + 1, parts[i].clone());
+            variants.push(("repeated key", join(&[0xa8], &repeated, &[])));
+            // Indefinite-length map, and a map head in a longer form.
+            variants.push(("indefinite map", join(&[0xbf], &parts, &[0xff])));
+            variants.push(("longer map head", join(&[0xb8, 7], &parts, &[])));
+            for (what, v) in variants {
+                assert!(
+                    Envelope::decode(&v).is_err(),
+                    "case {case}: {what} must be refused before an id is taken"
+                );
+            }
+        }
+    }
 }

@@ -211,6 +211,7 @@ impl<S: Store> History<S> {
         let (envelope, raw) = envelope::seal_raw(space, None, &batch, signer, Compression::Zstd);
         let env = Envelope::decode(&envelope).map_err(|e| Error::Rejected(e.into()))?;
         let id = env.received_id(&envelope);
+        debug_assert_eq!(id, env.batch_id(), "in-place batch id must equal TL-93's");
         store
             .set_format_version(FORMAT_VERSION)
             .map_err(store_err)?;
@@ -380,6 +381,7 @@ impl<S: Store> History<S> {
             return Err(reject(Reason::WrongHistory));
         }
         let id = env.received_id(bytes);
+        debug_assert_eq!(id, env.batch_id(), "in-place batch id must equal TL-93's");
         let mut key_valid = true;
         if let Some(dir) = dir {
             let info = dir
