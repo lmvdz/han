@@ -229,8 +229,9 @@ fn no_floats(v: &Value) -> bool {
 /// Regression (found by the oracle proptest): a double exactly halfway between two shortest
 /// candidates takes the even digit, as ECMAScript requires.
 #[test]
+#[allow(clippy::excessive_precision)] // the exact halfway value is the point of the test
 fn halfway_doubles_take_the_even_digit() {
     use han_core::json::{Value, canonicalize};
-    let v = Value::Float(-2185592229608536.25);
+    let v = Value::Float(-2_185_592_229_608_536.25);
     assert_eq!(canonicalize(&v).unwrap(), b"-2185592229608536.2".to_vec());
 }
