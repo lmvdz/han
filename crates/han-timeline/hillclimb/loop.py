@@ -403,7 +403,8 @@ def run(args):
                             for k, v in s["sets"].items()
                         )
                         msg = (
-                            f"han-timeline: {p['title']}\n\n{p['idea']}\n\n"
+                            f"han-timeline: {p['title'].removeprefix('han-timeline: ')}\n\n"
+                            f"{p['idea']}\n\n"
                             f"Hill-climb round {n}. Benchmark scores (geometric mean of per-op "
                             f"times, best of {args.runs} runs; the correctness gate passed):\n"
                             f"{lines}\n\n"
@@ -443,10 +444,12 @@ def status(_args):
         b, c = state["baseline"][name]["score"], state["best"][name]["score"]
         print(f"{name:<11} baseline {b:9.1f}  best {c:9.1f}  ({100 * (c - b) / b:+.1f}%)")
     for r in state["rounds"]:
-        print(f"  {r['round']:>3} {r['outcome']:<40} {r.get('idea', '')}")
+        print(f"  {r['round']:>3} {r['outcome']:<24} {r.get('title', r.get('idea', ''))[:80]}")
 
 
 def main():
+    # Titles and summaries carry non-ASCII text; never let the console encoding end a run.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     i = sub.add_parser("init")
