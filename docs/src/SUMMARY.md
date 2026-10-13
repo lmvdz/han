@@ -16,4 +16,5 @@
   - [App shell](ui/shell.md)
   - [Data layer](ui/data.md)
 - [Implementation plan](PLAN.md)
+- [Shared runner setup](runner.md)
 - [Review history](decisions/HISTORY.md)
