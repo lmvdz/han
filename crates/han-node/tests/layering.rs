@@ -116,11 +116,40 @@ fn the_agent_tools_get_only_the_api_types() {
 }
 
 #[test]
+fn the_terminal_face_gets_only_the_api_types() {
+    // PLAN 3: the TUI attaches to the daemon over the local pipe; it never links the runtime.
+    let tui = tree(&["-p", "han-tui"]);
+    assert_absent(
+        "han-tui",
+        &tui,
+        &[
+            "han-core",
+            "han-net",
+            "han-seq",
+            "han-timeline",
+            "iroh",
+            "rusqlite",
+            "keyring",
+            "ed25519-dalek",
+        ],
+    );
+    assert!(tui.iter().any(|d| d == "han-node"));
+}
+
+#[test]
 fn face_sources_use_only_the_api_and_the_rpc_client() {
-    let faces = [
+    let mut faces = vec![
         root().join("apps/han/src/board.rs"),
         root().join("apps/han/src/agent.rs"),
+        root().join("apps/han/src/tui.rs"),
     ];
+    // The terminal face is a crate of its own: every source file of it is a face source.
+    for entry in std::fs::read_dir(root().join("apps/han-tui/src")).expect("apps/han-tui/src") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|e| e == "rs") {
+            faces.push(path);
+        }
+    }
     for file in faces {
         let text =
             std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));

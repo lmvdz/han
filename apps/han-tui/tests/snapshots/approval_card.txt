@@ -1,0 +1,26 @@
+ HAN  team · by issue · filter: -
+┌ Board ─────────────────────────────────────────────────────────────────────────────────┐┏ Approvals (1) ━━━━━━━━━━━━━━━━━━━━━━━┓
+│  PERSON     AGENT        STATE · STEP                    CHANGES  OVERLAP    TOK   AGE │┃>git.push · team                      ┃
+│>▾ #41 Board freshness (2)  ⚑ hunk                                                      │┃  by lars-reviewer                    ┃
+│ ● @lars      lars-coder   working: running tests [cargo … 4 files  ⚑ hunk     41k   0s │┃  you can approve                     ┃
+│ ● @ada       ada-╔ git.push · team ═════════════════════════════════════════════════════════════════════════╗                  ┃
+│ ▾ #52 Login flow ║WHY GATED  push of a han/* branch (space rule)                                            ║                  ┃
+│▌◐ @lars      lars║                                                                                          ║                  ┃
+│ ◌ @bo        bo-r║ACTION     git.push                                                                       ║                  ┃
+│ ▾ #60 Docs (2)   ║DIGEST     9f3c 41aa 07be d2e1 aabb ccdd eeff 0011 2233 4455 6677 8899 aabb ccdd eeff     ║                  ┃
+│ ✓ @ada       ada-║           0011                                                                           ║                  ┃
+│ ○ @lars      lars║                                                                                          ║                  ┃
+│ ▾ No issue (1)   ║WHO        proposed by lars-reviewer · executor @git:han.example                          ║                  ┃
+│ ✗ @bo        bo-s║EXPIRES    no expiry                                                                      ║                  ┃
+│                  ║                                                                                          ║                  ┃
+│                  ║APPROVALS  have: none yet                                                                 ║                  ┃
+│                  ║           needed from: @lars:han.example                                                 ║                  ┃
+│                  ║           you can approve                                                                ║                  ┃
+│                  ║                                                                                          ║                  ┃
+│                  ║[a] Review & sign approval    [c] Cancel effect    [Esc] Close                            ║                  ┃
+│                  ╚══════════════════════════════════════════════════════════════════════════════════════════╝                  ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+│                                                                                        │┃                                      ┃
+└ 1-7 of 7 ──────────────────────────────────────────────────────────────────────────────┘┗ j/k · Enter opens · Esc closes ━━━━━━┛
+ ● node @lars · space live head 42 ⚑ 1 awaiting you                                          1 effect waits for your approval (a)

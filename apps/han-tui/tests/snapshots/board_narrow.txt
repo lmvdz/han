@@ -1,0 +1,20 @@
+ HAN  team · by issue · filter: -
+┏ Board ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  PERSON     AGENT        STATE · STEP                 OVERLAP    AGE ┃
+┃>▾ #41 Board freshness (2)  ⚑ hunk                                    ┃
+┃ ● @lars      lars-coder   working: running tests [car… ⚑ hunk     0s ┃
+┃ ● @ada       ada-bot      working: editing src/board.… ⚑ hunk ×2  20s┃
+┃ ▾ #52 Login flow (2)  1 await you                                    ┃
+┃▌◐ @lars      lars-review… waiting-approval (awaits yo…            1m ┃
+┃ ◌ @bo        bo-runner    stale · last heard 14m ago …            14m┃
+┃ ▾ #60 Docs (2)                                                       ┃
+┃ ✓ @ada       ada-docs     done: wrote the guide                   3h ┃
+┃ ○ @lars      lars-notes   idle: nothing to do                     2m ┃
+┃ ▾ No issue (1)                                                       ┃
+┃ ✗ @bo        bo-scratch   failed: host unreachable                40m┃
+┃                                                                      ┃
+┃                                                                      ┃
+┃                                                                      ┃
+┃                                                                      ┃
+┗ 1-7 of 7 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ ● node @lars · space live head 42                   ? help · : command
