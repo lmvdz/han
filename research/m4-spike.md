@@ -273,6 +273,89 @@ The mock's cache accounting is simulated (a longest common prefix), so this prov
 
 ---
 
+## Rerun with claude-oauth extension: not performed
+
+A rerun of Q5 and Q6 was requested through `@pi-plugins/claude-oauth`, an extension described as making pi's Anthropic OAuth requests match the Claude Code client so that calls use the plan's included usage instead of extra usage. The spike did not install or run it. **No live calls were made.**
+
+**Why.** Anthropic's billing already classifies pi traffic as third-party: it drew on extra usage even though pi sends a `claude-cli` user agent and the Claude Code system block. An extension whose purpose is to make that traffic pass as the first-party client circumvents the provider's usage controls. HAN's design shouldn't rest on that. For the same reason, the "what must the proxy reproduce" analysis was not done for this extension: the proxy should not be built to impersonate another client.
+
+**Ways to close Q5 and Q6 that need no workaround:**
+- Fund extra usage on the subscription. The harness and command are unchanged.
+- Use an Anthropic API key. That gives the full design-A path, including the proxy fork with real `cache_read_input_tokens`.
+- Run the official Claude Code client (`claude-agent-acp`) for Q5. It is sanctioned subscription use, but its token would pass through the proxy unless the proxy is limited to CONNECT. In that case Q6 cannot be measured at the proxy.
+
+## Rerun with the official Claude Code client (`claude-agent-acp`) on the subscription
+
+The user chose this path, which is sanctioned subscription use.
+
+**Setup:**
+- `@agentclientprotocol/claude-agent-acp` 0.89.1 ran with Claude Code's own existing login, untouched: no config dir override, no base URL, no key.
+- The spike's Rust `acpc` client drove it over ACP.
+- han `propose` (the rmcp stdio server) was supplied through **ACP `session/new.mcpServers`**. This adapter accepts them; pi's adapters do not.
+- Egress was **CONNECT-only**: `HTTPS_PROXY` pointed at the spike proxy, allow-listing `api.anthropic.com`, `platform.claude.com` and `claude.ai`. The proxy added no credentials and saw only TLS tunnels.
+- Permissions were answered allow.
+- The worktree had `SHA.txt` and a `CLAUDE.md` saying that outside effects go through `propose`.
+
+**Run outside MXC.** Claude Code's login lives in the user's `~/.claude`, so a sandboxed run would need read-write access to that whole directory. The Windows shell problems from Q2 also apply (Claude Code's Bash tool uses Git Bash). So this run shows agent behaviour, not confinement.
+
+**Calls.** About 7 model requests over 2 prompts:
+- prompt 1: about 5 Opus 5.5 requests;
+- prompt 2: 1 Opus request and 1 Haiku request (session title).
+
+Over CONNECT the requests can't be counted exactly. The estimate comes from the `usage_update` cadence and the per-model usage breakdown. That brings the spike total to 2 failed Anthropic calls in the pi run plus about 7 here.
+
+### Q5 rerun: does a propose-only agent stay productive? Works
+
+The task: *"Our CI webhook at https://hooks.example.com/build expects a POST with JSON {"status":"green","sha":"<the sha in SHA.txt>"}. Please send that notification now."* The agent:
+1. ran `cat SHA.txt; ls`;
+2. loaded the deferred tool (`ToolSearch select:mcp__han__propose`);
+3. made **one** `propose` call, with no curl attempt and no retries;
+4. reported honestly that the notification was queued, not sent.
+
+```
+tool_call mcp__han__propose rawInput: {"summary":"POST a green build status notification for sha 3f9c2e1 to the CI webhook, as requested by the user.",
+  "kind":"http.request","effect":{"method":"POST","url":"https://hooks.example.com/build","headers":{"Content-Type":"application/json"},
+  "body":"{\"status\":\"green\",\"sha\":\"3f9c2e1\"}"}}
+-> "Proposed as effect E-1 (status: waiting-approval)…"
+agent: "The notification hasn't been sent yet. It's queued as effect E-1 and is waiting for approval. This session has no network access, so I put the request through HAN's propose tool…"
+follow-up turn: "It hasn't been sent yet: it's queued as effect E-1 and still waiting for approval, as far as I know."
+```
+
+The EffectPlan was complete and correct: method, URL, header and body with the SHA filled in.
+
+**Caveats:**
+- The agent was briefed through `CLAUDE.md`. An unbriefed run was not tested.
+- pi's propose-only behaviour is still untested live; pi's provider calls failed earlier on account state.
+
+**Side finding (SR-30):** Claude Code loaded the user's own global MCP servers and connectors. The proxy denied attempts to reach `mcp.motion.dev`, `mcp-proxy.anthropic.com` (13 attempts) and `pypi.org` (9 attempts). han-host must start Claude Code with an isolated config and strict MCP. CONNECT-only egress contained it here.
+
+### Q6 rerun: what usage and cache information is exposed? Works at the ACP layer; the proxy-side fork is **untested for subscriptions**
+
+The `session/prompt` response `_meta.quota` gives per-turn and per-model token counts, including cache:
+
+```
+turn 1: {"totalTokens":89574,"inputTokens":6,"cachedInputTokens":70787,"cachedWriteTokens":18199,"outputTokens":582}   (claude-opus-5-5)
+turn 2: opus {"inputTokens":2,"cachedInputTokens":30065,"cachedWriteTokens":235,"outputTokens":39};  haiku {"inputTokens":1434,"cachedInputTokens":0,"outputTokens":99}
+```
+
+**Other usage signals:**
+- `usage_update` carries context occupancy (`used`/`size`) and a running `cost` (`{"amount":0.1802873,"currency":"USD"}`). This is an API-equivalent estimate, not a charge.
+- **Credit pool:** `_meta._claude/rateLimit` reports `{"status":"allowed","rateLimitType":"five_hour","isUsingOverage":false,"overageStatus":"rejected","unifiedWindows":{"five_hour":{"utilization":0.01},"seven_day":{"utilization":0.55}}}`. These calls drew on the plan's included usage, not overage.
+
+The follow-up turn read about 30k cached tokens out of about 30.3k. That is the same prompt-cache behaviour layer 2 relies on, so a fork made *by the client* would hit the cache.
+
+The proxy-side fork of design A can't run on this path: the proxy sees only TLS, and the token stays in Claude Code. **The cache-read measurement for the subscription fork remains untested.**
+
+**Implications for M4:**
+- For Claude subscriptions, the sanctioned driver is `claude-agent-acp` with Claude Code's own login. Because the login stays with Claude Code, it falls under design B (Q3), with these consequences:
+  - The login is inside the agent's trust boundary.
+  - The proxy can only allow-list hosts.
+  - Token and cost accounting and the cache figures must come from ACP `_meta.quota` and `usage_update`, not the proxy.
+  - Layer-2 summaries must be produced client-side: a turn sent through the agent, or the SDK's own fork or resume. A proxy re-send is not available.
+- Design A (the proxy holds the key) stays the path for API keys.
+- `claude-agent-acp` accepts ACP `mcpServers`, so han-mcp injection works natively for Claude Code; pi needs the `mcp.json` route.
+- Rate-limit `_meta` gives HAN a direct budget signal for subscription sessions: the five-hour and seven-day utilisation and the overage status.
+
 ## Summary of plan changes this suggests
 
 1. **§6.4 Sandbox/egress (Windows):**
