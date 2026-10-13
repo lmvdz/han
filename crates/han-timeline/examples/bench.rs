@@ -240,6 +240,15 @@ fn big_text() {
         .unwrap()
         .text(&obj);
     report("materialise the same version again (cached)", 1, start);
+    let at10 = At::Version(versions[10].clone());
+    let _ = fresh.state(&at10).unwrap().text_shared(&obj); // fills the shared cache
+    let start = Instant::now();
+    let shared = fresh.state(&at10).unwrap().text_shared(&obj).unwrap();
+    report("read the same version's text again, shared", 1, start);
+    assert_eq!(
+        shared.len(),
+        fresh.state(&at10).unwrap().text(&obj).unwrap().len()
+    );
 }
 
 fn main() {
