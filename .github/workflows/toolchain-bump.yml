@@ -1,0 +1,50 @@
+name: toolchain-bump
+
+# Monthly: open a PR that moves rust-toolchain.toml to the latest stable Rust (PLAN 4: pinned to the latest
+# stable, bumped monthly). CI runs on the PR like any other.
+on:
+  schedule:
+    - cron: "11 6 1 * *"   # 06:11 UTC on the 1st
+  workflow_dispatch:
+
+permissions:
+  contents: write        # pushes the bump branch
+  pull-requests: write   # opens the PR
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Find the latest stable
+        id: stable
+        run: |
+          v=$(curl -fsSL https://static.rust-lang.org/dist/channel-rust-stable.toml \
+            | awk '/^\[pkg\.rust\]/{f=1;next} f&&/^version *=/{gsub(/"/,"",$3); print $3; exit}')
+          case "$v" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "unexpected version: $v" >&2; exit 1;; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Update rust-toolchain.toml
+        env:
+          VERSION: ${{ steps.stable.outputs.version }}
+        run: sed -i -E "s/^channel = \".*\"/channel = \"${VERSION}\"/" rust-toolchain.toml
+      - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          # TODO(maintainer): PRs opened with the default token do not start the `ci` workflow. Either close and
+          # reopen the PR by hand, or add a fine-grained token (pull-requests and contents write) as the secret
+          # BUMP_TOKEN and uncomment the next line. Also enable "Allow GitHub Actions to create pull requests"
+          # in the repository settings.
+          # token: ${{ secrets.BUMP_TOKEN }}
+          branch: ops/toolchain-bump
+          delete-branch: true
+          commit-message: "Bump the Rust toolchain to ${{ steps.stable.outputs.version }}"
+          author: "han toolchain bump <noreply@github.com>"
+          committer: "han toolchain bump <noreply@github.com>"
+          title: "Bump the Rust toolchain to ${{ steps.stable.outputs.version }}"
+          body: |
+            Moves `rust-toolchain.toml` to the latest stable Rust, ${{ steps.stable.outputs.version }}.
+
+            Review the CI results; a new clippy lint may need a fix in a separate commit on this branch.
+          add-paths: rust-toolchain.toml

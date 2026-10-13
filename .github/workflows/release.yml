@@ -1,0 +1,174 @@
+name: release
+
+# Releases are cut by pushing a tag such as v0.1.0 (a maintainer does that; nothing here creates tags).
+# Built with cargo-dist (dist-workspace.toml): archives, a shell installer, a Homebrew formula and an MSI.
+# Never runs on pull requests. See docs/release.md.
+on:
+  push:
+    tags: ["v0.*"]
+
+permissions:
+  contents: read
+
+env:
+  DIST_VERSION: "0.33.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      val: ${{ steps.plan.outputs.manifest }}
+      tag: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: Plan (also checks that the tag matches the workspace version)
+        id: plan
+        run: |
+          dist plan --tag="${{ github.ref_name }}" --output-format=json > plan-dist-manifest.json
+          echo "manifest=$(jq -c . plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifacts-plan-dist-manifest
+          path: plan-dist-manifest.json
+
+  build-local:
+    needs: plan
+    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container && matrix.container.image || null }}
+    env:
+      # The public half of the release signing key, embedded in the binary (docs/release.md, "Self-update").
+      # A repository variable, not a secret. Unset means a build whose `han update --check` refuses to run.
+      HAN_UPDATE_PUBKEY: ${{ vars.HAN_UPDATE_PUBKEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - name: Install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: Build
+        shell: bash
+        run: |
+          dist build --tag="${{ needs.plan.outputs.tag }}" --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
+          cat dist-manifest.json
+          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
+          jq --raw-output ".upload_files[]" dist-manifest.json >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+        id: build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifacts-build-local-${{ join(matrix.targets, '_') }}
+          path: |
+            ${{ steps.build.outputs.paths }}
+            dist-manifest.json
+
+  build-global:
+    needs: [plan, build-local]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      - id: build
+        run: |
+          dist build --tag="${{ needs.plan.outputs.tag }}" --output-format=json "--artifacts=global" > dist-manifest.json
+          echo "paths<<EOF" >> "$GITHUB_OUTPUT"
+          jq --raw-output ".upload_files[]" dist-manifest.json >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifacts-build-global
+          path: ${{ steps.build.outputs.paths }}
+
+  host:
+    needs: [plan, build-local, build-global]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # creates the GitHub Release with the built files; uses the workflow's own token
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: Create the release and upload the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ needs.plan.outputs.tag }}"
+          gh release create "$tag" --repo "${{ github.repository }}" --title "$tag" --notes "Release $tag. Verify downloads against the .sha256 files." --verify-tag artifacts/*
+
+  # TODO(maintainer, needs secrets): publish the Homebrew formula to the tap.
+  #   1. Create github.com/lmvdz/homebrew-tap.
+  #   2. Add a repository secret HOMEBREW_TAP_TOKEN: a fine-grained token with contents:write on that repo only.
+  #   3. Remove the `if: false` below.
+  publish-homebrew:
+    if: false
+    needs: [plan, host]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: lmvdz/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: Commit the formula
+        run: |
+          cp artifacts/*.rb tap/Formula/
+          cd tap
+          git config user.name "han release"
+          git config user.email "noreply@github.com"
+          git add Formula
+          git commit -m "han ${{ needs.plan.outputs.tag }}"
+          git push
+
+  # TODO(maintainer, needs secrets): sign the update manifest (docs/release.md, "Self-update").
+  #   1. Generate the key pair with `python ref/release_keys.py keygen`; keep the private half out of the repo.
+  #   2. Add it as the repository secret HAN_UPDATE_SIGNING_KEY, and the public half as the repository
+  #      variable HAN_UPDATE_PUBKEY (embedded in the binary at build time).
+  #   3. Remove the `if: false` below. The step uploads latest.json and latest.json.sig to the release.
+  # TODO(maintainer, needs secrets): sign the MSI and the macOS binaries (Authenticode, Apple notarisation)
+  #   once certificates exist; not wired up.
+  sign-manifest:
+    if: false
+    needs: [plan, host]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Sign and upload latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAN_UPDATE_SIGNING_KEY: ${{ secrets.HAN_UPDATE_SIGNING_KEY }}
+        run: |
+          tag="${{ needs.plan.outputs.tag }}"
+          pip install cryptography
+          python ref/release_keys.py sign --version "${tag#v}" --notes-url "https://github.com/${{ github.repository }}/releases/tag/$tag" --out latest.json
+          gh release upload "$tag" latest.json latest.json.sig --repo "${{ github.repository }}"

@@ -4,6 +4,7 @@ name: full
 on:
   schedule:
     - cron: "17 2 * * *"   # 02:17 UTC
+    - cron: "43 5 * * *"   # 05:43 UTC: the advisory job only (see `advisories`)
   workflow_dispatch:
 
 permissions:
@@ -11,17 +12,18 @@ permissions:
 
 jobs:
   spec:
+    if: github.event.schedule != '43 5 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust toolchain (from rust-toolchain.toml; run_all's timeline row and the Rust fuzz target need it)
         run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -53,7 +55,10 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python ref/fuzz_diff.py --target both --seeds 1000
 
+  # cargo test on all three OSes. cargo-deny's advisories run in their own job, so a new advisory does not mask a
+  # test result (and the reverse); the other deny checks (bans, licences, sources) stay here.
   rust-matrix:
+    if: github.event.schedule != '43 5 * * *'
     strategy:
       fail-fast: false
       matrix:
@@ -61,11 +66,51 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-deny
       - run: cargo test --workspace --locked
-      - run: cargo deny check
+      - run: cargo deny check bans licenses sources
+
+  # The Linux-only sandbox tests (bubblewrap; han-host's sandbox_probe). rust-matrix runs them too where the
+  # runner allows user namespaces; this job installs bubblewrap and makes sure of that, so a skipped backend
+  # shows up here as a failure of the assertion below instead of a silent pass.
+  sandbox-linux:
+    if: github.event.schedule != '43 5 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install bubblewrap and allow unprivileged user namespaces (Ubuntu 24.04 restricts them by default)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --unshare-user --unshare-net --ro-bind / / true
+      - name: Sandbox tests
+        run: cargo test -p han-host --locked --test sandbox_probe -- --nocapture
+
+  # Known-vulnerable and unmaintained dependencies. A new advisory can appear without any change of ours, which is
+  # why this runs on a schedule. Failing here is a signal to look, not a merge blocker.
+  advisories:
+    if: github.event_name != 'schedule' || github.event.schedule == '43 5 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-deny,cargo-audit
+      - name: cargo deny (advisories; deny.toml carries the reviewed ignores)
+        run: cargo deny check advisories
+      - name: cargo audit (RustSec again, through a second reader of Cargo.lock)
+        run: cargo audit --file Cargo.lock --ignore RUSTSEC-2024-0436
