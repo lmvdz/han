@@ -63,6 +63,9 @@ RULES = """Hard rules (a change that breaks one is thrown away):
 - Observable behaviour must not change: every conformance vector, the randomized convergence
   tests and the exact merged-text checks must still pass. Speed only.
 - No new dependencies, no unsafe code, no change to the public API.
+- A fast path that only runs for some sizes or shapes of data (large texts, no seals, ...) is
+  invisible to the existing tests; add a unit test in the same src file that compares it with
+  the general path on randomized inputs, or the change does not count as tested.
 - This is a clean-room implementation (see CLAUDE.md): use only this repository; no web access,
   no other implementation of the profile, nothing from outside this folder.
 - Keep the code idiomatic and commented like the surrounding code; `cargo fmt` and
