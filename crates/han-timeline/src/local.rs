@@ -43,6 +43,29 @@ pub(crate) fn plan_edit(
     text: &str,
 ) -> Result<Option<Op>, Error> {
     let s = normalise(text);
+    if t.compact_layout() {
+        let len = t.len();
+        if pos.checked_add(delete).is_none_or(|end| end > len) {
+            return Err(Error::OutOfRange);
+        }
+        let deletes = t.visible_ranges(pos, pos + delete);
+        let inserts = if s.is_empty() {
+            Vec::new()
+        } else {
+            vec![Insert {
+                anchor: (pos > 0).then(|| t.char_id(t.visible_char(pos - 1).unwrap())),
+                text: s,
+            }]
+        };
+        return Ok(
+            (!deletes.is_empty() || !inserts.is_empty()).then(|| Op::TextEdit {
+                target: target.clone(),
+                deletes,
+                inserts,
+            }),
+        );
+    }
+
     let lay = t.layout();
     let len = lay.visible_index.len();
     if pos.checked_add(delete).is_none_or(|end| end > len) {
@@ -65,7 +88,8 @@ pub(crate) fn plan_edit(
     }
     let mut deletes = ranges_in_order(t, doomed.iter().map(|&i| lay.order[i]));
     // Characters hidden only by TL-45 (b) that duplicate a deleted one.
-    if !doomed.is_empty() {
+    // Without copies visible == vis_a, so nothing is hidden only by (b).
+    if !doomed.is_empty() && t.has_copies() {
         let canon: std::collections::HashSet<CharId> =
             doomed.iter().map(|&i| t.canonical(lay.order[i])).collect();
         let hidden = (0..lay.order.len())
