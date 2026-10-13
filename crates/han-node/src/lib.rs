@@ -30,6 +30,8 @@ pub mod supervisor;
 #[cfg(feature = "runtime")]
 mod sync;
 #[cfg(feature = "runtime")]
+pub mod timeline;
+#[cfg(feature = "runtime")]
 pub mod views;
 
 #[cfg(feature = "runtime")]

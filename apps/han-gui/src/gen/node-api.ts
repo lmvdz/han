@@ -171,6 +171,10 @@ task: string, } | { "type": "session_open",
  */
 space: string, 
 /**
+ * `auto` (default) or `guarded` (R-24: an agent that chooses guarding).
+ */
+steer_mode?: string, 
+/**
  * The task it works.
  */
 task?: string, 
@@ -249,7 +253,95 @@ space: string,
 /**
  * The proposal's entry id.
  */
-proposal: string, };
+proposal: string, } | { "type": "effect_propose", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * Who may claim and run it.
+ */
+executor: string, 
+/**
+ * The plan as JSON text: `{action, target, args?}` (han.ts `Plan`; `action` is also the body's).
+ */
+plan: string, 
+/**
+ * The task it is charged to (R-24: the driving task, when a task drives the turn).
+ */
+task?: string, 
+/**
+ * The cost unit and amount, in a budgeted space.
+ */
+cost?: [string, number], 
+/**
+ * Whether a failed attempt may be retried.
+ */
+repeatable: boolean, 
+/**
+ * No claim at or after this time.
+ */
+expires_at?: string, } | { "type": "effect_claim", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The proposal.
+ */
+proposal: string, 
+/**
+ * One more than the number of earlier claims.
+ */
+attempt: number, 
+/**
+ * The space's `launchWindow` in seconds.
+ */
+window: number, } | { "type": "effect_outcome", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The claim's entry id.
+ */
+claim: string, 
+/**
+ * `succeeded`, `failed`, `cancelled` or `unknown`.
+ */
+result: string, 
+/**
+ * `yes`, `no` or `unknown`.
+ */
+started: string, 
+/**
+ * What it cost, with `started: yes` only.
+ */
+cost?: [string, number], } | { "type": "policy_set", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The whole policy as JSON text.
+ */
+policy: string, } | { "type": "stream_publish", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The session.
+ */
+session: string, 
+/**
+ * The profile's name, such as `han.timeline/1`.
+ */
+name: string, 
+/**
+ * The item's body as JSON text (at most 64 KiB with its envelope).
+ */
+body: string, };
 
 export type CallResult = { "type": "receipt", 
 /**
@@ -489,6 +581,54 @@ from?: string,
  * The later point.
  */
 to: string, 
+/**
+ * The window.
+ */
+window: Window, } | { "type": "inputs", 
+/**
+ * The session.
+ */
+session: string, 
+/**
+ * The window (its cursor is the key of the last input handled).
+ */
+window: Window, } | { "type": "tasks", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * Only tasks with this assignee.
+ */
+assignee?: string, 
+/**
+ * The window.
+ */
+window: Window, } | { "type": "guard", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The actor.
+ */
+actor: string, 
+/**
+ * The window.
+ */
+window: Window, } | { "type": "effects", 
+/**
+ * Only this space; every followed space when absent.
+ */
+space?: string, 
+/**
+ * Only effects whose executor is this actor.
+ */
+executor?: string, 
+/**
+ * Include effects in a final phase.
+ */
+include_done: boolean, 
 /**
  * The window.
  */
@@ -895,6 +1035,178 @@ approvers: Array<string>,
  */
 why_gated: string, };
 
+export type EffectRow = { 
+/**
+ * Orders and identifies the row: the space and the proposal's seq, zero-padded.
+ */
+key: string, 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The proposal's entry id.
+ */
+proposal: string, 
+/**
+ * The proposer.
+ */
+proposer: string, 
+/**
+ * The executor.
+ */
+executor: string, 
+/**
+ * The action.
+ */
+action: string, 
+/**
+ * The digest of the plan.
+ */
+plan_digest: string, 
+/**
+ * The plan as JSON text, from the proposal's content (absent when redacted or not delivered).
+ */
+plan?: string, 
+/**
+ * The task it is charged to.
+ */
+task?: string, 
+/**
+ * `open`, `claimed` or `done` (a final phase, as far as this device folds it).
+ */
+phase: string, 
+/**
+ * Authors of the open approvals.
+ */
+approvals: Array<string>, 
+/**
+ * How many claims it has had.
+ */
+claims: number, 
+/**
+ * The latest claim's entry id.
+ */
+last_claim?: string, 
+/**
+ * The space's `launchWindow` in seconds.
+ */
+launch_window: number, 
+/**
+ * Whether a failed attempt may be retried.
+ */
+repeatable: boolean, 
+/**
+ * The cost unit and amount, when the proposal has one.
+ */
+cost?: [string, number], 
+/**
+ * No claim at or after this time.
+ */
+expires_at?: string, 
+/**
+ * The seq of the proposal.
+ */
+seq: number, 
+/**
+ * The head of the space when the row was made (an executor claims each effect at most once per head).
+ */
+head: number, };
+
+export type GuardRow = { 
+/**
+ * Orders and identifies the row: the space and the actor.
+ */
+key: string, 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The actor.
+ */
+actor: string, 
+/**
+ * It chose guarding, or is forced.
+ */
+guarded: boolean, 
+/**
+ * The owners' `forceGuarded` is on (it applies to non-humans).
+ */
+forced: boolean, 
+/**
+ * The head the answer is at.
+ */
+head: number, };
+
+export type InputRow = { 
+/**
+ * Orders and identifies the row: the seq, zero-padded.
+ */
+key: string, 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The session.
+ */
+session: string, 
+/**
+ * The input's entry id.
+ */
+id: string, 
+/**
+ * The input's seq.
+ */
+seq: number, 
+/**
+ * Its author.
+ */
+author: string, 
+/**
+ * Its text (absent when redacted).
+ */
+text?: string, };
+
+export type TaskRow = { 
+/**
+ * Orders and identifies the row: the space and the seq, zero-padded.
+ */
+key: string, 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The task's entry id.
+ */
+task: string, 
+/**
+ * The seq of the task.
+ */
+seq: number, 
+/**
+ * Its author.
+ */
+author: string, 
+/**
+ * Its assignees.
+ */
+to: Array<string>, 
+/**
+ * The work's external reference.
+ */
+external?: string, 
+/**
+ * The ask (content), when delivered.
+ */
+ask?: string, 
+/**
+ * Whether it is still open.
+ */
+open: boolean, };
+
 export type SpaceLink = "connecting" | "live" | "offline" | "rejected";
 
 export type SpaceStatusRow = { 
@@ -1151,7 +1463,7 @@ added: number,
  */
 removed: number, };
 
-export type Row = { "view": "board", "row": BoardRow } | { "view": "session", "row": SessionRow } | { "view": "who_is_on", "row": WhoRow } | { "view": "overlap", "row": OverlapRow } | { "view": "approval", "row": ApprovalRow } | { "view": "space_status", "row": SpaceStatusRow } | { "view": "cost", "row": CostRow } | { "view": "outbox", "row": OutboxRow } | { "view": "join_progress", "row": JoinProgressRow } | { "view": "node_status", "row": NodeStatusRow } | { "view": "timeline_point", "row": TimelinePointRow } | { "view": "file_patch", "row": FilePatchRow };
+export type Row = { "view": "board", "row": BoardRow } | { "view": "session", "row": SessionRow } | { "view": "who_is_on", "row": WhoRow } | { "view": "overlap", "row": OverlapRow } | { "view": "approval", "row": ApprovalRow } | { "view": "space_status", "row": SpaceStatusRow } | { "view": "cost", "row": CostRow } | { "view": "outbox", "row": OutboxRow } | { "view": "join_progress", "row": JoinProgressRow } | { "view": "node_status", "row": NodeStatusRow } | { "view": "timeline_point", "row": TimelinePointRow } | { "view": "file_patch", "row": FilePatchRow } | { "view": "effect", "row": EffectRow } | { "view": "guard", "row": GuardRow } | { "view": "input", "row": InputRow } | { "view": "task", "row": TaskRow };
 
 export type DiffOp = { "op": "insert", 
 /**

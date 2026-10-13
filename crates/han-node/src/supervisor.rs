@@ -40,7 +40,43 @@ pub struct RoleSpec {
     pub name: String,
     /// Arguments after the subcommand.
     pub args: Vec<String>,
+    /// Environment variables to set on top of the allow-list (SR-08). Never a secret the role should not
+    /// hold (SR-09): model keys go only to a host, GitHub credentials only to an executor.
+    pub env: Vec<(String, String)>,
 }
+
+/// The variables a child role inherits from the node (SR-08): what processes need to run on each OS, logging
+/// settings, and nothing else. Everything else a role needs comes in [`RoleSpec::env`] or its arguments.
+pub const ENV_ALLOW: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "HOME",
+    "USERPROFILE",
+    "USERNAME",
+    "USER",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "LANG",
+    "LC_ALL",
+    "RUST_LOG",
+    "RUST_BACKTRACE",
+    "NUMBER_OF_PROCESSORS",
+];
 
 /// Why a role could not be started or stopped.
 #[derive(Debug, thiserror::Error)]
@@ -127,9 +163,16 @@ impl Supervisor for ProcessSpawner {
                 return Err(SupervisorError::Running(spec.name));
             }
         }
+        let inherited = ENV_ALLOW
+            .iter()
+            .filter_map(|k| std::env::var_os(k).map(|v| (k.to_string(), v)));
         let child = Command::new(&self.program)
             .arg(spec.role.subcommand())
             .args(&spec.args)
+            .env_clear()
+            .envs(inherited)
+            .envs(spec.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| SupervisorError::Spawn(e.to_string()))?;

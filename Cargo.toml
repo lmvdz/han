@@ -1,6 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["crates/han-core", "crates/han-timeline", "crates/han-seq", "crates/han-net", "crates/han-node", "apps/han"]
+members = [
+    "crates/han-core",
+    "crates/han-timeline",
+    "crates/han-seq",
+    "crates/han-net",
+    "crates/han-node",
+    "crates/han-vcs",
+    "crates/han-mcp",
+    "crates/han-exec",
+    "crates/han-host",
+    "apps/han",
+]
 
 [workspace.package]
 version = "0.1.0"

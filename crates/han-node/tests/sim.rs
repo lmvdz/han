@@ -193,6 +193,7 @@ async fn scenario() {
         &call(
             &bob,
             Command::SessionOpen {
+                steer_mode: None,
                 space: space.clone(),
                 task: None,
                 title: Some("bob".into()),
@@ -204,6 +205,7 @@ async fn scenario() {
         &call(
             &carol,
             Command::SessionOpen {
+                steer_mode: None,
                 space: space.clone(),
                 task: None,
                 title: Some("carol".into()),
@@ -215,6 +217,7 @@ async fn scenario() {
         &call(
             &alice,
             Command::SessionOpen {
+                steer_mode: None,
                 space: space.clone(),
                 task: None,
                 title: Some("alice".into()),

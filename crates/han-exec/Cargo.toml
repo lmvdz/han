@@ -1,0 +1,32 @@
+[package]
+name = "han-exec"
+description = "HAN executor: approved effects as desired-state actions (git_push, open_pr, http_request), an SQLite launch journal keyed by idempotency key, plan checks against the approved digest and changeset, and a local gate seam."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+base64.workspace = true
+han-core.workspace = true
+octocrab = { version = "=0.54.4", default-features = false, features = ["default-client", "rustls", "rustls-ring", "tracing"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+han-node = { path = "../han-node", version = "0.1.0", default-features = false }
+han-vcs = { path = "../han-vcs", version = "0.1.0" }
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

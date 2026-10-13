@@ -277,6 +277,14 @@ impl Engine {
         self.spaces.get(space).map(|m| m.link)
     }
 
+    /// The actor of a session of `space`, if this node knows the session.
+    pub fn session_actor(&self, space: &str, session: &str) -> Option<String> {
+        self.spaces
+            .get(space)
+            .and_then(|m| m.sessions.get(session))
+            .map(|s| s.actor.clone())
+    }
+
     /// The sessions of `space` that are not closed.
     pub fn open_sessions(&self, space: &str) -> Vec<String> {
         self.spaces
@@ -496,6 +504,40 @@ impl Engine {
                 .get_mut(space)
                 .map(|m| m.overlap_rows(&now))
                 .ok_or_else(|| not_found("space", space)),
+            Query::Inputs { session, .. } => self
+                .spaces
+                .values()
+                .find_map(|m| m.input_rows(session))
+                .ok_or_else(|| not_found("session", session)),
+            Query::Tasks {
+                space, assignee, ..
+            } => self
+                .spaces
+                .get(space)
+                .map(|m| m.task_rows(assignee.as_deref()))
+                .ok_or_else(|| not_found("space", space)),
+            Query::Guard { space, actor, .. } => self
+                .spaces
+                .get(space)
+                .map(|m| vec![m.guard_row(actor)])
+                .ok_or_else(|| not_found("space", space)),
+            Query::Effects {
+                space,
+                executor,
+                include_done,
+                ..
+            } => match space {
+                Some(sp) => self
+                    .spaces
+                    .get(sp)
+                    .map(|m| m.effect_rows(executor.as_deref(), *include_done))
+                    .ok_or_else(|| not_found("space", sp)),
+                None => Ok(self
+                    .spaces
+                    .values()
+                    .flat_map(|m| m.effect_rows(executor.as_deref(), *include_done))
+                    .collect()),
+            },
             Query::Approvals { actor, .. } => Ok(self
                 .spaces
                 .values()

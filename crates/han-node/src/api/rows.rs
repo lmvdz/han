@@ -395,6 +395,124 @@ pub struct ApprovalRow {
     pub why_gated: String,
 }
 
+/// A steering input (`Inputs` view).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct InputRow {
+    /// Orders and identifies the row: the seq, zero-padded.
+    pub key: String,
+    /// The space.
+    pub space: String,
+    /// The session.
+    pub session: String,
+    /// The input's entry id.
+    pub id: String,
+    /// The input's seq.
+    pub seq: u64,
+    /// Its author.
+    pub author: String,
+    /// Its text (absent when redacted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub text: Option<String>,
+}
+
+/// A task (`Tasks` view).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct TaskRow {
+    /// Orders and identifies the row: the space and the seq, zero-padded.
+    pub key: String,
+    /// The space.
+    pub space: String,
+    /// The task's entry id.
+    pub task: String,
+    /// The seq of the task.
+    pub seq: u64,
+    /// Its author.
+    pub author: String,
+    /// Its assignees.
+    pub to: Vec<String>,
+    /// The work's external reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external: Option<String>,
+    /// The ask (content), when delivered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ask: Option<String>,
+    /// Whether it is still open.
+    pub open: bool,
+}
+
+/// Whether an actor is guarded (`Guard` view).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct GuardRow {
+    /// Orders and identifies the row: the space and the actor.
+    pub key: String,
+    /// The space.
+    pub space: String,
+    /// The actor.
+    pub actor: String,
+    /// It chose guarding, or is forced.
+    pub guarded: bool,
+    /// The owners' `forceGuarded` is on (it applies to non-humans).
+    pub forced: bool,
+    /// The head the answer is at.
+    pub head: u64,
+}
+
+/// An effect as an executor reads it (`Effects` view).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct EffectRow {
+    /// Orders and identifies the row: the space and the proposal's seq, zero-padded.
+    pub key: String,
+    /// The space.
+    pub space: String,
+    /// The proposal's entry id.
+    pub proposal: String,
+    /// The proposer.
+    pub proposer: String,
+    /// The executor.
+    pub executor: String,
+    /// The action.
+    pub action: String,
+    /// The digest of the plan.
+    pub plan_digest: String,
+    /// The plan as JSON text, from the proposal's content (absent when redacted or not delivered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan: Option<String>,
+    /// The task it is charged to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task: Option<String>,
+    /// `open`, `claimed` or `done` (a final phase, as far as this device folds it).
+    pub phase: String,
+    /// Authors of the open approvals.
+    pub approvals: Vec<String>,
+    /// How many claims it has had.
+    pub claims: u64,
+    /// The latest claim's entry id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_claim: Option<String>,
+    /// The space's `launchWindow` in seconds.
+    pub launch_window: u64,
+    /// Whether a failed attempt may be retried.
+    pub repeatable: bool,
+    /// The cost unit and amount, when the proposal has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost: Option<(String, u64)>,
+    /// No claim at or after this time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub expires_at: Option<String>,
+    /// The seq of the proposal.
+    pub seq: u64,
+    /// The head of the space when the row was made (an executor claims each effect at most once per head).
+    pub head: u64,
+}
+
 /// How this device is connected to a space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -629,6 +747,14 @@ pub enum Row {
     TimelinePoint(TimelinePointRow),
     /// A file patch.
     FilePatch(FilePatchRow),
+    /// An effect with its plan.
+    Effect(EffectRow),
+    /// Whether an actor is guarded.
+    Guard(GuardRow),
+    /// A steering input.
+    Input(InputRow),
+    /// A task.
+    Task(TaskRow),
 }
 
 impl Row {
@@ -647,6 +773,10 @@ impl Row {
             Row::NodeStatus(r) => &r.key,
             Row::TimelinePoint(r) => &r.key,
             Row::FilePatch(r) => &r.key,
+            Row::Effect(r) => &r.key,
+            Row::Guard(r) => &r.key,
+            Row::Input(r) => &r.key,
+            Row::Task(r) => &r.key,
         }
     }
 }
