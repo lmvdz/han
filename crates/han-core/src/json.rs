@@ -508,6 +508,9 @@ fn write_string(s: &str, out: &mut String) {
 }
 
 /// ECMAScript `Number::toString(10)` for a finite double (RFC 8785 section 3.2.2.3).
+///
+/// Delegates to `ryu-js`, which implements the ECMAScript algorithm exactly, including the
+/// choice of the even digit when two shortest candidates are equally close (e.g. `x.25`).
 fn es6_number(f: f64) -> Result<String, JsonError> {
     if !f.is_finite() {
         return Err(JsonError::NonFinite);
@@ -515,35 +518,8 @@ fn es6_number(f: f64) -> Result<String, JsonError> {
     if f == 0.0 {
         return Ok("0".into());
     }
-    let sign = if f < 0.0 { "-" } else { "" };
-    // `{:e}` yields the shortest digits that round-trip, as `d.ddde<exp>`.
-    let sci = format!("{:e}", f.abs());
-    let (mantissa, exp) = sci
-        .split_once('e')
-        .expect("LowerExp always has an exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let k = i32::try_from(digits.len()).expect("a double has at most 17 digits");
-    let n: i32 = exp.parse::<i32>().expect("exponent is an integer") + 1;
-    let body = if k <= n && n <= 21 {
-        format!(
-            "{digits}{}",
-            "0".repeat(usize::try_from(n - k).unwrap_or(0))
-        )
-    } else if 0 < n && n <= 21 {
-        let split = usize::try_from(n).unwrap_or(0);
-        format!("{}.{}", &digits[..split], &digits[split..])
-    } else if -6 < n && n <= 0 {
-        format!("0.{}{digits}", "0".repeat(usize::try_from(-n).unwrap_or(0)))
-    } else {
-        let e = n - 1;
-        let esign = if e < 0 { '-' } else { '+' };
-        if k == 1 {
-            format!("{digits}e{esign}{}", e.abs())
-        } else {
-            format!("{}.{}e{esign}{}", &digits[..1], &digits[1..], e.abs())
-        }
-    };
-    Ok(format!("{sign}{body}"))
+    let mut buf = ryu_js::Buffer::new();
+    Ok(buf.format_finite(f).to_owned())
 }
 
 /// Converts a typed value (an `Entry`, a `Receipt`, ...) to a [`Value`] through serde.
