@@ -144,7 +144,7 @@ fn content(state: &han_timeline::State, o: &ObjectId) -> Option<String> {
 }
 
 /// Canonical characters keep one relative order in every timeline head (TL-72 step 2). A
-/// diagnostic behind `CHECK_ORDER=1`: copies can break it today (SPEC-QUESTIONS.md, Q1).
+/// diagnostic behind `CHECK_ORDER=1`: copies may break it, which the planner tolerates (TL-72).
 fn check_order(h: &History) {
     let heads: Vec<OpId> = h.timelines().into_iter().map(|t| t.id).collect();
     let states: Vec<_> = heads
@@ -337,6 +337,22 @@ fn step(
                     let res = resolutions(rng, &plan.conflicts);
                     let draft = plan.resolve(&res).unwrap();
                     let preview = r.history.preview(&draft).unwrap();
+                    // Every merged text reads exactly what TL-72 steps 7 – 8 promise.
+                    for (o, want) in plan.expected_texts(&res).unwrap() {
+                        let text_at = |at: At| r.history.state(&at).unwrap().text(&o);
+                        assert_eq!(
+                            preview.text(&o).as_ref(),
+                            Some(&want),
+                            "merged text of {o}: conflicts {:?}, resolutions {res:?}
+ base {:?}
+ target {:?}
+ incoming {:?}",
+                            plan.conflicts,
+                            text_at(At::Version(plan.base.clone())),
+                            text_at(At::Timeline(t.clone())),
+                            text_at(At::Timeline(from.clone())),
+                        );
+                    }
                     // Texts the target left alone since the base end up exactly as incoming
                     // has them (TL-72 step 7, TL-77).
                     let canon = |at: At, o: &ObjectId| {
@@ -375,7 +391,6 @@ fn step(
                     *stats.entry("conflicts").or_default() += plan.conflicts.len();
                 }
                 Err(Error::UpToDate | Error::MergeSelf) => {}
-                Err(Error::MergeOrder) => *stats.entry("merge_order").or_default() += 1,
                 Err(e) => panic!("plan: {e}"),
             }
         }
@@ -603,7 +618,14 @@ fn worktree_histories_converge() {
         .unwrap_or(12);
     let mut total: BTreeMap<&str, usize> = BTreeMap::new();
     for seed in 100..100 + seeds {
-        for (k, v) in scenario(seed, HistoryKind::Worktree, 160) {
+        for (k, v) in scenario(
+            seed,
+            HistoryKind::Worktree,
+            std::env::var("STEPS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(160),
+        ) {
             *total.entry(k).or_default() += v;
         }
     }

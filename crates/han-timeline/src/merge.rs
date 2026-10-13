@@ -160,22 +160,43 @@ struct DraftInsert {
     origin: Option<CharId>,
 }
 
-/// Deletes and inserts for one region of one text.
-#[derive(Clone, Debug, Default)]
-struct RegionEdit {
-    deletes: Vec<CharId>,
-    inserts: Vec<DraftInsert>,
+/// One region of a text where the incoming side has edits (TL-72 steps 4 – 6).
+#[derive(Clone, Debug)]
+struct Region {
+    /// The target's region characters (indexes into the target sequence), in order.
+    t: Vec<usize>,
+    /// The incoming region characters (indexes into the incoming sequence), in order.
+    i: Vec<usize>,
+    /// Where the region sits in the target sequence: its first character, or for an empty
+    /// target region the index of the first target character after it.
+    gap: usize,
+    /// The conflict this region raised, or `None` for a clean incoming change.
+    conflict: Option<usize>,
+}
+
+/// A text present on both sides, planned: the sequences, what each side kept, and the regions.
+#[derive(Debug)]
+struct TextPlan {
+    target: Arc<TextObj>,
+    tseq: Vec<Elem>,
+    iseq: Vec<Elem>,
+    /// target sequence index → base index, for characters the target kept.
+    t_kept: Vec<Option<usize>>,
+    /// incoming sequence index → base index, for characters the incoming side kept.
+    i_kept: Vec<Option<usize>>,
+    /// base index → target sequence index, for characters the target kept.
+    t_bx: Vec<Option<usize>>,
+    /// base index → incoming sequence index, for characters the incoming side kept.
+    i_bx: Vec<Option<usize>>,
+    regions: Vec<Region>,
 }
 
 #[derive(Clone, Debug)]
-enum Cluster {
-    Clean(RegionEdit),
-    Conflict {
-        index: usize,
-        incoming: RegionEdit,
-        replace_deletes: Vec<CharId>,
-        replace_anchor: DraftAnchor,
-    },
+enum TextSource {
+    /// An imported text: its inserts.
+    Import(Vec<DraftInsert>),
+    /// A text on both sides.
+    Both(Arc<TextPlan>),
 }
 
 /// What a map key conflict does when resolved `incoming`.
@@ -215,7 +236,7 @@ enum ObjectPlan {
         object: ObjectId,
         create: bool,
         transcript: bool,
-        clusters: Vec<Cluster>,
+        source: TextSource,
     },
 }
 
@@ -331,7 +352,7 @@ fn sequence(t: Option<&TextObj>) -> Vec<Elem> {
 #[derive(Clone, Debug)]
 struct Edit {
     side: Side,
-    /// The first base position the edit covers (TL-72 step 2).
+    /// The first base position the edit covers.
     p: usize,
     /// Side positions inserted.
     x: (usize, usize),
@@ -339,12 +360,44 @@ struct Edit {
     lines: (usize, usize),
 }
 
-struct Side3<'a> {
-    seq: &'a [Elem],
-    /// base index → side index, for kept base characters.
-    bx: Vec<Option<usize>>,
+/// The kept characters of a side (TL-72 step 2): of the shared characters `(base, side)` in
+/// base order, the longest subsequence whose side positions increase; among equally long ones,
+/// the one whose base positions are lexicographically smallest.
+fn kept_subsequence(shared: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let n = shared.len();
+    // longest[i]: the longest increasing subsequence that starts at shared[i].
+    let mut longest = vec![0usize; n];
+    // tails[k]: the greatest side position that starts an increasing run of length k + 1 seen
+    // so far (scanning from the right); decreasing in k.
+    let mut tails: Vec<usize> = Vec::new();
+    for i in (0..n).rev() {
+        let x = shared[i].1;
+        let k = tails.partition_point(|&t| t > x);
+        longest[i] = k + 1;
+        if k == tails.len() {
+            tails.push(x);
+        } else if tails[k] < x {
+            tails[k] = x;
+        }
+    }
+    let mut out = Vec::with_capacity(tails.len());
+    let mut need = tails.len();
+    let mut last: Option<usize> = None;
+    for (i, &(b, x)) in shared.iter().enumerate() {
+        if need == 0 {
+            break;
+        }
+        if longest[i] == need && last.is_none_or(|l| x > l) {
+            out.push((b, x));
+            last = Some(x);
+            need -= 1;
+        }
+    }
+    out
 }
 
+/// The edits of one side against the base (TL-72 steps 2 – 3), and base index → side index
+/// for the characters it kept.
 fn edits_of(
     side: Side,
     base: &[Elem],
@@ -352,16 +405,14 @@ fn edits_of(
     seq: &[Elem],
     line: &dyn Fn(usize) -> usize,
     base_char: &dyn Fn(usize) -> char,
-) -> Result<(Vec<Edit>, Vec<Option<usize>>), Error> {
-    let mut kept: Vec<(usize, usize)> = Vec::new();
-    for (xi, e) in seq.iter().enumerate() {
-        if let Some(&bi) = base_index.get(&e.canon) {
-            if kept.last().is_some_and(|(pb, _)| *pb >= bi) {
-                return Err(Error::MergeOrder);
-            }
-            kept.push((bi, xi));
-        }
-    }
+) -> (Vec<Edit>, Vec<Option<usize>>) {
+    let mut shared: Vec<(usize, usize)> = seq
+        .iter()
+        .enumerate()
+        .filter_map(|(xi, e)| base_index.get(&e.canon).map(|&bi| (bi, xi)))
+        .collect();
+    shared.sort_unstable();
+    let kept = kept_subsequence(&shared);
     let mut bx = vec![None; base.len()];
     for &(bi, xi) in &kept {
         bx[bi] = Some(xi);
@@ -383,7 +434,7 @@ fn edits_of(
         }
         prev = (bi + 1, xi + 1);
     }
-    Ok((out, bx))
+    (out, bx)
 }
 
 fn meet(a: &Edit, b: &Edit) -> bool {
@@ -416,38 +467,20 @@ fn find(parent: &mut [usize], i: usize) -> usize {
 /// The target text with the lookups step 7 needs.
 struct TargetText<'a> {
     t: &'a TextObj,
-    /// canonical → the target character holding it (a visible one when there is one).
-    holds: HashMap<CharId, Local>,
     /// canonical → characters hidden only by TL-45 (b).
     hidden: HashMap<CharId, Vec<Local>>,
-    /// canonical → visible target character.
-    shows: HashMap<CharId, Local>,
 }
 
 impl<'a> TargetText<'a> {
     fn new(t: &'a TextObj) -> Self {
         let lay = t.layout();
-        let mut holds: HashMap<CharId, Local> = HashMap::new();
         let mut hidden: HashMap<CharId, Vec<Local>> = HashMap::new();
-        let mut shows = HashMap::new();
         for (i, &l) in lay.order.iter().enumerate() {
-            let c = t.canonical(l);
-            if lay.visible[i] {
-                shows.insert(c.clone(), l);
-                holds.insert(c, l);
-            } else {
-                if lay.vis_a[i] {
-                    hidden.entry(c.clone()).or_default().push(l);
-                }
-                holds.entry(c).or_insert(l);
+            if lay.vis_a[i] && !lay.visible[i] {
+                hidden.entry(t.canonical(l)).or_default().push(l);
             }
         }
-        TargetText {
-            t,
-            holds,
-            hidden,
-            shows,
-        }
+        TargetText { t, hidden }
     }
 
     /// The character and its hidden duplicates, for a delete that must not let it reappear.
@@ -470,160 +503,18 @@ impl<'a> TargetText<'a> {
     }
 }
 
-struct TextPlanner<'a> {
-    base: Vec<Elem>,
-    tseq: Vec<Elem>,
-    iseq: Vec<Elem>,
-    target: Option<TargetText<'a>>,
-}
-
-impl TextPlanner<'_> {
-    /// Where the first run of a region goes (TL-72 step 7).
-    fn first_anchor(&self, t_region: &[usize], i_start: usize) -> DraftAnchor {
-        let Some(tt) = &self.target else {
-            return DraftAnchor::Start;
-        };
-        if let Some(&first) = t_region.first() {
-            return tt.before(self.tseq[first].local);
-        }
-        for xi in (0..i_start).rev() {
-            if let Some(&l) = tt.holds.get(&self.iseq[xi].canon) {
-                return DraftAnchor::Char(tt.t.char_id(l));
-            }
-        }
-        DraftAnchor::Start
-    }
-
-    /// The order index of a target character.
-    fn pos_of(&self, l: Local) -> isize {
-        self.target.as_ref().map_or(-1, |tt| {
-            tt.t.layout().pos[l.0 as usize][l.1 as usize] as isize
-        })
-    }
-
-    /// The order index after which an anchor puts an insertion (-1 for `start`).
-    fn anchor_pos(&self, a: &DraftAnchor) -> isize {
-        match (a, &self.target) {
-            (DraftAnchor::Char(c), Some(tt)) => tt.t.local(c).map_or(-1, |l| self.pos_of(l)),
-            _ => -1,
-        }
-    }
-
-    /// Makes the target region read the incoming region text (TL-72 step 7).
-    ///
-    /// Copies of characters the target shows nowhere go where the recommended anchoring puts
-    /// them, except that a character the target still holds as a hidden character is revived
-    /// right after it when that place lies between the region's neighbours: the copy then keeps
-    /// the order its original has against every other character, in every timeline.
-    fn make_equal(&self, t_region: &[usize], i_region: &[usize]) -> RegionEdit {
-        let mut edit = RegionEdit::default();
-        let incoming: HashSet<&CharId> = i_region.iter().map(|&x| &self.iseq[x].canon).collect();
-        if let Some(tt) = &self.target {
-            for &xt in t_region {
-                let e = &self.tseq[xt];
-                if !incoming.contains(&e.canon) {
-                    tt.delete_with_duplicates(e.local, &mut edit.deletes);
-                }
-            }
-        }
-        let Some(&first) = i_region.first() else {
-            return edit;
-        };
-        let tt = self.target.as_ref();
-        let shows = |c: &CharId| tt.and_then(|tt| tt.shows.get(c)).copied();
-        let mut cursor = self.first_anchor(t_region, first);
-        let mut cursor_pos = self.anchor_pos(&cursor);
-        // Nothing may land after the first visible target character past the region.
-        let bound_after = match t_region.last() {
-            Some(&last) => self.pos_of(self.tseq[last].local),
-            None => cursor_pos,
-        };
-        let region_end = tt
-            .and_then(|tt| {
-                let lay = tt.t.layout();
-                let k = lay
-                    .visible_index
-                    .partition_point(|&x| (x as isize) <= bound_after);
-                lay.visible_index.get(k).map(|&x| x as isize)
-            })
-            .unwrap_or(isize::MAX);
-        // For each region character, the order index of the next character the target shows.
-        let mut next_shown = vec![region_end; i_region.len()];
-        for r in (0..i_region.len().saturating_sub(1)).rev() {
-            next_shown[r] = match shows(&self.iseq[i_region[r + 1]].canon) {
-                Some(l) => self.pos_of(l),
-                None => next_shown[r + 1],
-            };
-        }
-        let mut open_run = false;
-        for (r, &xi) in i_region.iter().enumerate() {
-            let e = &self.iseq[xi];
-            if let (Some(l), Some(tt)) = (shows(&e.canon), tt) {
-                cursor = DraftAnchor::Char(tt.t.char_id(l));
-                cursor_pos = self.pos_of(l);
-                open_run = false;
-                continue;
-            }
-            if let Some(tt) = tt
-                && let Some(&h) = tt.holds.get(&e.canon)
-            {
-                let hp = self.pos_of(h);
-                if cursor_pos < hp && hp < next_shown[r] {
-                    edit.inserts.push(DraftInsert {
-                        anchor: DraftAnchor::Char(tt.t.char_id(h)),
-                        text: e.ch.to_string(),
-                        origin: Some(e.canon.clone()),
-                    });
-                    cursor = DraftAnchor::Prev(edit.inserts.len() - 1, 0);
-                    cursor_pos = hp;
-                    open_run = false;
-                    continue;
-                }
-            }
-            // Extend the current run when this character continues its origin insertion.
-            if open_run
-                && let Some(run) = edit.inserts.last_mut()
-                && let Some(o) = &run.origin
-                && o.insertion == e.canon.insertion
-                && o.offset + run.text.chars().count() as u32 == e.canon.offset
-            {
-                run.text.push(e.ch);
-                let n = run.text.chars().count() as u32;
-                cursor = DraftAnchor::Prev(edit.inserts.len() - 1, n - 1);
-                continue;
-            }
-            edit.inserts.push(DraftInsert {
-                anchor: cursor.clone(),
-                text: e.ch.to_string(),
-                origin: Some(e.canon.clone()),
-            });
-            cursor = DraftAnchor::Prev(edit.inserts.len() - 1, 0);
-            open_run = true;
-        }
-        edit
-    }
-
-    fn text_of(seq: &[Elem], idx: &[usize]) -> String {
-        idx.iter().map(|&i| seq[i].ch).collect()
-    }
-}
-
-/// Plans one text present in both target and incoming (TL-72). Pushes conflicts.
+/// Plans one text present in both target and incoming (TL-72 steps 1 – 6). Pushes conflicts.
 fn plan_text(
     object: &ObjectId,
     path: Option<String>,
     sb: Option<&TextObj>,
-    st: &TextObj,
+    st: &Arc<TextObj>,
     si: &TextObj,
     conflicts: &mut Vec<Conflict>,
-) -> Result<Vec<Cluster>, Error> {
-    let planner = TextPlanner {
-        base: sequence(sb),
-        tseq: sequence(Some(st)),
-        iseq: sequence(Some(si)),
-        target: Some(TargetText::new(st)),
-    };
-    let base = &planner.base;
+) -> Option<TextPlan> {
+    let base = sequence(sb);
+    let tseq = sequence(Some(st));
+    let iseq = sequence(Some(si));
     let base_index: HashMap<&CharId, usize> = base
         .iter()
         .enumerate()
@@ -633,7 +524,7 @@ fn plan_text(
     let mut lf_before = Vec::with_capacity(base.len() + 1);
     let mut n = 0;
     lf_before.push(0);
-    for e in base {
+    for e in &base {
         if e.ch == '\n' {
             n += 1;
         }
@@ -641,7 +532,6 @@ fn plan_text(
     }
     let line = |i: usize| lf_before[i];
     let base_char = |i: usize| base[i].ch;
-    // Line starts, for base positions of a line range.
     let mut line_start = vec![0usize];
     for (i, e) in base.iter().enumerate() {
         if e.ch == '\n' {
@@ -650,32 +540,31 @@ fn plan_text(
     }
     let line_pos = |l: usize| line_start.get(l).copied().unwrap_or(base.len());
 
-    let (t_edits, t_bx) = edits_of(
-        Side::Target,
-        base,
-        &base_index,
-        &planner.tseq,
-        &line,
-        &base_char,
-    )?;
-    let (i_edits, i_bx) = edits_of(
-        Side::Incoming,
-        base,
-        &base_index,
-        &planner.iseq,
-        &line,
-        &base_char,
-    )?;
-    let sides = [
-        Side3 {
-            seq: &planner.tseq,
-            bx: t_bx,
-        },
-        Side3 {
-            seq: &planner.iseq,
-            bx: i_bx,
-        },
-    ];
+    let (t_edits, t_bx) = edits_of(Side::Target, &base, &base_index, &tseq, &line, &base_char);
+    // The base position each target character stands at: its own when kept, else the first
+    // base position its edit covers.
+    let mut t_pos = vec![0usize; tseq.len()];
+    for (bi, x) in t_bx.iter().enumerate() {
+        if let Some(x) = x {
+            t_pos[*x] = bi;
+        }
+    }
+    for e in &t_edits {
+        t_pos[e.x.0..e.x.1].fill(e.p);
+    }
+    let (i_edits, i_bx) = edits_of(Side::Incoming, &base, &base_index, &iseq, &line, &base_char);
+    let mut t_kept = vec![None; tseq.len()];
+    for (bi, x) in t_bx.iter().enumerate() {
+        if let Some(x) = x {
+            t_kept[*x] = Some(bi);
+        }
+    }
+    let mut i_kept = vec![None; iseq.len()];
+    for (bi, x) in i_bx.iter().enumerate() {
+        if let Some(x) = x {
+            i_kept[*x] = Some(bi);
+        }
+    }
     let edits: Vec<Edit> = t_edits.into_iter().chain(i_edits).collect();
     let mut parent: Vec<usize> = (0..edits.len()).collect();
     for a in 0..edits.len() {
@@ -701,17 +590,13 @@ fn plan_text(
             (a, b, members)
         })
         .collect();
-    clusters.sort_by_key(|(a, b, members)| (*a, *b, members.first().map(|m| edits[*m].p)));
+    clusters.sort_by_key(|(a, b, members)| (*a, *b, members.iter().map(|m| edits[*m].p).min()));
 
-    let region = |side: usize, a: usize, b: usize, members: &[usize]| -> Vec<usize> {
-        let s = &sides[side];
-        let want = if side == 0 {
-            Side::Target
-        } else {
-            Side::Incoming
-        };
+    // A side's region characters (step 5): its kept base characters in the region's lines and
+    // what its edits in the cluster inserted, in its order.
+    let region = |bx: &[Option<usize>], want: Side, a: usize, b: usize, members: &[usize]| {
         let mut xs: Vec<usize> = (line_pos(a)..line_pos(b).max(line_pos(a)))
-            .filter_map(|bi| s.bx[bi])
+            .filter_map(|bi| bx[bi])
             .collect();
         for &m in members {
             if edits[m].side == want {
@@ -720,69 +605,247 @@ fn plan_text(
         }
         xs.sort_unstable();
         xs.dedup();
-        let _ = s.seq;
         xs
     };
+    let text_of = |seq: &[Elem], idx: &[usize]| idx.iter().map(|&i| seq[i].ch).collect::<String>();
 
-    let mut out = Vec::new();
+    let mut regions = Vec::new();
     for (a, b, members) in clusters {
         let has_t = members.iter().any(|&m| edits[m].side == Side::Target);
         let has_i = members.iter().any(|&m| edits[m].side == Side::Incoming);
         if !has_i {
             continue;
         }
-        let t_region = region(0, a, b, &members);
-        let i_region = region(1, a, b, &members);
-        if !has_t {
-            out.push(Cluster::Clean(planner.make_equal(&t_region, &i_region)));
-            continue;
-        }
-        let t_text = TextPlanner::text_of(&planner.tseq, &t_region);
-        let i_text = TextPlanner::text_of(&planner.iseq, &i_region);
-        if t_text == i_text {
-            continue;
-        }
-        let base_text: String = (line_pos(a)..line_pos(b).max(line_pos(a)))
-            .map(|bi| base[bi].ch)
-            .collect();
-        let index = conflicts.len();
-        conflicts.push(Conflict::Text(TextHunk {
-            object: object.clone(),
-            path: path.clone(),
-            lines: (a as u64, b as u64),
-            base: base_text,
-            target: t_text,
-            incoming: i_text,
-        }));
-        let mut replace_deletes = Vec::new();
-        if let Some(tt) = &planner.target {
-            for &xt in &t_region {
-                tt.delete_with_duplicates(planner.tseq[xt].local, &mut replace_deletes);
+        let t = region(&t_bx, Side::Target, a, b, &members);
+        let i = region(&i_bx, Side::Incoming, a, b, &members);
+        let base_range = (line_pos(a), line_pos(b).max(line_pos(a)));
+        let mut conflict = None;
+        if has_t {
+            let (t_text, i_text) = (text_of(&tseq, &t), text_of(&iseq, &i));
+            if t_text == i_text {
+                continue;
             }
+            conflict = Some(conflicts.len());
+            conflicts.push(Conflict::Text(TextHunk {
+                object: object.clone(),
+                path: path.clone(),
+                lines: (a as u64, b as u64),
+                base: base[base_range.0..base_range.1]
+                    .iter()
+                    .map(|e| e.ch)
+                    .collect(),
+                target: t_text,
+                incoming: i_text,
+            }));
         }
-        let i_start = i_region.first().copied().unwrap_or(0);
-        out.push(Cluster::Conflict {
-            index,
-            incoming: planner.make_equal(&t_region, &i_region),
-            replace_deletes,
-            replace_anchor: planner.first_anchor(&t_region, i_start),
+        let gap = match t.first() {
+            Some(&first) => first,
+            None => t_pos.partition_point(|&p| p < base_range.0),
+        };
+        regions.push(Region {
+            t,
+            i,
+            gap,
+            conflict,
         });
     }
-    Ok(out)
+    (!regions.is_empty()).then(|| TextPlan {
+        target: st.clone(),
+        tseq,
+        iseq,
+        t_kept,
+        i_kept,
+        t_bx,
+        i_bx,
+        regions,
+    })
 }
 
-/// An imported text: all visible characters as copies (TL-71).
-fn import_text(si: &TextObj) -> RegionEdit {
-    let planner = TextPlanner {
-        base: Vec::new(),
-        tseq: Vec::new(),
-        iseq: sequence(Some(si)),
-        target: None,
-    };
-    let all: Vec<usize> = (0..planner.iseq.len()).collect();
-    planner.make_equal(&[], &all)
+/// An imported text: all its visible characters as copies, in runs (TL-71).
+fn import_text(si: &TextObj) -> Vec<DraftInsert> {
+    let mut out: Vec<DraftInsert> = Vec::new();
+    for e in sequence(Some(si)) {
+        if let Some(run) = out.last_mut()
+            && let Some(o) = &run.origin
+            && o.insertion == e.canon.insertion
+            && o.offset + run.text.chars().count() as u32 == e.canon.offset
+        {
+            run.text.push(e.ch);
+            continue;
+        }
+        let anchor = match out.len() {
+            0 => DraftAnchor::Start,
+            k => DraftAnchor::Prev(k - 1, out[k - 1].text.chars().count() as u32 - 1),
+        };
+        out.push(DraftInsert {
+            anchor,
+            text: e.ch.to_string(),
+            origin: Some(e.canon.clone()),
+        });
+    }
+    out
 }
 
+/// What a region becomes in a resolved merge.
+enum RegionAction<'a> {
+    /// Untouched (the `target` resolution).
+    Skip,
+    /// Made to read its incoming region text (step 7).
+    Rewrite,
+    /// Replaced by a given string (step 8).
+    Replace(&'a str),
+}
+
+impl TextPlan {
+    /// Where the first run of a region goes when no earlier run can take it (step 7): before
+    /// the target's first region character; for an empty target region, after the last target
+    /// character that survives the merge before the region's gap, else `start`. (The
+    /// RECOMMENDED "character holding the nearest kept character" can be a copy that sits
+    /// elsewhere in the target's order, which would break the region's reading.)
+    fn first_anchor(
+        &self,
+        tt: &TargetText<'_>,
+        r: &Region,
+        deleted: &HashSet<usize>,
+    ) -> DraftAnchor {
+        if let Some(&first) = r.t.first() {
+            return tt.before(self.tseq[first].local);
+        }
+        (0..r.gap)
+            .rev()
+            .find(|xt| !deleted.contains(xt))
+            .map_or(DraftAnchor::Start, |xt| {
+                DraftAnchor::Char(tt.t.char_id(self.tseq[xt].local))
+            })
+    }
+
+    /// The deletes and inserts (object-level indexes) of the resolved regions (steps 7 – 8).
+    fn resolve(&self, actions: &[RegionAction<'_>]) -> (Vec<CharId>, Vec<DraftInsert>) {
+        let tt = TargetText::new(&self.target);
+        // Step 7, first two points: what each rewritten region keeps, and what goes.
+        let mut kept: Vec<HashSet<usize>> = Vec::with_capacity(self.regions.len());
+        let mut deleted: HashSet<usize> = HashSet::new();
+        for (r, action) in self.regions.iter().zip(actions) {
+            let keep: HashSet<usize> = match action {
+                RegionAction::Rewrite => {
+                    let i_set: HashSet<usize> = r.i.iter().copied().collect();
+                    r.t.iter()
+                        .copied()
+                        .filter(|&xt| {
+                            self.t_kept[xt]
+                                .and_then(|bi| self.i_bx[bi])
+                                .is_some_and(|xi| i_set.contains(&xi))
+                        })
+                        .collect()
+                }
+                _ => HashSet::new(),
+            };
+            if !matches!(action, RegionAction::Skip) {
+                deleted.extend(r.t.iter().copied().filter(|xt| !keep.contains(xt)));
+            }
+            kept.push(keep);
+        }
+        let mut deletes = Vec::new();
+        let mut sorted: Vec<usize> = deleted.iter().copied().collect();
+        sorted.sort_unstable();
+        for xt in sorted {
+            tt.delete_with_duplicates(self.tseq[xt].local, &mut deletes);
+        }
+        let t_index: HashMap<&CharId, usize> = self
+            .tseq
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (&e.canon, i))
+            .collect();
+
+        let mut inserts: Vec<DraftInsert> = Vec::new();
+        // The last thing placed in document order when it is an insert run, with the target
+        // position right after it: a later region with no surviving target character in
+        // between continues after that run (the chaining of step 7).
+        let mut tail: Option<(DraftAnchor, usize)> = None;
+        let survivor_between = |from: usize, to: usize| (from..to).any(|xt| !deleted.contains(&xt));
+        let lead = |r: &Region, tail: &Option<(DraftAnchor, usize)>| match tail {
+            Some((anchor, pos)) if *pos <= r.gap && !survivor_between(*pos, r.gap) => {
+                anchor.clone()
+            }
+            _ => self.first_anchor(&tt, r, &deleted),
+        };
+        for ((r, action), keep) in self.regions.iter().zip(actions).zip(&kept) {
+            match action {
+                RegionAction::Skip => {
+                    if !r.t.is_empty() {
+                        tail = None;
+                    }
+                }
+                RegionAction::Replace(s) => {
+                    if !s.is_empty() {
+                        inserts.push(DraftInsert {
+                            anchor: lead(r, &tail),
+                            text: (*s).to_string(),
+                            origin: None,
+                        });
+                        let k = inserts.len() - 1;
+                        let n = inserts[k].text.chars().count() as u32;
+                        tail = Some((DraftAnchor::Prev(k, n - 1), r.gap));
+                    }
+                }
+                RegionAction::Rewrite => {
+                    let in_region: HashSet<usize> = r.t.iter().copied().collect();
+                    let mut cursor: Option<DraftAnchor> = None;
+                    let mut cursor_pos = r.gap;
+                    let mut open = false;
+                    for &xi in &r.i {
+                        let e = &self.iseq[xi];
+                        if let Some(xt) = self.i_kept[xi].and_then(|bi| self.t_bx[bi])
+                            && keep.contains(&xt)
+                        {
+                            cursor = Some(DraftAnchor::Char(tt.t.char_id(self.tseq[xt].local)));
+                            cursor_pos = xt + 1;
+                            tail = None;
+                            open = false;
+                            continue;
+                        }
+                        // A character the target still shows outside this region after the
+                        // merge's other changes goes in as text, or TL-45 (b) would hide it.
+                        let plain = t_index
+                            .get(&e.canon)
+                            .is_some_and(|xt| !in_region.contains(xt) && !deleted.contains(xt));
+                        let origin = (!plain).then(|| e.canon.clone());
+                        if open
+                            && let Some(run) = inserts.last_mut()
+                            && match (&run.origin, &origin) {
+                                (None, None) => true,
+                                (Some(o), Some(c)) => {
+                                    o.insertion == c.insertion
+                                        && o.offset + run.text.chars().count() as u32 == c.offset
+                                }
+                                _ => false,
+                            }
+                        {
+                            run.text.push(e.ch);
+                            let n = run.text.chars().count() as u32;
+                            let end = DraftAnchor::Prev(inserts.len() - 1, n - 1);
+                            cursor = Some(end.clone());
+                            tail = Some((end, cursor_pos));
+                            continue;
+                        }
+                        let anchor = cursor.clone().unwrap_or_else(|| lead(r, &tail));
+                        inserts.push(DraftInsert {
+                            anchor,
+                            text: e.ch.to_string(),
+                            origin,
+                        });
+                        let end = DraftAnchor::Prev(inserts.len() - 1, 0);
+                        cursor = Some(end.clone());
+                        tail = Some((end, cursor_pos));
+                        open = true;
+                    }
+                }
+            }
+        }
+        (deletes, inserts)
+    }
+}
 // ---------------------------------------------------------------------------------------------
 // Maps and trees (TL-71, TL-87)
 
@@ -1022,7 +1085,7 @@ impl<S: Store> History<S> {
                         object: id.clone(),
                         create: true,
                         transcript: t.transcript,
-                        clusters: vec![Cluster::Clean(import_text(t))],
+                        source: TextSource::Import(import_text(t)),
                     },
                 });
                 continue;
@@ -1063,13 +1126,14 @@ impl<S: Store> History<S> {
                 }
                 (Obj::Text(t), Obj::Text(s)) => {
                     let path = path_of(&st, id).or_else(|| path_of(&si, id));
-                    let clusters = plan_text(id, path, sb.text_obj(id), t, s, &mut conflicts)?;
-                    objects.push(ObjectPlan::Text {
-                        object: id.clone(),
-                        create: false,
-                        transcript: t.transcript,
-                        clusters,
-                    });
+                    if let Some(plan) = plan_text(id, path, sb.text_obj(id), t, s, &mut conflicts) {
+                        objects.push(ObjectPlan::Text {
+                            object: id.clone(),
+                            create: false,
+                            transcript: t.transcript,
+                            source: TextSource::Both(Arc::new(plan)),
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -1146,6 +1210,60 @@ fn ranges(mut chars: Vec<CharId>) -> Vec<IdRange> {
 }
 
 impl MergePlan {
+    /// What each text the merge changes must read once `resolutions` are applied, worked out
+    /// from strings alone: the target text with every resolved region replaced by its region
+    /// text (TL-72 steps 7 – 8). An independent check of the identity-based result.
+    #[doc(hidden)]
+    pub fn expected_texts(
+        &self,
+        resolutions: &[Resolution],
+    ) -> Result<BTreeMap<ObjectId, String>, Error> {
+        if resolutions.len() != self.conflicts.len() {
+            return Err(Error::Unresolved);
+        }
+        let mut out = BTreeMap::new();
+        for plan in &self.objects {
+            let ObjectPlan::Text { object, source, .. } = plan else {
+                continue;
+            };
+            let text = match source {
+                TextSource::Import(inserts) => inserts.iter().map(|i| i.text.as_str()).collect(),
+                TextSource::Both(p) => {
+                    // Per target position: the region text to put before it, and whether the
+                    // character itself goes.
+                    let n = p.tseq.len();
+                    let mut before: Vec<String> = vec![String::new(); n + 1];
+                    let mut gone = vec![false; n];
+                    for r in &p.regions {
+                        let replacement = match r.conflict.map(|i| &resolutions[i]) {
+                            None | Some(Resolution::Incoming) => {
+                                r.i.iter().map(|&x| p.iseq[x].ch).collect::<String>()
+                            }
+                            Some(Resolution::Text(s)) => crate::local::normalise(s),
+                            _ => continue,
+                        };
+                        let at = r.gap;
+                        for &xt in &r.t {
+                            gone[xt] = true;
+                        }
+                        before[at].push_str(&replacement);
+                    }
+                    let mut s = String::new();
+                    for (k, e) in p.tseq.iter().enumerate() {
+                        s.push_str(&before[k]);
+                        if !gone[k] {
+                            s.push(e.ch);
+                        }
+                    }
+                    s.push_str(&before[n]);
+                    s
+                }
+            };
+            out.insert(object.clone(), text);
+        }
+        Ok(out)
+    }
+
     /// Applies one resolution per conflict, in plan order (TL-75), giving the merge to record.
     pub fn resolve(&self, resolutions: &[Resolution]) -> Result<MergeDraft, Error> {
         if resolutions.len() != self.conflicts.len() {
@@ -1261,68 +1379,49 @@ impl MergePlan {
                     object,
                     create,
                     transcript,
-                    clusters,
+                    source,
                 } => {
-                    let mut deletes = Vec::new();
-                    let mut inserts: Vec<DraftInsert> = Vec::new();
-                    let mut add = |edit: &RegionEdit, deletes: &mut Vec<CharId>| {
-                        deletes.extend(edit.deletes.iter().cloned());
-                        let base = inserts.len();
-                        for ins in &edit.inserts {
-                            let anchor = match &ins.anchor {
-                                DraftAnchor::Prev(k, off) => DraftAnchor::Prev(base + k, *off),
-                                a => a.clone(),
-                            };
-                            inserts.push(DraftInsert {
-                                anchor,
-                                text: ins.text.clone(),
-                                origin: ins.origin.clone(),
-                            });
+                    let replacements: Vec<String> = resolutions
+                        .iter()
+                        .map(|r| match r {
+                            Resolution::Text(t) => crate::local::normalise(t),
+                            _ => String::new(),
+                        })
+                        .collect();
+                    let (deletes, inserts) = match source {
+                        TextSource::Import(inserts) => (Vec::new(), inserts.clone()),
+                        TextSource::Both(plan) => {
+                            let actions: Vec<RegionAction<'_>> = plan
+                                .regions
+                                .iter()
+                                .map(|r| match r.conflict {
+                                    None => RegionAction::Rewrite,
+                                    Some(i) => match &resolutions[i] {
+                                        Resolution::Incoming => RegionAction::Rewrite,
+                                        Resolution::Text(_) => {
+                                            RegionAction::Replace(&replacements[i])
+                                        }
+                                        _ => RegionAction::Skip,
+                                    },
+                                })
+                                .collect();
+                            plan.resolve(&actions)
                         }
                     };
-                    for cluster in clusters {
-                        match cluster {
-                            Cluster::Clean(edit) => add(edit, &mut deletes),
-                            Cluster::Conflict {
-                                index,
-                                incoming,
-                                replace_deletes,
-                                replace_anchor,
-                            } => match &resolutions[*index] {
-                                Resolution::Incoming => add(incoming, &mut deletes),
-                                Resolution::Text(s) => {
-                                    let s = crate::local::normalise(s);
-                                    let mut edit = RegionEdit {
-                                        deletes: replace_deletes.clone(),
-                                        inserts: Vec::new(),
-                                    };
-                                    if !s.is_empty() {
-                                        edit.inserts.push(DraftInsert {
-                                            anchor: replace_anchor.clone(),
-                                            text: s,
-                                            origin: None,
-                                        });
-                                    }
-                                    add(&edit, &mut deletes);
-                                }
-                                _ => {}
-                            },
-                        }
-                    }
                     if !*create && deletes.is_empty() && inserts.is_empty() {
                         continue;
                     }
-                    // No two inserts may name one anchor (TL-48): a later one goes after the
-                    // earlier one, which keeps their order.
-                    let mut taken: HashMap<DraftAnchor, usize> = HashMap::new();
+                    // Chaining (TL-72 step 7, TL-48): a run whose anchor an earlier run took
+                    // goes after the last character of the run just before it.
+                    let mut taken: HashSet<DraftAnchor> = HashSet::new();
                     let mut out = Vec::new();
                     for (k, ins) in inserts.iter().enumerate() {
                         let mut anchor = ins.anchor.clone();
-                        while let Some(&prev) = taken.get(&anchor) {
-                            let n = inserts[prev].text.chars().count() as u32;
-                            anchor = DraftAnchor::Prev(prev, n - 1);
+                        if k > 0 && taken.contains(&anchor) {
+                            let n = inserts[k - 1].text.chars().count() as u32;
+                            anchor = DraftAnchor::Prev(k - 1, n - 1);
                         }
-                        taken.insert(anchor.clone(), k);
+                        taken.insert(anchor.clone());
                         let anchor = match anchor {
                             DraftAnchor::Start => None,
                             DraftAnchor::Char(c) => Some(c),

@@ -376,14 +376,15 @@ impl<S: Store> History<S> {
         let (batch, raw) = env
             .batch()
             .map_err(|e| (Some(id), Verdict::Rejected(e.into())))?;
-        // Counters that can never be satisfied: a parent or merge dependency at or above the
-        // batch's own start (TL-04, TL-76).
+        // TL-101 step 7, Counters: judged at once, so a batch that could never be integrated is
+        // never held back (TL-04, TL-76).
         let late = |v: &Version| v.heads().iter().any(|h| h.counter >= batch.start);
         let merge_late = batch.ops.iter().any(|op| match op {
             Op::Merge(m) => late(&m.incoming) || late(&m.base),
             _ => false,
         });
-        if late(&batch.parents) || merge_late {
+        let overflow = batch.start + batch.ops.len() as u64 - 1 > MAX_SAFE;
+        if late(&batch.parents) || merge_late || overflow {
             return Err((Some(id), Verdict::Rejected(Reason::Lamport)));
         }
         let mut p = Pending {
@@ -404,9 +405,8 @@ impl<S: Store> History<S> {
 
     /// TL-103: `None` while the history's kind is unknown.
     fn authorisation(&self, p: &Pending, dir: &dyn Directory) -> Option<bool> {
-        if !p.key_valid {
-            return Some(false);
-        }
+        // The scope comes from the history's kind: from the batch itself when it is shaped as
+        // a genesis, otherwise from the held genesis. Without one, nothing can be judged yet.
         let (kind, session) = if p.batch.parents.is_root() {
             match p.batch.ops.first() {
                 Some(Op::TimelineCreate {
@@ -419,9 +419,12 @@ impl<S: Store> History<S> {
         } else {
             (Some(self.kind?), self.session.clone())
         };
+        if !p.key_valid {
+            return Some(false);
+        }
+        // A transcript genesis without a session fails as `genesis` later; judge it as space.
         let scope = match (kind, &session) {
             (Some(HistoryKind::Transcript), Some(s)) => Scope::Session(s),
-            (Some(HistoryKind::Transcript), None) => return Some(false),
             _ => Scope::Space,
         };
         Some(dir.may_write(&p.batch.replica.actor, scope))
