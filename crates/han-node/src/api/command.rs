@@ -41,6 +41,12 @@ pub enum Command {
         /// The ticket text.
         ticket: String,
     },
+    /// Joins a home by a home ticket (`han1home.`, `han seq` prints it) instead of its HTTPS well-known: pins
+    /// the home's node and receipt keys as **ticket-pinned** trust, keeps them in `node.db`, and links to it.
+    HomePin {
+        /// The home ticket text.
+        ticket: String,
+    },
     /// Follows a space this person already belongs to (for example on a new device).
     SpaceFollow {
         /// The home of the space.
@@ -303,6 +309,7 @@ impl Command {
             Command::SpaceCreate { .. }
             | Command::SpaceJoin { .. }
             | Command::SpaceFollow { .. }
+            | Command::HomePin { .. }
             | Command::Invite { .. }
             | Command::MemberSet { .. }
             | Command::AgentCreate { .. }

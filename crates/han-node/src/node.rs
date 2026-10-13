@@ -9,7 +9,7 @@ use std::time::Duration;
 use han_core::json::{self, Value};
 use han_core::{SigningKey, base64url, grammar, ids};
 use han_net::client::args;
-use han_net::{Client, InviteTicket, NodeAddr, Transport};
+use han_net::{Client, HomeTicket, InviteTicket, NodeAddr, Transport};
 use han_seq::Clock;
 use han_seq::ServerKey;
 use han_seq::build::{EntrySpec, entry_id, sign_entry, space_policy};
@@ -97,6 +97,8 @@ pub(crate) struct Inner<T: Transport> {
     engine: Arc<Mutex<Engine>>,
     pub server_keys: Arc<dyn ServerKeys>,
     pub key_cache: Mutex<HashMap<String, Vec<ServerKey>>>,
+    /// Homes joined by ticket (ticket-pinned trust), by ServerName; their keys stand in for the well-known.
+    pub pins: Mutex<HashMap<String, HomeTicket>>,
     key_store: Arc<dyn KeyStore>,
     supervisor: Arc<dyn Supervisor>,
     links: Mutex<HashMap<String, (HomeRef, LinkHandle<T>)>>,
@@ -123,6 +125,19 @@ pub(crate) enum Outcome {
     Sent(han_core::Receipt),
     Rejected(NodeError),
     Offline,
+}
+
+/// The `config` key under which a home ticket is kept in `node.db`.
+const PIN_PREFIX: &str = "home-pin/";
+
+/// Where to dial the home a ticket names.
+fn home_of_ticket(t: &HomeTicket) -> HomeRef {
+    HomeRef {
+        server: t.server.clone(),
+        node: t.node.node.clone(),
+        addrs: t.node.addrs.clone(),
+        relays: t.node.relays.clone(),
+    }
 }
 
 fn unavailable(e: impl std::fmt::Display) -> NodeError {
@@ -377,6 +392,7 @@ impl<T: Transport> Node<T> {
                 engine.apply_status(&f.space, st);
             }
         }
+        let pins = db.home_pins().map_err(unavailable)?;
         let timelines = Arc::new(crate::timeline::StreamTimelines::new());
         engine.set_timeline(timelines.clone());
         let inner = Arc::new(Inner {
@@ -389,6 +405,7 @@ impl<T: Transport> Node<T> {
             engine: Arc::new(Mutex::new(engine)),
             server_keys,
             key_cache: Mutex::new(HashMap::new()),
+            pins: Mutex::new(pins),
             key_store: keys,
             supervisor,
             links: Mutex::new(HashMap::new()),
@@ -396,6 +413,17 @@ impl<T: Transport> Node<T> {
             ticker: Mutex::new(None),
         });
         let node = Node { inner };
+        let pinned: Vec<HomeTicket> = node
+            .inner
+            .pins
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for t in &pinned {
+            node.ensure_link(&home_of_ticket(t), vec![t.node.node.clone()]);
+        }
         for f in &follows {
             node.inner.refresh_outbox(&f.space);
             node.ensure_link(&f.home, vec![f.home.node.clone()]);
@@ -805,6 +833,31 @@ impl<T: Transport> Node<T> {
                     .map_err(|e| map_net_error(&e))?;
                 self.follow(&home, vec![home.node.clone()], &t.space)?;
                 Ok(CallResult::Space { space: t.space })
+            }
+            Command::HomePin { ticket } => {
+                let t = HomeTicket::parse(&ticket)
+                    .ok_or_else(|| NodeError::invalid("not a home ticket"))?;
+                if t.node.addrs.is_empty() && t.node.relays.is_empty() {
+                    return Err(NodeError::invalid("the ticket's node has no address"));
+                }
+                inner
+                    .db
+                    .set_config(&format!("{PIN_PREFIX}{}", t.server), &t.to_text())
+                    .map_err(unavailable)?;
+                inner
+                    .key_cache
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(&t.server);
+                let home = home_of_ticket(&t);
+                let trusted = vec![t.node.node.clone()];
+                inner
+                    .pins
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(t.server.clone(), t);
+                self.ensure_link(&home, trusted);
+                Ok(CallResult::Done)
             }
             Command::SpaceFollow { home, space } => {
                 if !grammar::is_space_id(&space) {

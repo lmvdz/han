@@ -197,6 +197,20 @@ impl NodeDb {
 
     // ───────────────────────── follows and records ─────────────────────────
 
+    /// The homes joined by ticket, by ServerName; a stored ticket that no longer parses is skipped.
+    pub fn home_pins(&self) -> Result<std::collections::HashMap<String, han_net::HomeTicket>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT value FROM config WHERE key LIKE 'home-pin/%'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = std::collections::HashMap::new();
+        for text in rows {
+            if let Some(t) = han_net::HomeTicket::parse(&text?) {
+                out.insert(t.server.clone(), t);
+            }
+        }
+        Ok(out)
+    }
+
     /// Every followed space.
     pub fn follows(&self) -> Result<Vec<Follow>> {
         let conn = self.lock();

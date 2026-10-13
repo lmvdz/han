@@ -7,6 +7,7 @@ mod board;
 mod conform;
 mod dial;
 mod exec;
+mod home;
 mod host;
 mod keys;
 mod node;
@@ -38,6 +39,8 @@ enum Cmd {
     Tui(tui::TuiArgs),
     /// Run a home: the sequencer of one server on a QUIC endpoint.
     Seq(seq::SeqArgs),
+    /// Print the home ticket a running `han seq` wrote to its data directory, to hand to teammates.
+    Ticket(seq::TicketArgs),
     /// Dial a home and make calls.
     Dial(dial::DialArgs),
     /// Run conformance vectors against a home.
@@ -90,6 +93,7 @@ async fn run(cli: Cli) {
         Cmd::Board(a) => board::run(a).await,
         Cmd::Tui(a) => tui::run(a).await,
         Cmd::Seq(a) => seq::run(a).await,
+        Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,
         Cmd::Conform(a) => conform::run(a).await,
         Cmd::Agent(a) => agent::run(a).await,

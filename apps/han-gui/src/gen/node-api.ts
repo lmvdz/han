@@ -65,6 +65,10 @@ join: string, } | { "type": "space_join",
 /**
  * The ticket text.
  */
+ticket: string, } | { "type": "home_pin", 
+/**
+ * The home ticket text.
+ */
 ticket: string, } | { "type": "space_follow", 
 /**
  * The home of the space.
