@@ -39,8 +39,12 @@ CLAUDE_MODEL = os.environ.get("CLIMB_CLAUDE_MODEL", "opus")
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["idea", "rationale", "files", "instructions", "expected_gain_pct"],
+    "required": ["title", "idea", "rationale", "files", "instructions", "expected_gain_pct"],
     "properties": {
+        "title": {
+            "type": "string",
+            "description": "Commit subject, imperative, at most 60 characters",
+        },
         "idea": {"type": "string", "description": "One-line name of the change"},
         "rationale": {
             "type": "string",
@@ -188,7 +192,9 @@ Earlier attempts (do not repeat failed or rejected ideas unless you fix why they
 
 {RULES}
 
-Read the source under crates/han-timeline/src/ as needed (read-only). Prefer changes with a large
+Read the source under crates/han-timeline/src/ as needed. You can only read files: you cannot
+run code, build or time anything, so never claim to have measured, prototyped or tested something.
+Any number you give is an estimate from reading the code; say so. Prefer changes with a large
 expected gain and low risk to correctness. Signing and verifying (Ed25519, strict) are required
 by the spec and cannot be removed. Give the engineer precise instructions: which functions,
 which data structures, and how to keep behaviour identical. Answer with the JSON object only."""
@@ -315,11 +321,28 @@ def run(args):
                     rec["delta_pct"] = -100 * delta
                     rec["scores"] = {k: v["score"] for k, v in s["sets"].items()}
                     if delta > state["threshold"]:
+                        # Confirm a win with a second measurement before keeping it.
+                        again = score(runs=args.runs, gate=False)
+                        new2 = again["sets"]["validation"]["score"]
+                        rec["confirm_pct"] = -100 * (old - new2) / old
+                        if (old - new2) / old <= state["threshold"]:
+                            delta = 0.0
+                    if delta > state["threshold"]:
                         git("add", "-A")
+                        # Only measured facts go into the history; the planner's reasoning
+                        # (which is estimation) stays in the round folder.
+                        lines = "\n".join(
+                            f"- {k}: {state['best'][k]['score']:.1f} -> {v['score']:.1f} us "
+                            f"({100 * (v['score'] - state['best'][k]['score']) / state['best'][k]['score']:+.1f}%)"
+                            for k, v in s["sets"].items()
+                        )
                         msg = (
-                            f"han-timeline: {p['idea']}\n\n{p['rationale']}\n\n"
-                            f"Validation score {old:.1f} -> {new:.1f} us "
-                            f"({-100 * delta:+.1f}%), hill-climb round {n}.\n\n"
+                            f"han-timeline: {p['title']}\n\n{p['idea']}\n\n"
+                            f"Hill-climb round {n}. Benchmark scores (geometric mean of per-op "
+                            f"times, best of {args.runs} runs; the correctness gate passed):\n"
+                            f"{lines}\n\n"
+                            "Planned by Claude, implemented by Codex, measured by "
+                            "crates/han-timeline/hillclimb/score.py.\n\n"
                             "Clean-Room: B\n"
                             "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"
                             f"Co-Authored-By: Codex ({CODEX_MODEL}) <noreply@openai.com>\n"
