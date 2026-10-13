@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 
 // ───────────── grammar ─────────────
 const SERVER = String.raw`[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*`;
-const reServer = new RegExp(`^${SERVER}$`);
-const reActor = new RegExp(`^@[a-z0-9._-]{0,64}:${SERVER}$`);
-const reSpaceNormal = new RegExp(`^([a-z0-9]{1,26}):${SERVER}$`);
-const reSpaceProfile = new RegExp(`^profile:(@[a-z0-9._-]{0,64}:${SERVER})$`);
+const SERVER_LEN = String.raw`(?=[a-z0-9.-]{1,253}$)`;   // a ServerName is at most 253 characters (also inside ActorId and SpaceId)
+const reServer = new RegExp(`^${SERVER_LEN}${SERVER}$`);
+const reActor = new RegExp(`^@[a-z0-9._-]{0,64}:${SERVER_LEN}${SERVER}$`);
+const reSpaceNormal = new RegExp(`^([a-z0-9]{1,26}):${SERVER_LEN}${SERVER}$`);
+const reSpaceProfile = new RegExp(`^profile:(@[a-z0-9._-]{0,64}:${SERVER_LEN}${SERVER})$`);
 const reHex = /^[0-9a-f]{64}$/;
 const reNonce = /^[a-z2-7]{26}$/;
 const reKeyId = /^[A-Za-z0-9_-]{1,64}$/;
@@ -49,7 +50,7 @@ export function isTime(s: unknown): s is string {
   const m = reTimeParts.exec(s);
   if (!m) return false;
   const [y, mo, d, h, mi, se] = m.slice(1).map(Number);
-  if (mo < 1 || mo > 12 || h > 23 || mi > 59 || se > 59) return false;
+  if (y < 1 || mo < 1 || mo > 12 || h > 23 || mi > 59 || se > 59) return false;
   const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
   const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
   return d >= 1 && d <= dim;
@@ -197,9 +198,9 @@ function links(a: any): string | null {
   return null;
 }
 export function jsonInts(v: any, depth = 0): boolean {
-  if (depth > 64) return false;
   if (v === null || typeof v === "boolean" || typeof v === "string") return true;
   if (typeof v === "number") return isInt(v);
+  if (depth >= 32) return false;   // at most 32 nested arrays and objects, the outermost counted
   if (Array.isArray(v)) return v.every((x) => jsonInts(x, depth + 1));
   if (isObj(v)) return Object.values(v).every((x) => jsonInts(x, depth + 1));
   return false;

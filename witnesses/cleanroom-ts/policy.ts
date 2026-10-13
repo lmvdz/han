@@ -260,32 +260,32 @@ function guardedFor(s: GuardInput, ctx: PolicyCtx, recorded: string[], ...agents
   for (const x of agents) if (!out.includes(x) && guardStatus(s, ctx, x).guarded) out.push(x);
   return out;
 }
-/** P-15: the guarded agents whose limits x carries: the union of the guardedFor of the open tasks x accepted, in the order the tasks were created. */
+/** P-15: the guarded agents whose limits x carries: the union of the guardedFor of the tasks whose `accepted` lists x, in the order the tasks were created
+ *  (an assignee's own final update removes it from `accepted`; an owner's force-close empties it; round 31, X1). */
 function carried(s: SpaceState, x: string): string[] {
   const out: string[] = [];
-  const open = (Object.values(s.tasks) as A[]).filter((t) => t.open && t.accepted.includes(x)).sort((p, q) => p.seq - q.seq);
+  const open = (Object.values(s.tasks) as A[]).filter((t) => t.accepted.includes(x)).sort((p, q) => p.seq - q.seq);
   for (const t of open) for (const y of t.guardedFor as string[]) if (!out.includes(y)) out.push(y);
   return out;
 }
 /** P-15: guarded, or carrying a guarded agent's limits. */
 const limited = (s: SpaceState, ctx: PolicyCtx, x: string): boolean => guardStatus(s, ctx, x).guarded || carried(s, x).length > 0;
-/** P-15, a task's guardedFor at its creation: the parent's list, then carried(author), then the author if guarded; each once. */
+/** P-15, a task's guardedFor at its creation: the parent's list, or carried(author) when it has no parent (X2); then the author if guarded; each once. */
 function taskGuardedFor(s: SpaceState, ctx: PolicyCtx, author: string, parentId: string | undefined): string[] {
-  const out: string[] = parentId !== undefined ? [...((s.tasks as A)[parentId].guardedFor as string[])] : [];
-  for (const x of carried(s, author)) if (!out.includes(x)) out.push(x);
+  const out: string[] = parentId !== undefined ? [...((s.tasks as A)[parentId].guardedFor as string[])] : carried(s, author);
   return guardedFor(s, ctx, out, author);
 }
 /** P-15 whose own approval a claim needs: the guard of each agent in the effect's guardedFor and of its proposer and executor if guarded now. null: such an agent has no confirmed operator. */
 function effectGuardedFor(s: SpaceState, ctx: PolicyCtx, proposer: string, executor: string, taskId: string | undefined): string[] {
-  const out: string[] = taskId !== undefined ? [...((s.tasks as A)[taskId].guardedFor as string[])] : [];
-  for (const x of carried(s, proposer)) if (!out.includes(x)) out.push(x);
+  const out: string[] = taskId !== undefined ? [...((s.tasks as A)[taskId].guardedFor as string[])] : carried(s, proposer);
+  for (const x of carried(s, executor)) if (!out.includes(x)) out.push(x);   // X3
   return guardedFor(s, ctx, out, proposer, executor);
 }
-/** P-15: the bound counts the entry's author (and an effect's executor) whether guarded or not. */
+/** P-15: a proposal's bound counts its proposer and executor whether guarded or not. (A task's is on its own list: MAX_GUARDED_FOR - 2, X6.) */
 const overBound = (recorded: string[], ...actors: string[]): boolean => new Set([...recorded, ...actors]).size > MAX_GUARDED_FOR;
-/** P-08: whether an approval's author is guarded now, judged from the state and the actorKind the approval recorded. */
-const approvalGuarded = (s: SpaceState, x: A): boolean =>
-  (s.guarded as A)[x.author] === true || (s.policy.sessions.forceGuarded === true && x.actorKind !== "human");
+/** P-08: whether an open approval can never count again: its author is guarded now (judged from the state and the actorKind it recorded) or its server is denied (X7). */
+const approvalDead = (s: SpaceState, x: A): boolean =>
+  (s.guarded as A)[x.author] === true || (s.policy.sessions.forceGuarded === true && x.actorKind !== "human") || s.policy.servers.deny.includes(serverOf(x.author));
 function guardsOf(s: SpaceState, ctx: PolicyCtx, ef: A): (string | null)[] {
   const out: (string | null)[] = [];
   for (const x of guardedFor(s, ctx, ef.guardedFor, ef.proposer, ef.executor)) { const v = guardStatus(s, ctx, x).guard ?? null; if (!out.includes(v)) out.push(v); }
@@ -418,9 +418,9 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
     case "task.update": {
       const t = (s.tasks as A)[b.task];
       if (!t) return inv("not a task");
-      if (!t.open) return deny("task closed");
-      if (!holds(s, a)) return deny("no role");
       const final = FINAL_TASK.includes(b.state);
+      if (!t.open && !(final && t.accepted.includes(a))) return deny("task closed");   // X1: an accepted assignee still closes its own part
+      if (!holds(s, a)) return deny("no role");
       const assignee = t.to.includes(a);
       if (isOwner(s, a) && !assignee && final) return ok;
       if (assignee && final) {
@@ -575,7 +575,7 @@ function decideTask(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
     const avail = parent && parent.left ? parent.left.amount : (s.budgetLeft as A).amount;
     if (b.budget.amount > avail) return deny("budget does not fit");
   }
-  if (overBound(taskGuardedFor(s, ctx, a, b.parent), a)) return deny("too many guarded tasks; close some");   // P-15
+  if (taskGuardedFor(s, ctx, a, b.parent).length > MAX_GUARDED_FOR - 2) return deny("too many guarded tasks; close some");   // P-15, X6
   return ok;
 }
 
@@ -833,7 +833,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       }
       s.policy = structuredClone(b.policy);
       // P-08: forcing on drops the open approvals of the authors it guards, judged from the recorded kind
-      for (const ef of Object.values(s.effects) as A[]) ef.approvals = ef.approvals.filter((x: A) => x.consumedBy || !approvalGuarded(s, x));
+      for (const ef of Object.values(s.effects) as A[]) ef.approvals = ef.approvals.filter((x: A) => x.consumedBy || !approvalDead(s, x));
       break;
     }
     case "key.add": s.profile!.keys[b.keyId] = { publicKey: b.publicKey, status: "valid" }; break;
@@ -854,15 +854,22 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
     }
     case "task.update": {
       const t = (s.tasks as A)[b.task];
-      t.state = b.state;
-      if (!FINAL_TASK.includes(b.state) && !t.accepted.includes(a)) t.accepted.push(a);   // P-15: a non-final update is the assignee's acceptance
-      if (FINAL_TASK.includes(b.state)) {
+      const wasOpen = t.open;
+      if (wasOpen) t.state = b.state;   // a closed task only loses the author's acceptance (X1)
+      if (b.state === "accepted" && !t.accepted.includes(a)) t.accepted.push(a);   // P-15, X4: only an explicit accept accepts
+      if (FINAL_TASK.includes(b.state)) t.accepted = t.to.includes(a) ? t.accepted.filter((x: string) => x !== a) : [];   // X1: an assignee's own final update ends what it carries; an owner's force-close, all
+      if (FINAL_TASK.includes(b.state) && wasOpen) {
         t.open = false;
         if (t.left) { const amt = t.left.amount; t.left.amount = 0; refundFrom(s, t.parent, amt, true); }
       }
       break;
     }
-    case "task.cancel": (s.tasks as A)[b.task].cancelRequested = true; break;
+    case "task.cancel": {
+      const t = (s.tasks as A)[b.task];
+      t.cancelRequested = true;
+      if (isOwner(s, a)) t.accepted = [];   // X1: an owner's cancel force-closes for everyone
+      break;
+    }
     case "effect.propose": {
       const ef: A = {
         proposer: a, proposerKey: e.keyId, executor: b.executor, action: b.action, planDigest: b.planDigest, seq, repeatable: b.repeatable,
@@ -925,7 +932,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
         for (const x of returned) delete x.consumedBy;
         // a returned approval stays superseded if its author approved again meanwhile (A5): one open approval per author
         ef.approvals = ef.approvals.filter((x: A) => !(returned.includes(x) && (ef.approvals.some((y: A) => y !== x && y.author === x.author && !y.consumedBy)
-          || !holds(s, x.author) || approvalGuarded(s, x))));   // or its author lost its role / is guarded or forced meanwhile (P-08)
+          || !holds(s, x.author) || approvalDead(s, x))));   // or its author lost its role / is guarded or forced meanwhile (P-08)
       };
       const settle = (cost: A | undefined) => {
         if (!claim.reserved) { claim.settled = true; return; }
