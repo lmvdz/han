@@ -1,0 +1,175 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "02-lamport-and-genesis",
+ "description": "A batch whose start is not above every parent counter is rejected; only one genesis batch may have empty parents",
+ "rules": [
+  "TL-04",
+  "TL-15",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "same": {
+   "replica": "B",
+   "start": 1,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "lower": {
+   "replica": "C",
+   "start": 1,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "genesis2": {
+   "replica": "C",
+   "start": 5,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "noparents": {
+   "replica": "B",
+   "start": 7,
+   "parents": [],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "good": {
+   "replica": "B",
+   "start": 9,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 2
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "deliver": "same",
+     "result": "rejected:lamport"
+    },
+    {
+     "deliver": "lower",
+     "result": "rejected:lamport"
+    },
+    {
+     "deliver": "genesis2",
+     "result": "rejected:genesis"
+    },
+    {
+     "deliver": "noparents",
+     "result": "rejected:genesis"
+    },
+    {
+     "deliver": "good",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "9@B"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "k": [
+            [
+             "9@B",
+             2
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

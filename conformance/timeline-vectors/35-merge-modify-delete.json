@@ -1,0 +1,170 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "35-merge-modify-delete",
+ "description": "Main deleted a file that the session edited: the plan reports a modify/delete conflict instead of silently dropping the edit",
+ "rules": [
+  "TL-87",
+  "TL-75"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "x\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1edit": {
+   "replica": "B",
+   "start": 7,
+   "parents": [
+    "6@A"
+   ],
+   "timeline": "6@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "s1\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "maindel": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "2@A",
+     "key": "src/a.txt"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1edit"
+    },
+    {
+     "deliver": "maindel"
+    },
+    {
+     "expect": {
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "6@A",
+        "kind": "merge",
+        "base": [
+         "5@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "modify_delete",
+          "object": "2@A",
+          "key": "src/a.txt",
+          "deleted_by": "target"
+         }
+        ],
+        "results": [
+         {
+          "resolutions": [
+           "target"
+          ],
+          "texts": {
+           "4@A": "x\ns1\n"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

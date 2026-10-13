@@ -1,0 +1,178 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "53-merge-rename-conflict",
+ "description": "Main and the session renamed the same file to different paths: the merge reports a rename conflict instead of keeping the file twice",
+ "rules": [
+  "TL-87"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "x\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 7,
+   "parents": [
+    "6@A"
+   ],
+   "timeline": "6@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "2@A",
+     "key": "src/a.txt"
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/c.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "main": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "2@A",
+     "key": "src/a.txt"
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/b.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "main"
+    },
+    {
+     "expect": {
+      "plans": [
+       {
+        "into": "1@A",
+        "from": "6@A",
+        "kind": "merge",
+        "base": [
+         "5@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "rename",
+          "object": "2@A",
+          "content": "4@A",
+          "target": [
+           "src/b.txt"
+          ],
+          "incoming": [
+           "src/c.txt"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

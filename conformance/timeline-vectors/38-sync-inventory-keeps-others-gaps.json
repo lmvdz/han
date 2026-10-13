@@ -1,0 +1,129 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "38-sync-inventory-keeps-others-gaps",
+ "description": "A receiver that is none of these replicas lists exactly the counters it holds for each of them: A's gap between 2 and 5 stays a gap",
+ "rules": [
+  "TL-110"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 1
+    }
+   ]
+  },
+  "b2": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "n",
+     "value": 2
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "m",
+     "value": 3
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "inventory": {
+       "A": [
+        [
+         1,
+         2
+        ],
+        [
+         5,
+         5
+        ]
+       ],
+       "B": [
+        [
+         3,
+         3
+        ]
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}
