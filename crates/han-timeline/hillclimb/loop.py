@@ -409,11 +409,9 @@ def run(args):
                             f"Hill-climb round {n}. Benchmark scores (geometric mean of per-op "
                             f"times, best of {args.runs} runs; the correctness gate passed):\n"
                             f"{lines}\n\n"
-                            "Planned by Claude, implemented by Codex, measured by "
-                            "crates/han-timeline/hillclimb/score.py.\n\n"
+                            "Measured by crates/han-timeline/hillclimb/score.py.\n\n"
+                            # HAN's commits carry no attribution; this is the only trailer.
                             "Clean-Room: B\n"
-                            "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"
-                            f"Co-Authored-By: Codex ({CODEX_MODEL}) <noreply@openai.com>\n"
                         )
                         sh(["git", "commit", "-q", "-F", "-"], cwd=WT, input=msg)
                         state["best"] = s["sets"]
