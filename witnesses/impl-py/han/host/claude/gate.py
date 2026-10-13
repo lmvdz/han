@@ -5,7 +5,10 @@ import os, re
 from dataclasses import dataclass, field
 
 FILE_TOOLS = ("Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep")
-WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")      # H11: refused in a strict turn like Bash writes; a change then goes out as a proposal
+WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")      # V7: local inside the session's worktree in every mode; outside it is refused, and in a strict turn the model is pointed at a proposal
+# V1: HAN's own governing actions, as tools of HAN's MCP server. This host declares none of them (the gate would deny them as unknown), but a
+# harness that does must not get them in a strict turn (R-24): approving, governing (`member.set`, `policy.set`) and steering another's session.
+GOVERN_TOOLS = ("approve", "effect_approve", "member_set", "policy_set", "steer", "session_input")
 WEB_TOOLS = {"WebFetch": ("web.fetch", "url"), "WebSearch": ("web.search", "query")}
 MCP_PREFIX = "mcp__han__"            # the one in-process MCP server; external servers are disabled
 
@@ -41,8 +44,8 @@ NOGLOB = "set -f; "
 # E7: Bash is default-deny. A command runs only if it is in COMMANDS and EVERY argument is accounted for: a flag must be one the command
 # lists (an unknown flag is refused), a flag's value is checked by its kind, and every other word is a path, a number or plain text as
 # the command says. Kinds: "bool" (no value), "num" (digits), "text" (a pattern or key; never a path), "path" (read), "wpath" (written).
-# Commands and flags that write are for auto turns only: a strict turn (guarded outside input, or a session it has entered; R-24) may only read, and so
-# may the file tools (H11: Write, Edit and NotebookEdit are refused there).
+# V7: a write is local only inside the session's worktree (`cwd`), in a strict turn (R-24) as in an auto one: `wpath` is checked like `path`.
+# A write outside it is refused, and a strict turn's model is pointed at the proposal path.
 @dataclass(frozen=True)
 class Cmd:
     short: dict = field(default_factory=dict)        # letter -> kind
@@ -84,6 +87,8 @@ def inside(root: str, path: str) -> bool:
     try: return os.path.commonpath([os.path.normcase(full), os.path.normcase(root)]) == os.path.normcase(root)
     except ValueError: return False                          # another drive
 
+PROPOSE_HINT = "; in a strict turn, propose the change as an effect (the deploy tool)"
+
 class Gate:
     def __init__(self, cwd: str, world_tools=DEFAULT_WORLD_TOOLS, bash_allow=LOCAL_BASH):
         self.cwd, self.world_tools, self.bash_allow = os.path.realpath(cwd), {t.name: t for t in world_tools}, tuple(bash_allow)
@@ -96,6 +101,9 @@ class Gate:
             action, key = WEB_TOOLS[tool]
             return Decision("world", action=action, args={key: str(inp.get(key, ""))[:2000]})
         if tool == "Bash": return self._bash(str(inp.get("command", "")), mode)
+        if tool.startswith(MCP_PREFIX) and tool[len(MCP_PREFIX):] in GOVERN_TOOLS:
+            if mode == "strict": return Decision("deny", f"{tool[len(MCP_PREFIX):]}: approving, governing and steering others are not available in a strict turn")
+            return Decision("deny", f"{tool} is not available in this session")
         if tool.startswith(MCP_PREFIX) and tool[len(MCP_PREFIX):] in self.world_tools:
             wt = self.world_tools[tool[len(MCP_PREFIX):]]
             return Decision("world", action=wt.action, args={k: v for k, v in inp.items() if k in wt.params})
@@ -104,26 +112,23 @@ class Gate:
     def _file(self, tool: str, inp: dict, mode: str) -> Decision:
         paths = [inp[k] for k in ("file_path", "notebook_path", "path") if inp.get(k)]
         if any(not isinstance(p, str) or not inside(self.cwd, p) for p in paths):
-            return Decision("deny", f"{tool}: path is outside the workspace")
+            return Decision("deny", f"{tool}: path is outside the workspace" + (PROPOSE_HINT if mode == "strict" and tool in WRITE_TOOLS else ""))
         pat = inp.get("pattern") if tool == "Glob" else None       # a glob can climb out with .. or an absolute prefix
         if isinstance(pat, str) and (os.path.isabs(pat) or re.match(r"^[A-Za-z]:", pat) or ".." in re.split(r"[\\/]", pat)):
             return Decision("deny", "Glob: pattern leaves the workspace")
-        if mode == "strict" and tool in WRITE_TOOLS:                 # H11: strict (R-24): nothing is written locally, it is proposed
-            return Decision("deny", f"{tool}: writing is not available in a strict turn; propose the change as an effect (the deploy tool)")
         return Decision("allow")
 
     def _bash(self, cmd: str, mode: str) -> Decision:
         """No sandbox exists for Bash on Windows, so there is no way to bound what a shell command touches. A command that names the
         network is a world action (an effect); anything else is default-deny (E7): one plain command from COMMANDS with no shell syntax,
-        every flag known and every path argument inside the workspace. A strict turn (R-24) is limited to what only reads."""
+        every flag known and every path argument inside the workspace. A write is local inside the worktree in every mode (V7)."""
         if cmd.startswith(NOGLOB): cmd = cmd[len(NOGLOB):]             # our own prefix, seen again by the second line (can_use_tool)
         if NETWORK.search(cmd): return Decision("world", action="bash.network", args={"command": cmd[:2000]})
         if UNSAFE_CHARS.search(cmd): return Decision("deny", "Bash: shell syntax is not allowed; one plain command only")
         words, strict = cmd.split(), mode == "strict"
         spec = COMMANDS.get(words[0]) if words and words[0] in self.bash_allow else None
-        if not spec or (strict and spec.write):
-            avail = [n for n in self.bash_allow if n in COMMANDS and not (strict and COMMANDS[n].write)]
-            return Decision("deny", f"Bash: only {', '.join(avail)} are allowed" + (" in a strict turn" if strict else ""))
+        if not spec:
+            return Decision("deny", f"Bash: only {', '.join(n for n in self.bash_allow if n in COMMANDS)} are allowed" + (" in a strict turn" if strict else ""))
         why = self._check_args(spec, words[1:], strict)
         return Decision("deny", f"Bash: {why}") if why else Decision("allow", args={"command": NOGLOB + cmd})
 
@@ -138,8 +143,8 @@ class Gate:
         """Why the value `v` of kind `kind` is refused, else None."""
         if kind == "num": return None if v.isdigit() else f"{v!r} is not a number"
         if kind == "text": return None
-        if kind == "wpath" and strict: return "writing is not available in a strict turn"
-        if kind in ("path", "wpath"): return None if self.path_ok(v) else "path leaves the workspace"
+        if kind in ("path", "wpath"):
+            return None if self.path_ok(v) else "path leaves the workspace" + (PROPOSE_HINT if strict and kind == "wpath" else "")
         return "unexpected value"
 
     def _check_args(self, spec: Cmd, args: list[str], strict: bool) -> str | None:

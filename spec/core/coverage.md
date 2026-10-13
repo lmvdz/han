@@ -1,7 +1,7 @@
 # HAN v1 — coverage of v0.4
 
 Every v0.4 invariant, wire method, command, port and error code, and what happened to it in v1 (rounds 7–<!--s:round-->30<!--/s-->): **kept** (same guarantee, different mechanism), **moved** (now private to a module, the transport binding or an extension), **weakened** (checked less strongly, with how) or **dropped** (with the reason).
-v1 structure referred to below: <!--s:calls_core-->4<!--/s--> sequencer calls (`hello`, `append`, `read`, `state`); modules M1 Log, M2 Policy (<!--s:policy_fns-->6<!--/s--> pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-12, T-01…T-07, G-01…G-11 (the generic binding, §8.3: G-07…G-11 are its frames, `hello`, reads, server-to-server and wire conformance).
+v1 structure referred to below: <!--s:calls_core-->4<!--/s--> sequencer calls (`hello`, `append`, `read`, `state`); modules M1 Log, M2 Policy (<!--s:policy_fns-->6<!--/s--> pure functions), M3 Identity, M4 Verifier, M5 Executor, M6 Agent host, M7 Transport binding; rules R-01…R-18, R-24 and R-25, P-01…P-13, P-15 and P-16, X-01…X-07, X-09…X-12, T-01…T-07, G-01…G-11 (the QUIC binding `han/1`, §8.2: G-07…G-11 are its connections and frames, `hello`, reads, server-to-server and wire conformance), N-01…N-04 (devices and node ids, the peer filter, invite tickets, optional GitHub admission).
 Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.md`, `design/command-handler-map.md`, `interfaces.ts`.
 
 ## Invariants (12/12 accounted for: 10 kept, 2 weakened with a stated qualification)
@@ -38,17 +38,17 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | events.unsubscribe | close the stream | kept |
 | events.snapshot | `state(…[, {at}])` | kept, **paged:** the state is never refused for its size. Every map of it (`roles`, `roleHistory`, `tasks`, `effects`, `sessions`, `guarded`, a profile's keys) comes in pages of at most `maxStateItems` (1,000) and `maxFrameBytes` with `next`; `state {cursor}` continues, `state {effect}` reads one effect, `state {agent}` one agent's `{guarded}`; `read` carries entries only (§3) |
 | view.get / subscribe / resync / unsubscribe | live sessions: the session stream rides the transport (T-07, G-05) and what it may show is `sessionAccess` (P-15); truth stays in `read`. No view-reset protocol: a stream carries no state to resync. | moved to transport |
-| document.open / sync.exchange | **dropped from the v1 core:** shared documents are the transport's (T-03 files, e.g. Matrix rooms) or a future extension | dropped |
+| document.open / sync.exchange | **dropped from the v1 core:** shared documents are the transport's (T-03 files) or a profile such as `han.timeline/1` or a future extension | dropped |
 | presence.update / subscribe / unsubscribe | transport `signal` + `subscribe` (T-05, G-04, G-09: signals ride `subscribe`, never `read`) | moved to transport |
-| artifact.begin / write / commit | transport files (T-03). Generic binding: `blobPut(ref, offset, bytes)` on the uploader's own server, complete only when the uploader's own bytes hash-match (G-01, G-02). Not a sequencer call. | moved to transport |
-| artifact.read | transport (T-03). Generic binding: `blobGet(ref, space)` under G-01 | moved to transport |
+| artifact.begin / write / commit | transport files (T-03). `han/1`: `blobPut(ref, offset, bytes)` on the uploader's own server, complete only when the uploader's own bytes hash-match (G-01, G-02). Not a sequencer call. | moved to transport |
+| artifact.read | transport (T-03). `han/1`: `blobGet(ref, space)` under G-01 | moved to transport |
 
 ## Commands (19 → entry kinds)
 
 | v0.4 command | v1 | Status |
 |---|---|---|
 | context.post | `message` | kept |
-| (chat, invites, presence, files) | the transport: T-01 carry the log, T-04 invite, T-05 signal, T-03 files; Matrix binding §8.2 | moved to transport |
+| (chat, invites, presence, files) | the transport: T-01 carry the log, T-04 invite, T-05 signal, T-03 files; chat stays in chat tools (§8.3, informative) | moved to transport |
 | (live session open / steer / close) | `session.open` / `session.input` / `session.close` (P-15) | new |
 | context.create | `space.create` | kept |
 | conversation.create | `space.create` + `member.set` (agent) + `task` | kept |
@@ -84,7 +84,7 @@ Sources: `packages/v0.4-r1/interface-design.md` §2, `design/public-method-map.m
 | ProviderBinding (provider/account binding) | **moved:** which provider and account an executor uses is executor-private configuration; the protocol names only the executor actor | moved |
 | ExternalChangeProposal (changes made outside HAN) | **moved:** an executor that notices an outside change reports it as an ordinary `message`, or proposes an effect to reconcile it | moved |
 | ExecutionPermit | **dropped:** the claim's receipt is the permit (X-03), and the instance binding (X-01) replaces the local enforcement object | dropped (subsumed) |
-| ArtifactStore | transport files (T-03); generic binding blob store (G-01, G-02) | moved to transport |
+| ArtifactStore | transport files (T-03); the `han/1` blob store (G-01, G-02) | moved to transport |
 | RetentionReceipt, retention roots | **replaced:** retention follows unredacted references (G-01); there are no explicit roots or receipts | moved |
 | NativeArtifactIndex (bindVerified, lookup) | **moved:** mapping blobs to native artifacts is executor-private (M5); the protocol sees only `BlobRef`s | moved |
 | CheckpointCoordinator | `checkpoint` entry + snapshot/restore effects | kept |

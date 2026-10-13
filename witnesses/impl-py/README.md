@@ -11,6 +11,10 @@ han/client/      client.py (Client, outbox + retry) · outbox.py (SQLite) · pro
 tests/           pytest-asyncio, a real server on a free port; each docstring names the rule it checks
 ```
 
+## Status: legacy parts (round 30, V14)
+
+Round 30 removed the WebSocket generic binding and the Matrix application-service binding from the normative spec (architecture.md §8.2-§8.3). In this witness these are **legacy**: `han/matrix/` (appservice, `MatrixClient`, media, store) and the `/_han/v1/*` HTTP read, state, entry, blob and challenge endpoints in `han/matrix/appservice.py`, together with the matrix tests (`tests/test_matrix_*.py`, `fixtures_matrix.py`). They are kept, not deleted. This witness's WebSocket server and Matrix code are frozen at round 29 (V14); only the Policy witness role (vectors and differential fuzz, through `ref/policy.py`) and the host, executor and verifier logic follow later rounds.
+
 ## Setup
 
 The venv `H:\HAN\v1\impl\.venv` already has every dependency, so nothing needs installing: run from `witnesses/impl-py/` (`python -m han.seq`; pytest is configured with `pythonpath = .`). `pyproject.toml` also declares the package for `pip install -e .[dev]` (not exercised here).

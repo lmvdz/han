@@ -1,0 +1,7 @@
+  depth 1: 43 transitions, 28 states, frontier 27, rss 23 MB
+  depth 2: 1226 transitions, 598 states, frontier 570, rss 25 MB
+  depth 3: 27086 transitions, 11661 states, frontier 11063, rss 52 MB
+  depth 4: 548516 transitions, 216244 states, frontier 204583, rss 562 MB
+  depth 5: 10562557 transitions, 3863880 states, frontier 0, rss 490 MB
+[guard] 10562557 transitions to depth 5; GuardApproved, GuardedRestricted, DelegateChain, GuardedApprovalsUnused, UnguardOnlyByTheGuard, NotStricter, ExactGuarding, OneOpenApprovalPerAuthor, CapLiveness and DeadApprovalsDropped HOLD (non-vacuous: guarded claim, delegated claim, guard denial, restricted author, guarded approval dropped, cap refusal, uncounted approval, task-less delegated work, limited delegate, parentless delegated task)
+exit 0

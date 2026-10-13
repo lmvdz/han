@@ -198,6 +198,8 @@ class Host:
         inp.data = [t for _, t, _ in data]
         refs = [inp.trigger] + [r for _, _, r in data if r][-(MAX_REFS - 1):]
         await self._full()                                  # the tasks: `_budget_task` and the guards a proposal waits for are looked up while the turn runs
+        if inp.task and not await self._accept(inp.task):   # R-24 (V4): accept the task before the first turn on it, or do not run the turn
+            return self.j.commit_turn(inp.seq, [])
         await self._load_guard_profiles(inp)
         self._ctx, self._made = (inp, refs), {}
         await self._emit({"type": "status", "state": "working"})
@@ -212,7 +214,7 @@ class Host:
         self._crash("decided")
         await self._refresh()                          # the state may have changed during the turn (a policy change, an unguard)
         if {"Steer", "Task"} & {type(a).__name__ for a in actions} or P.space_unit(self.state): await self._full()      # `_plan` looks at sessions and tasks
-        intents = self._plan(actions, inp, refs)
+        intents = self._plan(actions, inp, refs, mode)
         self.j.log(f"{mode} turn by {inp.author} at {inp.seq}: {inp.text}")
         for a in actions: self.j.log(f"  -> {a}")
         self.j.commit_turn(inp.seq, intents)           # the decision and the cursor move are one transaction
@@ -220,10 +222,27 @@ class Host:
         await self._deliver_pending()
         await self._emit({"type": "status", "state": "idle"})
 
-    def _plan(self, actions, inp: TurnInput, refs) -> list[tuple[str, str, dict]]:
+    async def _accept(self, task: str) -> bool:
+        """R-24 (V4): accept the driving task (`task.update {state: "accepted"}`) before the agent's first turn on it, so the task's
+        `guardedFor` is carried (P-15) into whatever the turn proposes and creates. Idempotent: nothing is appended when the state already
+        lists this agent in `accepted` (also after a crash between the append and the turn's commit). False when the space refuses the
+        acceptance: the turn does not run, and the refusal is reported as data."""
+        t = (await self._full())["tasks"].get(task) or {}
+        if self.me in t.get("accepted", []): return True
+        e, c = self.client.make_entry("task.update", self.space, {"task": task, "state": "accepted"}, None, refs=[task], seen=self.state["head"])
+        try: await self.client.append(e, c)
+        except WireError as ex:
+            self.refused.append(f"accept {task[:8]}: {ex}")
+            await self._emit({"type": "output", "text": f"refused by the space: {ex.message}"})
+            return False
+        self.full = None                                    # the next read has `accepted` (and `carried`) in it
+        await self._full()
+        return True
+
+    def _plan(self, actions, inp: TurnInput, refs, mode: str = "auto") -> list[tuple[str, str, dict]]:
         """Actions → intents [(key, kind, payload)], keyed by trigger and position, so a decision is made once. Entries are signed now
         (R-17: `seen` is the instruction's seq, `refs` name it and the data records read)."""
-        out, guarded = [], self.guarded_now
+        out, guarded = [], self.guarded_now or mode == "strict"          # R-24 (V1): a strict turn does not steer another's session, guarded or not
         def refuse(key, why):
             self.refused.append(why); out.append((key + "r", "say", {"text": "refused: " + why}))
         def entry(kind, body, content):
@@ -247,7 +266,7 @@ class Host:
                 e, c = entry("task", body, {"ask": a.text})
                 out.append((key, "entry", {"entry": e, "content": c}))
             elif isinstance(a, Steer):
-                if guarded and a.session not in self._my_sessions(): refuse(key, f"guarded: cannot steer {a.session[:8]}"); continue
+                if guarded and a.session not in self._my_sessions(): refuse(key, f"{'guarded' if self.guarded_now else 'strict turn'}: cannot steer {a.session[:8]}"); continue
                 e, c = entry("session.input", {"session": a.session}, {"text": a.text})
                 out.append((key, "entry", {"entry": e, "content": c}))
         return out
@@ -279,8 +298,9 @@ class Host:
         return f"proposed as {P.entry_id(made[0])}" + (f", waiting for {', '.join(guards)}" if guards else "")
 
     def _guarded_for(self, task: str | None) -> tuple[list[str], dict]:
-        """The effect's `guardedFor` as Policy will record it (P-15 `effect_guarded_for`, on the tasks read for this turn) and the ctx to
-        judge the guards with: the profiles read for it."""
+        """The effect's `guardedFor` as Policy will record it (P-15 `effect_guarded_for`: the named task's list, then `carried(me)`, the
+        union over the open tasks this agent accepted, then this agent and the executor if guarded), computed on the tasks read for this
+        turn, after `_accept` re-read them, and the ctx to judge the guards with: the profiles read for it."""
         profiles = self._guard_profiles | ({self.me: self.profile} if self.profile else {})
         ctx = {"time": "", "profiles": profiles}
         st = self.full or self.state
@@ -296,12 +316,12 @@ class Host:
         return [g for g in dict.fromkeys(P.guard_status(st, ctx, a).get("guard") for a in agents) if g] if st else []
 
     async def _load_guard_profiles(self, inp: TurnInput):
-        """Read the profiles of the agents whose guarding the turn's proposals will carry (the driving task's, the open tasks assigned to
-        this agent, the executor), so `_propose_now` can name their guards without a read."""
+        """Read the profiles of the agents whose guarding the turn's proposals will carry (the driving task's, the open tasks this agent
+        accepted (`carried`), the executor), so `_propose_now` can name their guards without a read."""
         tasks = (self.full or {"tasks": {}})["tasks"]
         need = {self.executor} if self.executor else set()
         for tid, t in tasks.items():
-            if tid == inp.task or (t.get("open") and self.me in t["to"]): need |= set(t.get("guardedFor", []))
+            if tid == inp.task or (t.get("open") and self.me in t.get("accepted", [])): need |= set(t.get("guardedFor", []))
         for a in need - {self.me}:
             try: self._guard_profiles[a] = (await self.client.read_state("profile:" + a))["profile"]
             except WireError: self._guard_profiles.pop(a, None)

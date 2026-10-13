@@ -2,6 +2,8 @@
 
 What a server must put on the wire, as frames. Built from the transcripts in `conformance/interop/golden/` (D15 of `spec/decisions/DECISIONS-r21.md`): every operation file is something **both** reference servers (Python `witnesses/impl-py/`, clean-room TypeScript `witnesses/cleanroom-ts/`) answered byte for byte alike for both clients. The rules they pin are architecture.md §2, §3, §4.1, §4.3, G-01…G-11.
 
+**These are `han/1` frame vectors** (round 30). What they pin is frame-level: the request and reply frames, their verdicts, the `hello` proof bytes, receipts and states. That holds unchanged for the QUIC binding of architecture.md §8.2, where each frame is one length-delimited JSON message on its call stream (G-07). The transcripts were recorded, and the runner below still runs, on the **legacy WebSocket carrier** of rounds 1–29 (one socket, one text message per frame), which the witnesses' servers keep, frozen. The carrier-level parts of this file are therefore informative: a label's own WebSocket, `send_raw` and `send_binary` as text and binary messages, `expect_close` as a socket close, the Challenge as the first message on the socket instead of on the control stream, `http_get` on the socket's origin, and the `<url-of-the-binding>` matcher (round 29's `/.well-known/han` `sequencer` URL; in `han/1` it is a list of node ids, so vector `D13a` is a legacy-carrier vector). A QUIC runner for the same frames comes with the first QUIC implementation.
+
 ```
 python ref/run_wire_vectors.py --url ws://127.0.0.1:8787/han     # a server already in test mode
 python ref/run_wire_vectors.py --launch py | ts                  # start a reference server in test mode, run, stop it

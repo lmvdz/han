@@ -3,9 +3,10 @@
  "rules": [
   "P-15",
   "P-07 E3",
-  "P-01"
+  "P-01",
+  "P-08"
  ],
- "description": "R2 (Q2): an approval by an author who is guarded at the claim, by its choice or forced by the profile pinned for the claim, is no E3 candidate; it is still pinned, like a candidate with a revoked key",
+ "description": "R2 (Q2), V5: an approval by an author who becomes guarded, by its choice or by forcing, never counts: the fold drops it when the author chooses guarding or a policy.set turns forcing on (judged from the actorKind the approval recorded), so a claim never meets, skips or pins it",
  "profiles": {
   "@bot:b.example": {
    "actorKind": "agent",
@@ -586,7 +587,18 @@
    },
    "time": "2026-10-10T12:00:19Z",
    "expect": "allow",
-   "note": "forcing on"
+   "check": {
+    "effects.6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021.approvals": [],
+    "effects.ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf.approvals": [
+     {
+      "id": "d4c44c880f352af9af4dd9ac5104ea3a55afbc42e54baaeff3165f831d9affd6",
+      "author": "@op:b.example",
+      "keyId": "k1",
+      "actorKind": "human"
+     }
+    ]
+   },
+   "note": "V5: forcing on drops the open approvals of the agents it guards, judged from the actorKind each approval recorded"
   },
   {
    "entry": {
@@ -610,7 +622,7 @@
    },
    "time": "2026-10-10T12:00:20Z",
    "expect": "denied",
-   "note": "BOT2 is forced by the profile pinned for the claim"
+   "note": "BOT2's approval is gone"
   },
   {
    "relevantActors": {
@@ -636,7 +648,6 @@
    "expect": [
     "@m:a.example",
     "@p:b.example",
-    "@bot2:b.example",
     "@op:b.example"
    ]
   },
@@ -665,7 +676,7 @@
    "check": {
     "effects.ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf.claims.0.approval": "d4c44c880f352af9af4dd9ac5104ea3a55afbc42e54baaeff3165f831d9affd6"
    },
-   "note": "the forced candidate is skipped, and pinned"
+   "note": "no forced candidate is left to skip or pin"
   },
   {
    "entry": {
@@ -692,11 +703,11 @@
      {
       "id": "4d03ba4a647df84b452bf2e614090bddf623b1f7e26941d056462aef5e580597",
       "author": "@p:b.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
-   },
-   "note": "T2: an approval made while BOT2 is forced drops BOT2's"
+   }
   },
   {
    "entry": {

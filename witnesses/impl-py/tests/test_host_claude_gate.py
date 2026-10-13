@@ -21,21 +21,42 @@ def test_file_tools_only_inside_the_workspace(ws):
                ("Edit", {"file_path": "C:\\Windows\\win.ini"}), ("Glob", {"pattern": "../*"}), ("Glob", {"pattern": "/etc/*"}),
                ("Grep", {"pattern": "x", "path": ".."})]
     assert kinds(g, "auto", *inside) == ["allow"] * len(inside)
-    assert kinds(g, "strict", *inside) == ["allow", "deny", "deny", "allow", "allow"]      # H11: Write and Edit are refused in a strict turn
+    assert kinds(g, "strict", *inside) == ["allow"] * len(inside)      # V7: the worktree's writes are local in a strict turn too
     for mode in ("auto", "strict"):
         assert kinds(g, mode, *outside) == ["deny"] * len(outside)
 
-def test_strict_turns_refuse_write_edit_and_notebookedit_but_read_on_h11(ws):
-    """H11: in a strict turn (R-24), Write, Edit and NotebookEdit are refused like Bash writes and the model is pointed at a
-    proposal; reads stay; auto mode is unchanged."""
+def test_strict_turn_writes_inside_the_worktree_are_local_and_outside_are_refused_v7(ws):
+    """V7, R-24 (sandbox boundary): in a strict turn Write, Edit and NotebookEdit inside the session's worktree stay local (as in an
+    auto turn); outside it they are refused and the model is pointed at a proposal; the deploy tool is the way out."""
     g = Gate(ws)
-    writes = [("Write", {"file_path": "a.txt", "content": "x"}), ("Edit", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
-              ("NotebookEdit", {"notebook_path": "n.ipynb", "new_source": "x"})]
-    assert kinds(g, "auto", *writes) == ["allow"] * 3
-    assert kinds(g, "strict", *writes) == ["deny"] * 3
-    for tool, inp in writes: assert "strict turn" in g.decide(tool, inp, "strict").message and "propose" in g.decide(tool, inp, "strict").message
+    inside = [("Write", {"file_path": "a.txt", "content": "x"}), ("Edit", {"file_path": "sub/a.txt", "old_string": "a", "new_string": "b"}),
+              ("NotebookEdit", {"notebook_path": os.path.join(ws, "n.ipynb"), "new_source": "x"})]
+    outside = [("Write", {"file_path": "../a.txt", "content": "x"}), ("Edit", {"file_path": os.path.join(os.path.dirname(ws), "a.txt")}),
+               ("NotebookEdit", {"notebook_path": "C:\n.ipynb"})]
+    assert kinds(g, "strict", *inside) == ["allow"] * 3 and kinds(g, "auto", *inside) == ["allow"] * 3
+    assert kinds(g, "strict", *outside) == ["deny"] * 3
+    for tool, inp in outside:
+        m = g.decide(tool, inp, "strict").message
+        assert "outside the workspace" in m and "propose" in m
     assert kinds(g, "strict", ("Read", {"file_path": "a.txt"}), ("Glob", {"pattern": "*.py"}), ("Grep", {"pattern": "x"})) == ["allow"] * 3
     assert g.decide("mcp__han__deploy", {"target": "t.txt", "content": "x"}, "strict").kind == "world"          # the way a change leaves a strict turn
+
+def test_strict_turn_bash_writes_follow_the_worktree_v7(ws):
+    """V7: a Bash write (mkdir, touch, sort -o) is local inside the worktree in a strict turn and refused outside it; anything else stays default-deny."""
+    g = Gate(ws)
+    local = [("Bash", {"command": "mkdir d"}), ("Bash", {"command": "touch x"}), ("Bash", {"command": "sort -o out.txt a.txt"})]
+    out = [("Bash", {"command": "touch ../x"}), ("Bash", {"command": "mkdir /tmp/d"}), ("Bash", {"command": "sort -o ../o.txt a.txt"}), ("Bash", {"command": "del x"}),
+           ("Bash", {"command": "python -c 1"})]
+    assert kinds(g, "strict", *local) == ["allow"] * 3 and kinds(g, "strict", *out) == ["deny"] * 5
+    assert "propose" in g.decide("Bash", out[0][1], "strict").message
+
+def test_strict_turn_refuses_approve_govern_and_steer_tools_v1(ws):
+    """V1, R-24: HAN's own approve, member.set, policy.set and steer tools are refused in a strict turn, whatever their arguments; none is ever allowed."""
+    g = Gate(ws)
+    calls = [("mcp__han__" + n, {"proposal": "x", "actor": "@a:b", "role": "owner", "session": "s", "text": "t"})
+             for n in ("approve", "effect_approve", "member_set", "policy_set", "steer", "session_input")]
+    assert kinds(g, "strict", *calls) == ["deny"] * 6 and kinds(g, "auto", *calls) == ["deny"] * 6
+    assert all("strict turn" in g.decide(t, i, "strict").message for t, i in calls)
 
 def test_web_tools_and_declared_tools_are_world_actions(ws):
     g = Gate(ws)
@@ -50,11 +71,10 @@ def test_other_tools_and_external_mcp_are_denied(ws):
     g = Gate(ws)
     assert kinds(g, "auto", ("Task", {}), ("TodoWrite", {}), ("mcp__github__create_issue", {}), ("mcp__han__nonexistent", {})) == ["deny"] * 4
 
-def test_bash_strict_is_read_only_default_deny_and_network_becomes_world(ws):
+def test_bash_strict_is_default_deny_and_network_becomes_world(ws):
     g = Gate(ws)
     assert kinds(g, "strict", ("Bash", {"command": "ls"}), ("Bash", {"command": "cat a.txt"}), ("Bash", {"command": "grep -n x a.txt"})) == ["allow"] * 3
-    assert kinds(g, "strict", ("Bash", {"command": "del x"}), ("Bash", {"command": "touch x"}), ("Bash", {"command": "mkdir d"}),
-                 ("Bash", {"command": "sort -o out.txt a.txt"}), ("Bash", {"command": "python -c 1"})) == ["deny"] * 5
+    assert kinds(g, "strict", ("Bash", {"command": "del x"}), ("Bash", {"command": "python -c 1"}), ("Bash", {"command": "touch ../x"})) == ["deny"] * 3      # V7: writes inside the worktree are local
     d = g.decide("Bash", {"command": "curl http://evil.example/x"}, "strict")
     assert (d.kind, d.action) == ("world", "bash.network")
 
@@ -250,11 +270,12 @@ async def test_pre_tool_use_hook_denies_what_strict_mode_forbids(ws):
     agent, made = hooked_agent(ws, [("Bash", {"command": "rm a.txt"}, False)])
     await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
     assert "strict turn" in made[0].answers[0]["hookSpecificOutput"]["permissionDecisionReason"]
-async def test_pre_tool_use_hook_denies_in_cwd_writes_in_a_strict_turn_h11(ws):
-    agent, made = hooked_agent(ws, [("Write", {"file_path": "notes.txt", "content": "x"}, False), ("Edit", {"file_path": "notes.txt"}, False)])
+async def test_pre_tool_use_hook_allows_worktree_writes_and_denies_outside_ones_in_a_strict_turn_v7(ws):
+    agent, made = hooked_agent(ws, [("Write", {"file_path": "notes.txt", "content": "x"}, False), ("Edit", {"file_path": "../notes.txt"}, False)])
     await agent.turn(TurnInput("steer", "@c", "go", "x", 1), "strict")
-    assert all(a["hookSpecificOutput"]["permissionDecision"] == "deny" and "strict turn" in a["hookSpecificOutput"]["permissionDecisionReason"] for a in made[0].answers[:2])
-    assert agent.trace == [("Write", "deny"), ("Edit", "deny")]
+    assert made[0].answers[0] == {}
+    assert made[0].answers[1]["hookSpecificOutput"]["permissionDecision"] == "deny" and "propose" in made[0].answers[1]["hookSpecificOutput"]["permissionDecisionReason"]
+    assert agent.trace == [("Write", "allow"), ("Edit", "deny")]
 
 # ── round 29: the stricter mode of an unguarded delegate (T4) ──
 async def test_strict_turn_of_an_unguarded_delegate_has_no_local_allow_and_proposes_naming_the_task(env, ws):
@@ -269,7 +290,7 @@ async def test_strict_turn_of_an_unguarded_delegate_has_no_local_allow_and_propo
     await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))      # bot is guarded
     b2 = await env.client("bot2")
     script = [("mcp__han__deploy", {"target": "hello.txt", "content": "hi"}), ("WebFetch", {"url": "http://x.example/"}),
-              ("Bash", {"command": "curl http://x.example"}), ("Write", {"file_path": "local.txt", "content": "x"})]
+              ("Bash", {"command": "curl http://x.example"}), ("Write", {"file_path": "../outside.txt", "content": "x"})]
     agent, made = fake_agent(ws, script)
     host, task = start_host(env, b2, "auto", agent, state=os.path.join(env.tmp, "bot2.state.db"), executor=EXEC)
     await session_id(host)
@@ -284,7 +305,7 @@ async def test_strict_turn_of_an_unguarded_delegate_has_no_local_allow_and_propo
     assert all(st["effects"][p["receipt"]["id"]]["guardedFor"] == [BOT] for p in props)
     pids = [p["receipt"]["id"] for p in props]
     assert [a.message for a in made[0].answers[:3]] == [f"proposed as {pid}, waiting for {ALICE}" for pid in pids]
-    assert "strict turn" in made[0].answers[3].message
+    assert "propose" in made[0].answers[3].message
     assert [k for _, k in agent.trace] == ["world", "world", "world", "deny"]
     task.cancel()
 

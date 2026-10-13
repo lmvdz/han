@@ -7,7 +7,7 @@ The docs mark each derived value as `<!--s:key-->value<!--/s-->`. This script co
   - ref/logs/*               the newest complete log of each model (guard model: depth, transitions; timing model: the round it last ran on, its counts);
   - conformance/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
   - spec/decisions/DECISIONS-rNN.md the round being built (the newest such file, H9); spec/decisions/HISTORY.md the scores of the rounds already graded;
-  - the sources of witnesses/impl-py/     three claims that used to be written by hand (the PreToolUse gate, the advisory status, a Matrix test of §8.2)
+  - the sources of witnesses/impl-py/     two claims that used to be written by hand (the PreToolUse gate, the advisory status)
 and rewrites the marked values in spec/core/architecture.md, README.md, spec/goal.md, spec/core/coverage.md, ref/README.md and conformance/wire-vectors/README.md.
   python ref/sync_docs.py             rewrite the docs
   python ref/sync_docs.py --check     change nothing; list every value that drifted and exit 1 (run_all.py runs this)
@@ -258,12 +258,7 @@ def facts_claims(F, test_names):
     adv = "ADVISORY" in src("witnesses", "impl-py", "han", "host", "host.py") and "test_guarded_status_says_it_is_advisory_without_a_sandbox" in test_names
     F["advisory_claim"] = ("the host says so in its `status` items (`test_host_p15.py::test_guarded_status_says_it_is_advisory_without_a_sandbox`)" if adv
                            else "the host does not yet say so in `status`")
-    matrix_impl = "/_han/v1/entry" in src("witnesses", "impl-py", "han", "matrix", "appservice.py")
-    matrix_test = any(re.search(r"v1/entry|id, kind, author, seq", open(p, encoding="utf-8").read()) for p in glob.glob(os.path.join(ROOT, "witnesses", "impl-py", "tests", "test_matrix_*.py")))
-    shape = "the §8.2 shape of this round (whole-entry upload, `{id}`-only room events, `{id, kind, author, seq}` from the sequencer)"
-    F["matrix_claim"] = (f"{shape} is asserted by a Matrix test" if matrix_test else
-                         f"{shape} is implemented but no Matrix test asserts it" if matrix_impl else f"{shape} is not implemented")
-    F["matrix_untested"] = "" if matrix_test else "the §8.2 shape of this round; "         # only an untested claim belongs in the "Not tested" list
+    # round 30: the Matrix binding left the spec (§8.3 is informative), so its claim is no longer derived
 
 def check_vector_names(arch, vector_ids):
     """The wire-vector names the G-07…G-11 row of §10 cites must exist."""

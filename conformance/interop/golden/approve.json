@@ -160,7 +160,8 @@
            {
             "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
             "author": "@alice:a.localhost",
-            "keyId": "k1"
+            "keyId": "k1",
+            "actorKind": "human"
            }
           ],
           "claims": [],
@@ -329,7 +330,8 @@
            {
             "id": "7ca1d409e8fc5f3e639e5de38fca6732d4810c727084c9f103978bdbded0f815",
             "author": "@alice:a.localhost",
-            "keyId": "k1"
+            "keyId": "k1",
+            "actorKind": "human"
            }
           ],
           "claims": [],

@@ -1237,7 +1237,8 @@
     "effects.4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f.approvals.16": {
      "id": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
      "author": "@op:b.example",
-     "keyId": "k1"
+     "keyId": "k1",
+     "actorKind": "human"
     }
    },
    "note": "the guard refreshes its one open approval"

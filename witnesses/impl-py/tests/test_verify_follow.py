@@ -55,14 +55,19 @@ async def test_redaction_deletes_retained_content(env, tmp_path):
 
 async def test_cli_follow_live_until_seq(env, tmp_path):
     """R-14, R-15: `python -m han.verify follow` (no --once) keeps following a live space, prints each status change and exits 0 at --until."""
-    import os, subprocess, sys
+    import os, sys
     env.actor("alice"); a = await env.client("alice")
     await mkspace(a)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cmd = [sys.executable, "-m", "han.verify", "follow", "--url", env.srv.url, "--actor", "@alice:a.localhost", "--key", os.path.join(env.tmp, "alice.key.json"),
            "--space", S, "--until", "3", "--gossip-interval", "1", "--server-key", f"a.localhost={os.path.join(env.tmp, 'server-key.json')}"]
-    run = asyncio.create_task(asyncio.to_thread(subprocess.run, cmd, cwd=root, capture_output=True, text=True, timeout=60))
-    await asyncio.sleep(1.5)
-    await say(a, "two"); await say(a, "three")
-    r = await run
-    assert r.returncode == 0 and r.stdout.splitlines()[0] == "ok through 1" and r.stdout.splitlines()[-1] == "ok through 3", r.stdout + r.stderr
+    proc = await asyncio.create_subprocess_exec(*cmd, cwd=root, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        first = await asyncio.wait_for(proc.stdout.readline(), 60)               # V8: append only once the follower reports the backlog, not after a sleep
+        assert first.decode().strip() == "ok through 1", first
+        await say(a, "two"); await say(a, "three")
+        out, err = await asyncio.wait_for(proc.communicate(), 60)
+    finally:
+        if proc.returncode is None: proc.kill(); await proc.wait()
+    lines = (first + out).decode().splitlines()
+    assert proc.returncode == 0 and lines[0] == "ok through 1" and lines[-1] == "ok through 3", (lines, err.decode())

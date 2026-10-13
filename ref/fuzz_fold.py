@@ -9,6 +9,12 @@ the kinds they may not use (approve, member.set, steering others' sessions) and 
 human members, 23 actors in all, who approve the newest effect and are assigned tasks of up to 65 assignees, so the 16-approval cap
 (P-08) and the 64-assignee bound (§2) are reached; in a crowd the agents approve too, so forcing leaves approvals that don't count
 (round 29, T2), and outside a crowd task-less proposals come from assignees of guarded tasks half the time (T1); the run reports how often, and how often the guard paths were taken.
+Assignees accept tasks with non-final updates (round 30, V4), so delegates carry their delegators' guarding and limits (V1). After
+the random seeds, a second phase replays the round-29 reviewer's bound counterexample (probes p4 and p4b) with random sizes and
+orders (`bound_run`): 16 to 20 guarded agents task an unguarded agent proposer, which accepts some of them; its proposal is refused
+exactly when the agents, the proposer and the executor would exceed MAX_GUARDED_FOR (V2); then the proposer and the executor become
+guarded, every operator and 16 humans approve, the executor claims, outcomes return approvals and everyone approves again; every
+state is checked as above, and a claim never needs more than MAX_GUARDED_FOR guards.
 
 For every entry decide() allows, fold() must not raise, must not mutate its inputs, and the new state must satisfy:
   · every budget amount (space remainder, task remainders) is ≥ 0
@@ -18,16 +24,19 @@ For every entry decide() allows, fold() must not raise, must not mutate its inpu
   · no effect has more than MAX_ATTEMPTS claims
   · guard_status never raises; `guarded` is the state's set or forcing, `forced` is forcing on a non-human, and `guard` is the
     operator in the pinned profile, confirmed
-  · P-15, recomputed here from the definitions: a new task's `guardedFor` is its parent's plus its author if guarded, a new effect's
-    its task's, then those of the other open tasks that list its proposer as an assignee (in creation order; round 29, T1), plus its
-    proposer and executor if guarded; a proposal refused as "too many guarded tasks" would have had more than MAX_GUARDED_FOR; a
-    recorded `guardedFor` never changes; it holds each agent once and at most MAX_GUARDED_FOR; an allowed claim consumed an approval by the guard of every agent in `guardedFor` and of its proposer and
-    executor if guarded at the claim, and never consumed as the rule's approval one whose author is guarded at the claim (R2); a
-    guarded author is never allowed `effect.approve`, a `member.set` other than leaving (R5) or a steer into another's session; a
-    guard's approval is never refused for the cap (R3)
-  · the cap counts only approvals that can still count (round 29, T2): an approval refused for the cap had at least
-    MAX_OPEN_APPROVALS open approvals by other authors that hold a role, aren't guarded (chosen or forced) and aren't the effect's
-    guards; and no effect holds an unconsumed approval whose author holds no role or chose guarding
+  · P-15, recomputed here from the definitions: an assignee has accepted a task once it posted a non-final update, or created it
+    assigning itself (V4); carried(x) is the union of the `guardedFor` of the open tasks x accepted (V1); a new task's `guardedFor`
+    is its parent's, then carried(author), then its author if guarded; a new effect's its task's, then carried(proposer) (in creation
+    order), then its proposer and executor if guarded; a task or proposal refused as "too many guarded tasks" would have had more than
+    MAX_GUARDED_FOR agents, counting its author (and executor) whether guarded or not (V2); a recorded `guardedFor` never changes; it
+    holds each agent once and at most MAX_GUARDED_FOR; an allowed claim consumed an approval by the guard of every agent in
+    `guardedFor` and of its proposer and executor if guarded at the claim, and never consumed as the rule's approval one whose author
+    is guarded at the claim (R2); a guarded or carrying author is never allowed `effect.approve`, a `member.set` other than leaving
+    (R5), a `policy.set` or a steer into another's session; a guard's approval is never refused for the cap (R3)
+  · the cap counts only approvals that can still count (T2, V3): an approval refused for the cap had at least MAX_OPEN_APPROVALS
+    open approvals by other authors that are E3 candidates now (the current rule, `separateApprover`, a role), aren't guarded and
+    aren't the effect's guards; every approval records its author's actorKind; and no effect holds an unconsumed approval whose author
+    holds no role or is guarded, chosen or forced (V5)
   · an entry that touches an effect leaves it no unconsumed approval that has expired
   · the P-08 bounds, derived in policy.py and han.ts (R3): each author holds at most one unconsumed and one consumed approval on an
     effect; authors that can never be its guards hold at most MAX_OPEN_APPROVALS + 1; so an effect holds at most
@@ -200,36 +209,56 @@ def _worst():
     ACT = "@" + "a" * 64 + ":" + "b" * 253                  # the longest actor id (§2)
     ID, KEY, TIME = "f" * 64, "k" * 64, "2026-10-10T12:00:00Z"
     BUD = {"unit": "u" * 32, "amount": 2 ** 53 - 1}
-    approval = {"id": ID, "author": ACT, "keyId": KEY, "expiresAt": TIME, "consumedBy": ID}
+    approval = {"id": ID, "author": ACT, "keyId": KEY, "actorKind": "service", "expiresAt": TIME, "consumedBy": ID}
     claim = {"id": ID, "attempt": 64, "instance": KEY, "time": TIME, "window": 3600, "approval": ID, "guardApprovals": [ID] * P.MAX_GUARDED_FOR, "reserved": BUD,
              "source": ["task", ID], "settled": True, "outcome": "unknown", "started": "unknown"}
     effect = {"proposer": ACT, "proposerKey": KEY, "executor": ACT, "action": "a" * 128, "planDigest": ID, "seq": 2 ** 53 - 1, "cost": BUD,
               "repeatable": False, "task": ID, "phase": "unknown", "cancelRequested": False, "expiresAt": TIME, "guardedFor": [ACT] * P.MAX_GUARDED_FOR,
               "approvals": [approval] * P.MAX_APPROVALS, "claims": [claim] * P.MAX_ATTEMPTS}
     task = {"author": ACT, "to": [ACT] * 64, "open": True, "state": "progress", "cancelRequested": False, "depth": 16, "seq": 2 ** 53 - 1,
-            "guardedFor": [ACT] * (P.MAX_GUARDED_FOR - 2), "parent": ID, "budget": BUD, "left": BUD}
+            "accepted": [ACT] * 64, "guardedFor": [ACT] * P.MAX_GUARDED_FOR, "parent": ID, "budget": BUD, "left": BUD}
     session = {"actor": ACT, "opened": TIME, "steerMode": "guarded", "steers": 2 ** 53 - 1, "task": ID}
     history = [{"from": 2 ** 53 - 1, "to": 2 ** 53 - 1}] * P.ROLE_INTERVALS
     return {"effects": len(P.jcs(effect)), "tasks": len(P.jcs(task)), "sessions": len(P.jcs(session)), "roleHistory": len(P.jcs(history))}
 BOUND = _worst()
 
+def carried(s, a):
+    """V1 from its definition: the `guardedFor` of the open tasks `a` accepted, in the order they were created."""
+    out = []
+    for t in sorted((t for t in s["tasks"].values() if t["open"] and a in t["accepted"]), key=lambda t: t["seq"]):
+        out += [x for x in t["guardedFor"] if x not in out]
+    return out
+
+def recorded_for(prev, ctx, first, a, *more):
+    """P-15: `first`, then carried(a), then `a` and `more` if guarded, each once."""
+    want = list(first)
+    want += [x for x in carried(prev, a) if x not in want]
+    for x in (a,) + more:
+        if x not in want and guarded(prev, ctx, x): want.append(x)
+    return want
+
 def check_guarding(s, prev, ctx, e):
-    """P-15 (P2, P4, P5), recomputed from the definitions on the state before the entry (`prev`), never from Policy's helpers."""
+    """P-15 (P2, P4, P5, V1, V4), recomputed from the definitions on the state before the entry (`prev`), never from Policy's helpers."""
     errs, k, b, a = [], e["kind"], e["body"], e["author"]
     leaving = k == "member.set" and b == {"actor": a, "role": "none"}
-    if guarded(prev, ctx, a) and (k == "effect.approve" or (k == "member.set" and not leaving) or (k == "session.input" and prev["sessions"][b["session"]]["actor"] != a)):
-        errs.append(f"guarded {a} was allowed {k}")
+    if (guarded(prev, ctx, a) or carried(prev, a)) and (k in ("effect.approve", "policy.set") or (k == "member.set" and not leaving)
+                                                        or (k == "session.input" and prev["sessions"][b["session"]]["actor"] != a)):
+        errs.append(f"guarded or carrying {a} was allowed {k}")
     if k == "task":
         parent = prev["tasks"].get(b.get("parent"))
-        want = list(parent["guardedFor"] if parent else []) + ([a] if guarded(prev, ctx, a) and a not in (parent["guardedFor"] if parent else []) else [])
+        want = recorded_for(prev, ctx, parent["guardedFor"] if parent else [], a)
         if s["tasks"][e["id"]]["guardedFor"] != want: errs.append(f"task guardedFor {s['tasks'][e['id']]['guardedFor']} != {want}")
+        if s["tasks"][e["id"]]["accepted"] != ([a] if a in b["to"] else []): errs.append("a new task's accepted is not its author alone if it assigned itself (V4)")
+    if k == "task.update":
+        t0, t1 = prev["tasks"][b["task"]], s["tasks"][b["task"]]
+        want = t0["accepted"] + ([a] if b["state"] not in P.TASK_FINAL and a not in t0["accepted"] else [])
+        if t1["accepted"] != want: errs.append(f"accepted {t1['accepted']} != {want} after a {b['state']} update (V4)")
     if k == "effect.propose":
-        want = list(prev["tasks"][b["task"]]["guardedFor"]) if "task" in b else []
-        for t in sorted((t for t in prev["tasks"].values() if t["open"] and a in t["to"]), key=lambda t: t["seq"]):   # T1
-            want += [x for x in t["guardedFor"] if x not in want]
-        for x in (a, b["executor"]):
-            if x not in want and guarded(prev, ctx, x): want.append(x)
+        want = recorded_for(prev, ctx, prev["tasks"][b["task"]]["guardedFor"] if "task" in b else [], a, b["executor"])
         if s["effects"][e["id"]]["guardedFor"] != want: errs.append(f"effect guardedFor {s['effects'][e['id']]['guardedFor']} != {want}")
+    if k == "effect.approve":
+        mine = [x for x in s["effects"][b["proposal"]]["approvals"] if x["id"] == e["id"]]
+        if not mine or mine[0]["actorKind"] != ctx["profiles"][a]["actorKind"]: errs.append("an approval did not record its author's actorKind (V5)")
     if k == "effect.claim":
         eff, c = s["effects"][b["proposal"]], s["effects"][b["proposal"]]["claims"][-1]
         consumed = {x["id"]: x["author"] for x in eff["approvals"] if x.get("consumedBy") == c["id"]}
@@ -249,23 +278,36 @@ def check_guarding(s, prev, ctx, e):
         if len(g) != len(set(g)) or len(g) > P.MAX_GUARDED_FOR: errs.append(f"guardedFor {g} repeats an agent or is longer than {P.MAX_GUARDED_FOR}")
     return errs
 
-def approval_bounds(eff):
+def approval_bounds(eff, ctx):
     """P-08 (R3), derived and asserted here: per author one unconsumed and one consumed approval; authors that can never be the
-    effect's guards (operators never change) at most MAX_OPEN_APPROVALS + 1; MAX_UNCONSUMED_APPROVALS and MAX_APPROVALS in all."""
+    effect's guards (the operators of guardedFor, proposer and executor in their profiles; operators never change) at most
+    MAX_OPEN_APPROVALS + 1; MAX_UNCONSUMED_APPROVALS and MAX_APPROVALS in all."""
     errs, open_, used = [], [a["author"] for a in eff["approvals"] if not a.get("consumedBy")], [a["author"] for a in eff["approvals"] if a.get("consumedBy")]
     if len(open_) != len(set(open_)) or len(used) != len(set(used)): errs.append("an author holds two unconsumed or two consumed approvals")
-    may_guard = {OPERATOR[x] for x in list(eff["guardedFor"]) + [eff["proposer"], eff["executor"]] if x in OPERATOR}
+    may_guard = {ctx["profiles"][x].get("operator") for x in list(eff["guardedFor"]) + [eff["proposer"], eff["executor"]] if x in ctx["profiles"]} - {None}
+    if len(may_guard) > P.MAX_GUARDED_FOR: errs.append(f"{len(may_guard)} possible guards")
     others = sum(1 for a in eff["approvals"] if a["author"] not in may_guard)
     if others > P.MAX_OPEN_APPROVALS + 1: errs.append(f"{others} approvals by authors that are never guards")
     if len(open_) > P.MAX_UNCONSUMED_APPROVALS: errs.append(f"{len(open_)} unconsumed approvals")
     if len(eff["approvals"]) > P.MAX_APPROVALS: errs.append(f"{len(eff['approvals'])} approvals on one effect")
     return errs
 
+def candidate(state, eff, a):
+    """V3 from P-08: the first rule naming the action or "*" applies; a role entry matches exactly, an id entry that actor; the author
+    holds a role; with separateApprover, not the proposer."""
+    rule = next((x for x in state["policy"]["approvals"] if x["action"] in (eff["action"], "*")), None)
+    role = state["roles"].get(a)
+    return bool(rule) and role in P.READ_ROLES and (a in rule["approvers"] or role in rule["approvers"]) \
+        and not (state["policy"]["separateApprover"] and a == eff["proposer"])
+
 def countable_now(state, ctx, eff, author):
-    """T2 from the definitions: open approvals by authors other than `author` that hold a role, aren't guarded and aren't its guards."""
+    """T2, V3 from the definitions: open approvals by authors other than `author` that are E3 candidates now, aren't guarded (by the
+    recorded actorKind) and aren't its guards."""
     gs = guards_now(state, ctx, eff)
+    forced = bool(state["policy"]["sessions"].get("forceGuarded"))
     return sum(1 for a in eff["approvals"] if not a.get("consumedBy") and not (a.get("expiresAt") and P.ts(a["expiresAt"]) <= P.ts(ctx["time"]))
-               and a["author"] != author and a["author"] not in gs and state["roles"].get(a["author"]) in P.READ_ROLES and not guarded(state, ctx, a["author"]))
+               and a["author"] != author and a["author"] not in gs and candidate(state, eff, a["author"])
+               and a["author"] not in state["guarded"] and not (forced and a["actorKind"] != "human"))
 
 def check_refusal(state, ctx, e, d):
     """T1 and T2: refusals for the bound and the cap only where the definitions say so."""
@@ -273,12 +315,11 @@ def check_refusal(state, ctx, e, d):
     if k == "effect.approve" and d.get("reason") == "too many open approvals" and b["proposal"] in state["effects"]:
         n = countable_now(state, ctx, state["effects"][b["proposal"]], a)
         if n < P.MAX_OPEN_APPROVALS: return f"{a}'s approval refused for the cap with only {n} countable approvals (T2)"
-    if k == "effect.propose" and d.get("reason") == "too many guarded tasks; close some":
-        want = set(state["tasks"][b["task"]]["guardedFor"]) if "task" in b else set()
-        for t in state["tasks"].values():
-            if t["open"] and a in t["to"]: want |= set(t["guardedFor"])
-        want |= {x for x in (a, b["executor"]) if guarded(state, ctx, x)}
-        if len(want) <= P.MAX_GUARDED_FOR: return f"a proposal refused for the bound with {len(want)} agents (T1)"
+    if k in ("effect.propose", "task") and d.get("reason") == "too many guarded tasks; close some":
+        named = b.get("task") if k == "effect.propose" else b.get("parent")
+        want = set(state["tasks"][named]["guardedFor"]) if named else set()
+        want |= set(carried(state, a)) | {a} | ({b["executor"]} if k == "effect.propose" else set())       # V2: counted whether guarded or not
+        if len(want) <= P.MAX_GUARDED_FOR: return f"a {k} refused for the bound with {len(want)} agents (V2)"
     return None
 
 def check_state(s, prev, ctx, e=None, actors=ACTORS):
@@ -301,10 +342,14 @@ def check_state(s, prev, ctx, e=None, actors=ACTORS):
         if len(P.jcs(t)) > BOUND["tasks"]: errs.append("a task exceeds its size bound")
     for pid, eff in s["effects"].items():
         if eff["phase"] not in PHASES: errs.append(f"bad phase {eff['phase']}")
-        dead = [a["author"] for a in eff["approvals"] if not a.get("consumedBy") and (s["roles"].get(a["author"]) not in P.READ_ROLES or a["author"] in s["guarded"])]
-        if dead: errs.append(f"an unconsumed approval by {dead[0]}, who holds no role or chose guarding (T2)")
+        forced = bool(s["policy"]["sessions"].get("forceGuarded"))
+        dead = [a["author"] for a in eff["approvals"] if not a.get("consumedBy") and (s["roles"].get(a["author"]) not in P.READ_ROLES or a["author"] in s["guarded"]
+                                                                                      or (forced and a["actorKind"] != "human"))]
+        if dead: errs.append(f"an unconsumed approval by {dead[0]}, who holds no role or is guarded (T2, V5)")
+        if any(a["actorKind"] != ctx["profiles"][a["author"]]["actorKind"] for a in eff["approvals"] if a["author"] in ctx["profiles"]):
+            errs.append("an approval's recorded actorKind is not its author's (V5)")
         if len(eff["claims"]) > P.MAX_ATTEMPTS: errs.append("more claims than MAX_ATTEMPTS")
-        errs += approval_bounds(eff)
+        errs += approval_bounds(eff, ctx)
         if len(P.jcs(eff)) > BOUND["effects"]: errs.append("an effect exceeds its size bound")
         old = prev["effects"].get(pid) if prev else None
         if old and old["phase"] in P.FINAL and eff["phase"] != old["phase"]: errs.append(f"final phase changed {old['phase']}→{eff['phase']}")
@@ -337,7 +382,9 @@ def count_guard(stats, prev, new, e, d, ctx=None):
     """P9: how often the guard paths were taken (keys start with `* ` so fuzz_diff lists them with its guard paths)."""
     k = e["kind"]
     if not d["allow"]:
-        if "guarded author may not" in d.get("reason", ""): stats["* forbidden kind refused for a guarded author"] += 1
+        if "author may not approve" in d.get("reason", ""):
+            stats["* forbidden kind refused for a guarded author"] += 1
+            if ctx and not guarded(prev, ctx, e["author"]): stats["* forbidden kind refused for a carrying delegate (V1)"] += 1
         if k == "effect.claim" and "guard" in d.get("reason", ""): stats["* claim refused for a guard"] += 1
         return
     if k == "task" and len(new["tasks"][e["id"]]["guardedFor"]) >= 1 and "parent" in e["body"]: stats["* subtask carrying a guarded agent"] += 1
@@ -355,6 +402,8 @@ def count_guard(stats, prev, new, e, d, ctx=None):
                sum(1 for pid, x in new["effects"].items() if pid in prev["effects"] for a in x["approvals"] if not a.get("consumedBy"))
         if gone > (1 if k == "effect.approve" else 0) and k != "effect.outcome": stats["* open approvals dropped for a lost role or guarding (T2)"] += 1
     if k == "agent.unguard": stats["* unguard allowed"] += 1
+    if k == "task" and "parent" not in e["body"] and set(new["tasks"][e["id"]]["guardedFor"]) - {e["author"]}: stats["* parentless task carrying its author's delegator (V1)"] += 1
+    if k == "task.update" and len(new["tasks"][e["body"]["task"]]["accepted"]) > len(prev["tasks"][e["body"]["task"]]["accepted"]): stats["* task accepted (V4)"] += 1
     if k == "member.set" and e["body"] == {"actor": e["author"], "role": "none"} and ctx and guarded(prev, ctx, e["author"]): stats["* guarded agent left"] += 1
     if k == "policy.set" and prev["policy"]["sessions"].get("forceGuarded") != new["policy"]["sessions"].get("forceGuarded"): stats["* forcing switched"] += 1
 
@@ -403,6 +452,97 @@ def run(seed, steps):
         if e["kind"] == "effect.claim": CLAIMS[0] += 1
     return None, allowed
 
+BOUND_STATS = collections.Counter()
+
+def bound_run(seed):
+    """V2 (round 29's U2, probes p4 and p4b) with random sizes and orders: returns an error or None."""
+    r = random.Random(10_000 + seed)
+    n = r.randint(16, 20)
+    bots = [f"@b{i}:b.example" for i in range(n)]
+    ops = [f"@o{i}:b.example" for i in range(n)]
+    hs = [f"@w{i}:a.example" for i in range(16)]
+    PRO, EXE, OPP, OPE = "@prop:c.example", "@exec:c.example", "@opp:c.example", "@ope:c.example"
+    def view(a, kind="human", op=None):
+        v = {"actor": a, "seq": 1, "actorKind": kind, "operatorConfirmed": kind != "human", "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
+        if op: v["operator"] = op
+        return v
+    profiles = {O: view(O), PRO: view(PRO, "agent", OPP), EXE: view(EXE, "service", OPE), OPP: view(OPP), OPE: view(OPE)}
+    for b_, o_ in zip(bots, ops): profiles[b_] = view(b_, "agent", o_); profiles[o_] = view(o_)
+    for h_ in hs: profiles[h_] = view(h_)
+    actors = list(profiles)
+    ctx = {"time": fmt(0), "profiles": profiles}
+    pol = {"visibility": "members", "join": "invite", "membersMayInvite": False, "allowAgents": "with-operator",
+           "approvals": [{"action": "*", "approvers": ["member"]}], "separateApprover": r.random() < .3, "budget": None, "maxDelegationDepth": 4,
+           "minDurability": "local", "launchWindow": 30, "extensionsMinRole": "member",
+           "sessions": {"watch": "member", "read": "member", "steer": "member", "modes": ["auto", "guarded"]}, "servers": {"deny": []}}
+    state = P.fold(None, {"entry": {"id": H("bc"), "v": 1, "space": S, "kind": "space.create", "author": O, "keyId": "k1", "body": {"policy": pol},
+                                    "contentHash": "", "refs": [], "seen": 0, "nonce": "c", "time": fmt(0)}, "content": None, "receipt": {"seq": 1, "time": fmt(0)}}, ctx)
+    i = [0]
+    def go(author, kind, body, want=None):
+        i[0] += 1
+        e = {"id": H(f"b{seed}-{i[0]}"), "v": 1, "space": S, "kind": kind, "author": author, "keyId": "k1", "body": body,
+             "contentHash": "", "refs": [], "seen": 0, "nonce": f"b{i[0]}", "time": fmt(0)}
+        nonlocal state
+        d = P.decide(state, e, ctx)
+        if want is not None and d["allow"] != want: return e, d, f"{kind} by {author}: expected {'allow' if want else 'a refusal'}, got {d}"
+        if not d["allow"]:
+            why = check_refusal(state, ctx, e, d)
+            return e, d, why
+        new = P.fold(state, {"entry": e, "content": None, "receipt": {"seq": state["head"] + 1, "time": ctx["time"]}}, ctx)
+        errs = check_state(new, state, ctx, e, [PRO, EXE] + bots[:3])
+        if kind == "effect.claim":
+            eff = new["effects"][body["proposal"]]
+            if len(eff["claims"][-1].get("guardApprovals", [])) > P.MAX_GUARDED_FOR: errs.append("a claim consumed more than MAX_GUARDED_FOR guard approvals")
+        state = new
+        return e, d, "; ".join(errs) or None
+    for a in actors[1:]:
+        _, _, err = go(O, "member.set", {"actor": a, "role": "member"}, True)
+        if err: return err
+    tasks = []
+    for b_ in bots:
+        go(b_, "session.open", {"steerMode": "guarded"}, True)
+        e, _, err = go(b_, "task", {"to": [PRO]}, True)
+        if err: return err
+        tasks.append(e["id"])
+    k = r.randint(n - 4, n)
+    for t in r.sample(tasks, k):
+        _, _, err = go(PRO, "task.update", {"task": t, "state": r.choice(["accepted", "progress"])}, True)
+        if err: return err
+    e, d, err = go(PRO, "effect.propose", {"executor": EXE, "action": "pay", "planDigest": H("plan"), "repeatable": True}, k + 2 <= P.MAX_GUARDED_FOR)
+    if err: return err
+    if not d["allow"]:
+        BOUND_STATS["proposals refused at the bound"] += 1
+        return None
+    pid = e["id"]
+    late = [PRO, EXE]; r.shuffle(late)
+    for a in late[:r.choice([1, 2, 2])]:
+        go(a, "session.open", {"steerMode": "guarded"}, True)
+    need = P.guards_of(state, ctx, state["effects"][pid])
+    if len(need) > P.MAX_GUARDED_FOR: return f"a claim needs {len(need)} guards"
+    if len(need) == P.MAX_GUARDED_FOR: BOUND_STATS["claims needing 19 guards after later guarding (U2)"] += 1
+    for rnd in range(r.randint(2, 4)):
+        voters = ops + [OPP, OPE] + hs; r.shuffle(voters)
+        for a in voters:
+            _, _, err = go(a, "effect.approve", {"proposal": pid, "planDigest": H("plan")})
+            if err: return err
+            if r.random() < .05:
+                eff = state["effects"][pid]
+                _, _, err = go(EXE, "effect.claim", {"proposal": pid, "attempt": len(eff["claims"]) + 1, "instance": "k1", "window": 30})
+                if err: return err
+        eff = state["effects"][pid]
+        _, d, err = go(EXE, "effect.claim", {"proposal": pid, "attempt": len(eff["claims"]) + 1, "instance": "k1", "window": 30})
+        if err: return err
+        eff = state["effects"][pid]
+        BOUND_STATS["most approvals held"] = max(BOUND_STATS["most approvals held"], len(eff["approvals"]))
+        BOUND_STATS["most unconsumed approvals"] = max(BOUND_STATS["most unconsumed approvals"], sum(1 for a in eff["approvals"] if not a.get("consumedBy")))
+        if d["allow"]:
+            BOUND_STATS["claims allowed"] += 1
+            if r.random() < .7:
+                c = state["effects"][pid]["claims"][-1]["id"]
+                _, _, err = go(EXE, "effect.outcome", {"claim": c, "result": "failed", "started": "no"}, True)
+                if err: return err
+    return None
+
 def main():
     seeds = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     steps = int(sys.argv[2]) if len(sys.argv) > 2 else 200
@@ -412,7 +552,13 @@ def main():
         total += allowed
         if err:
             print("FAIL", err); return 1
+    bounds = max(20, seeds // 10)
+    for seed in range(bounds):
+        err = bound_run(seed)
+        if err:
+            print("FAIL bound", seed, err); return 1
     print("caps reached (M9): " + "; ".join(f"{k} {v}" for k, v in STATS.items()))
+    print(f"bound counterexample (V2, {bounds} runs): " + "; ".join(f"{k} {v}" for k, v in sorted(BOUND_STATS.items())))
     print("guard paths (P9): " + "; ".join(f"{k[2:]} {v}" for k, v in sorted(GUARD_STATS.items())))
     print(f"{seeds} seeds × {steps} steps: {total} allowed entries folded ({CLAIMS[0]} claims); decide/fold total, pure, budgets within bounds, "
           f"final phases stable, guardedFor recorded as defined and never changed, claims approved by every guard and by no guarded rule approver, guarded authors restricted, "
