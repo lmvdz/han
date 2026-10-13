@@ -15,17 +15,67 @@ pub(crate) type Local = (u32, u32);
 #[derive(Clone, Debug)]
 struct InsRec {
     id: InsertionId,
-    chars: Arc<Vec<char>>,
+    /// Large ASCII insertions defer the four-byte character buffer.
+    chars: OnceLock<Arc<Vec<char>>>,
     /// ASCII runs can be copied directly into the visible string.
     ascii: Option<Arc<str>>,
     /// Sorted, coalesced tombstone intervals for the compact layout.
     hidden: Vec<(u32, u32)>,
     /// For a copy, the canonical character its first character came from.
     origin: Option<CharId>,
-    deleted: Vec<bool>,
+    /// Compact insertions use `hidden` alone, even when a dense layout is requested.
+    deleted: Option<Vec<bool>>,
     /// The children of this insertion's characters: per offset that has any (ascending), the
     /// local insertions anchored there, newest first.
     kids: Vec<(u32, Vec<u32>)>,
+}
+
+impl InsRec {
+    fn len(&self) -> usize {
+        self.ascii
+            .as_ref()
+            .map_or_else(|| self.chars().len(), |s| s.len())
+    }
+
+    /// ASCII storage stays compact until a caller needs a character slice.
+    fn chars(&self) -> &[char] {
+        self.chars.get_or_init(|| {
+            Arc::new(
+                self.ascii
+                    .as_ref()
+                    .expect("compact ASCII insertion")
+                    .chars()
+                    .collect(),
+            )
+        })
+    }
+
+    fn char_at(&self, k: usize) -> char {
+        match &self.ascii {
+            Some(s) => s.as_bytes()[k] as char,
+            None => self.chars()[k],
+        }
+    }
+
+    fn append_visibility(&self, out: &mut Vec<bool>, from: u32, to: u32) {
+        if let Some(deleted) = &self.deleted {
+            out.extend(deleted[from as usize..to as usize].iter().map(|d| !d));
+            return;
+        }
+        let mut at = from;
+        let first = self.hidden.partition_point(|&(_, end)| end <= from);
+        for &(a, b) in &self.hidden[first..] {
+            if a >= to {
+                break;
+            }
+            let start = a.max(at);
+            out.extend(std::iter::repeat_n(true, (start - at) as usize));
+            let end = b.min(to);
+            out.extend(std::iter::repeat_n(false, (end - start) as usize));
+            at = end;
+        }
+        out.extend(std::iter::repeat_n(true, (to - at) as usize));
+    }
 }
 
 /// An anchor (TL-46).
@@ -153,7 +203,7 @@ impl TextObj {
 
     pub fn local(&self, c: &CharId) -> Option<Local> {
         let l = *self.index.get(&c.insertion)?;
-        ((c.offset as usize) < self.ins[l as usize].chars.len()).then_some((l, c.offset))
+        ((c.offset as usize) < self.ins[l as usize].len()).then_some((l, c.offset))
     }
 
     pub fn has_char(&self, c: &CharId) -> bool {
@@ -169,7 +219,7 @@ impl TextObj {
     pub fn insertion_len(&self, id: &InsertionId) -> Option<u32> {
         self.index
             .get(id)
-            .map(|l| self.ins[*l as usize].chars.len() as u32)
+            .map(|l| self.ins[*l as usize].len() as u32)
     }
 
     /// Whether `r` names existing characters (TL-44).
@@ -186,7 +236,7 @@ impl TextObj {
     }
 
     pub fn char_at(&self, (l, k): Local) -> char {
-        self.ins[l as usize].chars[k as usize]
+        self.ins[l as usize].char_at(k as usize)
     }
 
     /// The canonical id of a character (TL-72).
@@ -211,7 +261,7 @@ impl TextObj {
                 Some(o) => (&o.insertion, o.offset),
                 None => (&rec.id, 0),
             };
-            *base == c.insertion && c.offset >= off && c.offset < off + rec.chars.len() as u32
+            *base == c.insertion && c.offset >= off && c.offset < off + rec.len() as u32
         })
     }
 
@@ -226,18 +276,26 @@ impl TextObj {
         self.text = OnceLock::new();
         self.runs = OnceLock::new();
         let anchor = anchor.and_then(|a| self.local(a));
-        let chars: Vec<char> = text.chars().collect();
+        let ascii = text.is_ascii().then(|| Arc::<str>::from(text));
+        // ASCII byte offsets are character offsets; avoid decoding and dense tombstones.
+        let compact = ascii.is_some() && text.len() >= 4096;
+        let chars = OnceLock::new();
+        if !compact {
+            let _ = chars.set(Arc::new(text.chars().collect::<Vec<_>>()));
+        }
         let l = self.ins.len() as u32;
         self.has_copies |= origin.is_some();
-        let n = chars.len();
+        let n = ascii
+            .as_ref()
+            .map_or_else(|| chars.get().unwrap().len(), |s| s.len());
         self.large |= n >= 4096;
         self.ins.push(InsRec {
             id: id.clone(),
-            chars: Arc::new(chars),
-            ascii: text.is_ascii().then(|| Arc::from(text)),
+            chars,
+            ascii,
             hidden: Vec::new(),
             origin,
-            deleted: vec![false; n],
+            deleted: (!compact).then(|| vec![false; n]),
             kids: Vec::new(),
         });
         self.index.insert(id, l);
@@ -290,7 +348,7 @@ impl TextObj {
         self.runs = OnceLock::new();
         if let Some(&l) = self.index.get(&r.insertion) {
             let rec = &mut self.ins[l as usize];
-            let to = (r.to as usize).min(rec.deleted.len());
+            let to = (r.to as usize).min(rec.len());
             let from = (r.from as usize).min(to);
             if from < to {
                 let mut range = (from as u32, to as u32);
@@ -303,8 +361,8 @@ impl TextObj {
                 }
                 rec.hidden.splice(start..end, [range]);
             }
-            for d in &mut rec.deleted[from..to] {
-                *d = true;
+            if let Some(deleted) = &mut rec.deleted {
+                deleted[from..to].fill(true);
             }
             if !self.has_copies
                 && self.seals.is_empty()
@@ -335,7 +393,7 @@ impl TextObj {
         let mut total = 0;
         for r in &self.ins {
             starts.push(total);
-            total += r.chars.len();
+            total += r.len();
         }
         let mut order = Vec::with_capacity(total);
         let mut vis_a: Vec<bool> = Vec::with_capacity(total);
@@ -346,7 +404,7 @@ impl TextObj {
         let mut stack: Vec<Local> = Vec::new();
         let push_children = |stack: &mut Vec<Local>, kids: &[u32]| {
             for &k in kids.iter().rev() {
-                if !self.ins[k as usize].chars.is_empty() {
+                if self.ins[k as usize].len() != 0 {
                     stack.push((k, 0));
                 }
             }
@@ -354,7 +412,7 @@ impl TextObj {
         push_children(&mut stack, &self.roots);
         while let Some((l, k)) = stack.pop() {
             let rec = &self.ins[l as usize];
-            let n = rec.chars.len() as u32;
+            let n = rec.len() as u32;
             let kid = rec.kids.get(rec.kids.partition_point(|(o, _)| *o < k));
             let end = kid.map_or(n - 1, |(o, _)| *o);
             let base = starts[l as usize];
@@ -366,7 +424,7 @@ impl TextObj {
                 *p = i;
             }
             order.extend((k..=end).map(|o| (l, o)));
-            vis_a.extend(rec.deleted[k as usize..=end as usize].iter().map(|d| !d));
+            rec.append_visibility(&mut vis_a, k, end + 1);
             if end + 1 < n {
                 stack.push((l, end + 1));
             }
@@ -390,7 +448,7 @@ impl TextObj {
                 let Some(&l) = self.index.get(&r.insertion) else {
                     continue;
                 };
-                for k in r.from..r.to.min(self.ins[l as usize].chars.len() as u32) {
+                for k in r.from..r.to.min(self.ins[l as usize].len() as u32) {
                     let i = pos[starts[l as usize] + k as usize];
                     sealed[i] = true;
                     first = first.min(i);
@@ -430,7 +488,7 @@ impl TextObj {
                     if c as usize == extent.len() {
                         extent.push(0);
                     }
-                    extent[c as usize] = extent[c as usize].max(off + r.chars.len() as u32);
+                    extent[c as usize] = extent[c as usize].max(off + r.len() as u32);
                     (c, off)
                 })
                 .collect();
@@ -517,7 +575,7 @@ impl TextObj {
             let mut stack: Vec<Local> = self.roots.iter().rev().map(|&l| (l, 0)).collect();
             while let Some((l, k)) = stack.pop() {
                 let rec = &self.ins[l as usize];
-                let n = rec.chars.len() as u32;
+                let n = rec.len() as u32;
                 if k == n {
                     continue;
                 }
@@ -564,7 +622,7 @@ impl TextObj {
                             if rec.ascii.is_some() {
                                 (to - from) as usize
                             } else {
-                                rec.chars[from as usize..to as usize]
+                                rec.chars()[from as usize..to as usize]
                                     .iter()
                                     .map(|c| c.len_utf8())
                                     .sum()
@@ -577,7 +635,7 @@ impl TextObj {
                         if let Some(ascii) = &rec.ascii {
                             out.push_str(&ascii[from as usize..to as usize]);
                         } else {
-                            out.extend(rec.chars[from as usize..to as usize].iter());
+                            out.extend(rec.chars()[from as usize..to as usize].iter());
                         }
                     }
                     return Arc::new(out);
@@ -722,6 +780,74 @@ mod tests {
                 let patched = t.layout();
                 let rebuilt = t.compute();
                 assert_eq!(*patched, rebuilt, "round {round} step {step}");
+            }
+        }
+    }
+
+    /// Compact ASCII storage agrees with eager storage, including seals and copies.
+    #[test]
+    fn compact_storage_equals_dense_storage() {
+        let rep = Arc::new(ReplicaId::new("@r:x.example", "k", 0));
+        let mut seed = 19u64;
+        let mut rnd = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 33) as usize % n
+        };
+        for round in 0..12 {
+            let mut t = TextObj::new(false);
+            let id = InsertionId {
+                op: OpId::new(1, rep.clone()),
+                index: 0,
+            };
+            let payload: String = (0..4096 + rnd(200))
+                .map(|_| (b'a' + rnd(26) as u8) as char)
+                .collect();
+            t.insert(id.clone(), None, &payload, None);
+            assert!(t.ins[0].chars.get().is_none());
+            assert!(t.ins[0].deleted.is_none());
+            for step in 0..40 {
+                let from = rnd(payload.len()) as u32;
+                let to = (from + 1 + rnd(100) as u32).min(payload.len() as u32);
+                let range = IdRange {
+                    insertion: id.clone(),
+                    from,
+                    to,
+                };
+                match rnd(4) {
+                    0 => t.seal(vec![range]),
+                    1 => {
+                        let anchor = CharId {
+                            insertion: id.clone(),
+                            offset: from,
+                        };
+                        t.insert(
+                            InsertionId {
+                                op: OpId::new(2 + step, rep.clone()),
+                                index: 0,
+                            },
+                            Some(&anchor),
+                            &payload[from as usize..to as usize],
+                            (round % 2 == 0).then_some(anchor.clone()),
+                        );
+                    }
+                    _ => t.delete(&range),
+                }
+                let mut dense = t.clone();
+                for rec in &mut dense.ins {
+                    let chars = Arc::new(rec.chars().to_vec());
+                    let mut deleted = vec![false; rec.len()];
+                    for &(a, b) in &rec.hidden {
+                        deleted[a as usize..b as usize].fill(true);
+                    }
+                    rec.chars = OnceLock::from(chars);
+                    rec.ascii = None;
+                    rec.deleted = Some(deleted);
+                }
+                dense.large = false;
+                dense.layout = OnceLock::new();
+                dense.text = OnceLock::new();
+                assert_eq!(t.compute(), dense.compute(), "round {round} step {step}");
+                assert_eq!(t.text(), dense.text(), "round {round} step {step}");
             }
         }
     }
