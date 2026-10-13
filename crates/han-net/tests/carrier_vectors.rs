@@ -12,7 +12,7 @@ use han_net::frame::{read_frame, write_frame};
 use han_net::ticket::InviteTicket;
 use han_net::typed::{self, TypedStream, Verdict};
 use han_net::wellknown::wellknown_verdict;
-use han_seq::stream_item;
+use han_seq::{auth, stream_item};
 
 fn load(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -234,5 +234,34 @@ async fn frame_vectors() {
             }
             other => panic!("unexpected expectation {other:?}"),
         }
+    }
+}
+
+#[test]
+fn binding_vectors() {
+    let v = load("control.json");
+    assert!(!cases(&v, "bindings").is_empty());
+    for c in cases(&v, "bindings") {
+        let (who, key_id, node, keys) = (s(c, "who"), s(c, "keyId"), s(c, "node"), &c["keys"]);
+        let got = if who.starts_with("@:") {
+            let sequencer: Vec<String> = cases(keys, "sequencer")
+                .iter()
+                .map(|n| s(n, "node").to_owned())
+                .collect();
+            let listed = cases(keys, "keys").iter().any(|k| s(k, "keyId") == key_id);
+            auth::server_binding(&sequencer, listed, node)
+        } else {
+            let key = keys.get(key_id).map(|k| {
+                let status = s(k, "status");
+                (s(k, "publicKey"), status == "valid")
+            });
+            auth::user_binding(key, node)
+        };
+        assert_eq!(
+            got.is_ok(),
+            s(c, "expect") == "ok",
+            "{}: {got:?}",
+            s(c, "name")
+        );
     }
 }
