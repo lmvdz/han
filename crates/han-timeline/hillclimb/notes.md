@@ -14,6 +14,7 @@ attempt below this fixed part each round.
 | edit a 1 MiB text | `plan_edit` on a text with one 1M-char insertion, then `write`; patched layout (`Layout::insert_run`, `Layout::hide`) |
 | materialise 1 MiB text (warm/cold) | `History::state` → `materialise` (`history.rs`): closure, cache lookup, `State::apply` of missing ops, then `TextObj::layout` → `TextObj::compute` (`text.rs`) and `text()` |
 | materialise again (cached) | cached state; `text()` (cached string clone) |
+| read again, shared | cached state; `State::text_shared` (no copy; the API callers should use for repeated reads) |
 
 Fixed costs that cannot go: Ed25519 signing and strict verification (spec), SHA-256 batch ids,
 the deterministic CBOR checks (decode + re-encode compare, `cbor.rs`).

@@ -9,7 +9,7 @@ use crate::cbor::Cbor;
 use crate::codec::full_id;
 use crate::ids::{CharId, InsertionId, ObjectId, OpId};
 use crate::op::{Change, MergeOp, Op};
-use crate::text::{Anchor, Bias, TextObj};
+use crate::text::{Anchor, Bias, SharedText, TextObj};
 use crate::value::Value;
 
 /// A register: the value of its greatest write (TL-33).
@@ -117,6 +117,16 @@ impl State {
     pub fn text(&self, id: &ObjectId) -> Option<String> {
         match self.objects.get(id)? {
             Obj::Text(t) => Some(t.text()),
+            _ => None,
+        }
+    }
+
+    /// The visible text of a text object, shared instead of copied: after the first read of a
+    /// version it costs a reference-count increment. Holding the result keeps that version's
+    /// text in memory after the history drops the state, so don't keep many of them.
+    pub fn text_shared(&self, id: &ObjectId) -> Option<SharedText> {
+        match self.objects.get(id)? {
+            Obj::Text(t) => Some(t.text_shared()),
             _ => None,
         }
     }
