@@ -1,0 +1,4 @@
+# Pinned to the latest stable; bumped monthly by a PR. No MSRV promise before the first release.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,24 @@
+[package]
+name = "han-core"
+description = "HAN core: I-JSON and JCS, ids, Ed25519 signatures, and the entry, receipt and record types with their shape validation. No async, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+# ECMAScript Number::toString for JCS (RFC 8785 3.2.2.3), including its round-half-even digit choice.
+ryu-js = "1.0.3"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+serde_json_canonicalizer = "0.3"
+
+[lints]
+workspace = true

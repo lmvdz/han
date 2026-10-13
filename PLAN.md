@@ -248,11 +248,11 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 | ACP | `agent-client-protocol` 3.3, pinned. pi first; both pi adapters (`pi-acp` 0.0.34 from the registry, and `@victor-software-house/pi-acp` 0.17) are evaluated in the M4 spike |
 | Node runtime | managed: `han` downloads a pinned Node build and pinned adapter versions into its data folder |
 | Sandbox | Microsoft MXC (`mxc-sdk` 1.0: Windows 11 without admin, Linux bubblewrap, macOS seatbelt); fallback WSL2 or Podman. The boundary is the whole agent process. The session's worktree is its writable area |
-| Egress default | a read-only allow-list through the proxy: package registries, docs sites, the model provider's API. Everything else is blocked; spaces widen or narrow it |
+| Egress default | an allow-list through the proxy: package registries, docs sites, the model provider's API. For tunnelled hosts "read-only" means unauthenticated: the proxy adds no credentials there, so anything that needs one goes through `propose`. Everything else is blocked; spaces widen or narrow it |
 | Proxy TLS | model calls: the harness's base URL points to the local proxy, which injects the key and forwards over TLS. Other egress: CONNECT tunnels allowed by hostname (SNI). No interception, no fake CA |
 | Model credentials | the proxy injects the real key for the provider's host only; agents hold a dummy key |
 | Proxy upstream | optional: an HTTP or SOCKS5 proxy, or the system route. Tailscale recipe: runners tagged `tag:han-runner`; access rules allowing only `autogroup:internet` via the exit node; a dedicated exit node on a guest network; ideally a separate tailnet from personal devices; ephemeral tagged auth keys. Check each provider's terms before using residential IPs |
-| Worktrees | han-host makes a git worktree and branch (`han/<issue>-<agent>`) per session from the default branch, records the base sha, and cleans up after merge or cancel |
+| Worktrees | han-host gives each session its own clone with its own git metadata (not a `git worktree` of a shared checkout), on branch `han/<issue>-<agent>` from the default branch; it records the base sha and cleans up after merge or cancel (SR, research/security-requirements.md) |
 | Shared runners | a runner is an actor in the space (an owner as operator). Members start agents on it with a signed task, so Policy decides who may use it |
 | Board freshness | a working session with no status item for 10 minutes shows as stale; if its host is unreachable for 30 minutes it shows as failed. Configurable per space |
 | Cost | the proxy counts tokens and cost per session from provider responses; spaces can set budgets through Policy's budget ledger |
@@ -280,14 +280,27 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 | Overlap response | alert both agents (as data) and highlight on the board. The newer claim is asked to coordinate or avoid the area; humans decide if it persists. Nothing is blocked automatically |
 | Agent questions (next) | a signed `message` to a session, shown to the agent as data between turns and answered as data; its human sees it. Limits are configurable per space. Defaults: the asker pays; one open question per pair; no question back inside an answer; 60 per hour per session |
 | TUI | board-first: Enter opens a session pane (live stream, timeline diff, tool calls); a side pane holds the inbox and alerts; Vim/VS Code keys and a `:` palette. Steering from the session pane is a signed `session.input`: instruction to your own agents, data to others' (R-24) |
-| GUI (after M3) | Tauri 2 with han-node embedded; React 19, TypeScript, Vite, TanStack Router, zustand, Tailwind 4, shadcn-style components. `call` is a Tauri command; `view` streams over `tauri::ipc::Channel`. Dependencies: `@pierre/diffs`, `@pierre/trees`. An early spike checks diff rendering in WebView2 and WebKitGTK |
+| GUI (after M3) | Tauri 2 with han-node embedded; React 19 with the React Compiler, TypeScript (strict), Vite, TanStack Router, Tailwind 4, shadcn-style components. `call` is a Tauri command; `view` streams over `tauri::ipc::Channel`. Dependencies: `@pierre/diffs`, `@pierre/trees`. An early spike checks diff rendering in WebView2 and WebKitGTK. Frontend rules: §6.6.1 |
 | Borrowed UI | clean room only (§8): spec writers study t3code, agent-orchestrator and Intent and write behaviour and UI specs; fresh implementers build from them. Published packages stay normal dependencies |
+
+#### 6.6.1 Frontend rules (React, 2026)
+
+| Rule | Decision |
+|---|---|
+| Effects and state | **Effect v4** (effect.website) owns every side effect, I/O, stream, service and typed error in the frontend. The node API's `view()` stream becomes an Effect `Stream`, exposed to React as **atoms** (Effect's `atom-react`: `useAtomValue`, `useAtomSuspense`, `RegistryProvider`; confirm the exact package name at build time). `call()` commands run as Effect programs. This replaces zustand and supersedes `research/gui.md`'s "skip Effect" |
+| Lint and format | **oxlint** and **oxfmt** (Oxc). Confirm at GUI start that oxlint's React-hooks and React Compiler rules cover what we need; add a minimal ESLint only for a rule oxlint lacks |
+| No `useEffect` | `useEffect` and `useLayoutEffect` are banned in app code: oxlint `no-restricted-imports` forbids importing them from `react`, and forbids the default and namespace imports of `react`, so `React.useEffect(...)` can't be written. CI fails on any use. No escape hatch in app code |
+| What replaces it | values derived during render; event handlers; atoms for anything external (subscriptions, live views, timers); Suspense and error boundaries for loading and failure; React 19 Actions (`useActionState`, `useOptimistic`) for commands; **ref callbacks with cleanup** (React 19) to mount imperative widgets such as the diff viewer or a terminal |
+| Memoisation | the React Compiler handles it; no hand-written `useMemo`/`useCallback` unless a measured hot path needs it |
+| Rendering performance | windowed lists for the board and streams (views are already windowed by the node API); one subscription per view, owned by its atom, never per component; no state copied from props |
+| Types | node API types generated from Rust (specta or ts-rs), plus a generated Effect `Schema` that decodes every frame from Tauri, so a bad frame is a typed error, not a crash |
+| Clean room | these rules are part of the UI specs Team B implements from (§8) |
 
 ### 6.7 GitHub and the executor
 
 | Topic | Decision |
 |---|---|
-| GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens. MVP: han-github polls issues every 60 s with conditional requests (ETags). Later: a webhook relay run by the team, or a small hosted forwarder |
+| GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens, minted only by han-exec (the single holder of the App's private key). MVP: han-github polls issues every 60 s with conditional requests (ETags). Later: a webhook relay run by the team, or a small hosted forwarder |
 | Finish flow | configurable per space and per repo: mark done; push the branch and propose a PR (default); or merge the timeline into main. Each step is gated or free as configured |
 | git | shell out to `git` for push (gix can't push yet); gix for reads; octocrab for the GitHub API |
 
@@ -363,7 +376,7 @@ Full findings: `research/`. No existing tool gives a self-hosted, live view of e
 | M1 | han-core | all policy vectors pass; 0 differential-fuzz divergences against ref over 1000 seeds |
 | T0 | Timeline spec (Team A) | `han.timeline/1` and its vectors reviewed: behaviour only |
 | M2 | han-net + han-seq over iroh | wire vectors pass over iroh; the peer filter and invite tickets work |
-| TM | Threat model (before M3) | a STRIDE model of han-node, the proxy, MXC, the peer filter, keys, the ACP and Node supply chain, the summary fork and the GitHub App; its mitigations added here as must-haves |
+| SR | Security requirements (before M3) | `research/security-requirements.md`: 103 controls with tests (SR-01…SR-103); the MUSTs listed there are required before M6 |
 | M3 | han-node: outbox, sync, views, node API, supervisor | a three-node turmoil simulation converges; JSON-RPC works on Windows; the snapshot-plus-diffs property holds |
 | T1 | han-timeline (Team B) | passes the T0 vectors and the randomized convergence and sync tests, with signed envelopes |
 | M4 | han-host (ACP client, MXC, proxy, mirroring, masking), han-mcp, han-exec | **first week, a spike answering:**<br>• which pi adapter works from a non-Zed client?<br>• can MXC confine a Node-based agent on Windows 11 with egress only to the proxy?<br>• does an ACP reject carry a reason?<br>• does a propose-only agent stay productive?<br>• does the cache-hit summary fork work?<br>Then: a real session streams status and a live timeline; an agent answers "who is on auth/?"; a gated push waits for approval and runs once |
