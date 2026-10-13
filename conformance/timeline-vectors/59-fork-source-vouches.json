@@ -1,0 +1,105 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "59-fork-source-vouches",
+ "description": "An authorised fork whose source is a quarantined timeline vouches for it, like a parent does",
+ "rules": [
+  "TL-103"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "writers": [
+  "A",
+  "B"
+ ],
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "cs1": {
+   "replica": "C",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "af": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s2",
+     "source": "2@C"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "cs1",
+     "result": "quarantined"
+    },
+    {
+     "deliver": "af",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "quarantined": [],
+      "heads": {
+       "2@C": [
+        "2@C"
+       ],
+       "3@A": [
+        "3@A"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

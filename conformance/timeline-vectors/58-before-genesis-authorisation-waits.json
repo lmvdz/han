@@ -1,0 +1,129 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "58-before-genesis-authorisation-waits",
+ "description": "Batches that arrive before the genesis are held back, because authorisation needs the history's kind; when the genesis arrives the unauthorised one is quarantined and the authorised one integrated",
+ "rules": [
+  "TL-101",
+  "TL-103"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "writers": [
+  "A",
+  "B"
+ ],
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "x": {
+   "replica": "C",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "k",
+     "value": 1
+    }
+   ]
+  },
+  "y": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "j",
+     "value": 1
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "x",
+     "result": "held"
+    },
+    {
+     "deliver": "y",
+     "result": "held"
+    },
+    {
+     "expect": {
+      "pending": [
+       "x",
+       "y"
+      ]
+     }
+    },
+    {
+     "deliver": "b0",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "pending": [],
+      "quarantined": [
+       "x"
+      ],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "root": {
+          "entries": {
+           "j": [
+            [
+             "3@A",
+             1
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
