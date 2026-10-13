@@ -1,0 +1,17 @@
+[package]
+name = "han"
+description = "The han command line: run a home (han seq) and dial one (han dial)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+han-core.workspace = true
+han-seq.workspace = true
+han-net.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
