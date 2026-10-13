@@ -208,14 +208,15 @@ impl<S: Store> History<S> {
             time: None,
             step: None,
         };
-        let envelope = envelope::seal(space, None, &batch, signer, Compression::Zstd);
+        let (envelope, raw) = envelope::seal_raw(space, None, &batch, signer, Compression::Zstd);
         let env = Envelope::decode(&envelope).map_err(|e| Error::Rejected(e.into()))?;
-        let id = env.batch_id();
+        let id = env.received_id(&envelope);
+        debug_assert_eq!(id, env.batch_id(), "in-place batch id must equal TL-93's");
         store
             .set_format_version(FORMAT_VERSION)
             .map_err(store_err)?;
         let mut history = History::empty(store, space, id);
-        let written = history.commit_local(batch, envelope)?;
+        let written = history.commit_local(batch, envelope, raw)?;
         Ok((history, written))
     }
 
@@ -365,25 +366,43 @@ impl<S: Store> History<S> {
         bytes: &[u8],
         dir: Option<&dyn Directory>,
     ) -> Result<Pending, (Option<BatchId>, Verdict)> {
+        self.pending_raw(bytes, dir, None)
+    }
+
+    fn pending_raw(
+        &self,
+        bytes: &[u8],
+        dir: Option<&dyn Directory>,
+        local_raw: Option<Vec<u8>>,
+    ) -> Result<Pending, (Option<BatchId>, Verdict)> {
         let reject = |r: Reason| (None, Verdict::Rejected(r));
         let env = Envelope::decode(bytes).map_err(|e| reject(e.into()))?;
         if env.space != self.space || env.history.is_some_and(|h| h != self.id) {
             return Err(reject(Reason::WrongHistory));
         }
-        let id = env.batch_id();
+        let id = env.received_id(bytes);
+        debug_assert_eq!(id, env.batch_id(), "in-place batch id must equal TL-93's");
         let mut key_valid = true;
         if let Some(dir) = dir {
             let info = dir
                 .key(&env.actor, &env.key)
                 .ok_or((Some(id), Verdict::Rejected(Reason::UnknownKey)))?;
-            if !env.verify(&info.public_key) {
+            if !env.verify_id(&info.public_key, &id) {
                 return Err((Some(id), Verdict::Rejected(Reason::BadSignature)));
             }
             key_valid = info.valid;
         }
-        let (batch, raw) = env
-            .batch()
-            .map_err(|e| (Some(id), Verdict::Rejected(e.into())))?;
+        let decoded = match local_raw {
+            Some(raw) => {
+                if raw.len() > envelope::MAX_BATCH {
+                    Err(crate::codec::DecodeError::TooLarge)
+                } else {
+                    crate::codec::decode_batch(&raw, &env.actor, &env.key).map(|batch| (batch, raw))
+                }
+            }
+            None => env.batch(),
+        };
+        let (batch, raw) = decoded.map_err(|e| (Some(id), Verdict::Rejected(e.into())))?;
         // TL-101 step 7, Counters: judged at once, so a batch that could never be integrated is
         // never held back (TL-04, TL-76).
         let late = |v: &Version| v.heads().iter().any(|h| h.counter >= batch.start);
@@ -952,15 +971,22 @@ impl<S: Store> History<S> {
         Ok(self.max_counter.max(hw) + 1)
     }
 
-    fn commit_local(&mut self, batch: Batch, envelope: Vec<u8>) -> Result<Written, Error> {
+    fn commit_local(
+        &mut self,
+        batch: Batch,
+        envelope: Vec<u8>,
+        raw: Vec<u8>,
+    ) -> Result<Written, Error> {
         self.store
             .raise_high_water(&batch.replica.actor, &batch.replica.key, batch.end())
             .map_err(store_err)?;
         let ops = (0..batch.ops.len()).map(|i| batch.op_id(i)).collect();
-        let p = self.pending(&envelope, None).map_err(|(_, v)| match v {
-            Verdict::Rejected(r) => Error::Rejected(r),
-            _ => Error::Rejected(Reason::Malformed),
-        })?;
+        let p = self
+            .pending_raw(&envelope, None, Some(raw))
+            .map_err(|(_, v)| match v {
+                Verdict::Rejected(r) => Error::Rejected(r),
+                _ => Error::Rejected(Reason::Malformed),
+            })?;
         let id = p.id;
         if !self.deps_held(&p.batch) {
             return Err(Error::UnknownOp);
@@ -1010,14 +1036,14 @@ impl<S: Store> History<S> {
             time: None,
             step: None,
         };
-        let envelope = envelope::seal(
+        let (envelope, raw) = envelope::seal_raw(
             &self.space,
             Some(self.id),
             &batch,
             signer,
             Compression::Zstd,
         );
-        self.commit_local(batch, envelope)
+        self.commit_local(batch, envelope, raw)
     }
 
     /// Writes `ops` as one batch on `timeline`, after its head (TL-24). `step` names the tool
@@ -1047,14 +1073,14 @@ impl<S: Store> History<S> {
             time: None,
             step,
         };
-        let envelope = envelope::seal(
+        let (envelope, raw) = envelope::seal_raw(
             &self.space,
             Some(self.id),
             &batch,
             signer,
             Compression::Zstd,
         );
-        self.commit_local(batch, envelope)
+        self.commit_local(batch, envelope, raw)
     }
 
     /// Forks `source` at `at` (its head when `None`) into a new timeline named `name` (TL-22,
