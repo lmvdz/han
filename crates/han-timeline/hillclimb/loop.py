@@ -34,30 +34,28 @@ STATE = os.path.join(WORK, "state.json")
 BRANCH = "climb/run"
 ALLOWED = "crates/han-timeline/src/"
 CODEX_MODEL = os.environ.get("CLIMB_CODEX_MODEL", "gpt-6.1-sol")
-CLAUDE_MODEL = os.environ.get("CLIMB_CLAUDE_MODEL", "opus")
 
-PLAN_SCHEMA = {
+DIRECTION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["title", "idea", "rationale", "files", "instructions", "expected_gain_pct"],
+    "required": ["title", "idea", "hypothesis", "files", "expected_gain_pct"],
     "properties": {
         "title": {
             "type": "string",
             "description": "Commit subject, imperative, at most 60 characters",
         },
-        "idea": {"type": "string", "description": "One-line name of the change"},
-        "rationale": {
+        "idea": {"type": "string", "description": "The target for this round, one paragraph"},
+        "hypothesis": {
             "type": "string",
-            "description": "Which measured cost this removes and why it is safe",
+            "description": "Which measured cost it removes and why it keeps behaviour (estimate)",
         },
         "files": {"type": "array", "items": {"type": "string"}},
-        "instructions": {
-            "type": "string",
-            "description": "Precise implementation instructions for the engineer",
-        },
         "expected_gain_pct": {"type": "number"},
     },
 }
+CLAUDE_MODEL = os.environ.get("CLIMB_CLAUDE_MODEL", "sonnet")
+# A fresh Codex session every few rounds keeps its context from growing without bound.
+SESSION_ROUNDS = int(os.environ.get("CLIMB_SESSION_ROUNDS", "5"))
 
 RULES = """Hard rules (a change that breaks one is thrown away):
 - Edit only files under crates/han-timeline/src/. Never touch tests, examples, benches,
@@ -164,41 +162,51 @@ def init(args):
         print(f"{name:<11} {s['score']:10.1f}")
 
 
-def history_text(state, last=12):
-    lines = []
-    for r in state["rounds"][-last:]:
-        lines.append(
-            f"- round {r['round']}: {r.get('idea', '?')} -> {r['outcome']}"
-            + (f" (validation {r['delta_pct']:+.1f}%)" if "delta_pct" in r else "")
-        )
-    return "\n".join(lines) or "(none yet)"
+def notebook(state):
+    """The fixed notes plus the current timings and every attempt: what both models read
+    instead of re-exploring the crate."""
+    with open(os.path.join(HERE, "notes.md"), encoding="utf-8") as f:
+        fixed = f.read()
+    best = state["best"]
+    lines = [fixed.rstrip(), "", "## Current best timings (per op, train set)", ""]
+    lines += [f"- {k}: {v:.1f} us" for k, v in sorted(best["train"]["metrics"].items())]
+    lines += [
+        "",
+        "Set scores (geometric mean, us): "
+        + ", ".join(f"{k} {v['score']:.1f}" for k, v in best.items()),
+        "",
+        "## Per-stage breakdown of a local op (examples/breakdown.rs)",
+        "",
+        "```",
+        breakdown().strip(),
+        "```",
+        "",
+        "## Attempts",
+        "",
+    ]
+    for r in state["rounds"]:
+        line = f"- round {r['round']} [{r['outcome']}] {r.get('title', r.get('idea', '?'))}"
+        if "delta_pct" in r:
+            line += f" (validation {r['delta_pct']:+.1f}%)"
+        if r.get("codex_summary"):
+            line += f": {r['codex_summary'][:400]}"
+        lines.append(line)
+    if not state["rounds"]:
+        lines.append("(none yet)")
+    return "\n".join(lines) + "\n"
 
 
-def plan(state, rdir):
-    best = state["best"]["train"]["metrics"]
-    metrics = "\n".join(f"  {k}: {v:.1f} us/op" for k, v in sorted(best.items()))
-    prompt = f"""You are the performance planner for crates/han-timeline in this repository (the
-han.timeline/1 engine). Your job: propose ONE change that makes it measurably faster. An engineer
-(another model, with no context but your instructions and the repository) will implement it.
+def direct(state, notes, rdir):
+    """One cheap Claude turn, no tools: pick the target for this round."""
+    prompt = f"""{notes}
 
-Current best timings on the training workload (per op, lower is better):
-{metrics}
-
-Per-stage breakdown of a local op (examples/breakdown.rs):
-{breakdown()}
-
-Earlier attempts (do not repeat failed or rejected ideas unless you fix why they failed):
-{history_text(state)}
-
-{RULES}
-
-Read the source under crates/han-timeline/src/ as needed. You can only read files: you cannot
-run code, build or time anything, so never claim to have measured, prototyped or tested something.
-Any number you give is an estimate from reading the code; say so. Prefer changes with a large
-expected gain and low risk to correctness. Signing and verifying (Ed25519, strict) are required
-by the spec and cannot be removed. Give the engineer precise instructions: which functions,
-which data structures, and how to keep behaviour identical. Answer with the JSON object only."""
-    with open(os.path.join(rdir, "planner_prompt.txt"), "w", encoding="utf-8") as f:
+You direct a performance hill-climb of crates/han-timeline. Pick the single most promising
+target for the next round from the notebook above: the timings, the breakdown, the ideas not
+yet tried and the attempts (do not repeat a rejected idea unless you say what is different).
+An engineer with the repository will investigate and implement it. You cannot read files or run
+anything; your numbers are estimates. Signing and strict verification cannot be removed.
+Answer with the JSON object only."""
+    with open(os.path.join(rdir, "director_prompt.txt"), "w", encoding="utf-8") as f:
         f.write(prompt)
     cmd = [
         CLAUDE,
@@ -206,63 +214,91 @@ which data structures, and how to keep behaviour identical. Answer with the JSON
         "--model",
         CLAUDE_MODEL,
         "--effort",
-        "high",
+        "medium",
         "--output-format",
         "json",
         "--json-schema",
-        json.dumps(PLAN_SCHEMA),
-        "--allowedTools",
-        "Read",
-        "Grep",
-        "Glob",
+        json.dumps(DIRECTION_SCHEMA),
+        "--tools",
+        "",
+        "--strict-mcp-config",
         "--no-session-persistence",
     ]
     code, out, err = sh(cmd, cwd=WT, input=prompt)
-    with open(os.path.join(rdir, "planner.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(rdir, "director.json"), "w", encoding="utf-8") as f:
         f.write(out if out else err)
     if code != 0:
-        raise RuntimeError(f"planner failed: {err[-2000:]}")
+        raise RuntimeError(f"director failed: {err[-2000:]}")
     reply = json.loads(out)
     answer = reply.get("structured_output")
     if answer is None:
         text = reply.get("result", "")
         answer = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    usage = reply.get("usage", {})
+    answer["_usage"] = {
+        "turns": reply.get("num_turns"),
+        "notional_usd": reply.get("total_cost_usd"),
+        "input": usage.get("input_tokens", 0),
+        "cache_read": usage.get("cache_read_input_tokens", 0),
+        "cache_write": usage.get("cache_creation_input_tokens", 0),
+        "output": usage.get("output_tokens", 0),
+    }
     return answer
 
 
-def code_change(p, rdir):
-    prompt = f"""Implement this performance change in crates/han-timeline (Rust).
+def codex_round(state, notes, p, rdir):
+    """Codex investigates and implements the target, in one session resumed across rounds."""
+    target = f"""Target: {p['title']}
+{p['idea']}
+Director's hypothesis (an estimate, check it): {p['hypothesis']}
+Start from: {', '.join(p['files'])}
 
-Change: {p['idea']}
-Why: {p['rationale']}
-Files: {', '.join(p['files'])}
+Investigate the code paths for this target, implement the change, and check it: run
+`cargo fmt -p han-timeline`, `cargo test --release -p han-timeline --test vectors --test random`
+(both must pass) and `cargo run --release -p han-timeline --example bench 4000` to see the effect.
+If it does not help, improve it or undo it. Do not commit. End with two or three sentences on
+what you changed and what the benchmark showed."""
+    session = state.get("codex_session")
+    if session and state.get("codex_session_rounds", 0) < SESSION_ROUNDS:
+        last = state["rounds"][-1] if state["rounds"] else None
+        prev = (
+            f"Round {last['round']} ({last.get('title', '?')}) was {last['outcome']}"
+            + (" and committed." if last["outcome"] == "kept" else "; the tree was reset.")
+            if last
+            else ""
+        )
+        prompt = f"""New round. {prev} The working tree is now at commit {state['head'][:10]}.
+Current set scores: {', '.join(f"{k} {v['score']:.1f} us" for k, v in state['best'].items())}.
 
-Instructions:
-{p['instructions']}
+{target}"""
+        cmd = [CODEX, "exec", "resume", session, "-"]
+    else:
+        prompt = f"""{notes}
+
+You implement speed-ups for crates/han-timeline, one target per round, in this repository.
+The notebook above maps each benchmark to its code, lists the invariants and the attempts.
 
 {RULES}
 
-Before you finish, run `cargo fmt -p han-timeline` and
-`cargo test --release -p han-timeline --test vectors --test random` and make sure both pass.
-Do not commit. Summarise what you changed in two or three sentences."""
-    cmd = [
-        CODEX,
-        "exec",
+{target}"""
+        cmd = [CODEX, "exec", "-C", WT, "-"]
+        state["codex_session_rounds"] = 0
+    cmd += [
         "-m",
         CODEX_MODEL,
-        "-s",
-        "workspace-write",
-        "-C",
-        WT,
         "--ignore-user-config",
         # The sandbox's restricted token cannot start app-alias executables (pwsh from
         # WindowsApps); without them on PATH Codex uses the system PowerShell.
         "-c",
         'windows.sandbox="unelevated"',
+        "-c",
+        'sandbox_mode="workspace-write"',
         "--json",
         "-o",
         os.path.join(rdir, "codex_last.txt"),
     ]
+    with open(os.path.join(rdir, "codex_prompt.txt"), "w", encoding="utf-8") as f:
+        f.write(prompt)
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join(
         d for d in env.get("PATH", "").split(os.pathsep) if "windowsapps" not in d.lower()
@@ -272,7 +308,24 @@ Do not commit. Summarise what you changed in two or three sentences."""
         f.write(out)
     with open(os.path.join(rdir, "codex_stderr.txt"), "w", encoding="utf-8") as f:
         f.write(err)
-    return code == 0
+    usage = {}
+    for line in out.splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("type") == "thread.started":
+            state["codex_session"] = e["thread_id"]
+        if e.get("type") == "turn.completed":
+            for k, v in e.get("usage", {}).items():
+                usage[k] = usage.get(k, 0) + v
+    state["codex_session_rounds"] = state.get("codex_session_rounds", 0) + 1
+    summary = ""
+    last_path = os.path.join(rdir, "codex_last.txt")
+    if os.path.exists(last_path):
+        with open(last_path, encoding="utf-8", errors="replace") as f:
+            summary = f.read().strip()
+    return code == 0, usage, summary
 
 
 def changed_paths():
@@ -294,10 +347,20 @@ def run(args):
         os.makedirs(rdir, exist_ok=True)
         rec = {"round": n, "started": time.strftime("%Y-%m-%dT%H:%M:%S")}
         try:
-            p = plan(state, rdir)
-            rec.update(idea=p["idea"], expected_gain_pct=p["expected_gain_pct"])
-            print(f"round {n}: {p['idea']}")
-            if not code_change(p, rdir):
+            notes = notebook(state)
+            with open(os.path.join(rdir, "notes.md"), "w", encoding="utf-8") as f:
+                f.write(notes)
+            p = direct(state, notes, rdir)
+            rec.update(
+                title=p["title"],
+                idea=p["idea"],
+                expected_gain_pct=p["expected_gain_pct"],
+                claude=p["_usage"],
+            )
+            print(f"round {n}: {p['title']}", flush=True)
+            ok, usage, summary = codex_round(state, notes, p, rdir)
+            rec.update(codex=usage, codex_summary=summary)
+            if not ok:
                 rec["note"] = "codex exited non-zero"
             paths = changed_paths()
             rec["files"] = paths
