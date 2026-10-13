@@ -77,6 +77,8 @@ python ref/run_all.py             # adds the exhaustive model checker (much long
 just ci                           # the same checks plus the witnesses, if you have `just`
 ```
 
+The Rust gates are `just rs-test` (fmt, clippy `-D warnings`, `cargo test --workspace`) and `just rs-deny`. CI, the nightly cross-OS matrix, the advisory scans, releases (cargo-dist) and the signed update check are described in [docs/release.md](docs/release.md).
+
 ## Licenses
 
 - **Specification text** (`*.md`): [CC BY 4.0](LICENSE-SPEC). Implement it freely; credit the authors.
