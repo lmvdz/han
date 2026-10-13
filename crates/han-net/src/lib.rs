@@ -8,6 +8,7 @@
 //!   call stream (handled in stream order), one unidirectional stream per live call, the peer filter (N-02)
 //!   at connection and call time.
 //! * [`Client`] and [`RawConn`] dial a node, check the Challenge, say `hello` and make calls.
+//! * [`profile`]: the profiles of other servers' actors, read from their homes, verified and pinned (section 4.1 step 4).
 //! * [`wellknown`], [`ticket`], [`control`], [`typed`]: the documents and formats of section 4.3, N-03 and the typed one-way streams of G-07.
 //! * [`wirevec`]: a runner for the wire conformance vectors over any transport.
 
@@ -18,6 +19,7 @@ pub mod dial;
 pub mod error;
 pub mod frame;
 pub mod mem;
+pub mod profile;
 pub mod quic;
 pub mod server;
 pub mod ticket;
@@ -30,6 +32,7 @@ pub use addr::{NodeAddr, NodeId};
 pub use client::{CallStream, Client, Inbound, RawConn};
 pub use error::{NetError, Result};
 pub use mem::{MemNetwork, MemTransport};
+pub use profile::{ProfileDirectory, RemoteProfiles, verify_profile_chain};
 pub use quic::{ALPN, IrohOptions, IrohTransport, RelayChoice};
 pub use server::{ServeOptions, ServerHandle, serve};
 pub use ticket::InviteTicket;

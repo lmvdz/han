@@ -12,10 +12,11 @@ use tokio::task::JoinHandle;
 use crate::addr::NodeId;
 use crate::error::NetError;
 use crate::frame::{read_frame, write_frame};
+use crate::profile::{RemoteProfiles, is_remote_actor, remote_subject};
 use crate::transport::{Connection, SendStream, Transport, close};
 
 /// How a server behaves.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServeOptions {
     /// Connections one node may hold open; over it the connection is closed with `limit` before a Challenge
     /// is issued (G-08).
@@ -24,6 +25,22 @@ pub struct ServeOptions {
     pub request_timeout: Duration,
     /// How often a connection's node is checked to still vouch for its actor (X14, at most 300 s).
     pub revalidate_every: Duration,
+    /// Where the profiles of other servers' actors are read (section 4.1 step 4). With it, a `hello` or an
+    /// `append` of a remote actor reads the profile first instead of answering `unavailable`, and every
+    /// `revalidate_every` the profile of each connected remote actor is read again before the node is
+    /// checked (N-02), so a device revoked at its own home loses its connection here.
+    pub profiles: Option<Arc<dyn RemoteProfiles>>,
+}
+
+impl std::fmt::Debug for ServeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServeOptions")
+            .field("max_conns_per_peer", &self.max_conns_per_peer)
+            .field("request_timeout", &self.request_timeout)
+            .field("revalidate_every", &self.revalidate_every)
+            .field("profiles", &self.profiles.is_some())
+            .finish()
+    }
 }
 
 impl Default for ServeOptions {
@@ -32,6 +49,7 @@ impl Default for ServeOptions {
             max_conns_per_peer: 256,
             request_timeout: Duration::from_secs(30),
             revalidate_every: Duration::from_secs(300),
+            profiles: None,
         }
     }
 }
@@ -145,6 +163,8 @@ async fn run_connection<C: Connection>(conn: C, home: Arc<Home>, local: &str, op
                     turn: Arc::clone(&turn),
                     n,
                     timeout: opts.request_timeout,
+                    home: Arc::clone(&home),
+                    profiles: opts.profiles.clone(),
                 };
                 n += 1;
                 tokio::spawn(call.run(send, recv));
@@ -157,6 +177,14 @@ async fn run_connection<C: Connection>(conn: C, home: Arc<Home>, local: &str, op
                 }
             }
             _ = tick.tick() => {
+                // N-02: a remote actor's profile is read again first, so a device revoked at its home is seen
+                if let Some(profiles) = &opts.profiles
+                    && let Some(who) = hconn.actor()
+                    && is_remote_actor(&home, &who)
+                    && let Err(e) = profiles.refresh(&who).await
+                {
+                    tracing::debug!("re-pin of {who}: {e}");
+                }
                 if !hconn.still_vouched() {
                     conn.close(close::REVOKED, "revoked");
                     break;
@@ -173,6 +201,8 @@ struct Call<C: Connection> {
     turn: Arc<Turn>,
     n: u64,
     timeout: Duration,
+    home: Arc<Home>,
+    profiles: Option<Arc<dyn RemoteProfiles>>,
 }
 
 impl<C: Connection> Call<C> {
@@ -191,6 +221,13 @@ impl<C: Connection> Call<C> {
                 return;
             }
         };
+        // section 4.1 step 4, G-08: a remote author's or `who`'s profile is read before the call is handled
+        if let Some(profiles) = &self.profiles
+            && let Some(actor) = remote_subject(&self.home, &text)
+            && let Err(e) = profiles.ensure(&actor).await
+        {
+            tracing::debug!("profile of {actor}: {e}");
+        }
         self.turn.wait(self.n).await;
         let handled = self.hconn.handle(&text);
         self.turn.pass(self.n);

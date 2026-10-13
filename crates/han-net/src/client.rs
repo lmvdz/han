@@ -356,6 +356,23 @@ impl<C: Connection> Client<C> {
         .await
     }
 
+    /// `hello` as the server actor of `home` (`@:S`), signed with its server key (G-08, han/1 binding): how a
+    /// home reads another's profiles (section 4.1 step 4).
+    pub async fn hello_as_server(&self, home: &han_seq::Home) -> Result<Value> {
+        let peer = self.conn.peer();
+        let (key_id, proof) = home.hello_proof(&self.challenge.challenge, &self.dialed, &peer);
+        self.call(
+            "hello",
+            han_seq_obj([
+                ("who", Value::Str(format!("@:{}", home.server()))),
+                ("keyId", Value::Str(key_id)),
+                ("proof", Value::Str(proof)),
+                ("version", Value::Int(1)),
+            ]),
+        )
+        .await
+    }
+
     /// `append`: the receipt.
     pub async fn append(&self, entry: &Value, content: Option<&Value>) -> Result<Receipt> {
         let mut args = vec![("entry", entry.clone())];
