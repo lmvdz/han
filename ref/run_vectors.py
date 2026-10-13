@@ -1,4 +1,4 @@
-"""Runs ref/vectors/*.json against a Policy implementation (default: ref/policy.py).
+"""Runs conformance/vectors/*.json against a Policy implementation (default: ref/policy.py).
 
 Vector format (language-neutral; see README.md):
   profiles: {actor: ProfileView-without-actor/seq}       initial pinned profile views
@@ -101,7 +101,7 @@ def run_vector(vec):
     return fails
 
 def main():
-    files = sorted(glob.glob(os.path.join(HERE, "vectors", "*.json")))
+    files = sorted(glob.glob(os.path.join(os.path.dirname(HERE), "conformance", "vectors", "*.json")))
     total_steps = bad = 0
     for f in files:
         vec = json.load(open(f, encoding="utf-8"))

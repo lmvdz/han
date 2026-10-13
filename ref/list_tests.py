@@ -1,5 +1,5 @@
-"""Lists the implementation's tests (impl/tests/*.py), the clean-room TypeScript interop scenarios (cleanroom-ts/interop.ts) and the wire
-conformance vectors (ref/wire-vectors/) with the rule tags found in their docstrings or names, so architecture.md §10 can be checked against what actually exists.
+"""Lists the implementation's tests (witnesses/impl-py/tests/*.py), the clean-room TypeScript interop scenarios (witnesses/cleanroom-ts/interop.ts) and the wire
+conformance vectors (conformance/wire-vectors/) with the rule tags found in their docstrings or names, so spec/core/architecture.md §10 can be checked against what actually exists.
 ref/sync_docs.py imports py_tests, ts_scenarios and wire_vectors from here to derive the counts in the docs.
   python ref/list_tests.py            one line per test, then totals per file
   python ref/list_tests.py --rules    rule -> tests (the reverse index)
@@ -26,7 +26,7 @@ def cases(fn):
 def py_tests():
     """(file, test name, tags, skipped-by-default, cases) for every test function and test method."""
     out = []
-    for path in sorted(glob.glob(os.path.join(ROOT, "impl", "tests", "test_*.py"))):
+    for path in sorted(glob.glob(os.path.join(ROOT, "witnesses", "impl-py", "tests", "test_*.py"))):
         src = open(path, encoding="utf-8").read()
         mod = ast.parse(src)
         live = bool(re.search(r"HAN_LIVE|skipif|pytest\.skip|importorskip", src))
@@ -40,15 +40,15 @@ def py_tests():
     return out
 
 def ts_scenarios():
-    path = os.path.join(ROOT, "cleanroom-ts", "interop.ts")
+    path = os.path.join(ROOT, "witnesses", "cleanroom-ts", "interop.ts")
     if not os.path.exists(path): return []
     src = open(path, encoding="utf-8").read()
     names = re.findall(r'scenario\(\s*(?:"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)', src)
     return [(a or b, tags(a or b)) for a, b in names]
 
 def wire_vectors():
-    """(file::id, rule tags) for every wire conformance vector (ref/wire-vectors/, architecture.md G-11)."""
-    d = os.path.join(HERE, "wire-vectors")
+    """(file::id, rule tags) for every wire conformance vector (conformance/wire-vectors/, architecture.md G-11)."""
+    d = os.path.join(ROOT, "conformance", "wire-vectors")
     if not os.path.exists(os.path.join(d, "index.json")): return []
     out = []
     for fn in json.load(open(os.path.join(d, "index.json"), encoding="utf-8"))["files"]:
@@ -64,7 +64,7 @@ FAMILIES = (("operations (golden)", lambda fn: fn[:2].isdigit()), ("agreed probe
 def wire_expectations():
     """Per vector family: (name, files, vectors, expectations, steps, generated appends). An expectation is what the runner counts as one: an `expect`, `expect_close`,
     `expect_silence`, `http_get`, `clock` or `limits` step. A `generate` step is one step, its `count` appends are checked by the runner and are not expectations."""
-    d = os.path.join(HERE, "wire-vectors")
+    d = os.path.join(ROOT, "conformance", "wire-vectors")
     if not os.path.exists(os.path.join(d, "index.json")): return []
     rows = {name: [name, 0, 0, 0, 0, 0] for name, _ in FAMILIES}
     for fn in json.load(open(os.path.join(d, "index.json"), encoding="utf-8"))["files"]:

@@ -47,7 +47,7 @@ def kinds(block):
     return res
 
 def md_table():
-    md = open(os.path.join(ROOT, "architecture.md"), encoding="utf-8").read()
+    md = open(os.path.join(ROOT, "spec", "core", "architecture.md"), encoding="utf-8").read()
     sec = md[md.index("## 5. Entry kinds"):md.index("## 6. Policy")]
     rows = {}
     for line in sec.splitlines():
@@ -95,7 +95,7 @@ def check_states(src, errs):
     import run_vectors
     shapes = state_shapes(src)
     seen = 0
-    for f in sorted(glob.glob(os.path.join(HERE, "vectors", "*.json"))):
+    for f in sorted(glob.glob(os.path.join(ROOT, "conformance", "vectors", "*.json"))):
         vec = json.load(open(f, encoding="utf-8"))
         if "steps" not in vec: continue
         states = {}
@@ -121,7 +121,7 @@ def check_states(src, errs):
     return seen
 
 def main():
-    src = open(os.path.join(ROOT, "han.ts"), encoding="utf-8").read()
+    src = open(os.path.join(ROOT, "spec", "core", "han.ts"), encoding="utf-8").read()
     bodies, contents = kinds(ts_block(src, "Bodies")), kinds(ts_block(src, "Contents"))
     table = md_table()
     errs = []

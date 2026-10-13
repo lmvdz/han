@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
 CHECKS = [
-    ("TypeScript strict check of han.ts", ["npx", "-y", "-p", "typescript@5.8.3", "tsc", "-p", os.path.join(ROOT, "tsconfig.json")]),
+    ("TypeScript strict check of han.ts", ["npx", "-y", "-p", "typescript@5.8.3", "tsc", "-p", os.path.join(ROOT, "spec", "core", "tsconfig.json")]),
     ("Three-way consistency (architecture.md §5 · han.ts · ref schema)", [PY, os.path.join(HERE, "check_consistency.py")]),
     ("Conformance vectors against ref/policy.py", [PY, os.path.join(HERE, "run_vectors.py")]),
     ("Policy mutations must be caught by the vectors", [PY, os.path.join(HERE, "mutate_vectors.py")]),
@@ -24,7 +24,7 @@ CHECKS = [
     ("Guard model (P-15), depth 5 (opt-in, --depth5)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "5"], "depth5"),
     ("Guard model mutations must each give a counterexample, depth 4 (~15 min)", [PY, os.path.join(HERE, "model_guard.py"), "--depth", "4", "--all-mutations"]),
     ("Signed layer (real Ed25519): home pipeline, content validation, mirror verification, proofs, blobs, notices", [PY, os.path.join(HERE, "run_wire.py")]),
-    ("Wire conformance vectors (ref/wire-vectors) are well formed: signatures, receipts, one chain (offline; live runs need a server: run_wire_vectors.py --url)", [PY, os.path.join(HERE, "run_wire_vectors.py"), "--check"]),
+    ("Wire conformance vectors (conformance/wire-vectors) are well formed: signatures, receipts, one chain (offline; live runs need a server: run_wire_vectors.py --url)", [PY, os.path.join(HERE, "run_wire_vectors.py"), "--check"]),
     ("Model check: effects, executor, crashes, revocation, abandon, clock offset, delay, rounding, window changes", [PY, os.path.join(HERE, "model_check.py")], "full"),
     ("Model mutations must be caught", [PY, os.path.join(HERE, "model_check.py"), "--all-mutations"], "full"),
 ]
