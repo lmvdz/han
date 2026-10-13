@@ -10,6 +10,11 @@ Each benchmark set runs examples/bench.rs with its own size and BENCH_SEED, `run
 metric the best run counts, and the set's score is the geometric mean of the per-op times of
 all metrics (microseconds; lower is better). `train` guides the planner, `validation` decides
 whether a change is kept, `test` is held out and only reported.
+
+With `--ref <bench binary>` every run of the candidate is paired with a run of the reference
+(the current best build), alternating, so both see the same machine load; each set then also
+reports the reference's metrics and the per-metric ratio candidate / reference. Compare runs
+only this way: the same code measured hours apart can differ by 2x on a shared machine.
 """
 
 import argparse
@@ -69,22 +74,36 @@ def bench_exe(repo):
     return exe + (".exe" if sys.platform == "win32" else "")
 
 
-def bench_set(exe, cfg, runs):
-    best = {}
+def bench_once(exe, cfg, best):
     env = dict(os.environ, BENCH_SEED=str(cfg["seed"]))
+    code, out = run([exe, str(cfg["n"])], os.path.dirname(exe), env)
+    if code != 0:
+        raise SystemExit(json.dumps({"error": "bench failed", "log_tail": out[-4000:]}))
+    for line in out.splitlines():
+        m = LINE.match(line.strip())
+        if m:
+            # The size is part of the label; key metrics by the words without numbers.
+            what = re.sub(r"\d[\d,.]*", "N", m.group("what")).strip()
+            v = float(m.group("each"))
+            best[what] = min(best.get(what, math.inf), v)
+
+
+def geomean(metrics):
+    return math.exp(sum(math.log(v) for v in metrics.values()) / len(metrics))
+
+
+def bench_set(exe, cfg, runs, ref=None):
+    best, ref_best = {}, {}
     for _ in range(runs):
-        code, out = run([exe, str(cfg["n"])], os.path.dirname(exe), env)
-        if code != 0:
-            raise SystemExit(json.dumps({"error": "bench failed", "log_tail": out[-4000:]}))
-        for line in out.splitlines():
-            m = LINE.match(line.strip())
-            if m:
-                # The size is part of the label; key metrics by the words without numbers.
-                what = re.sub(r"\d[\d,.]*", "N", m.group("what")).strip()
-                v = float(m.group("each"))
-                best[what] = min(best.get(what, math.inf), v)
-    score = math.exp(sum(math.log(v) for v in best.values()) / len(best))
-    return {"score": score, "metrics": best}
+        bench_once(exe, cfg, best)
+        if ref:
+            bench_once(ref, cfg, ref_best)
+    out = {"score": geomean(best), "metrics": best}
+    if ref:
+        out["ref_score"] = geomean(ref_best)
+        out["ref_metrics"] = ref_best
+        out["ratios"] = {m: v / ref_best[m] for m, v in best.items() if m in ref_best}
+    return out
 
 
 def main():
@@ -94,6 +113,8 @@ def main():
     ap.add_argument("--sets", default="train,validation,test")
     ap.add_argument("--seeds", type=int, default=50)
     ap.add_argument("--no-gate", action="store_true")
+    ap.add_argument("--ref", help="reference bench binary to pair every run with")
+    ap.add_argument("--exe", help="measure this bench binary instead of building one")
     a = ap.parse_args()
     result = {}
     if not a.no_gate:
@@ -101,8 +122,9 @@ def main():
         if not result["gate"]["ok"]:
             print(json.dumps(result))
             return
-    exe = bench_exe(a.repo)
-    result["sets"] = {s: bench_set(exe, SETS[s], a.runs) for s in a.sets.split(",")}
+    exe = a.exe or bench_exe(a.repo)
+    result["exe"] = exe
+    result["sets"] = {s: bench_set(exe, SETS[s], a.runs, a.ref) for s in a.sets.split(",")}
     print(json.dumps(result))
 
 
