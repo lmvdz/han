@@ -15,7 +15,11 @@ pub(crate) type Local = (u32, u32);
 #[derive(Clone, Debug)]
 struct InsRec {
     id: InsertionId,
-    chars: Vec<char>,
+    chars: Arc<Vec<char>>,
+    /// ASCII runs can be copied directly into the visible string.
+    ascii: Option<Arc<str>>,
+    /// Sorted, coalesced tombstone intervals for the compact layout.
+    hidden: Vec<(u32, u32)>,
     /// For a copy, the canonical character its first character came from.
     origin: Option<CharId>,
     deleted: Vec<bool>,
@@ -131,9 +135,12 @@ pub(crate) struct TextObj {
     roots: Vec<u32>,
     seals: Vec<Vec<IdRange>>,
     has_copies: bool,
+    large: bool,
     layout: OnceLock<Arc<Layout>>,
     /// The visible text, built on first use.
-    text: OnceLock<String>,
+    text: OnceLock<Arc<String>>,
+    /// Visible runs for ordinary text; dense indexes stay lazy until requested.
+    runs: OnceLock<Vec<(u32, u32, u32)>>,
 }
 
 impl TextObj {
@@ -217,14 +224,18 @@ impl TextObj {
         origin: Option<CharId>,
     ) {
         self.text = OnceLock::new();
+        self.runs = OnceLock::new();
         let anchor = anchor.and_then(|a| self.local(a));
         let chars: Vec<char> = text.chars().collect();
         let l = self.ins.len() as u32;
         self.has_copies |= origin.is_some();
         let n = chars.len();
+        self.large |= n >= 4096;
         self.ins.push(InsRec {
             id: id.clone(),
-            chars,
+            chars: Arc::new(chars),
+            ascii: text.is_ascii().then(|| Arc::from(text)),
+            hidden: Vec::new(),
             origin,
             deleted: vec![false; n],
             kids: Vec::new(),
@@ -276,10 +287,22 @@ impl TextObj {
 
     pub fn delete(&mut self, r: &IdRange) {
         self.text = OnceLock::new();
+        self.runs = OnceLock::new();
         if let Some(&l) = self.index.get(&r.insertion) {
             let rec = &mut self.ins[l as usize];
             let to = (r.to as usize).min(rec.deleted.len());
             let from = (r.from as usize).min(to);
+            if from < to {
+                let mut range = (from as u32, to as u32);
+                let start = rec.hidden.partition_point(|&(_, end)| end < range.0);
+                let mut end = start;
+                while end < rec.hidden.len() && rec.hidden[end].0 <= range.1 {
+                    range.0 = range.0.min(rec.hidden[end].0);
+                    range.1 = range.1.max(rec.hidden[end].1);
+                    end += 1;
+                }
+                rec.hidden.splice(start..end, [range]);
+            }
             for d in &mut rec.deleted[from..to] {
                 *d = true;
             }
@@ -298,6 +321,7 @@ impl TextObj {
 
     pub fn seal(&mut self, ranges: Vec<IdRange>) {
         self.text = OnceLock::new();
+        self.runs = OnceLock::new();
         self.seals.push(ranges);
         self.layout = OnceLock::new();
     }
@@ -447,10 +471,117 @@ impl TextObj {
         }
     }
 
+    /// Large ordinary texts need only runs for rendering and edit planning.
+    pub(crate) fn compact_layout(&self) -> bool {
+        self.large && !self.has_copies && self.seals.is_empty()
+    }
+
+    /// Identity ranges at visible positions, without expanding runs into character indexes.
+    pub(crate) fn visible_ranges(&self, from: usize, to: usize) -> Vec<IdRange> {
+        let mut out: Vec<IdRange> = Vec::new();
+        let mut pos = 0;
+        for &(l, a, b) in self.visible_runs() {
+            let end = pos + (b - a) as usize;
+            let start = from.max(pos);
+            let stop = to.min(end);
+            if start < stop {
+                let insertion = self.ins[l as usize].id.clone();
+                let lo = a + (start - pos) as u32;
+                let hi = a + (stop - pos) as u32;
+                if let Some(last) = out.last_mut()
+                    && last.insertion == insertion
+                    && last.to == lo
+                {
+                    last.to = hi;
+                } else {
+                    out.push(IdRange {
+                        insertion,
+                        from: lo,
+                        to: hi,
+                    });
+                }
+            }
+            pos = end;
+            if pos >= to {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Compact TL-43 pre-order, split at children and tombstone intervals. Seals and
+    /// canonical-copy visibility use the dense layout instead.
+    fn visible_runs(&self) -> &[(u32, u32, u32)] {
+        self.runs.get_or_init(|| {
+            let mut out = Vec::new();
+            let mut stack: Vec<Local> = self.roots.iter().rev().map(|&l| (l, 0)).collect();
+            while let Some((l, k)) = stack.pop() {
+                let rec = &self.ins[l as usize];
+                let n = rec.chars.len() as u32;
+                if k == n {
+                    continue;
+                }
+                let kid = rec.kids.get(rec.kids.partition_point(|(o, _)| *o < k));
+                let end = kid.map_or(n, |(o, _)| o + 1);
+                let mut from = k;
+                let first = rec.hidden.partition_point(|&(_, to)| to <= k);
+                for &(a, b) in &rec.hidden[first..] {
+                    if a >= end {
+                        break;
+                    }
+                    if from < a {
+                        out.push((l, from, a));
+                    }
+                    from = from.max(b);
+                    if from >= end {
+                        break;
+                    }
+                }
+                if from < end {
+                    out.push((l, from, end));
+                }
+                if end < n {
+                    stack.push((l, end));
+                }
+                if let Some((_, kids)) = kid {
+                    stack.extend(kids.iter().rev().map(|&l| (l, 0)));
+                }
+            }
+            out
+        })
+    }
+
     /// The visible text (TL-45).
     pub fn text(&self) -> String {
         self.text
             .get_or_init(|| {
+                if self.compact_layout() {
+                    let runs = self.visible_runs();
+                    let capacity = runs
+                        .iter()
+                        .map(|&(l, from, to)| {
+                            let rec = &self.ins[l as usize];
+                            if rec.ascii.is_some() {
+                                (to - from) as usize
+                            } else {
+                                rec.chars[from as usize..to as usize]
+                                    .iter()
+                                    .map(|c| c.len_utf8())
+                                    .sum()
+                            }
+                        })
+                        .sum();
+                    let mut out = String::with_capacity(capacity);
+                    for &(l, from, to) in runs {
+                        let rec = &self.ins[l as usize];
+                        if let Some(ascii) = &rec.ascii {
+                            out.push_str(&ascii[from as usize..to as usize]);
+                        } else {
+                            out.extend(rec.chars[from as usize..to as usize].iter());
+                        }
+                    }
+                    return Arc::new(out);
+                }
                 let lay = self.layout();
                 let mut out = String::with_capacity(lay.visible_index.len());
                 out.extend(
@@ -458,18 +589,36 @@ impl TextObj {
                         .iter()
                         .map(|&i| self.char_at(lay.order[i])),
                 );
-                out
+                Arc::new(out)
             })
+            .as_ref()
             .clone()
     }
 
     /// The number of visible characters.
     pub fn len(&self) -> usize {
-        self.layout().visible_index.len()
+        if self.compact_layout() {
+            self.visible_runs()
+                .iter()
+                .map(|&(_, from, to)| (to - from) as usize)
+                .sum()
+        } else {
+            self.layout().visible_index.len()
+        }
     }
 
     /// The visible character at position `p`.
-    pub fn visible_char(&self, p: usize) -> Option<Local> {
+    pub fn visible_char(&self, mut p: usize) -> Option<Local> {
+        if self.compact_layout() {
+            for &(l, from, to) in self.visible_runs() {
+                let n = (to - from) as usize;
+                if p < n {
+                    return Some((l, from + p as u32));
+                }
+                p -= n;
+            }
+            return None;
+        }
         let lay = self.layout();
         lay.visible_index.get(p).map(|&i| lay.order[i])
     }
