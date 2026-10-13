@@ -1,0 +1,237 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "10-anchors-left-and-right-bias",
+ "description": "Anchors made at a position keep their side as text is inserted at that point, and collapse onto the spot when their character is deleted",
+ "rules": [
+  "TL-46"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "abc",
+     "transcript": false
+    }
+   ]
+  },
+  "b1": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:0",
+       "X"
+      ]
+     ]
+    }
+   ]
+  },
+  "b2": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       0,
+       2
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "anchors": [
+         {
+          "object": "2@A",
+          "make": {
+           "pos": 1,
+           "bias": "left"
+          },
+          "anchor": [
+           "2@A#0:0",
+           "left"
+          ],
+          "pos": 1
+         },
+         {
+          "object": "2@A",
+          "make": {
+           "pos": 1,
+           "bias": "right"
+          },
+          "anchor": [
+           "2@A#0:1",
+           "right"
+          ],
+          "pos": 1
+         },
+         {
+          "object": "2@A",
+          "make": {
+           "pos": 0,
+           "bias": "left"
+          },
+          "anchor": "start",
+          "pos": 0
+         },
+         {
+          "object": "2@A",
+          "make": {
+           "pos": 3,
+           "bias": "right"
+          },
+          "anchor": "end",
+          "pos": 3
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "aXbc"
+         }
+        },
+        "anchors": [
+         {
+          "object": "2@A",
+          "anchor": [
+           "2@A#0:0",
+           "left"
+          ],
+          "pos": 1
+         },
+         {
+          "object": "2@A",
+          "anchor": [
+           "2@A#0:1",
+           "right"
+          ],
+          "pos": 2
+         },
+         {
+          "object": "2@A",
+          "anchor": "end",
+          "pos": 4
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "Xc"
+         }
+        },
+        "anchors": [
+         {
+          "object": "2@A",
+          "anchor": [
+           "2@A#0:0",
+           "left"
+          ],
+          "pos": 0
+         },
+         {
+          "object": "2@A",
+          "anchor": [
+           "2@A#0:1",
+           "right"
+          ],
+          "pos": 1
+         },
+         {
+          "object": "2@A",
+          "anchor": "end",
+          "pos": 2
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

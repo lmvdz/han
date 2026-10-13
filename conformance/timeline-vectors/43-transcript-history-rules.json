@@ -1,0 +1,177 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "43-transcript-history-rules",
+ "description": "A transcript history has only main and one writer, the session's actor: a fork is rejected, another member's edit is quarantined, the host's seal and edits apply",
+ "rules": [
+  "TL-27",
+  "TL-89",
+  "TL-103"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "writers": [
+  "A"
+ ],
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "hi",
+     "transcript": true
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "steer": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "!"
+      ]
+     ]
+    }
+   ]
+  },
+  "seal": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       2
+      ]
+     ]
+    }
+   ]
+  },
+  "more": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:1",
+       " there"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork",
+     "result": "rejected:timeline"
+    },
+    {
+     "deliver": "steer",
+     "result": "quarantined"
+    },
+    {
+     "deliver": "seal",
+     "result": "integrated"
+    },
+    {
+     "deliver": "more",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "quarantined": [
+       "steer"
+      ],
+      "heads": {
+       "1@A": [
+        "5@A"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hi there"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

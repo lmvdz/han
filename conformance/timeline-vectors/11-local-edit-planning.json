@@ -1,0 +1,209 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "11-local-edit-planning",
+ "description": "A local edit at visible positions becomes one text.edit: identity ranges for the deleted characters and one insert anchored on the visible character before the position (CR normalised to LF)",
+ "rules": [
+  "TL-47",
+  "TL-48",
+  "TL-40"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello world",
+     "transcript": false
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       5,
+       6
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "helloworld"
+         }
+        }
+       }
+      ],
+      "plan_edits": [
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 5,
+        "delete": 0,
+        "text": "_",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [],
+         "inserts": [
+          [
+           "2@A#0:4",
+           "_"
+          ]
+         ]
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 2,
+        "delete": 3,
+        "text": "Y",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           2,
+           5
+          ]
+         ],
+         "inserts": [
+          [
+           "2@A#0:1",
+           "Y"
+          ]
+         ]
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 0,
+        "delete": 0,
+        "text": "Q\r\n",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [],
+         "inserts": [
+          [
+           null,
+           "Q\n"
+          ]
+         ]
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 5,
+        "delete": 2,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           6,
+           8
+          ]
+         ],
+         "inserts": []
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 4,
+        "delete": 2,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           4,
+           5
+          ],
+          [
+           "2@A#0",
+           6,
+           7
+          ]
+         ],
+         "inserts": []
+        }
+       },
+       {
+        "at": "1@A",
+        "object": "2@A",
+        "pos": 10,
+        "delete": 1,
+        "text": "",
+        "error": "out_of_range"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,232 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "03-register-last-writer-wins",
+ "description": "Concurrent register writes keep one value: the greatest write wins; since a write is greater than everything it saw, this is last-writer-wins by op id, so a concurrent write with a greater counter beats a later one",
+ "rules": [
+  "TL-03",
+  "TL-33"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "register.create",
+     "value": "init"
+    }
+   ]
+  },
+  "b1": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "from A"
+    }
+   ]
+  },
+  "b2": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "from B"
+    }
+   ]
+  },
+  "b3": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A",
+    "3@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "after both"
+    }
+   ]
+  },
+  "b4": {
+   "replica": "C",
+   "start": 9,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.set",
+     "target": "2@A",
+     "value": "late but greater"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@B"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "value": "from B"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "value": "after both"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "b4"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "4@A",
+        "9@C"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "value": "late but greater"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "b4"
+    },
+    {
+     "deliver": "b2"
+    },
+    {
+     "deliver": "b1"
+    },
+    {
+     "deliver": "b3"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "4@A",
+        "9@C"
+       ]
+      },
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "value": "late but greater"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@A",
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "value": "from B"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,358 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "42-concurrent-merges-show-copies-once",
+ "description": "Two devices merge the same work into main concurrently: each canonical character shows once, and deleting it also deletes its hidden duplicate so it cannot reappear",
+ "rules": [
+  "TL-45",
+  "TL-47",
+  "TL-73"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "3@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:1",
+       "B"
+      ]
+     ]
+    }
+   ]
+  },
+  "mA": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         2,
+         3
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:1",
+         "B",
+         "4@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "mC": {
+   "replica": "C",
+   "start": 5,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "3@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "2@A"
+     ],
+     "changes": [
+      {
+       "type": "text",
+       "object": "2@A",
+       "create": false,
+       "transcript": false,
+       "deletes": [
+        [
+         "2@A#0",
+         2,
+         3
+        ]
+       ],
+       "inserts": [
+        [
+         "2@A#0:1",
+         "B",
+         "4@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "del": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A",
+    "5@C"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "5@C#0",
+       0,
+       1
+      ],
+      [
+       "5@A#0",
+       0,
+       1
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "mA"
+    },
+    {
+     "deliver": "mC"
+    },
+    {
+     "deliver": "del"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@A",
+         "5@C"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "a\nB\nc\n"
+         }
+        }
+       },
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "a\n\nc\n"
+         }
+        }
+       }
+      ],
+      "plan_edits": [
+       {
+        "at": [
+         "5@A",
+         "5@C"
+        ],
+        "object": "2@A",
+        "pos": 2,
+        "delete": 1,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "5@C#0",
+           0,
+           1
+          ],
+          [
+           "5@A#0",
+           0,
+           1
+          ]
+         ],
+         "inserts": []
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "mC"
+    },
+    {
+     "deliver": "mA"
+    },
+    {
+     "deliver": "del"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@A",
+         "5@C"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "a\nB\nc\n"
+         }
+        }
+       },
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "a\n\nc\n"
+         }
+        }
+       }
+      ],
+      "plan_edits": [
+       {
+        "at": [
+         "5@A",
+         "5@C"
+        ],
+        "object": "2@A",
+        "pos": 2,
+        "delete": 1,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "5@C#0",
+           0,
+           1
+          ],
+          [
+           "5@A#0",
+           0,
+           1
+          ]
+         ],
+         "inserts": []
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

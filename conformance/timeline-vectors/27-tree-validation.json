@@ -1,0 +1,387 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "27-tree-validation",
+ "description": "Tree keys must be git-style paths and values valid file entries (kind per mode, eol for text, no transcripts); a binary file is a register holding a BlobRef",
+ "rules": [
+  "TL-82",
+  "TL-83",
+  "TL-101"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "x\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad0": {
+   "replica": "A",
+   "start": 10,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "../x",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad1": {
+   "replica": "A",
+   "start": 11,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "a//b",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad2": {
+   "replica": "A",
+   "start": 12,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": ".git/config",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad3": {
+   "replica": "A",
+   "start": 13,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "/abs",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad4": {
+   "replica": "A",
+   "start": 14,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "a/.GIT/x",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad5": {
+   "replica": "A",
+   "start": 15,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "trail/",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bad6": {
+   "replica": "A",
+   "start": 16,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "a/./b",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "transcript": {
+   "replica": "B",
+   "start": 20,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.create",
+     "text": "t",
+     "transcript": true
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "t.txt",
+     "value": {
+      "obj": "20@B",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "noeol": {
+   "replica": "B",
+   "start": 30,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "n.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644"
+     }
+    }
+   ]
+  },
+  "linktext": {
+   "replica": "B",
+   "start": 31,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "l",
+     "value": {
+      "obj": "4@A",
+      "mode": "120000"
+     }
+    }
+   ]
+  },
+  "good": {
+   "replica": "C",
+   "start": 40,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.create",
+     "value": {
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "type": "application/octet-stream"
+     }
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "dir/blob.bin",
+     "value": {
+      "obj": "40@C",
+      "mode": "100755"
+     }
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "bad0",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "bad1",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "bad2",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "bad3",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "bad4",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "bad5",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "bad6",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "transcript",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "noeol",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "linktext",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "deliver": "good",
+     "result": "integrated"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "entries": {
+           "dir/blob.bin": [
+            [
+             "41@C",
+             {
+              "obj": "40@C",
+              "mode": "100755"
+             }
+            ]
+           ],
+           "src/a.txt": [
+            [
+             "5@A",
+             {
+              "obj": "4@A",
+              "mode": "100644",
+              "eol": "lf"
+             }
+            ]
+           ]
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

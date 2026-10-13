@@ -1,0 +1,205 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "15-seal-shows-exactly-what-its-author-saw",
+ "description": "A seal over text with an earlier deletion keeps that character deleted, restores a concurrently deleted one and hides a concurrent insert",
+ "rules": [
+  "TL-51",
+  "TL-52"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "hello",
+     "transcript": true
+    }
+   ]
+  },
+  "dele": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       1,
+       2
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  },
+  "seal": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.seal",
+     "target": "2@A",
+     "ranges": [
+      [
+       "2@A#0",
+       0,
+       1
+      ],
+      [
+       "2@A#0",
+       2,
+       5
+      ]
+     ]
+    }
+   ]
+  },
+  "conc": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       4,
+       5
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:0",
+       "Z"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "dele"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "deliver": "conc"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hllo"
+         }
+        }
+       },
+       {
+        "at": [
+         "4@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "hZll"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "dele"
+    },
+    {
+     "deliver": "conc"
+    },
+    {
+     "deliver": "seal"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "hllo"
+         }
+        }
+       },
+       {
+        "at": [
+         "4@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "hZll"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
