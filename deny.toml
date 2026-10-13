@@ -29,6 +29,9 @@ allow = [
     # webpki-roots and webpki-root-certs (the CA bundle, reached through iroh-relay and reqwest): a permissive
     # data licence.
     "CDLA-Permissive-2.0",
+    # doctest-file and recvmsg (reached through interprocess, the local IPC crate of han-node): the BSD Zero Clause
+    # licence, a public-domain-equivalent grant with no conditions.
+    "0BSD",
 ]
 confidence-threshold = 0.9
 # The allow-list is a policy, not an inventory: do not warn about licences no dependency uses yet.
