@@ -1,4 +1,4 @@
-"""Replays the wire conformance vectors (ref/wire-vectors/, architecture.md G-11, D15) against a HAN generic-binding server.
+"""Replays the wire conformance vectors (conformance/wire-vectors/, architecture.md G-11, D15) against a HAN generic-binding server.
 
   python ref/run_wire_vectors.py --url ws://127.0.0.1:8787/han          a server already in test mode (fresh: empty data directory)
   python ref/run_wire_vectors.py --launch py                            start the Python reference server in test mode, run, stop it
@@ -7,7 +7,7 @@
 Options: --only SUBSTR...  run only vectors whose file or id contains one   -v  list every vector   --keys DIR  key files {keyId, public, private}
          (must be the config.json keys)   --json FILE  write the results   --timeout S  wait for one expected frame (default 5)
 Test mode (G-11): ServerName a.localhost, a clock that starts at 2026-01-01T00:00:00Z and moves only when a vector says so (`test.clock`), the server key
-and actors of ref/wire-vectors/config.json provisioned, an empty data directory. Format of the vectors and how a server passes: ref/wire-vectors/README.md.
+and actors of conformance/wire-vectors/config.json provisioned, an empty data directory. Format of the vectors and how a server passes: conformance/wire-vectors/README.md.
 Needs only the Python standard library and `cryptography` (for the hello proofs and --check)."""
 import argparse, base64, hashlib, json, os, queue, re, socket, ssl, struct, subprocess, sys, tempfile, threading, time, urllib.request
 from urllib.parse import urlparse
@@ -22,7 +22,7 @@ import policy as P, wire as W
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
-VEC = os.path.join(HERE, "wire-vectors")
+VEC = os.path.join(ROOT, "conformance", "wire-vectors")
 
 # ───────────── strict JSON (I-JSON: no duplicate keys, no fractions or exponents) ─────────────
 class NotIJson(ValueError): pass
@@ -446,15 +446,15 @@ def launch(kind, cfg):
     log = open(os.path.join(td, "server.log"), "wb")
     if kind == "py":
         kf = os.path.join(td, "server-key.json"); json.dump({"keyId": sk["keyId"], "public": sk["publicKey"], "private": W.b64(seed)}, open(kf, "w"))
-        exe = os.path.join(ROOT, "impl", ".venv", "Scripts" if os.name == "nt" else "bin", "python.exe" if os.name == "nt" else "python")
-        cmd = [exe if os.path.exists(exe) else sys.executable, os.path.join(ROOT, "interop", "py_host.py"), "--server", cfg.server, "--port", str(port), "--db", os.path.join(td, "seq.db"),
+        exe = os.path.join(ROOT, "witnesses", "impl-py", ".venv", "Scripts" if os.name == "nt" else "bin", "python.exe" if os.name == "nt" else "python")
+        cmd = [exe if os.path.exists(exe) else sys.executable, os.path.join(ROOT, "conformance", "interop", "py_host.py"), "--server", cfg.server, "--port", str(port), "--db", os.path.join(td, "seq.db"),
                "--key", kf, "--actors", os.path.join(td, "actors.json"), "--freeze", cfg.c["clock"]]
-        cwd = os.path.join(ROOT, "impl")
+        cwd = os.path.join(ROOT, "witnesses", "impl-py")
     else:
         d = os.path.join(td, "tsdata"); os.makedirs(d)
         json.dump({"keyId": sk["keyId"], "publicKey": sk["publicKey"], "d": W.b64(seed), "from": sk["from"]}, open(os.path.join(d, "serverkey.json"), "w"))
-        cmd = ["node", os.path.join(ROOT, "interop", "ts_host.mjs"), "--server", cfg.server, "--dir", d, "--port", str(port), "--actors", os.path.join(td, "actors.json"), "--freeze", cfg.c["clock"]]
-        cwd = os.path.join(ROOT, "interop")
+        cmd = ["node", os.path.join(ROOT, "conformance", "interop", "ts_host.mjs"), "--server", cfg.server, "--dir", d, "--port", str(port), "--actors", os.path.join(td, "actors.json"), "--freeze", cfg.c["clock"]]
+        cwd = os.path.join(ROOT, "conformance", "interop")
     p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=cwd, env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1"))
     end = time.time() + 40
     while time.time() < end:

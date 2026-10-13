@@ -3,7 +3,7 @@
 For each seed this builds a random history with fuzz_fold's generator, computes the reference verdict of every step and
 the reference folded state after every allowed step, and writes a vector file whose steps carry `expect` = the ref
 verdict and a `check` of the WHOLE state (path "", which the TS runner resolves to the state itself), plus occasional
-`guardStatus` steps. The TS runner (cleanroom-ts/dist/run-vectors.js) is then run over the generated directories in a
+`guardStatus` steps. The TS runner (witnesses/cleanroom-ts/dist/run-vectors.js) is then run over the generated directories in a
 few batches. The first divergence per seed is reported with the step before it and, for a state divergence, the
 top-level state keys that differ. Each divergent seed's history up to the divergence is saved as a minimal vector.
 The generator (fuzz_fold's) has several operators separate from the owner, operators withdrawing and confirming again (an
@@ -27,7 +27,7 @@ sys.path.insert(0, HERE)
 import policy as P
 import fuzz_fold as F
 
-TS = os.path.join(os.path.dirname(HERE), "cleanroom-ts")
+TS = os.path.join(os.path.dirname(HERE), "witnesses", "cleanroom-ts")
 RUNNER = os.path.join(TS, "dist", "run-vectors.js")
 BATCH = 1000
 fmt = F.fmt
@@ -172,7 +172,7 @@ def main():
                     "only the batch*/, divergences/ and replay.mjs this script writes are removed from it, never DIR itself")
     a = ap.parse_args()
     if shutil.which("node") is None or not os.path.exists(RUNNER):
-        print("SKIP differential fuzz: node or cleanroom-ts/dist/run-vectors.js is missing"); return 0
+        print("SKIP differential fuzz: node or witnesses/cleanroom-ts/dist/run-vectors.js is missing"); return 0
     t0 = time.time()
     made = a.keep is None
     if made: a.keep = tempfile.mkdtemp(prefix="han-fuzzdiff-")                 # ours, and new: nothing in it to clear

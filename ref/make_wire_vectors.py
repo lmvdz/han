@@ -1,5 +1,5 @@
-"""Builds ref/wire-vectors/ from interop/golden/ (D15).  python ref/make_wire_vectors.py
-One-time conversion, kept for provenance; running the vectors needs only ref/wire-vectors/ and ref/run_wire_vectors.py.
+"""Builds conformance/wire-vectors/ from conformance/interop/golden/ (D15).  python ref/make_wire_vectors.py
+One-time conversion, kept for provenance; running the vectors needs only conformance/wire-vectors/ and ref/run_wire_vectors.py.
 
 * the 21 golden operations become one file each (01-hello.json ... 21-redact.json), in the order the scenario ran, because each file builds on the
   state the earlier ones left (seq numbers, ids);
@@ -9,7 +9,7 @@ One-time conversion, kept for provenance; running the vectors needs only ref/wir
   answer. They are conformance vectors too: an implementation that has not yet converged fails them.
 * probes-r22.json, probes-r23.json = coverage whose expected values come from the oracle ref/wire.py (below); r23 adds the test clock (G-11),
   read combinations, dropped notices and negative big integers (DECISIONS-r23.md F4, F8).
-Format: ref/wire-vectors/README.md."""
+Format: conformance/wire-vectors/README.md."""
 import base64, hashlib, json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -19,8 +19,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 
-GOLD = os.path.join(ROOT, "interop", "golden")
-OUT = os.path.join(HERE, "wire-vectors")
+GOLD = os.path.join(ROOT, "conformance", "interop", "golden")
+OUT = os.path.join(ROOT, "conformance", "wire-vectors")
 SERVER = "a.localhost"
 T0 = "2026-01-01T00:00:00Z"
 NAMES = ("alice", "bob", "carol", "vera", "x")
@@ -924,6 +924,6 @@ for _k in (0, 500, NTASK - 1):
 dump(os.path.join(OUT, "index.json"), index)
 if STALE:
     print("STALE GOLDEN: the oracle's state differs from the recorded state in", ", ".join(f"{fn} (steps {s})" for fn, s in STALE.items()))
-    print("  re-record the operation files with interop/run.py then interop/report.py once both servers follow the new state; until then the operation files and the probes built from them are not conformant")
+    print("  re-record the operation files with conformance/interop/run.py then conformance/interop/report.py once both servers follow the new state; until then the operation files and the probes built from them are not conformant")
 print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "round-25 probes:", len(r25), "round-27 probes:", len(r27), "head after agreed:", HEAD_AFTER_AGREED)
 sys.exit(2 if STALE else 0)

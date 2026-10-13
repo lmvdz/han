@@ -3,17 +3,17 @@
 The docs mark each derived value as `<!--s:key-->value<!--/s-->`. This script computes every key from
   - ref/list_tests.py        what exists: the implementation's tests, the clean-room interop scenarios, the wire vectors;
   - ref/RESULTS.md           what the last run_all.py run measured (vectors, mutations, fuzz, wire scenarios, ...);
-  - interop/RESULTS.md       the cross-implementation run and its closure section (recorded runs of the wire vectors);
+  - conformance/interop/RESULTS.md       the cross-implementation run and its closure section (recorded runs of the wire vectors);
   - ref/logs/*               the newest complete log of each model (guard model: depth, transitions; timing model: the round it last ran on, its counts);
-  - ref/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
-  - interop/DECISIONS-rNN.md the round being built (the newest such file, H9); HISTORY.md the scores of the rounds already graded;
-  - the sources of impl/     three claims that used to be written by hand (the PreToolUse gate, the advisory status, a Matrix test of §8.2)
-and rewrites the marked values in architecture.md, README.md, goal.md, coverage.md, ref/README.md and ref/wire-vectors/README.md.
+  - conformance/wire-vectors/        the expectations per vector family (list_tests.wire_expectations);
+  - spec/decisions/DECISIONS-rNN.md the round being built (the newest such file, H9); spec/decisions/HISTORY.md the scores of the rounds already graded;
+  - the sources of witnesses/impl-py/     three claims that used to be written by hand (the PreToolUse gate, the advisory status, a Matrix test of §8.2)
+and rewrites the marked values in spec/core/architecture.md, README.md, spec/goal.md, spec/core/coverage.md, ref/README.md and conformance/wire-vectors/README.md.
   python ref/sync_docs.py             rewrite the docs
   python ref/sync_docs.py --check     change nothing; list every value that drifted and exit 1 (run_all.py runs this)
   python ref/sync_docs.py --facts     print the derived facts
 A value that cannot be derived (a needed row of RESULTS.md is missing or not PASS, a figure disagrees with another source) is an error, not a guess.
-So is a test the docs cite as `test_*.py::test_*` that impl/tests does not have (R8): both modes fail and name it."""
+So is a test the docs cite as `test_*.py::test_*` that witnesses/impl-py/tests does not have (R8): both modes fail and name it."""
 import glob, os, re, sys
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -24,7 +24,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import list_tests as LT
 
-DOCS = ["architecture.md", "README.md", "goal.md", "coverage.md", os.path.join("ref", "README.md"), os.path.join("ref", "wire-vectors", "README.md")]
+DOCS = [os.path.join("spec", "core", "architecture.md"), "README.md", os.path.join("spec", "goal.md"), os.path.join("spec", "core", "coverage.md"), os.path.join("ref", "README.md"), os.path.join("conformance", "wire-vectors", "README.md")]
 MARK = re.compile(r"<!--s:([a-z_0-9]+)-->(.*?)<!--/s-->", re.S)
 
 class Underivable(Exception): pass
@@ -63,7 +63,7 @@ WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "sev
 def word(n): return WORDS.get(n, str(n))
 
 def facts_interfaces(F):
-    ts = read("han.ts")
+    ts = read("spec", "core", "han.ts")
     def body(head):
         i = ts.find(head + " {")
         if i < 0: raise Underivable(f"han.ts: {head!r} is missing")
@@ -115,46 +115,46 @@ def facts_results(F):
     F["wv_steps"], F["wv_receipts"] = int(m[2]), int(m[3])
     if int(m[1]) != F["wv_n"]: raise Underivable(f"ref/RESULTS.md says {m[1]} wire vectors, list_tests.py finds {F['wv_n']}: RESULTS.md is stale, run python ref/run_all.py --quick")
 
-# ── interop/RESULTS.md ──
+# ── conformance/interop/RESULTS.md ──
 def facts_interop(F):
-    text = read("interop", "RESULTS.md")
+    text = read("conformance", "interop", "RESULTS.md")
     rows = table_rows(text)
     d = {r[0]: r for r in rows if r[0] in ("ts->py", "py->ts", "ts->ts", "py->py") and len(r) == 4}
-    if len(d) != 4: raise Underivable("interop/RESULTS.md: the direction totals table is missing")
+    if len(d) != 4: raise Underivable("conformance/interop/RESULTS.md: the direction totals table is missing")
     t = int(d["ts->py"][3])
     F["interop_matrix"] = f"ts->py {d['ts->py'][1]}/{t}, py->ts {d['py->ts'][1]}/{t} ({d['py->ts'][2]} without a workaround)"
     m = re.search(r"Probes matching the spec reading: Python server (\d+)/(\d+), TS server (\d+)/(\d+)", text)
-    if not m: raise Underivable("interop/RESULTS.md: the probe totals line is missing")
+    if not m: raise Underivable("conformance/interop/RESULTS.md: the probe totals line is missing")
     F["interop_probes"] = f"Python server {m[1]}/{m[2]}, TS server {m[3]}/{m[4]}"
     # the closure section: C01..Cnn rows and the recorded wire-vector runs
     m = re.search(r"round 21 resolved all (\d+) failures", text)
-    if not m: raise Underivable("interop/RESULTS.md: the closure section is missing")
+    if not m: raise Underivable("conformance/interop/RESULTS.md: the closure section is missing")
     closed = [r for r in rows if re.fullmatch(r"C\d\d", r[0])]
-    if len(closed) != int(m[1]): raise Underivable(f"interop/RESULTS.md: the closure says {m[1]} failures, its table lists {len(closed)}")
-    if any(not r[-1].startswith("resolved") for r in closed if len(r) >= 5): raise Underivable("interop/RESULTS.md: a closure row is not resolved")
+    if len(closed) != int(m[1]): raise Underivable(f"conformance/interop/RESULTS.md: the closure says {m[1]} failures, its table lists {len(closed)}")
+    if any(not r[-1].startswith("resolved") for r in closed if len(r) >= 5): raise Underivable("conformance/interop/RESULTS.md: a closure row is not resolved")
     F["closure_n"] = int(m[1])
     runs = {}
     for r in rows:
         if r[0].startswith("wire vectors, ") and len(r) == 3:
             runs[r[0][len("wire vectors, "):]] = r[1:]
     for key, tag in (("end of round 21", "r21"), ("round 22", "r22")):
-        if key not in runs: raise Underivable(f"interop/RESULTS.md: no recorded wire-vector run {key!r}")
+        if key not in runs: raise Underivable(f"conformance/interop/RESULTS.md: no recorded wire-vector run {key!r}")
         py, ts = runs[key]
         F[f"wv_{tag}_py"], F[f"wv_{tag}_ts"] = py, ts
         for who, s in (("Python", py), ("TS", ts)):
-            if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s): raise Underivable(f"interop/RESULTS.md: cannot read {who} run {s!r}")
+            if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s): raise Underivable(f"conformance/interop/RESULTS.md: cannot read {who} run {s!r}")
     latest = max((int(k.split()[1]) for k in runs if re.fullmatch(r"round \d+", k)), default=0)       # the newest recorded run covers the vectors that exist now; earlier ones are history
     py, ts = runs[f"round {latest}"]
     F["wv_latest_round"], F["wv_latest_py"], F["wv_latest_ts"] = latest, py, ts
     for who, s_ in (("Python", py), ("TS", ts)):
-        if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s_): raise Underivable(f"interop/RESULTS.md: cannot read the round {latest} {who} run {s_!r}")
+        if not re.fullmatch(r"\d+/\d+ vectors, \d+/\d+ expectations", s_): raise Underivable(f"conformance/interop/RESULTS.md: cannot read the round {latest} {who} run {s_!r}")
         a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", s_)
-        if int(a[2]) > F["wv_n"] or int(a[4]) > F["wv_exp"]: raise Underivable(f"interop/RESULTS.md records more wire vectors or expectations for round {latest} ({who}: {s_}) than the vector files hold ({F['wv_n']}, {F['wv_exp']})")
+        if int(a[2]) > F["wv_n"] or int(a[4]) > F["wv_exp"]: raise Underivable(f"conformance/interop/RESULTS.md records more wire vectors or expectations for round {latest} ({who}: {s_}) than the vector files hold ({F['wv_n']}, {F['wv_exp']})")
     a = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", py)
     F["wv_latest_note"] = ("These are the vectors of the current files." if (int(a[2]), int(a[4])) == (F["wv_n"], F["wv_exp"]) else
                            f"The vector files have changed since: {F['wv_n']} vectors and {F['wv_exp']} expectations now, {a[2]} and {a[4]} when that run was recorded (round {latest}). Vectors that read the state were rewritten for the call `state` and others were added in round {F['round']}; none of that has been run against either server yet, so a server that does not implement the rules they pin fails them.")
     rounds = [int(a or b) for a, b in re.findall(r"^### 6\.\d+ (?:What the round-(\d+) refresh|Round (\d+))", text, re.M)]
-    if not rounds: raise Underivable("interop/RESULTS.md: no section '6.N Round NN' or 'What the round-NN refresh changed and found'; the round of the last matrix run cannot be derived")
+    if not rounds: raise Underivable("conformance/interop/RESULTS.md: no section '6.N Round NN' or 'What the round-NN refresh changed and found'; the round of the last matrix run cannot be derived")
     F["interop_round"] = max(rounds)
     b = re.fullmatch(r"(\d+)/(\d+) vectors, (\d+)/(\d+) expectations", F["wv_r22_py"])
     F["wv_r22_py_fails"] = int(b[2]) - int(b[1])
@@ -165,11 +165,11 @@ def facts_interop(F):
 # ── HISTORY.md: the round number and the scores ──
 def facts_history(F):
     rounds = {}
-    for r in table_rows(read("HISTORY.md")):
+    for r in table_rows(read("spec", "decisions", "HISTORY.md")):
         if len(r) >= 3 and r[0].isdigit(): rounds[int(r[0])] = r[1]
     if not rounds: raise Underivable("HISTORY.md: no round rows")
-    decided = [int(m[1]) for f in glob.glob(os.path.join(ROOT, "interop", "DECISIONS-r*.md")) if (m := re.fullmatch(r"DECISIONS-r(\d+)\.md", os.path.basename(f)))]
-    if not decided: raise Underivable("interop/: no DECISIONS-rNN.md; the round being built cannot be derived")
+    decided = [int(m[1]) for f in glob.glob(os.path.join(ROOT, "spec", "decisions", "DECISIONS-r*.md")) if (m := re.fullmatch(r"DECISIONS-r(\d+)\.md", os.path.basename(f)))]
+    if not decided: raise Underivable("spec/decisions/: no DECISIONS-rNN.md; the round being built cannot be derived")
     F["round"] = max(decided + [max(rounds)])      # the round being built: the newest decisions file (HISTORY.md only lists graded rounds)
     sc = {n: float(c) for n, c in rounds.items() if re.fullmatch(r"\d+(\.\d+)?", c)}
     pend = sorted(n for n, c in rounds.items() if "pending" in c)
@@ -252,14 +252,14 @@ def facts_claims(F, test_names):
     def src(*p):
         path = os.path.join(ROOT, *p)
         return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
-    hook = "PreToolUse" in src("impl", "han", "host", "agent.py") and "PreToolUse" in src("impl", "tests", "test_host_claude_gate.py")
+    hook = "PreToolUse" in src("witnesses", "impl-py", "han", "host", "agent.py") and "PreToolUse" in src("witnesses", "impl-py", "tests", "test_host_claude_gate.py")
     F["gate_claim"] = ("the implementation's gate runs on a `PreToolUse` hook that sees every call, with `canUseTool` as a second check (`test_host_claude_gate.py`)" if hook
                        else "the implementation's gate sits on `canUseTool`, which does not see every call (§8.4 requires a `PreToolUse` hook)")
-    adv = "ADVISORY" in src("impl", "han", "host", "host.py") and "test_guarded_status_says_it_is_advisory_without_a_sandbox" in test_names
+    adv = "ADVISORY" in src("witnesses", "impl-py", "han", "host", "host.py") and "test_guarded_status_says_it_is_advisory_without_a_sandbox" in test_names
     F["advisory_claim"] = ("the host says so in its `status` items (`test_host_p15.py::test_guarded_status_says_it_is_advisory_without_a_sandbox`)" if adv
                            else "the host does not yet say so in `status`")
-    matrix_impl = "/_han/v1/entry" in src("impl", "han", "matrix", "appservice.py")
-    matrix_test = any(re.search(r"v1/entry|id, kind, author, seq", open(p, encoding="utf-8").read()) for p in glob.glob(os.path.join(ROOT, "impl", "tests", "test_matrix_*.py")))
+    matrix_impl = "/_han/v1/entry" in src("witnesses", "impl-py", "han", "matrix", "appservice.py")
+    matrix_test = any(re.search(r"v1/entry|id, kind, author, seq", open(p, encoding="utf-8").read()) for p in glob.glob(os.path.join(ROOT, "witnesses", "impl-py", "tests", "test_matrix_*.py")))
     shape = "the §8.2 shape of this round (whole-entry upload, `{id}`-only room events, `{id, kind, author, seq}` from the sequencer)"
     F["matrix_claim"] = (f"{shape} is asserted by a Matrix test" if matrix_test else
                          f"{shape} is implemented but no Matrix test asserts it" if matrix_impl else f"{shape} is not implemented")
@@ -275,7 +275,7 @@ def check_vector_names(arch, vector_ids):
 CITED_TEST = re.compile(r"\b(test_[A-Za-z0-9_]+\.py)::((?:Test[A-Za-z0-9_]+::)?test_[A-Za-z0-9_]+)")
 
 def check_test_names():
-    """R8: every `test_*.py::test_*` the docs name must be a test that exists (impl/tests, read by list_tests.py as pytest collects it)."""
+    """R8: every `test_*.py::test_*` the docs name must be a test that exists (witnesses/impl-py/tests, read by list_tests.py as pytest collects it)."""
     have = {(f, n) for f, n, *_ in LT.py_tests()}
     missing = sorted({f"{d}: {f}::{n}" for d in DOCS for f, n in CITED_TEST.findall(read(d)) if (f, n) not in have})
     if missing: raise Underivable("the docs name tests that do not exist: " + "; ".join(missing))
@@ -284,7 +284,7 @@ def derive():
     F = {}
     names, vector_ids = facts_exist(F)
     facts_interfaces(F); facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names)
-    check_vector_names(read("architecture.md"), vector_ids)
+    check_vector_names(read("spec", "core", "architecture.md"), vector_ids)
     check_test_names()
     return F
 
@@ -293,11 +293,13 @@ def sync(F, check):
     for doc in DOCS:
         path = os.path.join(ROOT, doc)
         text = open(path, encoding="utf-8", newline="").read()      # newline="": the docs keep their line endings
+        up = os.path.relpath(ROOT, os.path.dirname(path)).replace(os.sep, "/")      # a doc below the root links to ref/logs/ from its own directory
+        up = "" if up == "." else up + "/"
         def sub(m):
             k = m[1]
             if k not in F:
                 unknown.append(f"{doc}: <!--s:{k}-->"); return m[0]
-            new = str(F[k])
+            new = str(F[k]).replace("](ref/", "](" + up + "ref/")
             if new != m[2]: drift.append(f"{doc}: {k}: {m[2]!r} -> {new!r}")
             return f"<!--s:{k}-->{new}<!--/s-->"
         out = MARK.sub(sub, text)

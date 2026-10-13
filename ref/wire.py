@@ -260,7 +260,7 @@ def frame_verdict(text: str, test_mode: bool = False):
 class Inbox(dict):
     """actor -> the notices of that actor's live subscription to its own profile (G-03). Notices are signals and are never replayed (F4, G-09):
     `setdefault`, which `Home.signal` uses, never creates an entry, so a notice for an actor that is not subscribed goes to a list nobody keeps.
-    An implementation may supply its own inbox with the same `setdefault` contract (impl/han/seq/sequencer.py does)."""
+    An implementation may supply its own inbox with the same `setdefault` contract (witnesses/impl-py/han/seq/sequencer.py does)."""
     def setdefault(self, actor, default=None): return self[actor] if actor in self else ([] if default is None else default)
 
 def _has(view, path) -> bool:

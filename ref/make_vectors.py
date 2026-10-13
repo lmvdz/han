@@ -1,11 +1,11 @@
-"""Writes ref/vectors/*.json. Expectations below are hand-written from architecture.md, NOT computed by policy.py.
+"""Writes conformance/vectors/*.json. Expectations below are hand-written from spec/core/architecture.md, NOT computed by policy.py.
 Each vector is fully expanded (every entry field, every profile, the full policy), so a stranger needs no macros.
 """
 import copy, hashlib, json, os
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "vectors")
+OUT = os.path.join(os.path.dirname(HERE), "conformance", "vectors")
 BASE = datetime(2026, 10, 10, 12, 0, 0, tzinfo=timezone.utc)
 S = "s1:a.example"
 O, M, P, X, G, Z, BOT, OP = "@o:a.example", "@m:a.example", "@p:b.example", "@x:c.example", "@g:a.example", "@z:d.example", "@bot:b.example", "@op:b.example"

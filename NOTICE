@@ -2,4 +2,4 @@ HAN — Human–Agent Network
 Copyright 2026 Lars (github.com/lmvdz)
 
 Specification text (*.md) is licensed under CC BY 4.0 (LICENSE-SPEC).
-Code (han.ts, ref/) is licensed under the Apache License 2.0 (LICENSE).
+Code (spec/core/han.ts, ref/, conformance/, witnesses/) is licensed under either the Apache License 2.0 (LICENSE) or the MIT License (LICENSE-MIT), at your option.

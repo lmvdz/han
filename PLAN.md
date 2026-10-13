@@ -1,11 +1,11 @@
 # HAN implementation plan
 
-Status: design, consolidated 2026-10-12. Nothing is built yet; the user decides when the build starts. Research behind the choices: `research/` (intentd, coordination, agent-plumbing, rust-blocks, gui). Spec decisions for the next round: `interop/DECISIONS-r30.md`.
+Status: design, consolidated 2026-10-12. Nothing is built yet; the user decides when the build starts. Research behind the choices: `research/` (intentd, coordination, agent-plumbing, rust-blocks, gui). Spec decisions for the next round: `spec/decisions/DECISIONS-r30.md`.
 
 ## 0. Principles
 
 1. **One protocol.** HAN frames run over QUIC with dial-by-key. iroh is the implementation choice, never a spec requirement. Matrix and chat tools are integrations, not bindings.
-2. **One product implementation, in Rust.** `ref/` (Python) is the executable spec that generates the vectors. `impl/` (Python) and `cleanroom-ts/` stay as Policy witnesses.
+2. **One product implementation, in Rust.** `ref/` (Python) is the executable spec that generates the vectors. `witnesses/impl-py/` (Python) and `witnesses/cleanroom-ts/` stay as Policy witnesses.
 3. **No harness lock-in.** Every agent is driven through ACP. pi is the reference harness, and any ACP agent should work.
 4. **The sandbox is the gate.** An agent has no egress and no credentials. Its only way out is HAN's `propose` tool; han-exec runs effects only with valid approvals. Harness permission prompts are a convenience, never the guarantee.
 5. **Authority only through the log.** Anything that grants or withholds rights is a log entry decided by Policy and covered by vectors. Everything else (status, presence, summaries, board data) is namespaced, non-authority data that can evolve without a spec round.
@@ -218,7 +218,7 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 | Encoding | signed authority entries stay JCS JSON. Bulk traffic (timeline ops, session streams, sync) is CBOR (`minicbor`) with integer field keys, in batches compressed with zstd, each batch signed over its exact bytes. CBOR was chosen for implementers in other languages; its gap to postcard doesn't matter at HAN's rates |
 | Presence | iroh-gossip, presence only: topics derived from a secret only readers hold, signed payloads, under 4 KiB. Status flows to readers through the node, never over gossip |
 | Blobs | `han/1` frames, verified by SHA-256 (iroh-blobs is BLAKE3-only) |
-| Round 30 | the spec gets the §8 QUIC binding, the peer filter, device keys and node ids, invite tickets, the profiles tier, and the protocol fixes V1–V8 (`interop/DECISIONS-r30.md`) |
+| Round 30 | the spec gets the §8 QUIC binding, the peer filter, device keys and node ids, invite tickets, the profiles tier, and the protocol fixes V1–V8 (`spec/decisions/DECISIONS-r30.md`) |
 
 ### 6.2 Identity, onboarding and approvals
 
@@ -359,7 +359,7 @@ Full findings: `research/`. No existing tool gives a self-hosted, live view of e
 | | Milestone | Done when |
 |---|---|---|
 | R | Repo restructure (§4) | every check passes from the new layout; CI runs on three operating systems |
-| S30 | Spec round 30 (`interop/DECISIONS-r30.md`) | checks pass; graded by an independent agent |
+| S30 | Spec round 30 (`spec/decisions/DECISIONS-r30.md`) | checks pass; graded by an independent agent |
 | M1 | han-core | all policy vectors pass; 0 differential-fuzz divergences against ref over 1000 seeds |
 | T0 | Timeline spec (Team A) | `han.timeline/1` and its vectors reviewed: behaviour only |
 | M2 | han-net + han-seq over iroh | wire vectors pass over iroh; the peer filter and invite tickets work |
