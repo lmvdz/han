@@ -1,14 +1,20 @@
-//! Timings of the engine's hot paths. Run with `cargo run --release --example bench`.
+//! Timings of the engine's hot paths. Run with `cargo run --release --example bench [n]`.
 //!
-//! 1. Applying 10,000 local ops (text edits and map writes, one op per batch).
-//! 2. Integrating 1,000 batches from three writers, delivered in random order.
-//! 3. Materialising a 1 MiB text: cold (no cached state) and at a past version.
+//! 1. Applying `n` local ops (text edits and map writes, one op per batch), which leaves a
+//!    text made of thousands of small insertions; then reopening that history from its store,
+//!    the first read of the fragmented text, planning edits in it, and answering a full sync.
+//! 2. Integrating `n / 10` batches from three writers, in random and in causal order.
+//! 3. Materialising a 1 MiB text: cold, at a past version, cached, and shared.
+//! 4. A worktree of `n / 10` files: writing 3-file changes (some renames), reading every file of
+//!    a cold-opened worktree, and planning and recording a merge of a session into main.
 
 use std::time::Instant;
 
+use std::collections::BTreeMap;
+
 use han_timeline::{
-    At, Directory, History, HistoryKind, KeyInfo, KeySigner, MemoryStore, ObjectId, Op, OpId,
-    Scope, Signer as _, Value, Version,
+    At, Directory, Hello, History, HistoryKind, KeyInfo, KeySigner, MemoryStore, ObjectId, Op,
+    OpId, Resolution, Scope, Signer as _, Value, Version,
 };
 
 const SPACE: &str = "s1:a.example";
@@ -93,7 +99,7 @@ fn new_history(a: &KeySigner, text: &str) -> (History, OpId, ObjectId) {
     (h, main, ObjectId::Op(g.ops[1].clone()))
 }
 
-fn local_ops(n: usize) {
+fn local_ops(n: usize) -> (History, OpId, ObjectId) {
     let a = signer("alice");
     let (mut h, main, text) = new_history(&a, "hello\n");
     let at = At::Timeline(main.clone());
@@ -119,6 +125,52 @@ fn local_ops(n: usize) {
         n,
         start,
     );
+    (h, main, text)
+}
+
+/// The history `local_ops` left: `n` batches and a text of thousands of small insertions.
+fn fragmented(h: &History, main: &OpId, text: &ObjectId) {
+    let batches = h.envelopes().count();
+    let start = Instant::now();
+    let reopened = History::open(h.store().clone(), SPACE, h.id()).unwrap();
+    report(
+        &format!("open a history of {batches} batches from its store"),
+        batches,
+        start,
+    );
+    let at = At::Timeline(main.clone());
+    let start = Instant::now();
+    let len = reopened
+        .state(&at)
+        .unwrap()
+        .text_shared(text)
+        .unwrap()
+        .chars()
+        .count();
+    report("first read of a fragmented text after opening", 1, start);
+    let mut s = 5u64 ^ seed().wrapping_mul(0x9e37_79b9);
+    let start = Instant::now();
+    for _ in 0..100 {
+        let pos = (rng(&mut s) as usize) % (len + 1);
+        let del = usize::from(pos < len);
+        let _ = reopened.plan_edit(&at, text, pos, del, "q").unwrap();
+    }
+    report("plan an edit in a fragmented text", 100, start);
+    let hello = Hello {
+        space: SPACE.into(),
+        history: h.id(),
+        inventory: Default::default(),
+        max_bytes: Some(u64::MAX),
+    }
+    .encode();
+    let start = Instant::now();
+    let answer = h.answer(&hello).unwrap();
+    report(
+        &format!("answer a full sync of {batches} batches"),
+        batches,
+        start,
+    );
+    assert!(answer.len() > batches);
 }
 
 fn out_of_order(n: usize) {
@@ -251,12 +303,190 @@ fn big_text() {
     );
 }
 
+/// A tree map entry for a text file (TL-83).
+fn file_entry(obj: &OpId) -> Value {
+    let Value::Map(mut m) = Value::object_ref(obj) else {
+        unreachable!()
+    };
+    m.insert("mode".into(), Value::text("100644"));
+    m.insert("eol".into(), Value::text("lf"));
+    Value::Map(m)
+}
+
+/// Some lines of source-like text.
+fn file_text(s: &mut u64, lines: usize) -> String {
+    (0..lines)
+        .map(|i| format!("    let value_{i} = compute({});\n", rng(s) % 1000))
+        .collect()
+}
+
+/// Edits `count` random files of `paths` (and renames one now and then) in one batch.
+fn change(
+    h: &mut History,
+    who: &KeySigner,
+    t: &OpId,
+    tree: &ObjectId,
+    paths: &mut Vec<String>,
+    s: &mut u64,
+    count: usize,
+) {
+    let at = At::Timeline(t.clone());
+    let state = h.state(&at).unwrap();
+    let mut ops = Vec::new();
+    for _ in 0..count {
+        let path = paths[(rng(s) as usize) % paths.len()].clone();
+        let entry = state.map_value(tree, &path).unwrap().clone();
+        let obj = ObjectId::Op(entry.obj_field().unwrap());
+        if rng(s).is_multiple_of(10) {
+            // A rename: the content object moves with the path (TL-85).
+            let to = format!("{path}.moved{}", rng(s) % 1000);
+            if state.map_value(tree, &to).is_none() {
+                ops.push(Op::MapDelete {
+                    target: tree.clone(),
+                    key: path.clone(),
+                });
+                ops.push(Op::MapSet {
+                    target: tree.clone(),
+                    key: to.clone(),
+                    value: entry,
+                });
+                paths.retain(|p| *p != path);
+                paths.push(to);
+            }
+            continue;
+        }
+        let len = state.text_shared(&obj).unwrap().chars().count();
+        let pos = (rng(s) as usize) % (len + 1);
+        let del = (rng(s) as usize % 20).min(len - pos);
+        if let Some(op) = h
+            .plan_edit(&at, &obj, pos, del, "    edited(); // by a session\n")
+            .unwrap()
+        {
+            // One edit per file per batch: later ones are planned against the same state.
+            if !ops
+                .iter()
+                .any(|o| matches!(o, Op::TextEdit { target, .. } if *target == obj))
+            {
+                ops.push(op);
+            }
+        }
+    }
+    if !ops.is_empty() {
+        h.write(who, 0, t, ops, None).unwrap();
+    }
+}
+
+fn worktree(n: usize) {
+    let a = signer("alice");
+    let b = signer("bob");
+    let (mut h, g) = History::create(
+        MemoryStore::default(),
+        SPACE,
+        &a,
+        0,
+        HistoryKind::Worktree,
+        None,
+        vec![Op::MapCreate { tree: true }],
+    )
+    .unwrap();
+    let main = h.main().unwrap();
+    let tree_id = g.ops[1].clone();
+    let tree = ObjectId::Op(tree_id.clone());
+    h.write(
+        &a,
+        0,
+        &main,
+        vec![Op::MapSet {
+            target: ObjectId::Root,
+            key: "tree".into(),
+            value: Value::object_ref(&tree_id),
+        }],
+        None,
+    )
+    .unwrap();
+    let mut s = 7u64 ^ seed().wrapping_mul(0x9e37_79b9);
+    // The files, twenty per batch, as a mirror of a repository would record them.
+    let files = (n / 10).max(40);
+    let mut paths: Vec<String> = Vec::new();
+    for chunk in 0..files.div_ceil(20) {
+        let mut ops = Vec::new();
+        for _ in 0..20.min(files - chunk * 20) {
+            let lines = 10 + (rng(&mut s) % 40) as usize;
+            ops.push(Op::TextCreate {
+                text: file_text(&mut s, lines),
+                transcript: false,
+            });
+        }
+        let w = h.write(&a, 0, &main, ops, None).unwrap();
+        let mut sets = Vec::new();
+        for (k, obj) in w.ops.iter().enumerate() {
+            let path = format!("src/m{}/file_{}.rs", chunk % 7, chunk * 20 + k);
+            sets.push(Op::MapSet {
+                target: tree.clone(),
+                key: path.clone(),
+                value: file_entry(obj),
+            });
+            paths.push(path);
+        }
+        h.write(&a, 0, &main, sets, None).unwrap();
+    }
+    let changes = (n / 20).max(20);
+    let start = Instant::now();
+    for _ in 0..changes {
+        change(&mut h, &a, &main, &tree, &mut paths, &mut s, 3);
+    }
+    report("write a 3-file change to a worktree", changes, start);
+
+    // A session forked from main; both sides work on, partly on the same files.
+    let session = h.fork(&b, 0, &main, None, "session").unwrap().ops[0].clone();
+    let mut session_paths = paths.clone();
+    for _ in 0..(n / 40).max(10) {
+        change(&mut h, &b, &session, &tree, &mut session_paths, &mut s, 3);
+        change(&mut h, &a, &main, &tree, &mut paths, &mut s, 2);
+    }
+    let start = Instant::now();
+    let plan = h.plan_merge(&main, &session).unwrap();
+    report("plan a merge of a session into main", 1, start);
+    let resolutions = vec![Resolution::Incoming; plan.conflicts.len()];
+    let start = Instant::now();
+    let draft = plan.resolve(&resolutions).unwrap();
+    h.merge(&a, 0, &draft, None).unwrap();
+    report("resolve and record that merge", 1, start);
+
+    // Every file of the merged worktree, from a cold open.
+    let reopened = History::open(h.store().clone(), SPACE, h.id()).unwrap();
+    let start = Instant::now();
+    let state = reopened.state(&At::Timeline(main.clone())).unwrap();
+    let mut entries: BTreeMap<String, Value> = BTreeMap::new();
+    if let Some(han_timeline::ObjectState::Map { entries: e, .. }) = state.object(&tree) {
+        for (k, v) in e {
+            entries.insert(k, v[0].1.clone());
+        }
+    }
+    let mut bytes = 0;
+    for v in entries.values() {
+        let obj = ObjectId::Op(v.obj_field().unwrap());
+        bytes += state.text_shared(&obj).unwrap().len();
+    }
+    report(
+        &format!(
+            "read every file of a cold-opened worktree ({} files)",
+            entries.len()
+        ),
+        entries.len(),
+        start,
+    );
+    assert!(bytes > 0);
+}
+
 fn main() {
     let n: usize = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(10_000);
-    local_ops(n);
+    let (h, main, text) = local_ops(n);
+    fragmented(&h, &main, &text);
     out_of_order(n / 10);
     big_text();
+    worktree(n);
 }
