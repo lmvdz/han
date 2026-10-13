@@ -64,8 +64,9 @@ fn addr_ok(text: &str) -> bool {
 }
 
 fn relay_ok(url: &str) -> bool {
-    url.strip_prefix("https://")
-        .is_some_and(|rest| (1..=1016).contains(&rest.len()) && rest.bytes().all(|b| (b'!'..=b'~').contains(&b)))
+    url.strip_prefix("https://").is_some_and(|rest| {
+        (1..=1016).contains(&rest.len()) && rest.bytes().all(|b| (b'!'..=b'~').contains(&b))
+    })
 }
 
 /// Why a `NodeAddr` is not one (X10), or `None` if it is: a strict node id, at most 16 direct addresses
@@ -74,7 +75,11 @@ pub fn node_addr_verdict(v: &Value) -> Option<&'static str> {
     let Value::Object(m) = v else {
         return Some("NodeAddr members");
     };
-    if m.len() != 3 || !["node", "addrs", "relays"].iter().all(|k| m.contains_key(*k)) {
+    if m.len() != 3
+        || !["node", "addrs", "relays"]
+            .iter()
+            .all(|k| m.contains_key(*k))
+    {
         return Some("NodeAddr members");
     }
     if !v["node"].as_str().is_some_and(is_node_id) {
@@ -87,7 +92,11 @@ pub fn node_addr_verdict(v: &Value) -> Option<&'static str> {
         };
         let texts: Vec<&str> = list.iter().filter_map(Value::as_str).collect();
         let distinct = texts.iter().collect::<std::collections::HashSet<_>>().len() == texts.len();
-        if list.len() > MAX_ADDRS || texts.len() != list.len() || !texts.iter().all(|t| ok(t)) || !distinct {
+        if list.len() > MAX_ADDRS
+            || texts.len() != list.len()
+            || !texts.iter().all(|t| ok(t))
+            || !distinct
+        {
             return Some(name_static(name));
         }
         any |= !list.is_empty();

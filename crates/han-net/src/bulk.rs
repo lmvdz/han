@@ -58,7 +58,10 @@ impl BulkBatch {
         if !is_profile_name(&self.profile) {
             return false;
         }
-        let Some(key) = keys.get(&self.key_id).filter(|k| k.status == KeyStatus::Valid) else {
+        let Some(key) = keys
+            .get(&self.key_id)
+            .filter(|k| k.status == KeyStatus::Valid)
+        else {
             return false;
         };
         PublicKey::from_base64url(&key.public_key)

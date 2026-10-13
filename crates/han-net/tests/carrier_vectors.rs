@@ -44,10 +44,21 @@ fn control_vectors() {
     let v = load("control.json");
     assert!(!cases(&v, "challenges").is_empty());
     for c in cases(&v, "challenges") {
-        let frames: Vec<String> = cases(c, "frames").iter().map(|f| f.as_str().unwrap().to_owned()).collect();
-        let nodes: Vec<String> = cases(c, "nodes").iter().map(|n| n.as_str().unwrap().to_owned()).collect();
+        let frames: Vec<String> = cases(c, "frames")
+            .iter()
+            .map(|f| f.as_str().unwrap().to_owned())
+            .collect();
+        let nodes: Vec<String> = cases(c, "nodes")
+            .iter()
+            .map(|n| n.as_str().unwrap().to_owned())
+            .collect();
         let got = challenge_verdict(&frames, s(c, "dialed"), s(c, "node"), &nodes);
-        assert_eq!(got.is_ok(), s(c, "expect") == "ok", "{}: {got:?}", s(c, "name"));
+        assert_eq!(
+            got.is_ok(),
+            s(c, "expect") == "ok",
+            "{}: {got:?}",
+            s(c, "name")
+        );
     }
 }
 
@@ -57,7 +68,12 @@ fn wellknown_vectors() {
     assert!(!cases(&v, "cases").is_empty());
     for c in cases(&v, "cases") {
         let got = wellknown_verdict(&c["doc"]);
-        assert_eq!(got.is_none(), s(c, "expect") == "ok", "{}: {got:?}", s(c, "name"));
+        assert_eq!(
+            got.is_none(),
+            s(c, "expect") == "ok",
+            "{}: {got:?}",
+            s(c, "name")
+        );
     }
 }
 
@@ -73,7 +89,11 @@ fn ticket_vectors() {
             want => {
                 let t = parsed.unwrap_or_else(|| panic!("{name}: should parse"));
                 assert_eq!(json::to_value(&t).unwrap(), *want, "{name}");
-                assert_eq!(t.to_text(), s(c, "text"), "{name}: encodes back to exactly the text");
+                assert_eq!(
+                    t.to_text(),
+                    s(c, "text"),
+                    "{name}: encodes back to exactly the text"
+                );
             }
         }
     }
@@ -106,7 +126,10 @@ fn bulk_vectors() {
     assert!(!all.is_empty());
     let first = &all[0]["batch"];
     assert_eq!(
-        to_hex(&bulk_message(s(first, "profile"), &from_hex(s(first, "data")))),
+        to_hex(&bulk_message(
+            s(first, "profile"),
+            &from_hex(s(first, "data"))
+        )),
         s(&v, "message")
     );
     for c in all {
@@ -118,7 +141,12 @@ fn bulk_vectors() {
             data: from_hex(s(b, "data")),
             sig: s(b, "sig").to_owned(),
         };
-        assert_eq!(Value::Bool(batch.verify(&keys)), c["valid"], "{}", s(c, "name"));
+        assert_eq!(
+            Value::Bool(batch.verify(&keys)),
+            c["valid"],
+            "{}",
+            s(c, "name")
+        );
         // the CBOR envelope round-trips
         assert_eq!(BulkBatch::from_cbor(&batch.to_cbor()), Some(batch));
     }

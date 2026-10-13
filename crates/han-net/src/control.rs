@@ -20,7 +20,8 @@ pub struct Challenge {
 
 fn challenge_chars(s: &str) -> bool {
     (22..=128).contains(&s.len())
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// What a client checks before it says `hello`: `frames` are the texts of the control stream so far. There is
@@ -44,16 +45,26 @@ pub fn challenge_verdict(
     let Value::Object(m) = &c else {
         return Err("not a bare Challenge");
     };
-    if m.len() != 4 || !["challenge", "server", "versions", "time"].iter().all(|k| m.contains_key(*k)) {
+    if m.len() != 4
+        || !["challenge", "server", "versions", "time"]
+            .iter()
+            .all(|k| m.contains_key(*k))
+    {
         return Err("not a bare Challenge");
     }
-    let challenge = c["challenge"].as_str().filter(|s| challenge_chars(s)).ok_or("challenge grammar")?;
+    let challenge = c["challenge"]
+        .as_str()
+        .filter(|s| challenge_chars(s))
+        .ok_or("challenge grammar")?;
     let versions: Vec<u64> = c["versions"]
         .as_array()
         .and_then(|l| l.iter().map(Value::as_u64).collect())
         .filter(|v: &Vec<u64>| v.contains(&1))
         .ok_or("no version 1")?;
-    let time = c["time"].as_str().filter(|t| grammar::is_time(t)).ok_or("time")?;
+    let time = c["time"]
+        .as_str()
+        .filter(|t| grammar::is_time(t))
+        .ok_or("time")?;
     let server = c["server"].as_str().ok_or("server")?;
     if server != dialed {
         return Err("server is not the dialed ServerName");

@@ -12,12 +12,14 @@ use han_core::frame::request_verdict;
 use han_core::json::{self, Value};
 use han_core::{base64url, grammar};
 
-use crate::services::parse_blobref;
-use crate::calls::{Authed, Feed, MAX_BLOB_PART_BYTES, MAX_FOLLOWS, MAX_SIGNAL_BYTES, StateSel};
+use crate::calls::{
+    Authed, Feed, MAX_BLOB_PART_BYTES, MAX_FOLLOWS, MAX_SIGNAL_BYTES, ReadReq, StateSel,
+};
 use crate::error::{Result, WireError};
 use crate::fanout::{Live, Next, SubId};
 use crate::home::Home;
 use crate::jv;
+use crate::services::parse_blobref;
 use crate::time::{format_time, parse_time};
 
 /// A challenge is valid this long (G-08).
@@ -221,7 +223,10 @@ impl Conn {
                     .into_iter()
                     .map(|item| jv::text(&jv::obj([("id", jv::int(id)), ("item", item)])))
                     .collect();
-                reply.push(jv::text(&jv::obj([("id", jv::int(id)), ("end", Value::Bool(true))])));
+                reply.push(jv::text(&jv::obj([
+                    ("id", jv::int(id)),
+                    ("end", Value::Bool(true)),
+                ])));
                 finish(reply, false)
             }
             Ok(Done::Feed(feed)) => {
@@ -252,7 +257,12 @@ impl Conn {
         }
     }
 
-    fn dispatch(&self, id: u64, call: &str, args: &Value) -> std::result::Result<Done, (WireError, bool)> {
+    fn dispatch(
+        &self,
+        id: u64,
+        call: &str,
+        args: &Value,
+    ) -> std::result::Result<Done, (WireError, bool)> {
         let plain = |e: WireError| (e, false);
         if call != "hello" {
             self.authenticated().map_err(plain)?;
@@ -284,8 +294,12 @@ impl Conn {
                 Ok(Done::Ok(Value::Null))
             }
             "append" => {
-                let receipt = home.append(&args["entry"], args.get("content")).map_err(plain)?;
-                Ok(Done::Ok(json::to_value(&receipt).map_err(|e| plain(WireError::from_json(e)))?))
+                let receipt = home
+                    .append(&args["entry"], args.get("content"))
+                    .map_err(plain)?;
+                Ok(Done::Ok(
+                    json::to_value(&receipt).map_err(|e| plain(WireError::from_json(e)))?,
+                ))
             }
             "read" => {
                 let space = space_arg(args).map_err(plain)?;
@@ -295,12 +309,22 @@ impl Conn {
                     Some(_) => return Err(plain(WireError::invalid("follow"))),
                 };
                 self.room(id, follow).map_err(plain)?;
-                let after = args["after"].as_u64().ok_or_else(|| plain(WireError::invalid("after")))?;
+                let after = args["after"]
+                    .as_u64()
+                    .ok_or_else(|| plain(WireError::invalid("after")))?;
                 let limit = opt_nat(args, "limit").map_err(plain)?;
-                let feed = home
-                    .read(&who, self.id, space, after, follow, limit, args.get("knownHeads"))
-                    .map_err(plain)?;
-                Ok(if follow { Done::Feed(feed) } else { Done::Items(feed.items) })
+                let req = ReadReq {
+                    after,
+                    follow,
+                    limit,
+                    known_heads: args.get("knownHeads"),
+                };
+                let feed = home.read(&who, self.id, space, &req).map_err(plain)?;
+                Ok(if follow {
+                    Done::Feed(feed)
+                } else {
+                    Done::Items(feed.items)
+                })
             }
             "state" => {
                 let space = space_arg(args).map_err(plain)?;
@@ -316,7 +340,9 @@ impl Conn {
                 let space = space_arg(args).map_err(plain)?;
                 self.room(id, true).map_err(plain)?;
                 let after = opt_nat(args, "after").map_err(plain)?;
-                home.subscribe(&who, self.id, space, after).map(Done::Feed).map_err(plain)
+                home.subscribe(&who, self.id, space, after)
+                    .map(Done::Feed)
+                    .map_err(plain)
             }
             "watch" => {
                 let space = space_arg(args).map_err(plain)?;
@@ -325,27 +351,43 @@ impl Conn {
                     .as_str()
                     .filter(|s| grammar::is_hex(s))
                     .ok_or_else(|| plain(WireError::invalid("session")))?;
-                home.watch(&who, self.id, space, session).map(Done::Feed).map_err(plain)
+                home.watch(&who, self.id, space, session)
+                    .map(Done::Feed)
+                    .map_err(plain)
             }
-            "signal" => self.signal(&who, args).map(|()| Done::Ok(Value::Null)).map_err(plain),
+            "signal" => self
+                .signal(&who, args)
+                .map(|()| Done::Ok(Value::Null))
+                .map_err(plain),
             "blobPut" => {
-                let r = parse_blobref(&args["ref"]).ok_or_else(|| plain(WireError::invalid("blobPut ref")))?;
-                let offset = args["offset"].as_u64().ok_or_else(|| plain(WireError::invalid("offset")))?;
+                let r = parse_blobref(&args["ref"])
+                    .ok_or_else(|| plain(WireError::invalid("blobPut ref")))?;
+                let offset = args["offset"]
+                    .as_u64()
+                    .ok_or_else(|| plain(WireError::invalid("offset")))?;
                 let data = args["data"]
                     .as_str()
                     .and_then(|d| base64url::decode(d).ok())
                     .filter(|d| d.len() <= MAX_BLOB_PART_BYTES)
                     .ok_or_else(|| plain(WireError::invalid("blobPut data")))?;
-                home.blob_put(&who, &r, offset, &data).map(Done::Ok).map_err(plain)
+                home.blob_put(&who, &r, offset, &data)
+                    .map(Done::Ok)
+                    .map_err(plain)
             }
             "blobGet" => {
-                let r = parse_blobref(&args["ref"]).ok_or_else(|| plain(WireError::invalid("blobGet ref")))?;
+                let r = parse_blobref(&args["ref"])
+                    .ok_or_else(|| plain(WireError::invalid("blobGet ref")))?;
                 let space = space_arg(args).map_err(plain)?;
                 let offset = opt_nat(args, "offset").map_err(plain)?.unwrap_or(0);
                 let length = opt_nat(args, "length").map_err(plain)?;
-                home.blob_get(&who, &r, space, offset, length).map(Done::Ok).map_err(plain)
+                home.blob_get(&who, &r, space, offset, length)
+                    .map(Done::Ok)
+                    .map_err(plain)
             }
-            "stream" => home.stream(&who, &args["item"]).map(|()| Done::Ok(Value::Null)).map_err(plain),
+            "stream" => home
+                .stream(&who, &args["item"])
+                .map(|()| Done::Ok(Value::Null))
+                .map_err(plain),
             "host" => self.host(&who, args).map(Done::Ok).map_err(plain),
             "invite" => {
                 let space = space_arg(args).map_err(plain)?;
@@ -354,7 +396,9 @@ impl Conn {
                 let (Some(hash), Some(until)) = (hash, until) else {
                     return Err(plain(WireError::invalid("invite args")));
                 };
-                home.invite(&who, space, hash, until).map(|()| Done::Ok(Value::Null)).map_err(plain)
+                home.invite(&who, space, hash, until)
+                    .map(|()| Done::Ok(Value::Null))
+                    .map_err(plain)
             }
             "join" => {
                 let space = space_arg(args).map_err(plain)?;
@@ -435,7 +479,9 @@ impl Conn {
         };
         if args["version"].as_i64() != Some(1)
             || !grammar::is_actor_id(who)
-            || args.get("knownHeads").is_some_and(|k| k.as_array().is_none_or(|l| l.len() > MAX_FOLLOWS))
+            || args
+                .get("knownHeads")
+                .is_some_and(|k| k.as_array().is_none_or(|l| l.len() > MAX_FOLLOWS))
         {
             return Err(WireError::invalid("hello args"));
         }
@@ -453,7 +499,9 @@ impl Conn {
             }
             challenge
         };
-        let Authed { ok, nodes } = self.home.hello(who, key_id, proof, &challenge, args.get("knownHeads"))?;
+        let Authed { ok, nodes } =
+            self.home
+                .hello(who, key_id, proof, &challenge, args.get("knownHeads"))?;
         let mut st = self.st();
         st.bound = nodes.contains(&self.peer);
         st.who = Some(who.to_owned());
@@ -479,9 +527,13 @@ impl Conn {
             let from = from
                 .as_str()
                 .filter(|f| grammar::is_actor_id(f) && !f.starts_with("@:"))
-                .ok_or_else(|| WireError::denied("a server may relay signals only from its own actors"))?;
+                .ok_or_else(|| {
+                    WireError::denied("a server may relay signals only from its own actors")
+                })?;
             if grammar::server_of(from) != who.strip_prefix("@:") {
-                return Err(WireError::denied("a server may relay signals only from its own actors"));
+                return Err(WireError::denied(
+                    "a server may relay signals only from its own actors",
+                ));
             }
             sender = from;
             relayed_by = Some(who);
@@ -497,8 +549,15 @@ impl Conn {
         let records_ok = args["records"]
             .as_array()
             .is_some_and(|l| l.len() <= 1000 && l.iter().all(|r| matches!(r, Value::Object(_))));
-        let head_ok = args.get("head").is_none_or(|h| matches!(h, Value::Object(_)));
-        if args["space"].as_str().is_none_or(|s| !grammar::is_space_id(s)) || !records_ok || !head_ok {
+        let head_ok = args
+            .get("head")
+            .is_none_or(|h| matches!(h, Value::Object(_)));
+        if args["space"]
+            .as_str()
+            .is_none_or(|s| !grammar::is_space_id(s))
+            || !records_ok
+            || !head_ok
+        {
             return Err(WireError::invalid("host args"));
         }
         Err(WireError::denied("this server does not take over spaces"))
@@ -519,9 +578,9 @@ impl Conn {
         };
         let advance = match args.get("steadyAdvance") {
             None => 0,
-            Some(v) => v
-                .as_u64()
-                .ok_or_else(|| WireError::invalid("steadyAdvance is a non-negative integer (seconds)"))?,
+            Some(v) => v.as_u64().ok_or_else(|| {
+                WireError::invalid("steadyAdvance is a non-negative integer (seconds)")
+            })?,
         };
         if let Some(w) = wall {
             clock.set_wall(w);
@@ -529,7 +588,12 @@ impl Conn {
         clock.advance_steady(advance);
         use crate::clock::Clock;
         Ok(jv::obj([
-            ("wall", jv::s(&format_time(i64::try_from(clock.now_ms() / 1000).unwrap_or(0)))),
+            (
+                "wall",
+                jv::s(&format_time(
+                    i64::try_from(clock.now_ms() / 1000).unwrap_or(0),
+                )),
+            ),
             ("steady", jv::int(clock.steady_ms() / 1000)),
         ]))
     }
@@ -543,12 +607,17 @@ impl Conn {
             Some(v) => Some(
                 v.as_u64()
                     .filter(|n| (1024..=han_core::limits::MAX_FRAME_BYTES as u64).contains(n))
-                    .ok_or_else(|| WireError::invalid("maxFrameBytes is an integer from 1024 to 1310720"))?,
+                    .ok_or_else(|| {
+                        WireError::invalid("maxFrameBytes is an integer from 1024 to 1310720")
+                    })?,
             ),
         };
         Ok(jv::obj([(
             "maxFrameBytes",
-            jv::int(self.home.set_max_frame_bytes(n.map(|n| usize::try_from(n).unwrap_or(0)))),
+            jv::int(
+                self.home
+                    .set_max_frame_bytes(n.map(|n| usize::try_from(n).unwrap_or(0))),
+            ),
         )]))
     }
 }
@@ -570,7 +639,10 @@ fn space_arg(args: &Value) -> Result<&str> {
 fn opt_nat(args: &Value, key: &str) -> Result<Option<u64>> {
     match args.get(key) {
         None => Ok(None),
-        Some(v) => v.as_u64().map(Some).ok_or_else(|| WireError::invalid(key.to_owned())),
+        Some(v) => v
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| WireError::invalid(key.to_owned())),
     }
 }
 
@@ -586,7 +658,10 @@ impl Home {
         slot.1 += 1;
         if slot.1 > OPEN_CALLS {
             let wait = OPEN_WINDOW_MS - now.saturating_sub(slot.0);
-            return Err(WireError::limit("too many calls from this node", wait.max(1)));
+            return Err(WireError::limit(
+                "too many calls from this node",
+                wait.max(1),
+            ));
         }
         Ok(())
     }

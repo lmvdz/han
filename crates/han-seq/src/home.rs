@@ -15,13 +15,13 @@ use han_core::policy::{
 use han_core::types::{ActorId, Durability};
 use han_core::{Entry, LogRecord, PublicKey, Receipt, SigningKey, grammar};
 
-use crate::services::{BlobState, StreamState};
 use crate::clock::{Clock, TestClock};
 use crate::error::{Result, WireError};
 use crate::fanout::{Hooks, NoHooks, Subs};
 use crate::identity::{PinKey, PinView, ServerKey};
 use crate::jv;
 use crate::paging::MapOrder;
+use crate::services::{BlobState, StreamState};
 use crate::store::{Store, StoreError, Stored};
 use crate::time::{format_time, parse_time};
 
@@ -131,6 +131,8 @@ pub struct Home {
     pub(crate) test_clock: Option<Arc<TestClock>>,
     pub(crate) store: Arc<dyn Store>,
     pub(crate) inner: Mutex<Inner>,
+    /// Counts the records that can change who a node vouches for or what it may do (X14).
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 /// The defaults of a profile space's policy (section 4.3): a sequencer SHOULD write exactly this one.
@@ -222,7 +224,9 @@ impl Home {
             None => Vec::new(),
         };
         match keys.iter().find(|k| k.key_id == cfg.key_id) {
-            Some(k) if k.public_key != public_key || k.until.is_some() || k.compromised.is_some() => {
+            Some(k)
+                if k.public_key != public_key || k.until.is_some() || k.compromised.is_some() =>
+            {
                 return Err(OpenError::Key(format!(
                     "server key {} is retired or belongs to another key",
                     cfg.key_id
@@ -253,6 +257,7 @@ impl Home {
             clock,
             test_clock,
             store: store.clone(),
+            changes: tokio::sync::watch::channel(0).0,
             inner: Mutex::new(Inner {
                 spaces: HashMap::new(),
                 moved: HashMap::new(),
@@ -307,10 +312,9 @@ impl Home {
             if !sound {
                 return Err(corrupt());
             }
-            let pe = PolicyEntry::from_entry(&rec.entry).map_err(|_| corrupt())?;
-            let ctx = Ctx::new(&rec.receipt.time, policy_profiles(&st.pins)).map_err(|_| corrupt())?;
+            let ctx =
+                Ctx::new(&rec.receipt.time, policy_profiles(&st.pins)).map_err(|_| corrupt())?;
             let record = Record::from_log_record(&rec).map_err(|_| corrupt())?;
-            let _ = pe;
             let old = sp.as_ref().map(|s| &*s.state);
             let new = fold(old, &record, &ctx).map_err(|_| corrupt())?;
             let s = sp.get_or_insert_with(|| Space {
@@ -388,6 +392,24 @@ impl Home {
     /// Installs a per-author rate limit (section 4.1 step 6).
     pub fn set_rate_limit(&self, limit: Arc<dyn RateLimit>) {
         self.lock().limiter = Some(limit);
+    }
+
+    /// Changes whenever a record that can revoke a key or remove a role is ordered: a carrier re-checks the
+    /// nodes behind its connections then (X14), not only every 300 s.
+    pub fn watch_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    /// The spaces this home holds records of.
+    pub fn spaces(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.lock().spaces.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// The current state of a space this home holds (a view of the log, for views and tools).
+    pub fn state_of(&self, space: &str) -> Option<Arc<SpaceState>> {
+        self.lock().spaces.get(space).map(|s| Arc::clone(&s.state))
     }
 
     /// The keys this server publishes at `/.well-known/han`.
@@ -492,7 +514,11 @@ impl Home {
         for _ in 0..3 {
             let ctx = Ctx::new(now, policy_profiles(&fetched))?;
             need = relevant_actors(state, pe, &ctx);
-            let new: Vec<ActorId> = need.iter().filter(|a| !tried.contains(*a)).cloned().collect();
+            let new: Vec<ActorId> = need
+                .iter()
+                .filter(|a| !tried.contains(*a))
+                .cloned()
+                .collect();
             if new.is_empty() {
                 break;
             }
@@ -556,7 +582,9 @@ impl Home {
         if let Some(sp) = space_id.and_then(|s| g.spaces.get(s))
             && let Some(seq) = sp.ids.get(&eid)
         {
-            return Ok(sp.records[usize::try_from(seq - 1).unwrap_or(0)].receipt.clone());
+            return Ok(sp.records[usize::try_from(seq - 1).unwrap_or(0)]
+                .receipt
+                .clone());
         }
         // 2 not home
         if let Some(sp) = space_id {
@@ -631,7 +659,8 @@ impl Home {
             },
         };
         let rescue = matches!(pe.body, Body::PolicySet(_) | Body::SpaceMove(_));
-        if wanted == Durability::Replicated && self.durability != Durability::Replicated && !rescue {
+        if wanted == Durability::Replicated && self.durability != Durability::Replicated && !rescue
+        {
             return Err(WireError::unavailable("minDurability not reachable"));
         }
         let requested = match &pe.body {
@@ -669,11 +698,7 @@ impl Home {
             content: content.cloned(),
             receipt: receipt.clone(),
         };
-        let folded = fold(
-            state,
-            &Record::from_log_record(&record)?,
-            &ctx,
-        )?;
+        let folded = fold(state, &Record::from_log_record(&record)?, &ctx)?;
         // 9 durable at the stated level, then the state
         let stored = Stored {
             record: record.clone(),
@@ -749,6 +774,12 @@ impl Home {
         }
         self.notify(g, &record.entry, &space_id, seq, &state_now);
         g.hooks.ordered(&record, &state_now);
+        if matches!(
+            entry.kind.as_str(),
+            "key.add" | "key.revoke" | "member.set" | "policy.set" | "space.move"
+        ) {
+            self.changes.send_modify(|n| *n += 1);
+        }
     }
 
     /// R-04: the content of a redacted record is erased, and the record carries the `redact` entry as proof.
@@ -792,7 +823,12 @@ impl Home {
             named.push(actor.to_owned());
         }
         if let Some(to) = entry.body.get("to").and_then(Value::as_array) {
-            named.extend(to.iter().filter_map(Value::as_str).filter(|a| reads(a)).map(str::to_owned));
+            named.extend(
+                to.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|a| reads(a))
+                    .map(str::to_owned),
+            );
         }
         let mut seen = HashSet::new();
         for actor in named {
@@ -827,7 +863,11 @@ impl Home {
     /// §7.3: a `space.move`'s acceptance must verify under the target's published keys.
     fn check_acceptance(&self, g: &Inner, entry: &Entry) -> Result<()> {
         let bad = || WireError::invalid("no valid acceptance from the target server");
-        let to = entry.body.get("to").and_then(Value::as_str).ok_or_else(bad)?;
+        let to = entry
+            .body
+            .get("to")
+            .and_then(Value::as_str)
+            .ok_or_else(bad)?;
         let accept = entry.body.get("accept").ok_or_else(bad)?;
         let (Some(key_id), Some(sig)) = (
             accept.get("keyId").and_then(Value::as_str),
@@ -922,7 +962,10 @@ impl Home {
         if let Some(op) = operator {
             profile.insert("operator".to_owned(), jv::s(op));
         }
-        let body = jv::obj([("policy", profile_policy()), ("profile", Value::Object(profile))]);
+        let body = jv::obj([
+            ("policy", profile_policy()),
+            ("profile", Value::Object(profile)),
+        ]);
         let (entry, content) = crate::build::sign_entry(
             crate::build::EntrySpec {
                 space,

@@ -15,7 +15,11 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<String
     while got < head.len() {
         match r.read(&mut head[got..]).await? {
             0 if got == 0 => return Ok(None),
-            0 => return Err(NetError::Closed("stream ended inside a frame length".into())),
+            0 => {
+                return Err(NetError::Closed(
+                    "stream ended inside a frame length".into(),
+                ));
+            }
             n => got += n,
         }
     }

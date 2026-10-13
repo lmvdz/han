@@ -4,8 +4,8 @@
 use han_core::grammar;
 use han_core::json::{self, Value};
 
-use crate::services::parse_blobref;
 use crate::calls::MAX_STREAM_ITEM_BYTES;
+use crate::services::parse_blobref;
 
 const STATUS_STATES: [&str; 7] = [
     "working",
@@ -29,7 +29,8 @@ pub fn is_profile_name(s: &str) -> bool {
     let prefix_ok = parts.next().is_some_and(|p| {
         (1..=32).contains(&p.len())
             && p.as_bytes()[0].is_ascii_lowercase()
-            && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && p.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
     });
     let rest: Vec<&str> = parts.collect();
     prefix_ok
@@ -37,7 +38,8 @@ pub fn is_profile_name(s: &str) -> bool {
         && (1..=4).contains(&rest.len())
         && rest.iter().all(|p| {
             (1..=32).contains(&p.len())
-                && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && p.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
 }
 
@@ -46,11 +48,14 @@ fn status_body_verdict(b: &Value) -> Option<String> {
     let Value::Object(m) = b else {
         return Some("body is not an object".into());
     };
-    let required: [(&str, fn(&Value) -> bool); 8] = [
+    type Check = fn(&Value) -> bool;
+    let required: [(&str, Check); 8] = [
         ("session", |v| v.as_str().is_some_and(grammar::is_hex)),
         ("agent", |v| v.as_str().is_some_and(grammar::is_actor_id)),
         ("harness", |v| v.as_str().is_some()),
-        ("state", |v| v.as_str().is_some_and(|s| STATUS_STATES.contains(&s))),
+        ("state", |v| {
+            v.as_str().is_some_and(|s| STATUS_STATES.contains(&s))
+        }),
         ("step", |v| v.as_str().is_some()),
         ("files", |v| v.as_array().is_some()),
         ("seq", |v| v.as_u64().is_some_and(|n| n >= 1)),
@@ -63,10 +68,14 @@ fn status_body_verdict(b: &Value) -> Option<String> {
             Some(_) => {}
         }
     }
-    if m.get("delegate_of").is_some_and(|v| !v.as_str().is_some_and(grammar::is_actor_id)) {
+    if m.get("delegate_of")
+        .is_some_and(|v| !v.as_str().is_some_and(grammar::is_actor_id))
+    {
         return Some("bad delegate_of".into());
     }
-    if m.get("issue").is_some_and(|v| !v.as_str().is_some_and(grammar::is_external)) {
+    if m.get("issue")
+        .is_some_and(|v| !v.as_str().is_some_and(grammar::is_external))
+    {
         return Some("bad issue".into());
     }
     None

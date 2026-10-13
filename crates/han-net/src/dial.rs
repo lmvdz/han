@@ -11,7 +11,10 @@ use crate::wellknown::Fetcher;
 
 /// The node ids that may answer as `server`: its `sequencer` list in `/.well-known/han`, fetched over HTTPS
 /// (the one mandatory discovery path, section 4.3). Also returns the addresses to dial.
-pub async fn trusted_nodes_for_server(fetcher: &Fetcher, server: &str) -> Result<(Vec<NodeId>, Vec<NodeAddr>)> {
+pub async fn trusted_nodes_for_server(
+    fetcher: &Fetcher,
+    server: &str,
+) -> Result<(Vec<NodeId>, Vec<NodeAddr>)> {
     let doc = fetcher.wellknown(server).await?;
     Ok((doc.nodes(), doc.sequencer))
 }
@@ -21,7 +24,10 @@ pub async fn trusted_nodes_for_server(fetcher: &Fetcher, server: &str) -> Result
 /// Round 31: the ticket's own `node` is trusted as given, so a ticket works with no web server. Round 32
 /// makes it a hint: the node must also be listed in `server`'s well-known document. Only this function
 /// changes then.
-pub async fn trusted_nodes_for_ticket(_fetcher: &Fetcher, ticket: &InviteTicket) -> Result<Vec<NodeId>> {
+pub async fn trusted_nodes_for_ticket(
+    _fetcher: &Fetcher,
+    ticket: &InviteTicket,
+) -> Result<Vec<NodeId>> {
     if ticket.node.addrs.is_empty() && ticket.node.relays.is_empty() {
         return Err(NetError::Dial("the ticket's node has no address".into()));
     }

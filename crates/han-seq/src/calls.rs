@@ -37,6 +37,15 @@ pub(crate) struct Authed {
     pub nodes: Vec<String>,
 }
 
+/// The arguments of `read` besides who asks and what space.
+#[derive(Clone, Copy)]
+pub(crate) struct ReadReq<'a> {
+    pub after: u64,
+    pub follow: bool,
+    pub limit: Option<u64>,
+    pub known_heads: Option<&'a Value>,
+}
+
 /// What `read`, `subscribe` and `watch` hand back: the backlog and, for a live call, the queue.
 pub(crate) struct Feed {
     pub items: Vec<Value>,
@@ -152,11 +161,14 @@ impl Home {
         who: &str,
         conn: u64,
         space: &str,
-        after: u64,
-        follow: bool,
-        limit: Option<u64>,
-        known_heads: Option<&Value>,
+        req: &ReadReq<'_>,
     ) -> Result<Feed> {
+        let ReadReq {
+            after,
+            follow,
+            limit,
+            known_heads,
+        } = *req;
         let limit = limit.unwrap_or(1000);
         if !(1..=1000).contains(&limit) {
             return Err(WireError::invalid("limit"));
@@ -169,10 +181,15 @@ impl Home {
         let mut items = Vec::new();
         if let Some(known) = known_heads {
             let heads = self.heads_for(&g, who, known)?;
-            items.push(jv::obj([("type", jv::s("heads")), ("heads", Value::Array(heads))]));
+            items.push(jv::obj([
+                ("type", jv::s("heads")),
+                ("heads", Value::Array(heads)),
+            ]));
         }
         let state = &s.state;
-        let start = usize::try_from(after).unwrap_or(usize::MAX).min(s.records.len());
+        let start = usize::try_from(after)
+            .unwrap_or(usize::MAX)
+            .min(s.records.len());
         for rec in s.records[start..]
             .iter()
             .filter(|r| can_read(state, who, r.receipt.seq))
@@ -184,7 +201,11 @@ impl Home {
         let live = if follow {
             let (sub, live) = g.subs.make(who, head, false, conn);
             let id = SubId(sub.id);
-            g.subs.by_space.entry(space.to_owned()).or_default().push(sub);
+            g.subs
+                .by_space
+                .entry(space.to_owned())
+                .or_default()
+                .push(sub);
             Some((id, live))
         } else {
             None
@@ -216,7 +237,9 @@ impl Home {
         let state = &s.state;
         let mut items = Vec::new();
         if let Some(after) = after {
-            let start = usize::try_from(after).unwrap_or(usize::MAX).min(s.records.len());
+            let start = usize::try_from(after)
+                .unwrap_or(usize::MAX)
+                .min(s.records.len());
             for rec in s.records[start..]
                 .iter()
                 .filter(|r| can_read(state, who, r.receipt.seq))
@@ -237,7 +260,11 @@ impl Home {
                 .or_default()
                 .push(sub.duplicate());
         }
-        g.subs.by_space.entry(space.to_owned()).or_default().push(sub);
+        g.subs
+            .by_space
+            .entry(space.to_owned())
+            .or_default()
+            .push(sub);
         Ok(Feed {
             items,
             live: Some((id, live)),
@@ -314,7 +341,9 @@ impl Home {
         for (rec, pins) in s.records[..n].iter().zip(&s.pins) {
             let ctx = han_core::policy::Ctx::new(
                 &rec.receipt.time,
-                pins.iter().map(|(a, v)| (a.clone(), v.for_policy())).collect(),
+                pins.iter()
+                    .map(|(a, v)| (a.clone(), v.for_policy()))
+                    .collect(),
             )?;
             let new = han_core::policy::fold(
                 state.as_ref(),
@@ -334,8 +363,7 @@ impl Home {
         let g = self.lock();
         let s = self.held(&g, space)?;
         let head = s.state.head;
-        let n_exclusive =
-            [sel.cursor, sel.effect, sel.agent].iter().flatten().count();
+        let n_exclusive = [sel.cursor, sel.effect, sel.agent].iter().flatten().count();
         if n_exclusive > 1 || (sel.at.is_some() && (sel.cursor.is_some() || sel.effect.is_some())) {
             return Err(WireError::invalid(
                 "at, cursor, effect and agent exclude each other (at may join agent)",
@@ -361,7 +389,10 @@ impl Home {
         if sel.effect.is_some_and(|v| v.as_str().is_none()) {
             return Err(WireError::invalid("effect must be an EntryId"));
         }
-        if sel.agent.is_some_and(|v| !v.as_str().is_some_and(grammar::is_actor_id)) {
+        if sel
+            .agent
+            .is_some_and(|v| !v.as_str().is_some_and(grammar::is_actor_id))
+        {
             return Err(WireError::invalid("agent must be an ActorId"));
         }
         if !can_read(&s.state, who, at) {
@@ -381,10 +412,15 @@ impl Home {
             m.remove("entries");
         }
         let scalar = |view: &Value| {
-            [("space", "space"), ("head", "head"), ("home", "home"), ("policy", "policy")]
-                .into_iter()
-                .map(|(k, _)| (k.to_owned(), view[k].clone()))
-                .collect::<std::collections::BTreeMap<_, _>>()
+            [
+                ("space", "space"),
+                ("head", "head"),
+                ("home", "home"),
+                ("policy", "policy"),
+            ]
+            .into_iter()
+            .map(|(k, _)| (k.to_owned(), view[k].clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
         };
         if let Some(Value::Str(id)) = sel.effect {
             let eff = view["effects"]
@@ -405,9 +441,7 @@ impl Home {
             one.insert("guarded".into(), guarded);
             return Ok(jv::obj([("state", Value::Object(one))]));
         }
-        if sel.cursor.is_some()
-            && (0..PAGED.len()).any(|m| offsets[m] > paging::len_of(&view, m))
-        {
+        if sel.cursor.is_some() && (0..PAGED.len()).any(|m| offsets[m] > paging::len_of(&view, m)) {
             return Err(WireError::invalid("cursor offset beyond the map"));
         }
         let page = paging::page(&view, &order, offsets, MAX_STATE_ITEMS, g.max_frame_bytes);
@@ -435,5 +469,9 @@ fn record_item(rec: &han_core::LogRecord) -> Result<Value> {
 }
 
 fn signal_item(from: &str, body: &Value) -> Value {
-    jv::obj([("type", jv::s("signal")), ("from", jv::s(from)), ("body", body.clone())])
+    jv::obj([
+        ("type", jv::s("signal")),
+        ("from", jv::s(from)),
+        ("body", body.clone()),
+    ])
 }

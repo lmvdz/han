@@ -75,7 +75,37 @@ pub fn entry_id(entry: &Value) -> Result<String> {
     members.remove("sig");
     let mut preimage = ids::ENTRY_ID_DOMAIN.as_bytes().to_vec();
     preimage.extend(
-        json::canonicalize(&Value::Object(members)).map_err(|e| WireError::invalid(e.to_string()))?,
+        json::canonicalize(&Value::Object(members))
+            .map_err(|e| WireError::invalid(e.to_string()))?,
     );
     Ok(ids::sha256_hex(&preimage))
+}
+
+/// A `PolicyDoc` for a new space: `members` or `public` to read, joining by `invite` or `open` or `closed`.
+/// The rest are the defaults the vectors use: no approval rules, sessions visible to members, steerable by owners.
+pub fn space_policy(visibility: &str, join: &str) -> Value {
+    use crate::jv::{int, obj, s};
+    obj([
+        ("visibility", s(visibility)),
+        ("join", s(join)),
+        ("membersMayInvite", Value::Bool(false)),
+        ("allowAgents", s("any")),
+        ("approvals", Value::Array(vec![])),
+        ("separateApprover", Value::Bool(false)),
+        ("budget", Value::Null),
+        ("maxDelegationDepth", int(2)),
+        ("minDurability", s("local")),
+        ("launchWindow", int(30)),
+        ("extensionsMinRole", s("member")),
+        (
+            "sessions",
+            obj([
+                ("watch", s("member")),
+                ("read", s("member")),
+                ("steer", s("owner")),
+                ("modes", Value::Array(vec![s("auto"), s("guarded")])),
+            ]),
+        ),
+        ("servers", obj([("deny", Value::Array(vec![]))])),
+    ])
 }
