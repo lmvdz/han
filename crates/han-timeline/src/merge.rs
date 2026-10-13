@@ -494,7 +494,7 @@ impl<'a> TargetText<'a> {
     /// The anchor immediately before character `l` in the target's order.
     fn before(&self, l: Local) -> DraftAnchor {
         let lay = self.t.layout();
-        let i = lay.pos[l.0 as usize][l.1 as usize];
+        let i = lay.pos(l);
         if i == 0 {
             DraftAnchor::Start
         } else {

@@ -5,7 +5,11 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    # `paste` is unmaintained (a notice, not a vulnerability). It is a proc-macro reached only through iroh's
+    # netwatch -> netdev -> netlink-packet-core; nothing of ours uses it, and there is no safe upgrade to pick.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro, transitive through iroh" },
+]
 
 [licenses]
 version = 2
@@ -20,6 +24,14 @@ allow = [
     "Zlib",
     "CC0-1.0",
     "Unlicense",
+    # minicbor (the CBOR crate for bulk batches, PLAN 6.1): a permissive licence in the MIT/BSD family.
+    "BlueOak-1.0.0",
+    # webpki-roots and webpki-root-certs (the CA bundle, reached through iroh-relay and reqwest): a permissive
+    # data licence.
+    "CDLA-Permissive-2.0",
+    # doctest-file and recvmsg (reached through interprocess, the local IPC crate of han-node): the BSD Zero Clause
+    # licence, a public-domain-equivalent grant with no conditions.
+    "0BSD",
 ]
 confidence-threshold = 0.9
 # The allow-list is a policy, not an inventory: do not warn about licences no dependency uses yet.

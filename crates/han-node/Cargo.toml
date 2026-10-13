@@ -1,0 +1,51 @@
+[package]
+name = "han-node"
+description = "HAN device runtime: keys, one endpoint, sync of followed spaces, the outbox, the views engine, the supervisor seam, and the node API (call and view) with its local JSON-RPC server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["runtime"]
+# The device runtime. Without it the crate is the node API types and the JSON-RPC client only, which is all a
+# face (TUI, GUI, MCP tools, integrations) may depend on: no han-net, no storage, no keys.
+runtime = [
+    "dep:han-core",
+    "dep:han-net",
+    "dep:han-seq",
+    "dep:keyring",
+    "dep:rusqlite",
+    "dep:rusqlite_migration",
+    "dep:getrandom",
+    "dep:widestring",
+]
+
+[dependencies]
+futures-core = "0.3"
+interprocess = { version = "2.4", features = ["tokio"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
+tracing.workspace = true
+ts-rs = "12"
+
+han-core = { workspace = true, optional = true }
+han-net = { workspace = true, optional = true }
+han-seq = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+keyring = { version = "4", optional = true }
+rusqlite = { workspace = true, optional = true }
+rusqlite_migration = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+widestring = { version = "1", optional = true }
+
+[dev-dependencies]
+rusqlite.workspace = true
+proptest = "1"
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
