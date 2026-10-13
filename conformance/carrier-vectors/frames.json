@@ -1,0 +1,174 @@
+{
+ "name": "frames",
+ "rules": [
+  "G-07",
+  "§2",
+  "X18"
+ ],
+ "description": "a frame is a 4-byte big-endian length, then that many bytes of UTF-8 I-JSON; a too-long length or non-UTF-8 payload closes the connection; then G-07 (1), (1a), (2) for a request frame: `null` means it is a request frame, `[id, close]` the id of the `invalid` reply and whether the connection closes",
+ "encode": [
+  {
+   "text": "{\"id\":1,\"call\":\"hello\",\"args\":{}}",
+   "hex": "000000217b226964223a312c2263616c6c223a2268656c6c6f222c2261726773223a7b7d7d"
+  },
+  {
+   "text": "{\"a\":\"é\"}",
+   "hex": "0000000a7b2261223a22c3a9227d",
+   "note": "the length counts UTF-8 bytes"
+  }
+ ],
+ "decode": [
+  {
+   "hex": "000000027b7d",
+   "expect": {
+    "frame": "{}",
+    "rest": ""
+   }
+  },
+  {
+   "hex": "000000027b7d0000",
+   "expect": {
+    "frame": "{}",
+    "rest": "0000"
+   }
+  },
+  {
+   "hex": "0000000a7b7d",
+   "expect": "more"
+  },
+  {
+   "hex": "000000",
+   "expect": "more"
+  },
+  {
+   "hex": "00140001",
+   "expect": "close",
+   "note": "1,310,721 bytes: over maxFrameBytes, judged from the length alone"
+  },
+  {
+   "hex": "00140000",
+   "expect": "more",
+   "note": "exactly maxFrameBytes is allowed"
+  },
+  {
+   "hex": "00000002c328",
+   "expect": "close",
+   "note": "not UTF-8"
+  }
+ ],
+ "requests": [
+  {
+   "text": "{\"id\":1,\"call\":\"read\",\"args\":{}}",
+   "expect": null
+  },
+  {
+   "text": "{\"args\":{},\"call\":\"read\",\"id\":1}",
+   "expect": null,
+   "note": "X18: any key order is accepted"
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"join\",\"args\":{}}",
+   "expect": null,
+   "note": "join is a call of han/1"
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"invite\",\"args\":{}}",
+   "expect": null
+  },
+  {
+   "text": "{\"id\":-0,\"call\":\"read\",\"args\":{}}",
+   "expect": [
+    0,
+    true
+   ],
+   "note": "X18: -0 is not I-JSON for HAN"
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"read\",\"args\":{\"after\":-0}}",
+   "expect": [
+    0,
+    true
+   ]
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"read\",\"args\":{\"after\":0}}",
+   "expect": null
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"read\",\"args\":{\"x\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}",
+   "expect": null,
+   "note": "depth 128: the frame, args and 126 arrays"
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"read\",\"args\":{\"x\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}",
+   "expect": [
+    0,
+    true
+   ],
+   "note": "depth 129"
+  },
+  {
+   "text": "{\"id\":1,\"id\":2,\"call\":\"read\",\"args\":{}}",
+   "expect": [
+    0,
+    true
+   ],
+   "note": "duplicate key"
+  },
+  {
+   "text": "{\"id\":1,\"call\":\"read\",\"args\":{\"after\":1.0}}",
+   "expect": [
+    0,
+    true
+   ]
+  },
+  {
+   "text": "{\"id\":9007199254740992,\"call\":\"read\",\"args\":{}}",
+   "expect": [
+    0,
+    true
+   ]
+  },
+  {
+   "text": "{\"id\":3,\"call\":\"read\",\"args\":{\"after\":9007199254740992}}",
+   "expect": [
+    3,
+    false
+   ]
+  },
+  {
+   "text": "{\"id\":4,\"call\":\"nosuch\",\"args\":{}}",
+   "expect": [
+    4,
+    false
+   ]
+  },
+  {
+   "text": "{\"id\":5,\"call\":\"read\"}",
+   "expect": [
+    5,
+    false
+   ]
+  },
+  {
+   "text": "[1]",
+   "expect": [
+    0,
+    true
+   ]
+  },
+  {
+   "text": "{\"id\":6,\"call\":\"test.clock\",\"args\":{}}",
+   "expect": [
+    6,
+    false
+   ],
+   "note": "not a call outside test mode"
+  },
+  {
+   "text": "{\"id\":6,\"call\":\"test.clock\",\"args\":{}}",
+   "test_mode": true,
+   "expect": null
+  }
+ ]
+}

@@ -5,7 +5,7 @@
   "P-16",
   "P-05"
  ],
- "description": "V1 (U1, the reviewer's three paths): while carried(X), the guardedFor of the open tasks X accepted, is not empty, X may not approve, govern or steer others, like a guarded author; a task it creates without a parent carries carried(X); an owner that accepts carries them too; the limits end when the tasks close, and an unaccepted assignment imposes none",
+ "description": "V1 (U1, the reviewer's three paths): while carried(X), the guardedFor of the tasks X accepted, is not empty, X may not approve, govern or steer others, like a guarded author; a task it creates without a parent carries carried(X); an owner that accepts carries them too; the limits end with each assignee's own final update (X1), and an unaccepted assignment imposes none",
  "profiles": {
   "@bot3:b.example": {
    "actorKind": "agent",
@@ -907,7 +907,7 @@
    },
    "time": "2026-10-10T12:00:33Z",
    "expect": "allow",
-   "note": "t and ts are closed: carried(BOT2) is empty"
+   "note": "BOT2 closed t and ts itself: carried(BOT2) is empty"
   },
   {
    "entry": {
@@ -928,6 +928,73 @@
    },
    "time": "2026-10-10T12:00:34Z",
    "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "7a68a07d7c51556e6f83b874aa488fd139276804bb2b4279c523097a2f8c2187",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": true,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "member",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ops1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "denied",
+   "note": "X1: BOT2 closing t ends nothing for O, which accepted it too"
+  },
+  {
+   "entry": {
+    "id": "d0364dd9edb0a16a83f09157d692317ac85ebb6d2bfe98c7ae4d2619b316a61c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "task": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+     "state": "done"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-od",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:36Z",
+   "expect": "allow",
+   "note": "O, an assignee, closes its own part of the closed task"
   },
   {
    "entry": {
@@ -970,7 +1037,7 @@
     "nonce": "n-ops2",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:35Z",
+   "time": "2026-10-10T12:00:37Z",
    "expect": "allow"
   },
   {
@@ -994,7 +1061,7 @@
     "nonce": "n-p4",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:36Z",
+   "time": "2026-10-10T12:00:38Z",
    "expect": "allow",
    "check": {
     "effects.eb8f375ab3f3ae03b62a3d7b02529fd0e72b3882d9d456d1942ca9b8ed534a18.guardedFor": [
@@ -1030,9 +1097,11 @@
   "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
   "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
   "oacc": "a4fa88d403b27a7006f55f791f073fcec08248fabd1bb130ae904f4ce65047c7",
+  "od": "d0364dd9edb0a16a83f09157d692317ac85ebb6d2bfe98c7ae4d2619b316a61c",
   "op": "381ff9e197cc0f51924c1e600b3f60a21fa637b5e62775f66e42263ff4363be5",
   "op3": "899f7a9b4201d8866ecdc708e54e5b2803a04a9af48bd0b8af3f4870128ae556",
   "ops": "ffc6bc9d80e8da205a643bb34d419c93e52305286d57c4b38035eafa0fbf3d52",
+  "ops1": "7a68a07d7c51556e6f83b874aa488fd139276804bb2b4279c523097a2f8c2187",
   "ops2": "092266a22ab7c2d33a4bdaae10372da256de4115f3d7e7763e541ba7c69c215c",
   "p3": "8d8ed36a8489cf8526e6ae183163d585bbc1d93a84200e00fb1c534fed658c90",
   "p4": "eb8f375ab3f3ae03b62a3d7b02529fd0e72b3882d9d456d1942ca9b8ed534a18",

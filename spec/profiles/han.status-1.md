@@ -1,10 +1,10 @@
 # Profile `han.status/1`
 
-Status: profile, round 30. **Normative for interoperability between HAN apps; carries no authority.** Policy never reads a status item, no approval, steer or claim depends on one, and a face MUST NOT present one as fact: what an agent did is in the log (effects, outcomes, `task.update`). Source: PLAN.md §5.
+Status: profile, round 30; delivery fixed in round 31 (X11). **Normative for interoperability between HAN apps; carries no authority.** Policy never reads a status item, no approval, steer or claim depends on one, and a face MUST NOT present one as fact: what an agent did is in the log (effects, outcomes, `task.update`). Source: PLAN.md §5.
 
 ## What it is
 
-One item that says where a live session is, as its host sees it. It feeds the board, overlap alerts, agent tools and integrations (for example a GitHub sync). The session's host publishes it on the session's stream (T-07; on `han/1` as bulk data, G-07), so it reaches exactly the actors `sessionAccess` grants watch.
+One item that says where a live session is, as its host sees it. It feeds the board, overlap alerts, agent tools and integrations (for example a GitHub sync). The session's host publishes it on the session's stream as the body of a `profile` stream item, `{type: "profile", name: "han.status/1", body: <this item>}` (T-07, G-05; round 31, X11), so it reaches exactly the actors `sessionAccess` grants watch. Its shape is checked by the carrier vectors `conformance/carrier-vectors/stream-items.json`.
 
 ## Shape
 

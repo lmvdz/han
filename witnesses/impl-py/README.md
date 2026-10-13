@@ -113,3 +113,11 @@ Options added in the fix round:
 Tests: `python -m pytest -q` from `witnesses/impl-py/` runs everything (steps 1 and 2, the Matrix binding against Synapse, round 20): 143 passed, 1 skipped (the live Claude run) in about 2 minutes.
 
 Round 20: `Sequencer.add_ordered_hook` (bindings subscribe to every newly ordered record; the Matrix appservice no longer wraps `append`); `Executor(..., client=)` takes any `ClientProtocol`, so han-exec runs over `MatrixClient`; `tests/test_round20.py` covers read-at on the current state, R-16 and approver pinning.
+
+## Round 31: what this witness follows, and the gaps
+Followed (through `ref/policy.py`, `ref/wire.py` and the host): X1-X8 Policy rules; the host accepts with an explicit `task.update {state: "accepted"}`, makes the agent's own final update when it stops working a task (the agent finishes or fails, or the task is cancelled or closed by someone else, also when already closed), and names the driving task in every proposal and subtask (`tests/test_round31.py`).
+
+Frozen-witness gaps (V14: the WebSocket server and Matrix code stay at round 29). Not implemented, because none is trivial on that carrier:
+- X9 `admit` as a peer filter (the WebSocket server keeps its own checks; the pure function is covered by `ref/carrier.py` vectors only);
+- X10 dialling a `NodeAddr` (`addrs`, `relays`), X13 ticket `server`, and X14 re-pinning connected devices every 300 s;
+- X11 `profile` stream items, X12 `join` after `hello`, X15 node identity and CBOR bulk.
