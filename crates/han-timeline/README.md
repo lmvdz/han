@@ -107,7 +107,7 @@ let _ = digest;
 | `History::plan_merge` → `MergePlan::resolve` → `MergeDraft` | plan a three-way merge, resolve its conflicts, preview or record it |
 | `History::state`, `head`, `version`, `timelines`, `checkpoints` | read any version |
 | `History::hello`, `answer`, `receive_answer` | two-message anti-entropy sync |
-| `State` | observable objects, anchors, map and tree conflicts, the state digest |
+| `State` | observable objects, anchors, map and tree conflicts, the state digest; `text_shared` reads a text without copying it (holding the result keeps that version's text in memory) |
 
 ## Tests and benchmarks
 
