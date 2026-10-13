@@ -1,0 +1,24 @@
+[package]
+name = "han-net"
+description = "HAN network binding: the han/1 carrier (frames, control stream, call streams, peer filter, tickets, well-known) over a Transport, with an iroh QUIC implementation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+han-core.workspace = true
+han-seq.workspace = true
+iroh = "1.3"
+minicbor = { version = "2", features = ["std", "derive"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

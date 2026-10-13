@@ -1,0 +1,22 @@
+[package]
+name = "han-seq"
+description = "HAN sequencer engine: the section 4.1 pipeline with a single writer, per-space SQLite storage, a steady clock, fan-out hooks and the carrier-independent call dispatcher. No network."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+han-core.workspace = true
+getrandom.workspace = true
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[lints]
+workspace = true
