@@ -130,7 +130,7 @@ async fn story(backend: &str) {
         panic!("a space")
     };
     for agent in [CODER, SCOUT, EXEC] {
-        confirm_operator(&world.home, ALICE, 1, agent);
+        confirm_operator(&world, &alice, ALICE, agent).await;
         call(
             &alice,
             Command::MemberSet {

@@ -137,14 +137,25 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                     space: profile.clone(),
                 })
                 .await;
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let r = client
-                .call(Command::MemberSet {
-                    space: profile,
-                    actor: operator,
-                    role: "owner".into(),
-                })
-                .await?;
+            // The operator holds no role in the profile space; the peer filter admits this member.set because
+            // the profile names it as the operator (N-02, P-03). Retry while the node is still fetching the space.
+            let mut tries = 0;
+            let r = loop {
+                match client
+                    .call(Command::MemberSet {
+                        space: profile.clone(),
+                        actor: operator.clone(),
+                        role: "owner".into(),
+                    })
+                    .await
+                {
+                    Err(han_node::api::NodeError::NotFound { .. }) if tries < 100 => {
+                        tries += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    other => break other?,
+                }
+            };
             println!("{r:?}");
         }
         AgentCmd::Start {
