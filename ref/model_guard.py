@@ -1,6 +1,7 @@
 """Bounded exhaustive check of P-15 guarded steering against the real policy.py (round 27: guarding is recorded on the work; round 28:
 a guarded author's approval never counts, a guarded agent may leave, and an operator never changes; round 29: an assignee carries its
-open tasks' guarding into all of its proposals, and the approval cap counts only approvals that can still count).
+open tasks' guarding into all of its proposals, and the approval cap counts only approvals that can still count; round 30: only accepted
+tasks carry guarding, a delegate carries the delegator's limits (`carried`), and approvals record their author's actorKind).
 
 The property (DECISIONS-r27 P9), checked on every claim Policy allows:
 
@@ -12,33 +13,38 @@ guard holds a role and its key is valid; an agent with no confirmed operator has
 claimed. The ghost records guarding at creation itself, from the definitions of P-15 and never from Policy's state: an agent is
 guarded when it chose to be (it opened a `guarded` session; only its guard ends that, with `agent.unguard`) or when owners force
 it (`forceGuarded` on and it is not human, a service included); its guard is the confirmed operator in its current profile. When a
-task is created the ghost records its parent's agents plus the author if guarded; when an effect is proposed, its task's agents, the
-agents of every task the ghost holds open that lists the proposer as an assignee (round 29, T1), plus the proposer and the executor if
-guarded. A claim needs the guards of those agents and of the proposer and executor if guarded now.
+task is created the ghost records its parent's agents, the agents the author carries, plus the author if guarded; when an effect is
+proposed, its task's agents, the agents the proposer carries, plus the proposer and the executor if guarded. An actor *carries* the agents
+recorded on every task the ghost holds open and the actor accepted (round 30: a non-final `task.update` by an assignee, or its own task).
+A claim needs the guards of those agents and of the proposer and executor if guarded now.
 
 World: owner O, member P, operators OP and OP2 (human members), agents BOT (operator OP) and BOT2 (operator OP2), service X
 (operator OP, the executor of some effects). At the start BOT is guarded, P has tasked BOT, BOT has delegated a task to BOT2, and
-BOT has proposed pr0 (executor X), which OP approved, and which BOT2 approved as a rule approver while a rule was on. Moves: steers (an outsider's, a guard's, BOT's into its own and into BOT2's
+BOT has proposed pr0 (executor X), which OP approved, and which BOT2 approved as a rule approver while a rule was on; BOT2 has not
+accepted t2 yet. Moves: steers (an outsider's, a guard's, BOT's into its own and into BOT2's
 session, BOT2's into BOT's), unguards by the guards and by others, BOT2 choosing guarding, P opening a guarded session (humans are
-never guarded), closing, delegation chains (BOT2 delegating beneath BOT's task back to BOT; BOT delegating to X), proposals by
-guarded agents, by their delegates, by an outsider naming BOT2 as executor, by BOT's own guard and by an owner naming the task
-BOT delegated (it isn't an assignee, so only the named task carries the guarding); approvals by OP, OP2, O and BOT;
+never guarded), closing, delegation chains (BOT2 delegating beneath BOT's task back to BOT; BOT delegating to X; BOT2 delegating to X
+without a parent, t6), every assignee accepting each open task, proposals by
+guarded agents, by their delegates (X under t6 among them), by an outsider naming BOT2 as executor, by BOT's own guard and by an owner
+naming the task BOT delegated (it isn't an assignee, so only the named task carries the guarding); approvals by OP, OP2, O, BOT and BOT2;
 claims, not-started and failed outcomes, cancels; BOT2 closing the task BOT delegated to it (t2); BOT inviting a member, and BOT
 leaving; owners switching `forceGuarded` and an
 approval rule (owners, BOT and BOT2 approve: a guard's approval is never a rule approval here, and BOT's is refused while it is
 guarded) on and off; OP removed and re-added, OP's key revoked; BOT's operator withdrawing and confirming again. An operator never
 changes (§4.3), so a withdrawal and a new confirmation are the only profile moves.
 
-Properties: GuardApproved (above); GuardedRestricted (a guarded author is never allowed `effect.approve`, a `member.set` other than
-leaving, or a steer into another's session, P5); GuardedApprovalsUnused (a claim never consumes, as the rule's approval, one whose
+Properties: GuardApproved (above); GuardedRestricted (a guarded author, or one that carries a guarded agent's limits, is never allowed
+`effect.approve`, a `member.set` other than leaving, a `policy.set`, or a steer into another's session, P5 and round 30's V1);
+DelegateChain (round 30: every task or effect an actor creates while it carries agents records all of them, so a delegate's parentless
+subtask carries the delegator); GuardedApprovalsUnused (a claim never consumes, as the rule's approval, one whose
 author is guarded at the claim, R2); UnguardOnlyByTheGuard (an unguard is allowed exactly when its author is the guard, holding a role with
 a valid key, of an agent that chose guarding, P6); NotStricter (Policy refuses no claim for a guard when every guard the ghost
 needs has approved, and refuses no entry as a guarded author's that the ghost allows); ExactGuarding (Policy's set `guarded` and
 the `guardedFor` of every task and effect equal the ghost's records); OneOpenApprovalPerAuthor; CapLiveness (round 29, T2: an
 approval by an unguarded role holder that is none of the effect's guards is never refused for the cap while fewer than the cap of
-*countable* approvals exist: open, by another author that holds a role, is not guarded by the ghost's reckoning, and is none of the
-guards the ghost requires); DeadApprovalsDropped (T2: no effect holds an unconsumed approval whose author holds no role or chose
-guarding). So that the cap is reached with these few approvers, the model lowers MAX_OPEN_APPROVALS to 1 (`CAP`: with 2, the first approval made while BOT2 is forced drops its approval before a second could be refused); the real 16 and the
+*countable* approvals exist: open, an E3 candidate by the ghost's reckoning of the rule (round 30, V3), by another author that holds a
+role and is not guarded, and none of the guards the ghost requires); DeadApprovalsDropped (T2, V5: no effect holds an unconsumed
+approval whose author holds no role or is guarded, chosen or forced). So that the cap is reached with these few approvers, the model lowers MAX_OPEN_APPROVALS to 1 (`CAP`: with 2, the first approval made while BOT2 is forced drops its approval before a second could be refused); the real 16 and the
 guards' exemption at full size are covered by vectors `guards-are-never-crowded-out`, `a-full-guard-chain-is-claimable` and
 `cap-counts-only-countable-approvals`, and by the fuzzer's bounds. The MAX_GUARDED_FOR bound is never reached here (vector
 `guarded-tasks-are-bounded`). Not modelled, and covered by
@@ -84,26 +90,28 @@ def E(label, kind, author, body):
 SESS = {"s1": (BOT, "guarded"), "s2": (BOT2, "auto"), "s4": (BOT2, "guarded"), "s8": (P, "guarded")}
 SID = {H(k): k for k in SESS}
 TASKS = {"t1": (P, [BOT], None), "t2": (BOT, [BOT2], None),          # made by init
-         "t3": (BOT2, [BOT], "t2"), "t4": (BOT, [X], "t1"), "t5": (P, [BOT2], None)}       # t3, t4: delegation chains; t5: an outsider's task
+         "t3": (BOT2, [BOT], "t2"), "t4": (BOT, [X], "t1"), "t5": (P, [BOT2], None),       # t3, t4: delegation chains; t5: an outsider's task
+         "t6": (BOT2, [X], None)}                                     # round 30: BOT2's parentless subtask (U1)
 PROPS = {"pr0": (BOT, X, None),                                       # made by init, approved by OP
          "pr1": (BOT, BOT, "t1"), "pr2": (BOT2, BOT2, "t2"), "pr3": (BOT, BOT, "t3"), "pr4": (BOT2, X, None),
          "pr5": (P, BOT2, None), "pr6": (OP, BOT, None), "pr7": (X, X, "t4"),
-         "pr8": (O, P, "t2")}                                         # an owner charges a task it isn't assigned (the named task's agents)
+         "pr8": (O, P, "t2"),                                         # an owner charges a task it isn't assigned (the named task's agents)
+         "pr9": (X, X, "t6")}                                         # the work of BOT2's parentless subtask
 LABEL = {H(k): k for k in list(TASKS) + list(PROPS)}
 
 def fz(d): return tuple(sorted(d.items()))
 
 class M:
     """A model state: Policy's state plus the ghost. The ghost: `gd` the agents that chose guarding; `rec` what was recorded on each task
-    and effect when it was created (label → agents); `closed` the tasks closed since; `fresh` the (effect, approver) pairs with an
-    approval no claim used up; `lastk` the guards whose approvals the latest claim of an effect used; `unconf`, `oprev`, `forced` the
-    profile and policy facts."""
-    __slots__ = ("labels", "state", "gd", "rec", "closed", "fresh", "lastk", "unconf", "oprev", "forced")
+    and effect when it was created (label → agents); `closed` the tasks closed since; `acc` the (task, actor) pairs of acceptances;
+    `fresh` the (effect, approver) pairs with an approval no claim used up; `lastk` the guards whose approvals the latest claim of an
+    effect used; `unconf`, `oprev`, `forced`, `rule` the profile and policy facts."""
+    __slots__ = ("labels", "state", "gd", "rec", "closed", "acc", "fresh", "lastk", "unconf", "oprev", "forced", "rule")
     def __init__(self, **kw):
         for k in self.__slots__: setattr(self, k, kw[k])
     def key(self):
         st = {k: v for k, v in self.state.items() if k not in ("entries", "head", "roleHistory")}
-        body = json.dumps([st, sorted(self.gd), self.rec, sorted(self.closed), sorted(self.fresh), self.lastk, sorted(self.unconf), self.oprev, self.forced], sort_keys=True)
+        body = json.dumps([st, sorted(self.gd), self.rec, sorted(self.closed), sorted(self.acc), sorted(self.fresh), self.lastk, sorted(self.unconf), self.oprev, self.forced, self.rule], sort_keys=True)
         return hashlib.sha256(body.encode()).digest()
     def with_(self, **kw):
         d = {k: getattr(self, k) for k in self.__slots__}; d.update(kw); return M(**d)
@@ -131,6 +139,18 @@ def guard_of(m, a):
 
 def can_sign(m, a): return m.state["roles"].get(a) in POL.READ_ROLES and not (a == OP and m.oprev)
 
+def carried(m, x):
+    """Round 30: the agents recorded on the open tasks `x` accepted."""
+    out = set()
+    for t, agents in m.rec:
+        if t in TASKS and t not in m.closed and (t, x) in m.acc: out |= set(agents)
+    return out
+
+def candidate(m, a):
+    """V3: an approval by `a` is an E3 candidate now: the model's rule (owners, BOT and BOT2) is on and `a` matches it holding a role."""
+    role = m.state["roles"].get(a)
+    return m.rule and role in POL.READ_ROLES and (role == "owner" or a in (BOT, BOT2))
+
 def required(m, pr):
     """The agents whose guard must approve a claim of `pr` now: those recorded when it (or a task it descends from) was created,
     and its proposer and executor if guarded now."""
@@ -147,10 +167,11 @@ def unmet(m, pr):
     return None
 
 def forbidden(m, author, kind, body):
-    """P5: a guarded author may not approve, govern (leaving is not governing, R5) or steer others."""
-    if not guarded(m, author): return False
+    """P5, V1: a guarded author, or one that carries a guarded agent's limits, may not approve, govern (leaving is not governing, R5)
+    or steer others."""
+    if not (guarded(m, author) or carried(m, author)): return False
     if kind == "member.set" and body == {"actor": author, "role": "none"}: return False
-    if kind in ("effect.approve", "member.set"): return True
+    if kind in ("effect.approve", "member.set", "policy.set"): return True
     return kind == "session.input" and body["session"] in m.state["sessions"] and SESS[SID[body["session"]]][0] != author
 
 def unguard_ok(m, author, a):
@@ -163,17 +184,20 @@ def record(m, n, kind, author, body, label):
     if kind == "agent.unguard": return n.with_(gd=n.gd - {body["agent"]})
     if kind == "task":
         parent = TASKS[label][2]
-        got = set(dict(m.rec)[parent]) if parent else set()
+        got = (set(dict(m.rec)[parent]) if parent else set()) | carried(m, author)        # V1: and what the author carries
         if guarded(m, author): got.add(author)
-        return n.with_(rec=fz(dict(m.rec, **{label: tuple(sorted(got))})))
+        acc = n.acc | ({(label, author)} if author in TASKS[label][1] else set())           # V4: an author assigning itself has accepted
+        return n.with_(rec=fz(dict(m.rec, **{label: tuple(sorted(got))})), acc=acc)
     if kind == "effect.propose":
         task = PROPS[label][2]
-        got = set(dict(m.rec)[task]) if task else set()
-        for t, agents in m.rec:                                           # T1: every open task that has the proposer as an assignee
-            if t in TASKS and t not in m.closed and author in TASKS[t][1]: got |= set(agents)
+        got = (set(dict(m.rec)[task]) if task else set()) | carried(m, author)          # T1, V4: the open tasks the proposer accepted
         got |= {a for a in (author, body["executor"]) if guarded(m, a)}
         return n.with_(rec=fz(dict(m.rec, **{label: tuple(sorted(got))})))
-    if kind == "effect.approve": return n.with_(fresh=n.fresh | {(LABEL[body["proposal"]], author)})
+    if kind == "effect.approve":                                          # V3: the approval's fold drops the others that don't count
+        pr = LABEL[body["proposal"]]
+        guards = {guard_of(m, a) for a in required(m, pr)}
+        keep = frozenset(x for x in n.fresh if x[0] != pr or x[1] == author or x[1] in guards or candidate(m, x[1]))
+        return n.with_(fresh=keep | {(pr, author)})
     if kind == "effect.claim":
         pr = LABEL[body["proposal"]]
         gs = tuple(sorted({guard_of(m, a) for a in required(m, pr)}))
@@ -183,14 +207,19 @@ def record(m, n, kind, author, body, label):
         back = dict(m.lastk).get(pr, ()) if body["started"] == "no" else ()
         back = tuple(g for g in back if m.state["roles"].get(g) in POL.READ_ROLES)       # T2: a returned approval of a guard that left is dropped
         return n.with_(fresh=n.fresh | {(pr, g) for g in back}, lastk=fz(dict(m.lastk, **{pr: ()})))
-    if kind == "policy.set": return n.with_(forced=body["policy"]["sessions"]["forceGuarded"])
-    if kind == "task.update": return n.with_(closed=n.closed | {LABEL[body["task"]]})
+    if kind == "policy.set":                                              # V5: forcing on drops the agents' open approvals
+        forced = body["policy"]["sessions"]["forceGuarded"]
+        fresh = frozenset(x for x in n.fresh if not (forced and x[1] in OPERATOR))
+        return n.with_(forced=forced, rule=bool(body["policy"]["approvals"]), fresh=fresh)
+    if kind == "task.update":
+        if body["state"] in POL.TASK_FINAL: return n.with_(closed=n.closed | {LABEL[body["task"]]})
+        return n.with_(acc=n.acc | {(LABEL[body["task"]], author)})          # V4: a non-final update accepts
     if kind == "member.set" and body["role"] not in POL.READ_ROLES:    # T2: an author that loses its role loses its open approvals
         return n.with_(fresh=frozenset(x for x in n.fresh if x[1] != body["actor"]))
     return n
 
 def init(pol):
-    m = M(labels=(), state=None, gd=frozenset(), rec=(), closed=frozenset(), fresh=frozenset(), lastk=(), unconf=frozenset(), oprev=False, forced=False)
+    m = M(labels=(), state=None, gd=frozenset(), rec=(), closed=frozenset(), acc=frozenset(), fresh=frozenset(), lastk=(), unconf=frozenset(), oprev=False, forced=False, rule=False)
     def go(m, label, kind, author, body):
         n, d = apply(pol, m, E(label, kind, author, body), label)
         assert n, f"NotStricter: the setup step {label} ({kind} by {short(author)}) was refused: {d.get('reason')}"
@@ -237,7 +266,7 @@ def successors(pol, m):
         if not eff or eff["phase"] in POL.FINAL: continue
         go(f"{short(eff['proposer'])} cancels {pr}", "effect.cancel", eff["proposer"], {"proposal": pid})
         if len(eff["claims"]) >= 2: continue
-        for who in (OP, OP2, O, BOT):
+        for who in (OP, OP2, O, BOT, BOT2):
             go(f"{short(who)} approves {pr}", "effect.approve", who, {"proposal": pid, "planDigest": DG})
         a = len(eff["claims"]) + 1
         go(f"{short(eff['executor'])} claims {pr}", "effect.claim", eff["executor"], {"proposal": pid, "attempt": a, "instance": "k1", "window": 30})
@@ -251,6 +280,11 @@ def successors(pol, m):
                 out.append((f"{short(eff['executor'])} outcome {pr} started:{started}", "effect.outcome", eff["executor"], body, n, d))
     if H("t2") in m.state["tasks"] and m.state["tasks"][H("t2")]["open"]:
         go("BOT2 closes t2", "task.update", BOT2, {"task": H("t2"), "state": "done"})
+    for t, (_, to, _) in TASKS.items():                                   # V4: each assignee may accept each open task once
+        tk = m.state["tasks"].get(H(t))
+        for a in to:
+            if tk and tk["open"] and (t, a) not in m.acc:
+                go(f"{short(a)} accepts {t}", "task.update", a, {"task": H(t), "state": "accepted"})
     if m.state["roles"].get(Z) is None: go("BOT invites Z", "member.set", BOT, {"actor": Z, "role": "guest"})
     if m.state["roles"].get(BOT): go("BOT leaves", "member.set", BOT, {"actor": BOT, "role": "none"})
     go("O removes OP" if m.state["roles"].get(OP) else "O re-adds OP", "member.set", O, {"actor": OP, "role": "none" if m.state["roles"].get(OP) else "member"})
@@ -274,17 +308,17 @@ def check_state(m):
     for pid, eff in m.state["effects"].items():
         authors = [a["author"] for a in eff["approvals"] if not a.get("consumedBy")]
         if len(authors) != len(set(authors)): return "OneOpenApprovalPerAuthor: an author has two open approvals on one proposal"
-        dead = [a for a in authors if m.state["roles"].get(a) not in POL.READ_ROLES or a in m.gd]
-        if dead: return f"DeadApprovalsDropped: {LABEL[pid]} holds an open approval by {short(dead[0])}, which holds no role or chose guarding"
+        dead = [a for a in authors if m.state["roles"].get(a) not in POL.READ_ROLES or guarded(m, a)]
+        if dead: return f"DeadApprovalsDropped: {LABEL[pid]} holds an open approval by {short(dead[0])}, which holds no role or is guarded"
     return None
 
 def countable(m, pr, who):
-    """T2, the ghost's count for the cap: open approvals on `pr` by authors other than `who` that hold a role, aren't guarded and
-    are none of the guards a claim of `pr` would need now."""
+    """T2, V3, the ghost's count for the cap: open approvals on `pr` by authors other than `who` that are E3 candidates now, aren't
+    guarded and are none of the guards a claim of `pr` would need now."""
     guards = {guard_of(m, a) for a in required(m, pr)}
     eff = m.state["effects"][H(pr)]
     return sum(1 for a in eff["approvals"] if not a.get("consumedBy") and a["author"] != who and a["author"] not in guards
-               and m.state["roles"].get(a["author"]) in POL.READ_ROLES and not guarded(m, a["author"]))
+               and candidate(m, a["author"]) and not guarded(m, a["author"]))
 
 def rule_approver_guarded(m, m2, body):
     """R2: the author of the approval an allowed claim consumed as the rule's, if the ghost holds it guarded at the claim."""
@@ -296,8 +330,13 @@ def rule_approver_guarded(m, m2, body):
 def check(m, name, kind, author, body, d, m2=None):
     if kind == "profile": return None
     allowed, reason = d["allow"], d.get("reason", "")
-    if allowed and forbidden(m, author, kind, body): return f"GuardedRestricted: guarded {short(author)} was allowed {kind}"
-    if not allowed and "guarded author may not" in reason and not forbidden(m, author, kind, body):
+    if allowed and forbidden(m, author, kind, body): return f"GuardedRestricted: guarded or carrying {short(author)} was allowed {kind}"
+    if allowed and kind in ("task", "effect.propose") and m2 is not None:
+        lab = next(l for l in (TASKS if kind == "task" else PROPS) if l in name.split() or f"({l})" in name)
+        item = (m2.state["tasks"] if kind == "task" else m2.state["effects"])[H(lab)]
+        missing = carried(m, author) - set(item["guardedFor"])
+        if missing: return f"DelegateChain: {lab} by {short(author)} does not record {sorted(map(short, missing))}, which it carries"
+    if not allowed and "author may not approve" in reason and not forbidden(m, author, kind, body):
         return f"NotStricter: {kind} by {short(author)} refused as a guarded author's, though the ghost allows it"
     if kind == "agent.unguard":
         ok = unguard_ok(m, author, body["agent"])
@@ -357,8 +396,8 @@ def explore(pol, depth, cap_bytes=None, progress=False):
     if v: return 0, v, ("init",), {}
     seen = {start.key()}; frontier = [(pack(start), ())]                # the frontier is kept compressed; `seen` holds 32-byte hashes
     n, tick = 0, 0
-    flags = {"guarded claim": False, "delegated claim": False, "guard denial": False, "restricted author": False, "guarded approver skipped": False,
-             "cap refusal": False, "uncounted approval": False, "task-less delegated work": False}
+    flags = {"guarded claim": False, "delegated claim": False, "guard denial": False, "restricted author": False, "guarded approval dropped": False,
+             "cap refusal": False, "uncounted approval": False, "task-less delegated work": False, "limited delegate": False, "parentless delegated task": False}
     for level in range(depth):
         nxt = []
         for blob, path in frontier:
@@ -376,10 +415,15 @@ def explore(pol, depth, cap_bytes=None, progress=False):
                     if d["allow"] and need: flags["guarded claim"] = True
                     if d["allow"] and need - {PROPS[pr][0], PROPS[pr][1]}: flags["delegated claim"] = True
                     if not d["allow"] and d.get("reason") in GUARD_REASONS: flags["guard denial"] = True
-                    eff = m.state["effects"][body["proposal"]]
-                    if m.state["policy"]["approvals"] and any(not x.get("consumedBy") and x["author"] in (BOT, BOT2) and guarded(m, x["author"]) for x in eff["approvals"]):
-                        flags["guarded approver skipped"] = True
-                if not d["allow"] and "guarded author may not" in d.get("reason", ""): flags["restricted author"] = True
+                if kind in ("policy.set", "session.open") and d["allow"] and m2 is not None:
+                    before = sum(1 for e in m.state["effects"].values() for x in e["approvals"] if not x.get("consumedBy") and x["author"] in (BOT, BOT2))
+                    after = sum(1 for e in m2.state["effects"].values() for x in e["approvals"] if not x.get("consumedBy") and x["author"] in (BOT, BOT2))
+                    if after < before: flags["guarded approval dropped"] = True
+                if not d["allow"] and "author may not approve" in d.get("reason", ""):
+                    flags["restricted author"] = True
+                    if not guarded(m, author): flags["limited delegate"] = True
+                if kind == "task" and d["allow"] and "parent" not in body and m2 is not None and not guarded(m, author) and carried(m, author):
+                    flags["parentless delegated task"] = True
                 if kind == "effect.approve" and not d["allow"] and d.get("reason") == "too many open approvals": flags["cap refusal"] = True
                 if kind == "effect.approve" and d["allow"] and author not in {guard_of(m, a) for a in required(m, LABEL[body["proposal"]])}:
                     eff = m.state["effects"][body["proposal"]]
@@ -408,23 +452,23 @@ def mutant(*edits):
     exec(compile(src, "policy_mut", "exec"), mod.__dict__)
     return mod
 
-TASK_REC = 't["guardedFor"] = guarded_for(s, ctx, parent["guardedFor"] if parent else [], author)'
+TASK_REC = 't["guardedFor"] = task_guarded_for(s, ctx, author, b.get("parent"))'
 EFF_REC = '    out = list(state["tasks"][task_id]["guardedFor"]) if task_id else []'
 EFF_RET = '    return guarded_for(state, ctx, out, proposer, executor)'
 NEED = 'need = guarded_for(state, ctx, eff["guardedFor"], eff["proposer"], eff["executor"])'
 FORCED = '    forced = agent and bool(state["policy"]["sessions"].get("forceGuarded"))'
 GUARDED = '"guarded": forced or x in state["guarded"]'
-GATE = '    if guard_status(state, ctx, author)["guarded"] and guarded_may_not(state, entry):'
-KINDS = '    if k in ("effect.approve", "member.set"): return True'
+GATE = '    if limited(state, ctx, author) and guarded_may_not(state, entry):'
+LIMITED = '    return guard_status(state, ctx, x)["guarded"] or bool(carried(state, x))'
+KINDS = '    if k in ("effect.approve", "member.set", "policy.set"): return True'
 STEER = '    if k == "session.input": return b["session"] in state["sessions"] and state["sessions"][b["session"]]["actor"] != entry["author"]'
 UNGUARD = '    if x not in state["guarded"] or guard_status(state, ctx, x).get("guard") != entry["author"]:'
-USABLE = '    return key_status(ctx, a["author"], a["keyId"]) == "valid" and not guard_status(state, ctx, a["author"])["guarded"]'
 LEAVE = '    if k == "member.set" and b == {"actor": entry["author"], "role": "none"}: return False        # leaving is not governing\n'
 MUTATIONS = {
     # what is recorded on the work (P2)
     "tasks-record-no-guarding": (TASK_REC, 't["guardedFor"] = []'),
-    "tasks-drop-the-parents-agents": (TASK_REC, 't["guardedFor"] = guarded_for(s, ctx, [], author)'),
-    "tasks-omit-a-guarded-author": (TASK_REC, 't["guardedFor"] = list(parent["guardedFor"]) if parent else []'),
+    "tasks-drop-the-parents-agents": ('    out = list(state["tasks"][parent_id]["guardedFor"]) if parent_id else []', '    out = []'),
+    "tasks-omit-a-guarded-author": ('    return guarded_for(state, ctx, out, author)', '    return out'),
     "effects-drop-the-named-tasks-agents": (EFF_REC, '    out = []'),
     "effects-omit-a-guarded-proposer": (EFF_RET, '    return guarded_for(state, ctx, out, executor)'),
     "effects-omit-a-guarded-executor": (EFF_RET, '    return guarded_for(state, ctx, out, proposer)'),
@@ -459,25 +503,33 @@ MUTATIONS = {
     "unguard-needs-no-role": ('    return ALLOW if role in READ_ROLES else deny("guard holds no role")', '    return ALLOW'),
     # what a guarded author may not do (P5)
     "guarded-authors-unrestricted": (GATE, '    if False:'),
-    "only-a-chosen-guarding-restricts": (GATE, '    if author in state["guarded"] and guarded_may_not(state, entry):'),
-    "guarded-agents-may-approve": (KINDS, '    if k in ("member.set",): return True'),
-    "guarded-agents-may-govern": (KINDS, '    if k in ("effect.approve",): return True'),
+    "only-a-chosen-guarding-restricts": (LIMITED, '    return x in state["guarded"] or bool(carried(state, x))'),
+    "guarded-agents-may-approve": (KINDS, '    if k in ("member.set", "policy.set"): return True'),
+    "guarded-agents-may-govern": (KINDS, '    if k in ("effect.approve", "policy.set"): return True'),
     "guarded-agents-may-steer-others": (STEER, '    if k == "session.input": return False'),
-    "guarded-agents-may-not-delegate": (KINDS, '    if k in ("effect.approve", "member.set", "task"): return True'),
-    "guarded-agents-may-not-propose": (KINDS, '    if k in ("effect.approve", "member.set", "effect.propose"): return True'),
+    "guarded-agents-may-not-delegate": (KINDS, '    if k in ("effect.approve", "member.set", "policy.set", "task"): return True'),
+    "guarded-agents-may-not-propose": (KINDS, '    if k in ("effect.approve", "member.set", "policy.set", "effect.propose"): return True'),
     "guarded-agents-may-not-steer-themselves": (STEER, '    if k == "session.input": return True'),
-    # round 28: a guarded author's approval never counts (R2); a guarded agent may leave (R5)
-    "guarded-approvers-count": (USABLE, '    return key_status(ctx, a["author"], a["keyId"]) == "valid"'),
-    "only-a-chosen-guarding-stops-an-approver": (USABLE, '    return key_status(ctx, a["author"], a["keyId"]) == "valid" and a["author"] not in state["guarded"]'),
+    # round 28: a guarded agent may leave (R5). "guarded-approvers-count" and "only-a-chosen-guarding-stops-an-approver" (R2) are retired
+    # in round 30: the fold drops a guarded author's open approvals, so E3 has nothing to skip (equivalent mutants)
     "guarded-agents-may-not-leave": (LEAVE, ''),
     # round 29: an assignee carries its open tasks' guarding (T1); the cap counts only what can still count (T2)
-    "effects-ignore-the-proposers-open-tasks": ('        out += [a for a in t["guardedFor"] if a not in out]', '        pass'),
-    "closed-tasks-still-carry": ('if t["open"] and proposer in t["to"]), key=', 'if proposer in t["to"]), key='),
-    "the-cap-counts-forced-authors": ('    return role_of(state, actor) in READ_ROLES and not guard_status(state, ctx, actor)["guarded"]', '    return role_of(state, actor) in READ_ROLES and actor not in state["guarded"]'),
-    "the-cap-counts-every-open-approval": ('    return role_of(state, actor) in READ_ROLES and not guard_status(state, ctx, actor)["guarded"]', '    return True'),
+    "effects-ignore-the-proposers-open-tasks": ('    out += [a for a in carried(state, proposer) if a not in out]', '    pass'),
+    "closed-tasks-still-carry": ('if t["open"] and x in t["accepted"]), key=', 'if x in t["accepted"]), key='),
+    "the-cap-counts-every-open-approval": ('        if sum(1 for a in approval_candidates(state, eff, ctx["time"])\n               if a["author"] != author and a["author"] not in guards)',
+                                           '        if sum(1 for a in open_approvals(eff, ctx["time"])\n               if a["author"] != author)'),
     "removed-authors-keep-open-approvals": ('        if new not in READ_ROLES: drop_open_approvals(s, tgt)', '        pass'),
     "guarded-authors-keep-open-approvals": ('            drop_open_approvals(s, author)', '            pass'),
-    "returned-approvals-of-departed-authors-stay": ('                    elif role_of(s, a["author"]) not in READ_ROLES or a["author"] in s["guarded"]:', '                    elif False:'),
+    "returned-approvals-of-departed-authors-stay": ('                    elif role_of(s, a["author"]) not in READ_ROLES or approval_guarded(s, a):', '                    elif False:'),
+    # round 30: only accepted tasks carry (V4); a delegate carries the limits and its subtasks carry them (V1); forcing drops (V5)
+    "unaccepted-tasks-carry": ('if t["open"] and x in t["accepted"]), key=', 'if t["open"] and x in t["to"]), key='),
+    "acceptance-ignored": ('            t["accepted"].append(author)', '            pass'),
+    "tasks-ignore-what-the-author-carries": ('    out += [a for a in carried(state, author) if a not in out]', '    pass'),
+    "delegates-carry-no-limits": (LIMITED, '    return guard_status(state, ctx, x)["guarded"]'),
+    "forcing-on-keeps-the-agents-approvals": ('            eff["approvals"] = [a for a in eff["approvals"] if a.get("consumedBy") or not approval_guarded(s, a)]', '            pass'),
+    "recorded-approvals-ignore-forcing": ('    return a["author"] in s["guarded"] or (bool(s["policy"]["sessions"].get("forceGuarded")) and a["actorKind"] != "human")', '    return a["author"] in s["guarded"]'),
+    # "an approval keeps what does not count" (V3) is not reachable here: with the model's rule and roles an approval stops being a
+    # candidate only when the rule is off, where no non-guard can approve; vector `cap-counts-only-countable-approvals` catches it
 }
 
 def main():
@@ -507,7 +559,7 @@ def main():
         sys.exit(3)
     if v: print(f"VIOLATION after {n} transitions: {v}\n  path: {' → '.join(path)}"); sys.exit(1)
     if not all(flags.values()): print(f"VACUOUS: {flags}"); sys.exit(1)
-    print(f"[guard] {n} transitions to depth {a.depth}; GuardApproved, GuardedRestricted, GuardedApprovalsUnused, UnguardOnlyByTheGuard, NotStricter, "
+    print(f"[guard] {n} transitions to depth {a.depth}; GuardApproved, GuardedRestricted, DelegateChain, GuardedApprovalsUnused, UnguardOnlyByTheGuard, NotStricter, "
           f"ExactGuarding, OneOpenApprovalPerAuthor, CapLiveness and DeadApprovalsDropped HOLD (non-vacuous: {', '.join(flags)})")
 
 if __name__ == "__main__":

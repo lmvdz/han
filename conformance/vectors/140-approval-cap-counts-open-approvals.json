@@ -1110,7 +1110,8 @@
      {
       "id": "53eed196daa7ad35e6528ad8a7a028ae8041a6a20f8ac2951c96ca4bd04eb17e",
       "author": "@c16:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
    },

@@ -256,12 +256,14 @@
       "id": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
       "author": "@o:a.example",
       "keyId": "k1",
-      "consumedBy": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d"
+      "consumedBy": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+      "actorKind": "human"
      },
      {
       "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
       "author": "@m:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
    }
@@ -292,7 +294,8 @@
      {
       "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
       "author": "@m:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ],
     "effects.9cf55c77231c2a842cd46fc05f4e678927cfd3336889d54f9ff0ae7b4c064464.phase": "open"
@@ -327,7 +330,8 @@
       "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
       "author": "@m:a.example",
       "keyId": "k1",
-      "consumedBy": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7"
+      "consumedBy": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+      "actorKind": "human"
      }
     ]
    }
@@ -496,7 +500,8 @@
       "id": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
       "author": "@o:a.example",
       "keyId": "k1",
-      "consumedBy": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d"
+      "consumedBy": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+      "actorKind": "human"
      }
     ]
    },
@@ -619,7 +624,8 @@
      {
       "id": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",
       "author": "@o:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ],
     "effects.64c2dc76a86e3ddc8dda927c82bcc1e1936d08a78956eb894090f7c8afa55ba5.phase": "open"

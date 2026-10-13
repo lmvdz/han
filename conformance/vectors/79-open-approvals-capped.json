@@ -485,7 +485,8 @@
      {
       "id": "39f82526861f1e785e2bf52b0828194c4fa43c62a0d5be74ec097cf8c6a88151",
       "author": "@m:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
    },
@@ -1205,17 +1206,20 @@
      {
       "id": "39f82526861f1e785e2bf52b0828194c4fa43c62a0d5be74ec097cf8c6a88151",
       "author": "@m:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      },
      {
       "id": "2edf267fd9f3d6852228f184ff589154c3dd2980f8e2ce6d875ea7a302a0f4dc",
       "author": "@op:b.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      },
      {
       "id": "53eed196daa7ad35e6528ad8a7a028ae8041a6a20f8ac2951c96ca4bd04eb17e",
       "author": "@o:a.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
    },

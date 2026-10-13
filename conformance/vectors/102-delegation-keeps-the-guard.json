@@ -571,6 +571,59 @@
   },
   {
    "entry": {
+    "id": "07e65444615fdb2bc890077a0870e46fd5e50f05858de32228a54414bb01ff47",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@bot3:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "fad57a735bd88b81323405a98db3e1bb76e7dc44077404c34778fce12d306a80",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-q0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "allow",
+   "check": {
+    "effects.07e65444615fdb2bc890077a0870e46fd5e50f05858de32228a54414bb01ff47.guardedFor": []
+   },
+   "note": "V4: BOT3 hasn't accepted t2, so its work that names no task carries nothing"
+  },
+  {
+   "entry": {
+    "id": "f878f75e0e0c7714b111075d7b2ff704f14f337c2d1eb7b9314920357d5721df",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@bot3:b.example",
+    "keyId": "k1",
+    "body": {
+     "task": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "state": "accepted"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-acc",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow",
+   "check": {
+    "tasks.de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8.accepted": [
+     "@bot3:b.example"
+    ]
+   }
+  },
+  {
+   "entry": {
     "id": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
     "v": 1,
     "space": "s1:a.example",
@@ -589,7 +642,7 @@
     "nonce": "n-q",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:19Z",
+   "time": "2026-10-10T12:00:21Z",
    "expect": "allow",
    "check": {
     "effects.6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021.guardedFor": [
@@ -597,7 +650,7 @@
      "@bot2:b.example"
     ]
    },
-   "note": "T1: work that names no task still carries the open tasks BOT3 is assigned"
+   "note": "T1, V4: once accepted, work that names no task carries the task's guarding"
   },
   {
    "entry": {
@@ -616,7 +669,7 @@
     "nonce": "n-tc",
     "time": "2026-10-10T12:00:00Z"
    },
-   "time": "2026-10-10T12:00:20Z",
+   "time": "2026-10-10T12:00:22Z",
    "expect": "allow",
    "note": "a guarded agent may cancel what it delegated"
   }
@@ -625,6 +678,7 @@
   "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
   "a1": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
   "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+  "acc": "f878f75e0e0c7714b111075d7b2ff704f14f337c2d1eb7b9314920357d5721df",
   "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
   "b2": "3bd4dc2d4b2bcd64762028bbff8201cf37c8f019ee1fd31fb2e4287dd1d1b079",
   "b3": "5855d651c2f473475ca7f1c309c3e81fa296c67dba8ebfe8287ff07311b28c9c",
@@ -638,6 +692,7 @@
   "op2": "f6d2f86637719383939553c359545da9d11153c3b45d65a02cd64df704368328",
   "p": "4c76ad5ea690b8104aef0f58af50fe7efaa8dcebbaedeba988438a67352a597f",
   "q": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
+  "q0": "07e65444615fdb2bc890077a0870e46fd5e50f05858de32228a54414bb01ff47",
   "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
   "s2": "c3cf013cbf1ceafa067644965fe2e8cfde8df5ba04eb7d6e9b0d096d3d53443c",
   "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",

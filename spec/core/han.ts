@@ -75,7 +75,7 @@ export interface Bodies {
   "key.add": { keyId: KeyId; publicKey: string };
   "key.revoke": { keyId: KeyId };
   "message": { to?: ActorId[] };
-  "task": { to: ActorId[]; budget?: Budget; parent?: EntryId; deadline?: Time };
+  "task": { to: ActorId[]; budget?: Budget; parent?: EntryId; deadline?: Time; external?: string };   // external: a reference outside HAN, such as an issue's address; printable ASCII without spaces, 1–1024 chars; opaque to Policy (§5)
   "task.update": { task: EntryId; state: TaskState };
   "task.cancel": { task: EntryId };
   "effect.propose": { executor: ActorId; action: string; planDigest: Hex; cost?: Budget; repeatable: boolean; task?: EntryId; expiresAt?: Time };
@@ -178,16 +178,17 @@ export interface SpaceState {
   roleHistory: { [actor: ActorId]: { from: Seq; to?: Seq }[] };   // readable-role intervals in this space's seqs (P-02): held at seq k iff a kept interval has from ≤ k < to (no `to` while it lasts); at most the 64 most recent per actor, older ones are dropped (seqs before the oldest kept `from` are then not readable for a former member)
   tasks: {
     [id: EntryId]: { author: ActorId; to: ActorId[]; open: boolean; state: TaskState | "pending"; cancelRequested: boolean; depth: number; seq: Seq;
-                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, plus the author if guarded when the task was created; fixed then, never shrinks
+                     accepted: ActorId[];           // P-15: the assignees that accepted it (a non-final task.update), in order; the author if it assigned itself, from creation
+                     guardedFor: ActorId[];         // P-15: the parent's guardedFor, then carried(author), then the author if guarded when the task was created; fixed then, never shrinks; a task whose list with its author would exceed MAX_GUARDED_FOR is denied
                      parent?: EntryId; budget?: Budget; left?: Budget };
   };
   effects: {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then that of every other open task listing the proposer as an assignee, plus the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; a proposal that would make it longer than MAX_GUARDED_FOR is denied
+      guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then carried(proposer) (the guardedFor of the open tasks it accepted), then the proposer and the executor, each if guarded at the proposal; fixed then, never shrinks; a proposal whose list with its proposer and executor would exceed MAX_GUARDED_FOR is denied
       expiresAt?: Time;                             // E5: no claim at or after this time
-      approvals: { id: EntryId; author: ActorId; keyId: KeyId; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect, and unconsumed ones whose author lost its role or is guarded are dropped (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
+      approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
         window: number;                             // the launchWindow in force when the claim was ordered (pinned for X-04, P-09)
@@ -214,24 +215,24 @@ export type ErrorCode = "denied" | "invalid" | "not_found" | "limit" | "unavaila
 export interface WireError { code: ErrorCode; message: string; retryAfterMs?: number /* `limit`, and `unavailable` when waiting helps (R-03a, R-16) */; movedTo?: ServerName }
 
 export interface Limits {
-  maxFrameBytes: 1310720;      // 1.25 MiB of JSON text
+  maxFrameBytes: 1310720;      // 1.25 MiB of JSON text: one frame (G-07)
   maxHeaderBytes: 16384; maxContentBytes: 65536;
   maxBlobBytes: 4294967296;
-  maxBlobPartBytes: 786432;    // generic binding only (§8.3): blobPut part, 768 KiB → 1,048,576 base64 chars, fits a frame
-  maxBlobRangeBytes: 786432;   // generic binding only: blobGet answers at most this many bytes per call
+  maxBlobPartBytes: 786432;    // the binding (§8.2): blobPut part, 768 KiB → 1,048,576 base64 chars, fits a frame
+  maxBlobRangeBytes: 786432;   // the binding (§8.2): blobGet answers at most this many bytes per call
   maxStreamItemBytes: 65536;   // T-07: one StreamItem; larger context goes in a blob
   maxFollows: 256;
   maxClockSkewSeconds: 60;     // R-03a: the one future-time tolerance; a receipt dated further ahead of a verifier's clock is a `future-time` fault
   maxStateItems: 1000;         // §3 state: items of each paged map (PagedMap) per page of a state read (a page is also bounded by maxFrameBytes); the rest follows by `cursor`
 }
 export interface Challenge { challenge: string /* 43 chars: 32 random bytes, base64url; a client accepts 22–128 of [A-Za-z0-9_-] (G-08) */; server: ServerName; versions: number[]; time: Time }
-/** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never host:port). */
+/** G-08: the bytes a hello `proof` signs: "han-hello-v1\n" ‖ UTF-8(challenge as sent) ‖ "\n" ‖ UTF-8(dialed), `dialed` being the ServerName the client intends (never a node id, address or port). */
 /** Policy's numeric constants (P-07 E5, P-08, P-15, P-02): fixed by the protocol, not negotiated by `hello`. */
 export interface PolicyConstants {
-  MAX_OPEN_APPROVALS: 16;      // countable open (unconsumed, unexpired) approvals by other authors a proposal may hold when a new one by a non-guard arrives: an approval counts while its author holds a role, isn't guarded and isn't one of its guards; a guard's is never capped and never counts (P-08)
+  MAX_OPEN_APPROVALS: 16;      // countable open approvals by other authors a proposal may hold when a new one by a non-guard arrives: an approval counts while it is an E3 candidate (unconsumed, unexpired, matching the current rule and separateApprover, its author holding a role) and isn't by one of its guards; a guard's is never capped and never counts (P-08)
   MAX_OPEN_SESSIONS: 64;       // open sessions per actor per space (P-15)
   MAX_ATTEMPTS: 64;            // claims per effect: the 65th effect.claim is `denied`, the executor proposes again (P-07 E5)
-  MAX_GUARDED_FOR: 19;         // P-15: a task's guardedFor holds at most the authors of its chain (maxDelegationDepth ≤ 16, so 17; derived); an effect's, which also takes the proposer's open tasks', is checked: a proposal that would exceed it is denied
+  MAX_GUARDED_FOR: 19;         // P-15, checked: a task whose guardedFor with its author, or a proposal whose guardedFor with its proposer and executor, would hold more agents is denied (each counted whether guarded or not), so a claim never needs more than 19 guards
   MAX_UNCONSUMED_APPROVALS: 36;   // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 by authors that are never guards (one more returned by a not-started outcome; an approval's fold keeps only countable ones besides the guards'), plus one per possible guard (MAX_GUARDED_FOR; operators never change)
   MAX_APPROVALS: 55;           // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 + 2 × MAX_GUARDED_FOR, each guard holding one unconsumed and one consumed approval
   ROLE_INTERVALS: 64;          // role intervals kept per actor (P-02)
@@ -274,16 +275,18 @@ export type ReplyFrame =
   | { id: number; ok: Json } | { id: number; error: WireError }
   | { id: number; item: ReadItem | StreamItem } | { id: number; end: true };
 
-// ───────────────────────── the generic binding's frames (§8.3) ─────────────────────────
-// One WebSocket, text frames of I-JSON. The server speaks first with a bare `Challenge` (no id). The client's first call
-// is `hello`; any other call before it is `denied`. Request ids are integers in [1, 2^53), chosen by the client; a streaming
-// call whose id is still open is `invalid`. A request frame is exactly {id, call, args} (id in [1, 2^53), args an object, closed per call);
-// text that is not an I-JSON object is answered `{ id: 0, error: invalid }` and the server closes; an integer of 2^53 or more anywhere in the text
-// is answered `invalid` on the request's own id when that is usable (the connection stays open), else `{ id: 0 }` and a close; an object that is not a
-// request frame is answered `invalid` with its own id when that is usable, else 0 (G-07). Binary frames close the connection. Streaming calls (`read`, `subscribe`, `watch`) answer with
-// `item` frames: `read` without `follow` then ends with `{ id, end: true }`; the others, and `read` with `follow`, run until
-// `cancel`, the connection closing, or `{ id, error: unavailable }` (the subscriber fell too far behind: read again).
-// `data` is base64url without padding. Every call below is a RequestFrame with the same envelope.
+// ───────────────────────── the QUIC binding's frames (§8.2, `han/1`) ─────────────────────────
+// QUIC + TLS 1.3, ALPN "han/1", dialled by node id (G-07). A frame is one I-JSON object, sent as a 4-byte big-endian length then its UTF-8 bytes
+// (≤ maxFrameBytes). The server opens a unidirectional control stream and sends a bare `Challenge` (no id) on it. Each call is one bidirectional stream
+// opened by the client: one request frame, then the reply (`ok`/`error`, or `read`'s items and `end`). The deliveries of `read` with `follow`, `subscribe`
+// and `watch` go on a unidirectional stream the server opens for that call. The client's first call is `hello` (a joining node: `hello` then `join`, N-02);
+// any other call before it is `denied`. Request ids are integers in [1, 2^53), chosen by the client; a streaming call whose id is still open is `invalid`.
+// A request frame is exactly {id, call, args} (args an object, closed per call). A frame that is not an I-JSON object is answered `{ id: 0, error: invalid }`
+// and the server closes the connection; an integer of 2^53 or more anywhere is answered `invalid` on the request's own id when that is usable (the connection
+// stays open), else `{ id: 0 }` and a close; an object that is not a request frame is answered `invalid` with its own id when that is usable, else 0 (G-07).
+// Streaming calls run until `cancel` (or a reset call stream), the connection closing, or `{ id, error: unavailable }` (the subscriber fell too far behind).
+// Call streams of one connection are handled in stream-id order. `data` is base64url without padding. Every call below is a RequestFrame with the same envelope.
+// (Round 29's legacy WebSocket carrier sent the same frames as text messages on one socket, §8.2.)
 export interface BindingCalls {
   subscribe: { args: { space: SpaceId; after?: Seq };            // without `after`: live only; with it, replays records after `after`, atomically with registration (no gap)
                item: ReadItem };                                  // records and signals (G-09); a reader who may not read the space gets `denied` (a profile space: records only)
@@ -297,13 +300,15 @@ export interface BindingCalls {
   stream:    { args: { item: StreamItem }; ok: null };            // G-05: only the session's actor, `n` one more than its last (an identical repeat of the last item is ok)
   watch:     { args: { space: SpaceId; session: EntryId }; item: StreamItem };   // live items only, while sessionAccess grants watch; stays open and silent when the right goes (G-05)
   cancel:    { args: { target: number }; ok: null };              // ends the streaming call whose request id is `target`
+  invite:    { args: { space: SpaceId; hash: Hex /* sha256 of the ticket's secret */; expiresAt: Time /* at most 7 days ahead */ }; ok: null };   // N-03: an owner (a member when membersMayInvite) registers a ticket at the home; never in the log
+  join:      { args: { space: SpaceId; secret: string }; ok: null };   // N-03: after hello, on a joining node's connection (N-02 c); a known, unused, unexpired secret is used up; anything else `denied` and the connection closes
 }
 /** G-11: the control call of test mode, and of nothing else. Outside test mode it is not a call: a server answers `invalid` (G-07 (2)) and a production server MUST NOT offer it.
  *  `wall` sets the wall reading (any instant); `steadyAdvance` (integer seconds, ≥ 0) advances the steady reading. Both are independent. Answers the readings after the call. */
 export interface TestCalls {
   "test.clock": { args: { wall?: Time; steadyAdvance?: number }; ok: { wall: Time; steady: number } };
   /** Lowers (or restores) the maxFrameBytes the server reports in `hello` and cuts state pages to, so the byte cut of a page can be tested without a 1.25 MiB state. Test mode only (G-11).
-   *  `maxFrameBytes`: an integer from 1024 to 1310720. Answers the value in force. The size limit of an incoming message (G-07) is not lowered. */
+   *  `maxFrameBytes`: an integer from 1024 to 1310720. Answers the value in force. The size limit of an incoming frame (G-07) is not lowered. */
   "test.limits": { args: { maxFrameBytes?: number }; ok: { maxFrameBytes: number } };
 }
 export type BindingCallName = keyof BindingCalls;
@@ -324,8 +329,8 @@ export interface Policy {                                // M2 — six pure func
   canRead(state: SpaceState, reader: ActorId, seq: Seq): boolean;                 // P-02
   sessionAccess(state: SpaceState, actor: ActorId, session: EntryId): { watch: boolean; read: boolean; steer: boolean };   // P-15
   /** P-01, the whole pin rule: author, member.set target, the targets of an instruction (session actor, assignees, executor), an unguard's agent, approve/cancel/claim: proposer, executor and guardedFor;
-   *  for an approve while forceGuarded is on, then the authors of the proposal's unconsumed approvals (the cap judges whether each is forced, P-08);
-   *  for a claim then the guards from ctx.profiles (P-15) and the approval candidates in E3 order up to and including the first usable one by ctx.profiles: a valid key and an author not guarded.
+   *  no approver is pinned for an approve (forcing is judged from the actorKind each approval recorded, P-08);
+   *  for a claim then the guards from ctx.profiles (P-15) and the approval candidates in E3 order up to and including the first usable one by ctx.profiles: a valid key (no candidate's author is guarded: the fold drops such approvals).
    *  The sequencer calls it with the profiles fetched so far until it names none it has not tried: three calls at most. */
   relevantActors(state: SpaceState | undefined, entry: Entry, ctx: PolicyCtx): ActorId[];
   /** P-15, the one guard function hosts call (R-24) instead of re-deriving it. `guard`: the `operator` of ctx.profiles[agent] if it is confirmed and the agent is not human, else absent.
@@ -371,35 +376,20 @@ export type StreamItem = { space: SpaceId; session: EntryId; n: number; time: Ti
   | { type: "status"; state: "idle" | "working" | "blocked" | "done" | "error"; detail?: string }   // presence: watch
   | { type: "context"; blob: BlobRef; what: "transcript" | "files" | "plan" }  // a snapshot: read only; its blob is served by blobGet to anyone with read on the live session (G-01)
 );
-// ───────────────────────── the Matrix binding's shapes (§8.2) ─────────────────────────
-/** `GET https://<server>/_han/v1/challenge` answers a `Challenge`. `GET .../read` carries `Authorization: HAN <actor> <keyId> <proof>`
- *  and `HAN-Challenge: <challenge>` (the challenge that was signed; single-use, 120 s), with proof = Ed25519(key,
- *  "han-hello-v1\n" ‖ challenge ‖ "\n" ‖ <server>). It answers `HttpReadResponse`, with HTTP status 400 invalid, 401 denied,
- *  404 not_found, 421 moved, 429 limit, 503 unavailable; 429 and 503 carry `Retry-After` (whole seconds, rounded up) beside `retryAfterMs`.
- *  No `follow`, no `knownHeads`. `POST .../entry` (same authentication) uploads a whole entry before it is announced to the room (§8.2). */
-export interface HttpReadRequest { space: SpaceId; after: Seq; limit?: number }   // the query string of GET read
-export type HttpReadResponse = { items: ReadItem[] } | { error: WireError };
-export interface HttpStateRequest { space: SpaceId; at?: Seq; cursor?: string; effect?: EntryId; agent?: ActorId }   // the query string of GET state: cursor, effect and agent exclude each other; at combines with agent only
-export type HttpStateResponse = StateReply | { error: WireError };
-export interface HttpEntryRequest { entry: Entry; content?: Json }                // the POST body, at most Limits.maxFrameBytes; the authenticated actor must be entry.author
-export type HttpEntryResponse = { id: EntryId } | { error: WireError };          // 200: held 10 minutes under the id; the room event names only the id
-/** §4.3, D13: `GET /.well-known/han` and `GET /.well-known/han-peers`, both `200 application/json`; an absent optional member is omitted, never null. */
+// ───────────────────────── nodes, invites, well-known (§4.3, §8.2) ─────────────────────────
+/** N-01: a node id is a device's Ed25519 public key, in the same base64url form as a profile key's `publicKey` (43 characters, canonical).
+ *  A registered device is a `valid` key of its actor's profile; its node id is that key. Every `han/1` connection is dialled by node id (G-07). */
+export type NodeId = string;
+/** N-03: what an inviter hands a joining person: a node id of the space's home, the space, and a one-time secret (32 random bytes, base64url).
+ *  Passed on as the text "han1" + base64url(JCS(ticket)). The home keeps only sha256(secret), registered with `invite`. */
+export interface InviteTicket { node: NodeId; space: SpaceId; secret: string }
+/** §4.3, D13: `GET /.well-known/han` and `GET /.well-known/han-peers` over HTTPS, both `200 application/json`; an absent optional member is omitted, never null. */
 export interface ServerKey { keyId: KeyId; publicKey: string; from: Time; until?: Time; compromised?: true }
-export interface WellKnownHan { server: ServerName; sequencer: string /* the complete WebSocket URL, path included, e.g. wss://a.example/han */; keys: ServerKey[] }
+export interface WellKnownHan { server: ServerName; sequencer: NodeId[] /* the node ids of the server's HAN nodes, at least one (round 29: the WebSocket URL, D7) */; keys: ServerKey[] }
 export interface WellKnownPeers { peers: { server: ServerName; url: string /* that peer's /.well-known/han */ }[] }
-/** Room events. All carry no authority (T-05, R-12); a client honours `org.han.space`, receipts, rejects and `org.han.session` only
- *  from the room's sequencer user (§8.2, trust anchor). */
-export interface MatrixEvents {
-  "org.han.space": { spaceId: SpaceId; sequencer: string /* the Matrix user @han-seq:<server of the space id> */ };   // state event, state key ""; a room keeps its first binding
-  "org.han.entry": { id: EntryId }                                           // sent by a member: names an entry it uploaded with POST /_han/v1/entry (never the entry itself)
-                 | { id: EntryId; kind: string; author: ActorId; seq: Seq };  // the sequencer's copy once ordered: ids and the kind only, nothing P-02 might hide
-  "org.han.receipt": { receipt: Receipt };                                   // m.relates_to (m.reference) the entry's event; reveals only ids, hashes and seqs
-  "org.han.reject": { id: EntryId; code: "denied" | "invalid" | "not_found" | "moved" | "unavailable"; reason: string; retryAfterMs?: number; movedTo?: ServerName };   // m.relates_to the entry's event; final, except `unavailable` (carries retryAfterMs; resend the same entry then); `limit` gets none
-  "org.han.signal": { body: Json };                                          // room-wide, T-05
-  "org.han.session": { session: EntryId; watch: string; read: string };      // state event in the space room, state key = the session id; room ids of the two stream rooms
-  "org.han.stream": StreamItem & { file?: { url: string; key: Json; iv: string; hashes: { [alg: string]: string }; v: string } };   // in a stream room; `file` = Matrix EncryptedFile info of a context item's blob
-}
-/** M7: what HAN needs from a transport (T-01…T-07). The Matrix binding implements it with org.han.* room events. */
+// §8.3 (informative, not part of the standard): a Matrix room may carry the state event "org.han.space" { spaceId: SpaceId; node: NodeId } (state key ""),
+// a hint a client verifies against the server the space id names; a notifier bot is a plain HAN actor. The round-29 Matrix binding's shapes are gone.
+/** M7: what HAN needs from a transport (T-01…T-07). The QUIC binding `han/1` (§8.2) implements it. */
 export interface TransportBinding {
   publish(space: SpaceId, record: LogRecord): Promise<void>;        // T-01: deliver to the space's members, any order
   subscribe(space: SpaceId, as: ActorId): AsyncIterable<ReadItem>;  // records and signals (T-05) for this actor

@@ -396,3 +396,60 @@ async def test_taint_is_carried_across_spaces(env):
     t1.cancel(); t2.cancel(); host1.stop(); host2.stop()
     ctl = Host(botc, S2, ScriptedAgent(), os.path.join(env.tmp, "ctl.state.db"), "guarded", EXEC, taint_path=os.path.join(env.tmp, "other.taint.db"))
     assert not ctl.tainted(); ctl.stop()
+
+# ── round 30 (V1, V4, V7): the host's duties in a task-driven strict turn ──
+async def _delegated(env, text, agent=None):
+    """bot (guarded) assigns a task to the unguarded bot2, whose host runs it. Returns (cl, botc, b2, host, task handle, task id)."""
+    cl, botc = await world(env)
+    BOT2, b2 = await _bot2(env, cl)
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))
+    host, handle = start_host(env, b2, "auto", agent or ScriptedAgent(), state=os.path.join(env.tmp, "bot2.state.db"))
+    await session_id(host)
+    tid = (await botc.append(*botc.make_entry("task", S, {"to": [BOT2]}, {"ask": text})))["id"]
+    return cl, botc, b2, host, handle, tid
+
+async def test_host_accepts_a_task_before_its_first_turn_on_it(env):
+    """R-24 (round 30, V4): bot2's host appends `task.update {state: accepted}` before the agent's first turn on the task, so the task
+    is in `accepted`, bot2 carries the delegator's limits while it is open, and the turn's proposal is recorded after the acceptance. The
+    host accepts once: a second turn on the same task (re-driven) appends no second update."""
+    agent = ScriptedAgent()
+    cl, botc, b2, host, handle, tid = await _delegated(env, "push deploy", agent)
+    props = await until(lambda: records(cl["alice"], "effect.propose", b2.actor))
+    ups = await records(cl["alice"], "task.update", b2.actor)
+    st = await state(cl["alice"])
+    assert len(ups) == 1 and ups[0]["entry"]["body"] == {"task": tid, "state": "accepted"}
+    assert ups[0]["receipt"]["seq"] < props[0]["receipt"]["seq"]                   # accepted, then proposed
+    assert st["tasks"][tid]["accepted"] == [b2.actor] and P.carried(st, b2.actor) == [BOT]
+    inp = agent.calls[0][0]
+    await host._turn(inp, None)                                                   # the same task driven again: already accepted
+    assert len(await records(cl["alice"], "task.update", b2.actor)) == 1
+    handle.cancel()
+
+async def test_strict_turn_refuses_to_steer_another_session_even_for_an_unguarded_agent(env):
+    """R-24 (round 30, V1): bot2 is not guarded but its task-driven turn is strict; a Steer into another's session is refused (reported,
+    not appended) while its proposal in the same turn is made. The gate refuses approve, govern and steer as tools (`test_host_claude_gate.py`)."""
+    cl, botc = await world(env)
+    BOT2, b2 = await _bot2(env, cl)
+    dsid = (await cl["dave"].append(*cl["dave"].make_entry("session.open", S, {"steerMode": "auto"})))["id"]
+    await botc.append(*botc.make_entry("session.open", S, {"steerMode": "guarded"}, {"title": "work"}))
+    agent = ScriptedAgent()
+    host, handle = start_host(env, b2, "auto", agent, state=os.path.join(env.tmp, "bot2.state.db"))
+    await session_id(host)
+    await botc.append(*botc.make_entry("task", S, {"to": [BOT2]}, {"ask": f"steer {dsid} do it; push x"}))
+    await until(lambda: records(cl["alice"], "effect.propose", BOT2))
+    assert [m for _, m in agent.calls] == ["strict"] and not host.guarded_now
+    assert await records(cl["alice"], "session.input", BOT2) == [] and any("strict turn: cannot steer" in r for r in host.refused)
+    handle.cancel()
+
+async def test_subtasks_of_a_task_driven_turn_are_parented_under_the_driving_task(env):
+    """R-24 (round 30, V1): a `task` the turn creates has the driving task as its `parent` (so no parentless-subtask escape), and
+    carries the delegator's `guardedFor`; the subtask is created after the acceptance."""
+    cl, botc, b2, host, handle, tid = await _delegated(env, f"delegate to {DAVE} please")
+    subs = await until(lambda: records(cl["alice"], "task", b2.actor))
+    ups = await records(cl["alice"], "task.update", b2.actor)
+    st = await state(cl["alice"])
+    sub = subs[0]["receipt"]["id"]
+    assert subs[0]["entry"]["body"] == {"to": [DAVE], "parent": tid}
+    assert st["tasks"][sub]["parent"] == tid and st["tasks"][sub]["guardedFor"] == [BOT]
+    assert ups[0]["receipt"]["seq"] < subs[0]["receipt"]["seq"]
+    handle.cancel()

@@ -403,7 +403,8 @@
      {
       "id": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
       "author": "@op:b.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
    },
@@ -434,7 +435,8 @@
      {
       "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
       "author": "@op:b.example",
-      "keyId": "k1"
+      "keyId": "k1",
+      "actorKind": "human"
      }
     ]
    },

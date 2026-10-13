@@ -135,9 +135,9 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 
 ```json
 {"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"vinPkwuq-8AHP-ZMNldho30mzM1jNAnqZmuFfUHxbas\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-13T00:34:58Z\"}"}
-{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"drOL7sr5v8JpgHuEWzmTc2J1aZcMl48T_mIsj_DG634zoxBQ8eJAxzqAoFvv4nlW6ZHf4sUjRlgI6cqCTeq6DA\", \"version\": 1}}"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-13T00:34:58Z\",\"knownHeads\":[]}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"7LEF4-2KGB35-mb1QnjmjEL6JzyYi-MMxWg6s6i6y0A\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-13T02:59:40Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"lQW8U-5w6yDvO5JU53RfkjzWQknQqtU0SR6WQjAhumm2jKbP8-TvfxKhtWwfz-rpcebCNyeWtxJWxlSoCplzBA\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-13T02:59:40Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
@@ -165,7 +165,7 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-13T00:35:57Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-13T03:00:39Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
@@ -175,7 +175,7 @@ TS executor started before the space exists, against the Python server (`exec-ts
 TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the entry signer `@:a.localhost` signed under `h1`, not `srv1` (in round 21 the TS verifier looked under `srv1` only and reported `seq 1: entry signature does not verify against the pinned key`, C21; it now uses the server's published keys, so the row passes):
 
 ```
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "ItDYmXTXcr7DIeDM2p5TyWjqgtjQVINuDbOlO6Zn5YfAIX059TteFrt28RL2jS2I-Ds40AV_9sWtz6ER2ONAAA"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "M4ST-mwqqQdjoFBuPtDmUzf_K1QS83S2ZtQfGXS1W3-3RFNejqVEVa8oGwYJ2bCU-s5_3nF-p3I6yyEa1NGkBw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked
@@ -327,6 +327,7 @@ Recorded runs of the wire vectors (`python ref/run_wire_vectors.py --launch py` 
 | wire vectors, round 27 | 113/113 vectors, 454/454 expectations | 113/113 vectors, 454/454 expectations |
 | wire vectors, round 28 | 113/113 vectors, 454/454 expectations | 113/113 vectors, 454/454 expectations |
 | wire vectors, round 29 | 113/113 vectors, 454/454 expectations | 113/113 vectors, 454/454 expectations |
+| wire vectors, round 30 | 113/113 vectors, 454/454 expectations | 113/113 vectors, 454/454 expectations |
 
 ### 6.1 What the round-22 refresh changed and found
 
@@ -389,3 +390,9 @@ Hosts follow suit:
 - Taint is kept per agent across sessions and spaces.
 
 The interop service actor `@x` now names `@alice` as its operator. The first interop run after the change failed in the ts→py cell, because `interop/run.py` did not pass the operator to the Python server's `--register`. That is fixed. `interop/run.py` on the round-29 servers: every cell of section 1 passes in all four directions, executors included. The differential fuzz agreed on seeds 0–999 and 500000–500999 (0 divergences each).
+
+### 6.9 Round 30
+
+Round 30 made a delegate carry a guarded agent's limits through the open tasks it has accepted. Tasks record `accepted` and approvals record their author's `actorKind`. The cap counts only approvals that can still be used. §8 now describes QUIC with dial-by-key as the carrier for the same frames.
+
+The witnesses' WebSocket servers are frozen at round 29 (V14) but still serve the round-30 Policy. Two golden transcripts (`approve`, `redact`) were re-recorded for the new state fields. `conformance/interop/run.py`: every cell of section 1 passes in all four directions. The differential fuzz agreed on seeds 0–1199 and 500000–500999.
