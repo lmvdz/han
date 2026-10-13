@@ -40,6 +40,8 @@ pub(crate) struct Pending {
 struct CacheEntry {
     heads: Vec<Pos>,
     closure: Closure,
+    /// The number of ops in the closure.
+    size: u64,
     state: Arc<State>,
     used: u64,
 }
@@ -680,8 +682,10 @@ impl<S: Store> History<S> {
         {
             cache.entries.swap_remove(lru);
         }
+        let size = closure.0.iter().map(|n| u64::from(*n)).sum();
         cache.entries.push(CacheEntry {
             heads,
+            size,
             closure,
             state,
             used: tick,
@@ -690,6 +694,19 @@ impl<S: Store> History<S> {
 
     /// The closure of `heads` and the state at it (TL-60).
     pub(crate) fn materialise(&self, heads: &[Pos]) -> (Closure, Arc<State>) {
+        // Fast path: these exact heads are cached (the usual case for a timeline's head).
+        {
+            let mut sorted = heads.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.tick += 1;
+            let tick = cache.tick;
+            if let Some(e) = cache.entries.iter_mut().find(|e| e.heads == sorted) {
+                e.used = tick;
+                return (e.closure.clone(), e.state.clone());
+            }
+        }
         let closure = self.graph.closure(heads, false);
         let mut front = self.graph.frontier(&closure);
         front.sort();
@@ -705,7 +722,7 @@ impl<S: Store> History<S> {
                 .entries
                 .iter_mut()
                 .filter(|e| e.heads.iter().all(|h| closure.contains(*h)))
-                .max_by_key(|e| e.closure.0.iter().map(|n| u64::from(*n)).sum::<u64>())
+                .max_by_key(|e| e.size)
                 .map(|e| {
                     e.used = tick;
                     (e.closure.clone(), e.state.clone())
@@ -727,6 +744,18 @@ impl<S: Store> History<S> {
         }
         let state = Arc::new(state);
         self.cache_insert(front, closure.clone(), state.clone());
+        (closure, state)
+    }
+
+    /// The state at `heads`, taken out of the cache: a batch built on it replaces it there,
+    /// so it can be changed in place instead of copied.
+    pub(crate) fn take_state(&self, heads: &[Pos]) -> (Closure, Arc<State>) {
+        let (closure, state) = self.materialise(heads);
+        let mut sorted = heads.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.entries.retain(|e| e.heads != sorted);
         (closure, state)
     }
 
