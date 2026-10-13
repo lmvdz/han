@@ -254,15 +254,15 @@ impl<T: Transport> ProfileDirectory<T> {
 
     /// A fresh view of `actor`: the cached one within 300 s, otherwise a read from its home.
     pub async fn ensure_profile(&self, actor: &str) -> Result<PinView> {
-        self.read(actor, false).await
+        self.read(actor, false, None).await
     }
 
     /// A read from the home of `actor` whatever the cache holds.
     pub async fn refresh_profile(&self, actor: &str) -> Result<PinView> {
-        self.read(actor, true).await
+        self.read(actor, true, None).await
     }
 
-    async fn read(&self, actor: &str, force: bool) -> Result<PinView> {
+    async fn read(&self, actor: &str, force: bool, requester: Option<&str>) -> Result<PinView> {
         if !grammar::is_actor_id(actor) || actor.starts_with("@:") {
             return Err(NetError::Protocol(format!("not a user or agent: {actor}")));
         }
@@ -272,7 +272,7 @@ impl<T: Transport> ProfileDirectory<T> {
                 .or_default(),
         );
         let _turn = gate.lock().await;
-        let out = self.read_locked(actor, force).await;
+        let out = self.read_locked(actor, force, requester).await;
         drop(_turn);
         let mut reading = lock(&self.shared.reading);
         if reading
@@ -284,7 +284,12 @@ impl<T: Transport> ProfileDirectory<T> {
         out
     }
 
-    async fn read_locked(&self, actor: &str, force: bool) -> Result<PinView> {
+    async fn read_locked(
+        &self,
+        actor: &str,
+        force: bool,
+        requester: Option<&str>,
+    ) -> Result<PinView> {
         if !force
             && self.fresh(actor)
             && let Some(v) = self.pinned(actor)
@@ -298,7 +303,7 @@ impl<T: Transport> ProfileDirectory<T> {
             .and_then(Weak::upgrade)
             .ok_or_else(|| NetError::Closed("the home is gone".into()))?;
         // before every fetch: the hosting rule and the budget
-        home.may_fetch_profile(actor)?;
+        home.may_fetch_profile(actor, requester)?;
         let server = grammar::server_of(actor).unwrap_or_default();
         if server == home.server() {
             return Err(NetError::Protocol("a profile of this server".into()));
@@ -393,13 +398,14 @@ impl<T: Transport> Directory for ProfileDirectory<T> {
         self.pinned(actor).map(|view| RemoteProfile { view, fresh })
     }
 
-    fn want_profile(&self, actor: &str) {
+    fn want_profile(&self, actor: &str, requester: Option<&str>) {
         let Ok(rt) = tokio::runtime::Handle::try_current() else {
             return;
         };
         let (dir, actor) = (self.clone(), actor.to_owned());
+        let requester = requester.map(str::to_owned);
         rt.spawn(async move {
-            if let Err(e) = dir.ensure_profile(&actor).await {
+            if let Err(e) = dir.read(&actor, false, requester.as_deref()).await {
                 tracing::debug!("profile of {actor} not read: {e}");
             }
         });

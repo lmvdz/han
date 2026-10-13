@@ -14,10 +14,10 @@ han-github request --config han-github.toml github:owner/repo#42 --title "Fix th
    (`If-None-Match`). A `304` costs one request and changes nothing.
 2. What changed becomes `github.issue/1` items on a session stream (below).
 3. An **open** issue that has the trigger label (default `agent-ready`) gets one
-   `TaskCreate { external: "github:owner/repo#N", to: tasks.to }`, once. `han-github request` does the same
+   `TaskCreate { external: "github:owner/repo#N", to: tasks.pool + tasks.to }`, once. `han-github request` does the same
    for one issue on a human's say-so. A task is never created for closed issues, for pull requests, or when
    the space already has a task with that `external` (open or not), so a restart creates no duplicates.
-4. It does not assign. The task is a suggestion addressed to `tasks.to`; an agent that takes the issue makes
+4. It does not assign. The task is a suggestion addressed to the shared agent pool (`tasks.pool`); any one pool agent that takes the issue makes
    **its own signed task** with the same `external` (PLAN §6.6). Issues without the label are only shown.
 
 Pagination: page 1 (`state=all&sort=updated&direction=desc&per_page=100`) is the conditional request. Sorted by
@@ -53,7 +53,10 @@ private_key = "/etc/han/github-app.pem"
 
 [tasks]
 label = "agent-ready"
-to = ["@lars-coder:home.example"]  # empty: issues are shown, no task is ever created
+# the team's shared agent pool (agents or services): any one of them claims the task
+pool = ["@runner-1:home.example", "@runner-2:home.example"]
+# to = ["@lars-coder:home.example"]  # optional extra addressees, merged into the pool
+# pool and to both empty: issues are shown, no task is ever created
 ```
 
 ## `github.issue/1`

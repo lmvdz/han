@@ -135,7 +135,7 @@ fn rig(server: &MockServer, tasks_to: &str, node: &Arc<Node>) -> Syncer<Reader> 
         private_key = "/secret/key.pem"
         api_base = "{}"
         [tasks]
-        to = [{tasks_to}]
+        pool = [{tasks_to}]
         "#,
         server.uri()
     ))
@@ -437,4 +437,18 @@ fn the_config_never_shows_the_key_path() {
     assert_eq!(cfg.poll_secs, 60);
     assert_eq!(cfg.tasks.label, "agent-ready");
     assert!(Config::parse("space=\"s\"\nendpoint=\"e\"\nrepos=[\"bad\"]\n[app]\napp_id=1\ninstallation_id=2\nprivate_key=\"k\"").is_err());
+}
+
+#[test]
+fn tasks_go_to_the_pool_and_to_is_merged_in_without_duplicates() {
+    let parse = |tasks: &str| {
+        Config::parse(&format!(
+            "space=\"s\"\nendpoint=\"e\"\nrepos=[\"o/r\"]\n[app]\napp_id=1\ninstallation_id=2\nprivate_key=\"k\"\n[tasks]\n{tasks}"
+        ))
+        .unwrap()
+    };
+    let cfg = parse("pool = [\"@r1:h\", \"@r2:h\"]\nto = [\"@r2:h\", \"@lars:h\"]");
+    assert_eq!(cfg.tasks.addressees(), ["@r1:h", "@r2:h", "@lars:h"]);
+    assert_eq!(parse("to = [\"@lars:h\"]").tasks.addressees(), ["@lars:h"]);
+    assert!(parse("").tasks.addressees().is_empty());
 }

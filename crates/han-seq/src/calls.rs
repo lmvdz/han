@@ -87,7 +87,7 @@ impl Home {
             if grammar::server_of(who) == Some(self.server.as_str()) {
                 WireError::not_found("no such actor")
             } else {
-                self.profile_missing(&g, who)
+                self.profile_missing(&g, who, None)
             }
         })?;
         let denied = || WireError::denied("authentication failed");

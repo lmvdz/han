@@ -86,8 +86,8 @@ async fn real_main(cli: Cli) -> Result<(), String> {
             if !cfg.repos.contains(&repo) {
                 return Err(format!("{repo} is not in the config"));
             }
-            if cfg.tasks.to.is_empty() {
-                return Err("tasks.to is empty in the config".into());
+            if cfg.tasks.addressees().is_empty() {
+                return Err("tasks.pool is empty in the config".into());
             }
             let mut syncer = connect(&cfg).await?;
             let r = syncer

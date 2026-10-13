@@ -72,8 +72,9 @@ pub trait Directory: Send + Sync + 'static {
 
     /// A hint that the home needs a fresh profile of `actor` of another server: start reading it and
     /// return at once (the home answers `unavailable` until [`Directory::profile`] has it). Called with the
-    /// home's lock held, so it must not call back into the home.
-    fn want_profile(&self, _actor: &str) {}
+    /// home's lock held, so it must not call back into the home. `requester` is the authenticated author
+    /// of the entry that needs the profile, if one does (it is what the fetch gate weighs, with the actor).
+    fn want_profile(&self, _actor: &str, _requester: Option<&str>) {}
 }
 
 /// The profile of an actor of another server, as the directory holds it.
@@ -463,11 +464,13 @@ impl Home {
     }
 
     /// For a carrier, before it fetches the profile or well-known document of `actor`'s server on behalf of
-    /// a request: `Ok` only if a `space.create` by `actor` could pass the hosting rule, and the fetch is
-    /// within the budget (`limit` otherwise). Strangers get `denied` without a fetch.
-    pub fn may_fetch_profile(&self, actor: &str) -> Result<()> {
+    /// a request: `Ok` only if a `space.create` by `actor` could pass the hosting rule, or `requester` (the
+    /// authenticated author of the entry that needs the profile) could, and the fetch is within the budget
+    /// (`limit` otherwise). Strangers get `denied` without a fetch; a fetch caused only by a stranger's own
+    /// request has no `requester`.
+    pub fn may_fetch_profile(&self, actor: &str, requester: Option<&str>) -> Result<()> {
         let mut g = self.lock();
-        if !self.hosting_allows(&g, actor) {
+        if !self.fetch_allowed(&g, actor, requester) {
             return Err(WireError::denied(HOSTING_DENIED));
         }
         self.charge_fetch(&mut g)
@@ -489,6 +492,12 @@ impl Home {
             .any(|s| s.state.roles.get(actor).is_some_and(|r| r.reads()))
     }
 
+    /// Whether a profile of `actor` may be fetched: the hosting rule holds for `actor`, or for the known
+    /// author of the entry that needs it (a local owner inviting a foreign actor).
+    fn fetch_allowed(&self, g: &Inner, actor: &str, requester: Option<&str>) -> bool {
+        self.hosting_allows(g, actor) || requester.is_some_and(|r| self.hosting_allows(g, r))
+    }
+
     /// The hosting rule for `actor` under the current policy.
     fn hosting_allows(&self, g: &Inner, actor: &str) -> bool {
         match &g.hosting {
@@ -506,10 +515,15 @@ impl Home {
     /// The answer when the profile of `actor` cannot be had now. One of another server is being read in the
     /// background if the hosting rule lets this home fetch it (the carrier calls
     /// [`Home::may_fetch_profile`] before it does); a stranger gets `denied` and nothing is fetched.
-    pub(crate) fn profile_missing(&self, g: &Inner, actor: &str) -> WireError {
+    pub(crate) fn profile_missing(
+        &self,
+        g: &Inner,
+        actor: &str,
+        requester: Option<&str>,
+    ) -> WireError {
         let foreign =
             !actor.starts_with("@:") && grammar::server_of(actor).is_some_and(|s| s != self.server);
-        if foreign && !self.hosting_allows(g, actor) {
+        if foreign && !self.fetch_allowed(g, actor, requester) {
             return WireError::denied(HOSTING_DENIED);
         }
         WireError::unavailable("the profile cannot be fetched now").retry_after(PROFILE_RETRY_MS)
@@ -601,7 +615,7 @@ impl Home {
             Some(s) if s == self.server => g.own_nodes.clone(),
             Some(s) => g.directory.server(s).map(|i| i.nodes).unwrap_or_default(),
             None => self
-                .profile_view_in(g, actor, &self.now_str(), false)
+                .profile_view_in(g, actor, &self.now_str(), false, None)
                 .map(|v| v.valid_nodes())
                 .unwrap_or_default(),
         }
@@ -611,7 +625,19 @@ impl Home {
 
     /// Identity.profile: the view of `actor` now, or `None` if this home cannot produce it.
     pub(crate) fn profile_view(&self, g: &Inner, actor: &str, now: &str) -> Option<PinView> {
-        self.profile_view_in(g, actor, now, true)
+        self.profile_view_in(g, actor, now, true, None)
+    }
+
+    /// Like [`Home::profile_view`], for a profile that the entry of `requester` needs: a fetch it causes
+    /// is weighed with the requester too.
+    fn profile_view_for(
+        &self,
+        g: &Inner,
+        actor: &str,
+        now: &str,
+        requester: &str,
+    ) -> Option<PinView> {
+        self.profile_view_in(g, actor, now, true, Some(requester))
     }
 
     /// Like [`Home::profile_view`]; with `fresh_only` false, the last view read of an actor of another
@@ -622,6 +648,7 @@ impl Home {
         actor: &str,
         now: &str,
         fresh_only: bool,
+        requester: Option<&str>,
     ) -> Option<PinView> {
         if let Some(server) = actor.strip_prefix("@:") {
             let keys = if server == self.server {
@@ -653,7 +680,7 @@ impl Home {
             // an actor of another server: its profile is read from its home (section 4.1 step 4)
             let known = g.directory.profile(actor);
             if known.as_ref().is_none_or(|p| !p.fresh) {
-                g.directory.want_profile(actor);
+                g.directory.want_profile(actor, requester);
             }
             return known.filter(|p| p.fresh || !fresh_only).map(|p| p.view);
         }
@@ -672,6 +699,7 @@ impl Home {
         pe: &PolicyEntry,
         now: &str,
     ) -> Result<Option<BTreeMap<ActorId, PinView>>> {
+        let author = pe.author.as_str();
         let mut fetched: BTreeMap<ActorId, PinView> = BTreeMap::new();
         let mut tried: HashSet<ActorId> = HashSet::new();
         let mut need = Vec::new();
@@ -687,7 +715,7 @@ impl Home {
                 break;
             }
             for a in new {
-                if let Some(v) = self.profile_view(g, &a, now) {
+                if let Some(v) = self.profile_view_for(g, &a, now, author) {
                     fetched.insert(a.clone(), v);
                 }
                 tried.insert(a);
@@ -774,7 +802,7 @@ impl Home {
         let now_secs = self.now_secs();
         let now = format_time(now_secs); // read once: the pin loop, Policy's ctx.time and the receipt time
         let Some(author) = self.profile_view(g, &entry.author, &now) else {
-            return Err(self.profile_missing(g, &entry.author));
+            return Err(self.profile_missing(g, &entry.author, None));
         };
         if !author.keys.contains_key(&entry.key_id) {
             return Err(WireError::denied("no valid key")); // R-12: nothing to verify against
