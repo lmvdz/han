@@ -11,7 +11,8 @@ use han_node::api::{
     APPROVAL_NOT_SIGNED, Command, CommandClass, ConnectionClass, NodeApi, NodeError, Query, Row,
     ViewEvent, Window,
 };
-use han_node::rpc::{RpcClient, default_endpoint, serve_as};
+use han_node::rpc::{RpcClient, default_endpoint, role_endpoint, serve_as, serve_roles};
+use han_node::supervisor::{ProcessSpawner, RoleSpec, RoleStatus, Supervisor};
 use han_node::{Node, presence};
 use han_presence::PresenceError;
 use han_presence::testing::Scripted;
@@ -285,6 +286,114 @@ async fn over_the_pipe_a_face_gets_the_prompt_and_a_host_connection_cannot_appro
     let e = face.call(approve(&s)).await.unwrap_err();
     denied_with(&e, "presence check cancelled");
     assert_eq!(approvals(&s), 0);
+    script.allow();
+    face.call(approve(&s)).await.expect("confirmed");
+    until("the approval lands", || approvals(&s) == 1).await;
+}
+
+/// Run as a child by `a_spawned_host_is_given_only_its_endpoint_and_cannot_approve`, as `han host` would be:
+/// reads its spec (the last argument), connects to the endpoint the spec gives it and sends `EffectApprove`
+/// for the proposal the spec names in `work.task` (a carrier; this is not a real host). Writes what the node
+/// answered next to the spec.
+#[test]
+#[ignore]
+fn host_child_sends_an_approval() {
+    let Some(file) = std::env::args()
+        .next_back()
+        .filter(|a| a.ends_with(".json"))
+    else {
+        return;
+    };
+    let spec = han_registry::HostSpec::read(&file).unwrap();
+    let endpoint = spec
+        .node_endpoint
+        .clone()
+        .expect("the spawner gave an endpoint");
+    let answer = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let conn = RpcClient::connect(&endpoint).await.unwrap();
+            conn.call(Command::EffectApprove {
+                space: spec.space.clone(),
+                proposal: spec.work.task.clone().unwrap(),
+                expires_at: None,
+                note: None,
+            })
+            .await
+        });
+    let text = match answer {
+        Ok(_) => "approved".to_owned(),
+        Err(NodeError::Denied { message }) => format!("denied: {message}"),
+        Err(e) => format!("other: {e}"),
+    };
+    std::fs::write(std::path::Path::new(&file).with_extension("out"), text).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_spawned_host_is_given_only_its_endpoint_and_cannot_approve() {
+    let script = Scripted::new();
+    let s = stage(|c| c.set_presence(script.clone())).await;
+    let dir = s.world.dir.join("presence-spawn");
+    std::fs::create_dir_all(&dir).unwrap();
+    let faces = default_endpoint(&dir);
+    let servers = serve_roles(Arc::new(s.alice.clone()), &faces).unwrap();
+    assert_eq!(servers.endpoint(), faces);
+    assert_eq!(
+        servers.endpoint_of(ConnectionClass::Host),
+        role_endpoint(&faces, ConnectionClass::Host)
+    );
+
+    // the supervisor is given the host endpoint only; the spec it writes carries it, overriding anything the
+    // caller put there
+    let host = role_endpoint(&faces, ConnectionClass::Host);
+    let spawner = ProcessSpawner::new(std::env::current_exe().unwrap())
+        .with_prefix([
+            "host_child_sends_an_approval",
+            "--exact",
+            "--include-ignored",
+        ])
+        .with_host_endpoint(host.clone());
+    let state = dir.join("agent");
+    let mut spec: han_registry::HostSpec = serde_json::from_value(serde_json::json!({
+        "space": s.space,
+        "agent": CODER,
+        "harness": {"name": "pi"},
+        "home": {"server": "a.localhost"},
+        "work": {"task": s.proposal},
+        "dirs": {"state": state, "keys": state, "login": state.join("login")},
+        "nodeEndpoint": faces,
+    }))
+    .unwrap();
+    assert_eq!(spec.node_endpoint.as_deref(), Some(faces.as_str()));
+    spec.agent = CODER.into();
+    spawner
+        .start(RoleSpec {
+            name: "host".into(),
+            spec,
+            run_as: None,
+        })
+        .unwrap();
+    let file = han_registry::spec_file(&state, "host");
+    let written = han_registry::HostSpec::read(&file.to_string_lossy()).unwrap();
+    assert_eq!(written.node_endpoint.as_deref(), Some(host.as_str()));
+
+    let out = file.with_extension("out");
+    until("the host process answers", || {
+        out.exists() && matches!(spawner.status().as_slice(), [(_, RoleStatus::Exited(_))])
+    })
+    .await;
+    let answer = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        answer.starts_with("denied: ") && answer.contains("may not send"),
+        "{answer}"
+    );
+    assert!(script.prompts().is_empty(), "the node never asked a person");
+    assert_eq!(approvals(&s), 0);
+
+    // the face endpoint still works for a face
+    let face = RpcClient::connect(&faces).await.unwrap();
     script.allow();
     face.call(approve(&s)).await.expect("confirmed");
     until("the approval lands", || approvals(&s) == 1).await;

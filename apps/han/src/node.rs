@@ -11,9 +11,9 @@ use std::sync::Arc;
 use clap::{Args, Subcommand};
 use han_net::wellknown::Fetcher;
 use han_net::{IrohOptions, IrohTransport, Transport};
-use han_node::api::{Command, NodeApi};
+use han_node::api::{Command, ConnectionClass, NodeApi};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore, KeyringStore};
-use han_node::rpc::{default_endpoint, serve};
+use han_node::rpc::{default_endpoint, role_endpoint, serve_roles};
 use han_node::supervisor::ProcessSpawner;
 use han_node::{Node, NodeConfig, NodeParts, WellKnownKeys};
 use han_registry::HomeRef;
@@ -260,6 +260,9 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     let transport = IrohTransport::bind(opts).await?;
     transport.online(std::time::Duration::from_secs(5)).await;
 
+    let endpoint = args
+        .endpoint
+        .unwrap_or_else(|| default_endpoint(&args.data));
     let mut config = NodeConfig::new(actor);
     config.key_id = args.key_id;
     config.data_dir = Some(args.data.clone());
@@ -269,7 +272,11 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         clock: Arc::new(SystemClock::new()),
         keys,
         server_keys: Arc::new(WellKnownKeys::new(Fetcher::new())),
-        supervisor: Arc::new(ProcessSpawner::new(std::env::current_exe()?)),
+        // Hosts are told the host endpoint and no other (SR-107).
+        supervisor: Arc::new(
+            ProcessSpawner::new(std::env::current_exe()?)
+                .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host)),
+        ),
     })?;
 
     // A home named by ticket is kept in the data directory, so a restart needs no flag.
@@ -283,10 +290,7 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         None => {}
     }
 
-    let endpoint = args
-        .endpoint
-        .unwrap_or_else(|| default_endpoint(&args.data));
-    let server = serve(Arc::new(node.clone()), &endpoint)?;
+    let server = serve_roles(Arc::new(node.clone()), &endpoint)?;
     println!("actor {}", node.actor());
     println!("node {}", transport.node_id());
     println!("endpoint {}", server.endpoint());

@@ -26,7 +26,7 @@ use crate::api::NodeError;
 
 pub use client::RpcClient;
 #[cfg(feature = "runtime")]
-pub use server::{RpcServer, listen_local, serve, serve_as};
+pub use server::{NodeServers, RpcServer, listen_local, serve, serve_as, serve_roles};
 
 /// The longest message, in bytes, either side accepts.
 pub const MAX_LINE: usize = 4 * 1024 * 1024;
@@ -119,6 +119,18 @@ pub fn default_endpoint(data_dir: &std::path::Path) -> String {
     #[cfg(not(windows))]
     {
         data_dir.join("node.sock").to_string_lossy().into_owned()
+    }
+}
+
+/// The endpoint a node serves connections of `class` on, given its face endpoint: the face endpoint itself, and
+/// `<endpoint>-host` and `<endpoint>-exec` beside it. Each is its own pipe or socket, owner-only, so the class
+/// of a connection is the name it connected to and nothing the peer says (SR-107).
+pub fn role_endpoint(endpoint: &str, class: crate::api::ConnectionClass) -> String {
+    use crate::api::ConnectionClass;
+    match class {
+        ConnectionClass::Face => endpoint.to_owned(),
+        ConnectionClass::Host => format!("{endpoint}-host"),
+        ConnectionClass::Executor => format!("{endpoint}-exec"),
     }
 }
 

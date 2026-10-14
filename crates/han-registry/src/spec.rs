@@ -168,6 +168,12 @@ pub struct HostSpec {
     /// Relays: `n0`, `none`, or URLs.
     #[serde(default = "n0")]
     pub relay: String,
+    /// The host endpoint of the node that started this host: the one connection class a host may use to talk
+    /// to that node (agent commands only, SR-107). The spawner fills it; it is absent when the host was
+    /// started by hand or runs as another OS user, who cannot reach the owner-only pipe. A host is never
+    /// given the face endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_endpoint: Option<String>,
 }
 
 impl HostSpec {
@@ -255,6 +261,7 @@ mod tests {
                 login: "/var/lib/han-agents/a/claude-config".into(),
             },
             relay: "none".into(),
+            node_endpoint: Some("/run/han/node.sock-host".into()),
         }
     }
 
