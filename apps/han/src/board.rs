@@ -16,7 +16,7 @@ pub struct BoardArgs {
     /// The space to show.
     space: String,
     /// The data directory of the running `han node` (names its pipe).
-    #[arg(long, default_value = "han-data")]
+    #[arg(long, env = "HAN_DATA", default_value = "han-data")]
     data: PathBuf,
     /// The node's endpoint, if it is not the default of `--data`.
     #[arg(long)]

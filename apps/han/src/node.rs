@@ -28,7 +28,7 @@ pub struct NodeArgs {
     #[arg(long, default_value = "d1")]
     key_id: String,
     /// The data directory: `node.db`, and the key files with `--file-keys`.
-    #[arg(long, default_value = "han-data")]
+    #[arg(long, env = "HAN_DATA", default_value = "han-data")]
     data: PathBuf,
     /// Keep the keys in files under the data directory instead of the OS keychain (for runners with no
     /// keychain).

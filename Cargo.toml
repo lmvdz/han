@@ -37,7 +37,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = "2"
 getrandom = "0.3"
 tracing = "0.1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 
 [workspace.lints.rust]

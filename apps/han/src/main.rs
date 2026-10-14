@@ -5,6 +5,7 @@
 mod agent;
 mod board;
 mod conform;
+mod device;
 mod dial;
 mod exec;
 mod home;
@@ -38,8 +39,10 @@ enum Cmd {
     Board(board::BoardArgs),
     /// The live board in the terminal: sessions, the session pane, approvals. Needs the running node.
     Tui(tui::TuiArgs),
-    /// Follow a space and list the followed ones, through the running node.
+    /// Create, follow and list spaces, set roles and policy, through the running node.
     Space(space::SpaceArgs),
+    /// Pair a new device into this person's profile, or revoke one, through the running node.
+    Device(device::DeviceArgs),
     /// Run a home: the sequencer of one server on a QUIC endpoint.
     Seq(seq::SeqArgs),
     /// Print the home ticket a running `han seq` wrote to its data directory, to hand to teammates.
@@ -96,6 +99,7 @@ async fn run(cli: Cli) {
         Cmd::Board(a) => board::run(a).await,
         Cmd::Tui(a) => tui::run(a).await,
         Cmd::Space(a) => space::run(a).await,
+        Cmd::Device(a) => device::run(a).await,
         Cmd::Seq(a) => seq::run(a).await,
         Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,

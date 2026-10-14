@@ -28,4 +28,4 @@ pub mod testing;
 pub mod text;
 pub mod ui;
 
-pub use term::{Options, run};
+pub use term::{Options, print, run};
