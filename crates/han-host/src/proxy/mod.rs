@@ -21,6 +21,7 @@
 //! bodies, query strings, paths or keys (SR-44).
 
 pub mod addr;
+pub mod budget;
 pub mod sni;
 pub mod usage;
 
@@ -37,6 +38,8 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 pub use addr::{Resolve, StaticResolver, SystemResolver, refused_class};
+use budget::Held;
+pub use budget::{Budget, CallBound, Hold, Ledger, Price, Refusal};
 pub use usage::Usage;
 
 /// The host of the MCP tunnel.
@@ -133,14 +136,6 @@ pub struct ModelRoute {
     pub key: Arc<KeySource>,
     /// Certificate roots for the provider.
     pub roots: Roots,
-}
-
-/// The budget the proxy asks before each model call (SR-41).
-pub trait Budget: Send + Sync + 'static {
-    /// Whether the session's budget is spent.
-    fn exhausted(&self) -> bool;
-    /// Records what one call used.
-    fn record(&self, usage: &Usage);
 }
 
 /// What the proxy hands a stream on the MCP tunnel to.
@@ -783,6 +778,20 @@ async fn read_more(s: &mut TcpStream, buf: &mut Vec<u8>) -> io::Result<()> {
     Ok(())
 }
 
+/// What the request body says about the call's cost. Input tokens are estimated at two bytes each, which
+/// errs high; the actual count replaces the estimate when the call settles.
+fn call_bound(body: &[u8]) -> CallBound {
+    let v: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let max = ["max_tokens", "max_completion_tokens", "max_output_tokens"]
+        .iter()
+        .find_map(|k| v.get(k).and_then(serde_json::Value::as_u64));
+    CallBound {
+        model: v.get("model").and_then(|m| m.as_str()).map(str::to_owned),
+        input_tokens: (body.len() as u64).div_ceil(2),
+        max_output: max,
+    }
+}
+
 async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> {
     let Some((route, client)) = sh.model.as_ref() else {
         sh.record(decision(Route::Other, "", 0, false, "no-model-route"));
@@ -810,9 +819,15 @@ async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> 
         sh.record(decision(Route::Model, name, 0, false, "path-not-allowed"));
         return reply(&mut s, "403 Forbidden", "").await;
     }
+    // a cheap early refusal, before the body is read
     if sh.budget.as_ref().is_some_and(|b| b.exhausted()) {
         sh.record(decision(Route::Model, name, 0, false, "budget-spent"));
-        return reply(&mut s, "429 Too Many Requests", "").await;
+        return reply(
+            &mut s,
+            "429 Too Many Requests",
+            "x-han-refusal: budget-spent\r\n",
+        )
+        .await;
     }
     if head
         .get("expect")
@@ -826,6 +841,19 @@ async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> 
             sh.record(decision(Route::Model, name, 0, false, "bad-body"));
             return reply(&mut s, "400 Bad Request", "").await;
         }
+    };
+    // Admission: the check and the reservation are one step in the budget. `held` releases on every exit
+    // below that does not settle, including this task being dropped.
+    let held = match &sh.budget {
+        None => Held::none(),
+        Some(b) => match b.reserve(&call_bound(&body)) {
+            Ok(hold) => Held::new(Arc::clone(b), hold),
+            Err(why) => {
+                sh.record(decision(Route::Model, name, 0, false, why.reason()));
+                let extra = format!("x-han-refusal: {}\r\n", why.reason());
+                return reply(&mut s, "429 Too Many Requests", &extra).await;
+            }
+        },
     };
     let kept: Vec<(String, String)> = head
         .headers
@@ -899,9 +927,7 @@ async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> 
     // Spend is recorded before the client sees the end of the response. Closing first lets
     // a client that reads to EOF and immediately calls again pass the budget check before
     // this call is counted (SR-41).
-    if let Some(b) = &sh.budget {
-        b.record(&used);
-    }
+    held.settle(&used);
     sh.usage.send_modify(|u| u.add(&used));
     let mut d = decision(Route::Model, name, 443, true, "allowed");
     d.bytes_up = up_len;

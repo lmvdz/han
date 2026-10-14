@@ -1,14 +1,15 @@
 //! The egress proxy against a local TLS mock provider and local tunnel upstreams (SR-28, SR-35…SR-41,
 //! SR-44, SR-45, SR-48). Every canary below is fake.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
 use han_host::proxy::{
-    AllowEntry, Budget, KeySource, KeyStyle, ModelRoute, Proxy, ProxyConfig, ProxyHandle, Roots,
-    StaticResolver, Usage, sni,
+    AllowEntry, Budget, KeySource, KeyStyle, Ledger, ModelRoute, Price, Proxy, ProxyConfig,
+    ProxyHandle, Roots, StaticResolver, Usage, budget::DEFAULT_MAX_OUTPUT_TOKENS, sni,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -32,6 +33,8 @@ struct Mock {
     addr: SocketAddr,
     ca_pem: String,
     seen: Arc<Mutex<Seen>>,
+    /// While false, the mock holds its answers back (after recording the request).
+    gate: tokio::sync::watch::Sender<bool>,
 }
 
 fn tls_config() -> (String, tokio_rustls::rustls::ServerConfig) {
@@ -96,6 +99,20 @@ async fn read_request<S: tokio::io::AsyncRead + Unpin>(s: &mut S) -> Option<Requ
 
 impl Mock {
     async fn start() -> Mock {
+        Mock::start_with(true).await
+    }
+
+    /// A mock that records requests but answers only once [`Mock::open`] is called.
+    async fn start_gated() -> Mock {
+        Mock::start_with(false).await
+    }
+
+    fn open(&self) {
+        self.gate.send_replace(true);
+    }
+
+    async fn start_with(open: bool) -> Mock {
+        let (gate, gate_rx) = tokio::sync::watch::channel(open);
         let (ca_pem, cfg) = tls_config();
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -109,6 +126,7 @@ impl Mock {
                 };
                 let acceptor = acceptor.clone();
                 let seen = Arc::clone(&s2);
+                let mut gate = gate_rx.clone();
                 tokio::spawn(async move {
                     let Ok(mut tls) = acceptor.accept(sock).await else {
                         return;
@@ -118,6 +136,7 @@ impl Mock {
                     };
                     let path = first.split(' ').nth(1).unwrap_or("").to_owned();
                     seen.lock().unwrap().requests.push((first, headers, body));
+                    let _ = gate.wait_for(|open| *open).await;
                     let resp = if path.starts_with("/v1/messages/redirect") {
                         "HTTP/1.1 302 Found\r\nlocation: https://127.0.0.1:9/steal\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
                     } else {
@@ -132,7 +151,12 @@ impl Mock {
                 });
             }
         });
-        Mock { addr, ca_pem, seen }
+        Mock {
+            addr,
+            ca_pem,
+            seen,
+            gate,
+        }
     }
 
     fn route(&self, key: Arc<KeySource>, style: KeyStyle) -> ModelRoute {
@@ -365,6 +389,155 @@ async fn spend_is_recorded_before_the_response_ends() {
     let r = raw(p.addr(), &model_req("/v1/messages", TOKEN, "{}")).await;
     assert!(r.starts_with("HTTP/1.1 429"), "{r}");
     assert_eq!(mock.requests().len(), 1);
+}
+
+/// Waits until `cond` holds. It waits on state, not for a fixed time; the bound only turns a hang into a failure.
+async fn until(what: &str, mut cond: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !cond() {
+        assert!(start.elapsed() < Duration::from_secs(30), "never: {what}");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+/// One unit per input token, five per output token (cache reads free, cache writes two).
+const PRICE: Price = Price {
+    input: 1,
+    output: 5,
+    cache_read: 0,
+    cache_creation: 2,
+};
+
+fn ledger(limit: u64) -> Arc<Ledger> {
+    Arc::new(Ledger::new(
+        limit,
+        HashMap::from([("claude-test".to_owned(), PRICE)]),
+    ))
+}
+
+async fn ledger_proxy(mock: &Mock, ledger: &Arc<Ledger>) -> ProxyHandle {
+    let mut cfg = ProxyConfig::new("s1", TOKEN);
+    cfg.model = Some(mock.route(KeySource::new(REAL_KEY), KeyStyle::XApiKey));
+    let budget: Arc<dyn Budget> = Arc::clone(ledger) as Arc<dyn Budget>;
+    cfg.budget = Some(budget);
+    Proxy::start(cfg).await.unwrap()
+}
+
+fn call_body(max_tokens: Option<u64>) -> String {
+    match max_tokens {
+        Some(m) => format!("{{\"model\":\"claude-test-1\",\"max_tokens\":{m}}}"),
+        None => "{\"model\":\"claude-test-1\"}".to_owned(),
+    }
+}
+
+/// The worst case of a call with this `max_tokens`: two bytes of body per input token at the dearer input
+/// price (2), and the output cap at 5.
+fn worst(max_tokens: Option<u64>, default_cap: u64) -> u64 {
+    let body = call_body(max_tokens);
+    (body.len() as u64).div_ceil(2) * 2 + max_tokens.unwrap_or(default_cap) * 5
+}
+
+/// SR-41: N concurrent calls against a budget that fits k of them. Exactly k are forwarded, and the spend
+/// never passes the limit. The mock holds every answer back, so nothing settles while the others arrive: the
+/// reservation, not the spend, must refuse them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_calls_cannot_overshoot_the_budget() {
+    const N: usize = 12;
+    const K: usize = 3;
+    let w = worst(Some(1_000), 0);
+    let limit = w * K as u64 + w / 2;
+    let mock = Mock::start_gated().await;
+    let l = ledger(limit);
+    let p = ledger_proxy(&mock, &l).await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    for _ in 0..N {
+        let (tx, addr) = (tx.clone(), p.addr());
+        tokio::spawn(async move {
+            let r = raw(
+                addr,
+                &model_req("/v1/messages", TOKEN, &call_body(Some(1_000))),
+            )
+            .await;
+            let _ = tx.send(r);
+        });
+    }
+    for _ in 0..N - K {
+        let r = rx.recv().await.unwrap();
+        assert!(r.starts_with("HTTP/1.1 429"), "{r}");
+        assert!(r.contains("x-han-refusal: budget-would-exceed"), "{r}");
+    }
+    until("k calls reach the provider", || mock.requests().len() == K).await;
+    assert_eq!(l.reserved(), w * K as u64);
+    mock.open();
+    for _ in 0..K {
+        let r = rx.recv().await.unwrap();
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    }
+    assert_eq!(mock.requests().len(), K, "exactly k were forwarded");
+    until("reservations settle", || l.reserved() == 0).await;
+    assert!(l.spent() <= limit, "spent {} of {limit}", l.spent());
+    // the mock reports 10 input, 90 cache-read and 5 output tokens: 10 + 0 + 25 each
+    assert_eq!(l.spent(), 35 * K as u64);
+}
+
+/// A call whose client goes away mid-stream still ends: the reservation is released and the call settled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_aborted_call_releases_its_reservation() {
+    let mock = Mock::start_gated().await;
+    let l = ledger(1_000_000);
+    let p = ledger_proxy(&mock, &l).await;
+    let mut s = TcpStream::connect(p.addr()).await.unwrap();
+    s.write_all(model_req("/v1/messages", TOKEN, &call_body(Some(100))).as_bytes())
+        .await
+        .unwrap();
+    until("the call is forwarded", || mock.requests().len() == 1).await;
+    assert_eq!(l.reserved(), worst(Some(100), 0));
+    drop(s);
+    mock.open();
+    until("the reservation is gone", || l.reserved() == 0).await;
+    // the freed budget admits the next call
+    let r = raw(
+        p.addr(),
+        &model_req("/v1/messages", TOKEN, &call_body(Some(100))),
+    )
+    .await;
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+}
+
+/// A request that sets no `max_tokens` reserves the documented default cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_without_max_tokens_reserves_the_default_cap() {
+    let mock = Mock::start_gated().await;
+    let l = ledger(1_000_000);
+    let p = ledger_proxy(&mock, &l).await;
+    let mut s = TcpStream::connect(p.addr()).await.unwrap();
+    s.write_all(model_req("/v1/messages", TOKEN, &call_body(None)).as_bytes())
+        .await
+        .unwrap();
+    until("the call is forwarded", || mock.requests().len() == 1).await;
+    assert_eq!(l.reserved(), worst(None, DEFAULT_MAX_OUTPUT_TOKENS));
+    mock.open();
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out).await;
+    until("the reservation is gone", || l.reserved() == 0).await;
+}
+
+/// A model without a price reserves nothing (subscription mode has no per-call price).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unpriced_model_is_not_reserved() {
+    let mock = Mock::start_gated().await;
+    let l = ledger(1_000_000);
+    let p = ledger_proxy(&mock, &l).await;
+    let mut s = TcpStream::connect(p.addr()).await.unwrap();
+    s.write_all(model_req("/v1/messages", TOKEN, "{\"model\":\"other\"}").as_bytes())
+        .await
+        .unwrap();
+    until("the call is forwarded", || mock.requests().len() == 1).await;
+    assert_eq!(l.reserved(), 0);
+    mock.open();
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out).await;
+    assert_eq!(l.spent(), 0);
 }
 
 // ───────────────────────── tunnels ─────────────────────────
