@@ -153,11 +153,23 @@ async fn steering_a_guarded_agent_runs_strict_and_taints_it() {
         assert!(!host.is_finished(), "the session ended early");
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    let first = prompts().remove(0);
-    assert!(first.contains(ISSUE), "{first}");
+    let first = log_lines(&log)
+        .into_iter()
+        .find(|v| v["event"] == "prompt")
+        .unwrap()["prompt"]
+        .clone();
+    let blocks = first.as_array().unwrap();
+    let text = blocks[0]["text"].as_str().unwrap();
+    assert!(text.contains(ISSUE), "{text}");
     assert!(
-        !first.contains("canary-7f3a"),
-        "the ask became the prompt: {first}"
+        !text.contains("canary-7f3a"),
+        "the ask became the prompt: {text}"
+    );
+    // The ask reaches the agent only as a data block (SR-54, SR-57).
+    let data = blocks[1]["text"].as_str().unwrap();
+    assert!(
+        data.contains("canary-7f3a") && data.contains("<han-data id="),
+        "{data}"
     );
 
     // Turn 2: Bob, an owner but not the agent's guard, steers the guarded agent: strict.

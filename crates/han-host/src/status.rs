@@ -34,6 +34,26 @@ pub fn bound(s: &str, max: usize) -> String {
     out
 }
 
+/// How much of the agent's last message the idle step shows.
+pub const WAITING_PREVIEW: usize = 80;
+
+/// The step of a session that waits for input after a turn: "waiting for input: <start of the last message>".
+/// Whitespace runs collapse to one space.
+pub fn waiting_step(last_message: &str) -> String {
+    let flat = last_message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if flat.is_empty() {
+        return "waiting for input".into();
+    }
+    let mut start: String = flat.chars().take(WAITING_PREVIEW).collect();
+    if flat.chars().count() > WAITING_PREVIEW {
+        start.push('…');
+    }
+    format!("waiting for input: {start}")
+}
+
 /// What the host saw, as the deriver consumes it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Signal {
@@ -42,6 +62,8 @@ pub enum Signal {
         /// For example "working on github:o/r#12".
         step: String,
     },
+    /// The start of the agent's latest message (masked), for the step shown while it waits for input.
+    LastMessage(String),
     /// A tool call started or changed.
     Tool {
         /// Its title.
@@ -79,6 +101,8 @@ pub enum Signal {
 pub struct StatusDeriver {
     body: StatusBody,
     tests: Option<Tests>,
+    /// The start of the agent's latest message this turn.
+    last_message: Option<String>,
 }
 
 impl StatusDeriver {
@@ -116,6 +140,7 @@ impl StatusDeriver {
                 at: String::new(),
             },
             tests: None,
+            last_message: None,
         }
     }
 
@@ -128,7 +153,9 @@ impl StatusDeriver {
                 b.state = SessionState::Working;
                 b.step = bound(&step, MAX_STEP);
                 b.tool = None;
+                self.last_message = None;
             }
+            Signal::LastMessage(m) => self.last_message = Some(m),
             Signal::Tool { title, kind } => {
                 b.state = SessionState::Working;
                 b.step = bound(&title, MAX_STEP);
@@ -169,7 +196,10 @@ impl StatusDeriver {
                     b.state = SessionState::Idle;
                 }
                 b.tool = None;
-                b.step = "waiting for input".into();
+                b.step = match self.last_message.take() {
+                    Some(m) => waiting_step(&m),
+                    None => "waiting for input".into(),
+                };
             }
             Signal::Failed(why) => {
                 b.state = SessionState::Failed;
@@ -312,6 +342,28 @@ mod tests {
         s.apply(Signal::TurnEnded);
         assert_eq!(s.state(), SessionState::Idle);
         assert!(!s.apply(Signal::TurnEnded), "no change, no item");
+    }
+
+    #[test]
+    fn the_idle_step_shows_the_start_of_the_last_message() {
+        let mut s = d();
+        s.apply(Signal::TurnStarted { step: "w".into() });
+        s.apply(Signal::LastMessage(format!(
+            "Which
+branch should I
+
+ target? {}",
+            "x".repeat(200)
+        )));
+        s.apply(Signal::TurnEnded);
+        let step = s.snapshot("t").step;
+        assert!(step.starts_with("waiting for input: Which branch should I target? xxx"));
+        assert!(step.ends_with('…'));
+        assert_eq!(step.chars().count(), "waiting for input: ".len() + 81);
+        // The next turn that says nothing falls back to the plain step.
+        s.apply(Signal::TurnStarted { step: "w".into() });
+        s.apply(Signal::TurnEnded);
+        assert_eq!(s.snapshot("t").step, "waiting for input");
     }
 
     #[test]

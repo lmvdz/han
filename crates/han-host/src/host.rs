@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use han_mcp::{HostBridge, ProposeAnswer, ProposeRequest};
 use han_node::api::{
     BoxFuture, CallResult, Command, FileTouch, NodeApi, NodeError, Query, Row, Sandbox,
@@ -28,6 +28,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::acp::{AcpDriver, AgentDriver, AgentEvent, Mode, SessionConfig, TurnInput};
 use crate::driver::DriverConfig;
+use crate::items::ItemFeed;
 use crate::mask::Masker;
 use crate::r24::{self, Driver, DriverKind, GuardFacts, TaintStore, TaskDuty};
 use crate::status::{Signal, StatusDeriver};
@@ -517,11 +518,14 @@ pub struct HostDeps {
     pub signer: Option<(String, String, [u8; 32])>,
 }
 
+/// A task being worked: its id, its author, the issue it came from and its ask.
+type TaskInfo = (String, String, Option<String>, Option<String>);
+
 /// Finds the open task for the issue assigned to the agent, or claims the issue with a self-assigned task.
 async fn find_or_claim_task(
     cfg: &HostConfig,
     api: &dyn NodeApi,
-) -> Result<Option<(String, String, Option<String>)>, HostError> {
+) -> Result<Option<TaskInfo>, HostError> {
     if let Some(t) = &cfg.task {
         let rows = snapshot(
             api,
@@ -532,14 +536,14 @@ async fn find_or_claim_task(
             },
         )
         .await?;
-        let author = rows
+        let (author, ask) = rows
             .iter()
             .find_map(|r| match r {
-                Row::Task(x) if &x.task == t => Some(x.author.clone()),
+                Row::Task(x) if &x.task == t => Some((x.author.clone(), x.ask.clone())),
                 _ => None,
             })
-            .unwrap_or_else(|| cfg.agent.clone());
-        return Ok(Some((t.clone(), author, cfg.issue.clone())));
+            .unwrap_or_else(|| (cfg.agent.clone(), None));
+        return Ok(Some((t.clone(), author, cfg.issue.clone(), ask)));
     }
     let Some(issue) = &cfg.issue else {
         return Ok(None);
@@ -553,13 +557,13 @@ async fn find_or_claim_task(
         },
     )
     .await?;
-    if let Some((id, author)) = rows.iter().find_map(|r| match r {
+    if let Some((id, author, ask)) = rows.iter().find_map(|r| match r {
         Row::Task(t) if t.open && t.external.as_deref() == Some(issue.as_str()) => {
-            Some((t.task.clone(), t.author.clone()))
+            Some((t.task.clone(), t.author.clone(), t.ask.clone()))
         }
         _ => None,
     }) {
-        return Ok(Some((id, author, Some(issue.clone()))));
+        return Ok(Some((id, author, Some(issue.clone()), ask)));
     }
     // A self-claim (PLAN §6.6: counts as accepted; the host still appends the acceptance, R-24).
     let r = api
@@ -570,7 +574,14 @@ async fn find_or_claim_task(
             external: Some(issue.clone()),
         })
         .await?;
-    Ok(receipt_id(&r).map(|id| (id, cfg.agent.clone(), Some(issue.clone()))))
+    Ok(receipt_id(&r).map(|id| {
+        (
+            id,
+            cfg.agent.clone(),
+            Some(issue.clone()),
+            Some(format!("work on {issue}")),
+        )
+    }))
 }
 
 /// Runs one session until the work stops (the agent finishes, `stop` turns true, or it fails).
@@ -584,9 +595,7 @@ pub async fn run_session(
 
     // 1. The task, accepted before the first turn (R-24).
     let task = find_or_claim_task(&cfg, api.as_ref()).await?;
-    let mut duty = task
-        .as_ref()
-        .map(|(id, _, _)| TaskDuty::new(&cfg.space, id));
+    let mut duty = task.as_ref().map(|(id, ..)| TaskDuty::new(&cfg.space, id));
     if let Some(cmd) = duty.as_mut().and_then(TaskDuty::accept) {
         api.call(cmd).await?;
     }
@@ -639,7 +648,7 @@ async fn run_opened(
     cfg: &HostConfig,
     deps: &HostDeps,
     session: &str,
-    task: Option<(String, String, Option<String>)>,
+    task: Option<TaskInfo>,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<SessionState, HostError> {
     let api = deps.api.clone();
@@ -830,16 +839,42 @@ async fn run_opened(
             let mut dirty = true;
             let mut last = tokio::time::Instant::now() - Duration::from_secs(120);
             let mut tick = tokio::time::interval(Duration::from_millis(300));
+            let mut feed = ItemFeed::new();
             loop {
                 tokio::select! {
+                    // Signals first: a turn's start precedes its events, and its end follows them.
+                    biased;
                     s = sig_rx.recv() => match s {
                         Some(s) => {
+                            match &s {
+                                Signal::TurnStarted { .. } => feed.begin_turn(),
+                                Signal::TurnEnded | Signal::Failed(_) | Signal::Done => {
+                                    // The turn's events are all queued by now: fold them before it ends, so the
+                                    // last message is complete and the step can show its start.
+                                    while let Some(Some(ev)) = events.next().now_or_never() {
+                                        feed.apply(&ev, &now_text());
+                                        for s in signals_of(&shared, mirror.as_deref(), ev) {
+                                            dirty |= shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(s);
+                                        }
+                                    }
+                                    feed.end_turn();
+                                    if matches!(s, Signal::TurnEnded)
+                                        && let Some(m) = feed.last_message()
+                                    {
+                                        let m = shared.masker.mask(m).into_owned();
+                                        shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(Signal::LastMessage(m));
+                                    }
+                                }
+                                _ => {}
+                            }
                             dirty |= shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(s);
+                            publish_items(&shared, &mut feed).await;
                         }
                         None => break,
                     },
                     ev = events.next() => match ev {
                         Some(ev) => {
+                            feed.apply(&ev, &now_text());
                             for s in signals_of(&shared, mirror.as_deref(), ev) {
                                 dirty |= shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(s);
                             }
@@ -849,6 +884,7 @@ async fn run_opened(
                         }
                     },
                     _ = tick.tick() => {
+                        publish_items(&shared, &mut feed).await;
                         if dirty || last.elapsed() > Duration::from_secs(60) {
                             publish(&shared).await;
                             dirty = false;
@@ -857,6 +893,7 @@ async fn run_opened(
                     }
                 }
             }
+            publish_items(&shared, &mut feed).await;
             publish(&shared).await;
         })
     };
@@ -875,7 +912,7 @@ async fn run_opened(
     let mut handled: u64 = 0;
     let mut state = SessionState::Idle;
 
-    if let Some((task_id, author, external)) = &task {
+    if let Some((task_id, author, external, ask)) = &task {
         let driver = Driver {
             author: author.clone(),
             kind: DriverKind::Task {
@@ -886,7 +923,8 @@ async fn run_opened(
             seq: 0,
         };
         let text = r24::task_prompt(external.as_deref(), task_id);
-        state = turn(&shared, &mut agent, &facts, &taint, driver, text).await?;
+        let data = r24::task_data(ask.as_deref(), &r24::data_id());
+        state = turn(&shared, &mut agent, &facts, &taint, driver, text, data).await?;
         if let Some(m) = &mirror {
             m.rescan();
         }
@@ -919,7 +957,7 @@ async fn run_opened(
                         space: cfg.space.clone(),
                         seq: i.seq,
                     };
-                    state = turn(&shared, &mut agent, &facts, &taint, driver, text).await?;
+                    state = turn(&shared, &mut agent, &facts, &taint, driver, text, None).await?;
                     if let Some(m) = &mirror {
                         m.rescan();
                     }
@@ -963,6 +1001,7 @@ async fn turn(
     taint: &TaintStore,
     driver: Driver,
     text: String,
+    data: Option<String>,
 ) -> Result<SessionState, HostError> {
     let cfg = &shared.cfg;
     facts
@@ -991,7 +1030,7 @@ async fn turn(
         .turn(
             TurnInput {
                 text,
-                data_blocks: Vec::new(),
+                data_blocks: data.into_iter().collect(),
             },
             decision.mode,
         )
@@ -1088,6 +1127,24 @@ fn signals_of(
         )],
         AgentEvent::Exited { code } => vec![Signal::Failed(format!("the agent exited ({code:?})"))],
         _ => Vec::new(),
+    }
+}
+
+/// Sends the items that changed as `han.item/1` stream items (masked and bounded by the feed).
+async fn publish_items(shared: &Shared, feed: &mut ItemFeed) {
+    for body in feed.take(&shared.masker) {
+        let r = shared
+            .api
+            .call(Command::StreamPublish {
+                space: shared.cfg.space.clone(),
+                session: shared.session.clone(),
+                name: crate::items::PROFILE.into(),
+                body: body.to_string(),
+            })
+            .await;
+        if let Err(e) = r {
+            tracing::warn!("item not published: {e}");
+        }
     }
 }
 

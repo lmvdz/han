@@ -86,6 +86,12 @@ item with the highest `seq`.
   characters, a label or login 64, 20 labels) and stripped of control characters; a face shows them as text,
   never markup or a link it follows, and an agent gets them only inside the data envelope (SR-54, SR-59).
   The task's `ask` embeds the title the same way (at most 200 characters) and is data to the agent, too.
+  The `ask` also carries the issue **body**, because the agent's sandbox cannot reach GitHub: after the title line, between
+  `----- BEGIN ISSUE TEXT (untrusted, ...) -----` and `----- END ISSUE TEXT -----`, with control characters removed
+  (newlines and tabs stay), the delimiter text defused, and at most 4,096 bytes (cut with `[truncated]`). An empty body adds no
+  block. The ask is fixed when the task is made: if the issue's body (or title) changes later, the existing task is **not**
+  rewritten and the agent works from the text it was made with (it can ask for more context). `han-github request` has only
+  the title you pass, so its ask has no body.
 
 ## Not here
 
