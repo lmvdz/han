@@ -636,6 +636,9 @@ fn draw_session(f: &mut Frame, app: &App, area: Rect) {
             };
             facts.push(format!("sandbox: {backend} ({fidelity})"));
         }
+        if s.publish_errors > 0 {
+            facts.push(format!("{} publish error(s)", s.publish_errors));
+        }
         head.push(Line::styled(fit(&facts.join(" · "), w), quiet()));
     }
     if let Some(row) = &p.row

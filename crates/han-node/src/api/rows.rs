@@ -176,6 +176,10 @@ pub struct StatusBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox: Option<Sandbox>,
+    /// How many status or stream publishes of this session the node refused or failed, so far. A node-side
+    /// extension like `sandbox` (unknown members are ignored); `0` for a host that does not send it.
+    #[serde(default)]
+    pub publish_errors: u32,
     /// A counter per session, starting at 1.
     pub seq: u64,
     /// The host's time.
@@ -305,6 +309,9 @@ pub struct BoardRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox: Option<Sandbox>,
+    /// Publishes of the session that failed (see `StatusBody::publish_errors`).
+    #[serde(default)]
+    pub publish_errors: u32,
     /// This node's steady clock (ms) when the last item arrived; a face computes the age from its own clock.
     pub last_active_ms: u64,
     /// Whether the session is closed.

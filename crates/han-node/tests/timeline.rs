@@ -262,6 +262,7 @@ async fn another_member_sees_the_live_timeline() {
         tokens: None,
         summary: None,
         sandbox: None,
+        publish_errors: 0,
         seq: 0,
         at: "2026-01-01T00:00:00Z".into(),
     };

@@ -43,6 +43,7 @@ fn status(session: &str) -> StatusBody {
         tokens: None,
         summary: Some(format!("{} {CANARY}", "x".repeat(2_000))),
         sandbox: None,
+        publish_errors: 0,
         seq: 7,
         at: "2026-10-13T10:00:00Z".into(),
     }
@@ -73,6 +74,7 @@ fn board_row() -> BoardRow {
         tokens: None,
         summary: Some(CANARY.into()),
         sandbox: None,
+        publish_errors: 0,
         last_active_ms: 5,
         closed: false,
         needs_me: false,

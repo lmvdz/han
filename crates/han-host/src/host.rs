@@ -260,7 +260,7 @@ struct Shared {
     status: Mutex<StatusDeriver>,
     /// Closed (taken) at shutdown, so the publisher sees the end of the channel after the queued signals.
     signals: Mutex<Option<mpsc::UnboundedSender<Signal>>>,
-    /// Publishes (status or item) the node refused or failed; shown in the status summary.
+    /// Publishes (status or item) the node refused or failed; reported as `publish_errors` in the status.
     publish_errors: AtomicU64,
     read_others: Mutex<bool>,
     proposals: Mutex<Vec<String>>,
@@ -1335,16 +1335,9 @@ async fn publish(shared: &Shared) {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .snapshot(&now_text());
-    // Publish failures so far, in the summary (the status has no field for them). Text is masked by
-    // `shared.api` (SR-52): nothing here masks by hand.
-    let failed = shared.publish_errors.load(Ordering::Relaxed);
-    if failed > 0 {
-        let note = format!("{failed} publish error(s)");
-        body.summary = Some(match body.summary.take() {
-            Some(s) => crate::status::bound(&format!("{note}; {s}"), crate::status::MAX_SUMMARY),
-            None => note,
-        });
-    }
+    // Text is masked by `shared.api` (SR-52): nothing here masks by hand.
+    body.publish_errors =
+        u32::try_from(shared.publish_errors.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
     if let Err(e) = shared
         .api
         .call(Command::StatusPublish {

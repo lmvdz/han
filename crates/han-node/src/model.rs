@@ -1534,6 +1534,7 @@ impl SpaceModel {
                     tokens: st.and_then(|x| x.tokens),
                     summary: st.and_then(|x| x.summary.clone()),
                     sandbox: st.and_then(|x| x.sandbox),
+                    publish_errors: st.map_or(0, |x| x.publish_errors),
                     last_active_ms: s.last_item_ms,
                     closed: s.closed,
                     needs_me,

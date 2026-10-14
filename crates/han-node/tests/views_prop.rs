@@ -474,6 +474,7 @@ impl Driver {
                         }),
                         summary: None,
                         sandbox: None,
+                        publish_errors: 0,
                         seq: *seq,
                         at: "2026-01-01T00:00:00Z".into(),
                     },
@@ -958,6 +959,7 @@ fn put_status(d: &mut Driver, session: usize, f: impl FnOnce(&mut StatusBody)) {
         tokens: None,
         summary: None,
         sandbox: None,
+        publish_errors: 0,
         seq: *n,
         at: "2026-01-01T00:00:00Z".into(),
     };
