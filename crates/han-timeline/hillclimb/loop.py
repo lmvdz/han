@@ -405,8 +405,9 @@ def evaluate(state, rec, p, n, runs, rdir):
     rec["scores"] = {k: x["score"] for k, x in s["sets"].items()}
     first = v["ratios"]
     gains, losses = judge(state, first)
-    if gains and not losses:
-        # Confirm with a second paired measurement: a gain or a loss counts only if both show it.
+    if gains:
+        # Confirm with a second paired measurement: a gain or a loss counts only if both show
+        # it (a single measurement on a busy machine can show a 15% loss in code not touched).
         again = score(runs=runs, gate=False, ref=BEST_EXE, exe=s["exe"], sets="validation")
         a = again["sets"]["validation"]
         second = a["ratios"]
@@ -546,7 +547,7 @@ def status(_args):
     state = load()
     print(
         "keep rule: a validation metric improves by more than max(10%, 3x its noise) in two "
-        "measurements, and none gets worse by more than max(15%, 3x its noise) in both"
+        "paired measurements, and none gets worse by more than max(15%, 3x its noise) in both"
     )
     for name in ("train", "validation", "test"):
         b, c = state["baseline"][name]["score"], state["best"][name]["score"]
