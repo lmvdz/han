@@ -1,6 +1,6 @@
 # HAN — teams of people and agents that see each other's work
 
-**HAN is an open standard, and soon an app, for teams where people and AI coding agents work side by side. Everyone, agents included, sees live what every agent is working on, so nobody has to ask "what are you working on?". Where a space's approval rule or an agent's guard requires one, nothing an agent does to the outside world (a push, a PR, a deploy, a payment) happens without an approval that anyone on the team can verify.**
+**HAN is an open standard, and an app now in its first dogfood, for teams where people and AI coding agents work side by side. It gives the team live visibility: everyone, agents included, sees live what every agent is working on, so nobody has to ask "what are you working on?". Where a space's approval rule or an agent's guard requires one, nothing an agent does to the outside world (a push, a PR, a deploy, a payment) happens without an approval that anyone on the team can verify.**
 
 ## What HAN gives a team
 
@@ -13,27 +13,82 @@
 - **Guarded agents.** A guarded agent can't approve, govern or steer anyone else, and nothing it proposes runs without its human's approval. A delegate that accepts its task is guarded the same way until the task closes for it: its work waits for that human, and it can't approve, govern or steer anyone else. Guarding is recorded on the work when the work is created, so nothing already recorded is freed later. Owners may guard every non-human with `forceGuarded`. The residue Policy can't see is listed in [§7.5](spec/core/architecture.md).
 - **Replayable policy.** Policy is <!--s:policy_fns_w-->six<!--/s--> pure functions, so any participant can re-check every decision. A cheating sequencer leaves a portable proof.
 
-## Where it's going
+## What works today
 
-The specification is mature. The next step is a product, planned in [PLAN.md](PLAN.md):
+HAN is being built in Rust, in this repository, and its first users are building HAN with it. Milestones M1 to M5 are merged, and the dogfood (M6) is under way. [PLAN.md §10](PLAN.md) lists every milestone with its pull requests, and the book has a [status page](docs/status.md).
 
-- **The MVP: team awareness.** 2–4 people, each running several coding agents. A live board shows who is on which GitHub issue and what each agent is doing. You can drill into any session's live work timeline. Agents query each other's sessions, and overlap alerts fire before two agents collide.
-- **No harness lock-in.** Agents run through ACP (Agent Client Protocol), with pi first; any ACP agent should work.
-- **The sandbox is the gate.** Agents get no network and no credentials. Their only way out is HAN's `propose`, and a separate executor acts only on valid approvals.
-- **One protocol over QUIC**, dialled by key (iroh is the planned implementation, not a requirement), so teammates' machines and cloud runners reach each other without port forwarding; spaces still have a home server name. Matrix and chat tools become integrations. Since spec round 30, [§8](spec/core/architecture.md) specifies this binding (`han/1`), with a peer filter and invite tickets; Matrix is an informative integration.
-- **A Rust implementation:** one `han` binary with a terminal UI first, and a Tauri desktop app after.
+| Part | What it does |
+|---|---|
+| `han-core` | Policy as pure functions: all 168 Policy vectors pass, with 0 divergences from the reference under differential fuzzing (M1) |
+| `han-seq`, `han-net` | the sequencer and the `han/1` binding over QUIC (iroh), dialled by key: all <!--s:wv_n-->113<!--/s--> wire vectors pass over QUIC. Also home tickets, the peer filter, federation with pinned remote profiles, and a hosting rule: only known actors create spaces on a home (M2) |
+| `han-node` | the per-device daemon: keys, sync, outbox, live views (board, sessions, approvals, overlaps), and the node API over JSON-RPC on a named pipe or Unix socket. A three-node simulation runs in CI (M3) |
+| `han-timeline` | live work timelines, built by a two-team clean room from a behaviour-only spec (T0, T1) |
+| `han-host`, `han-exec`, `han-mcp`, `han-vcs` | agent sessions over ACP in a sandbox (MXC on Windows, bubblewrap on Linux) whose only way out is an egress proxy; agent tools (`propose`, `team_*`); an executor that runs approved effects at most once; git workspaces, changesets and mirroring (M4) |
+| harnesses | pi with an API key, and the official Claude Code client through `claude-agent-acp` on a Claude subscription (M4) |
+| `han tui` | the live board, the session pane and the approvals inbox in the terminal (M5) |
+| `han-github` | a GitHub App integration: it polls issues with ETags and turns `agent-ready` issues into tasks for a shared agent pool (M5) |
+| releases | cargo-dist installers, `han update --check` against a signed manifest, and a nightly cross-OS CI ([docs/release.md](docs/release.md)) |
 
-## Status
+**Not there yet:**
+- the GUI;
+- agent-to-agent questions;
+- semantic gates and risk tiers (the spec work is queued, see below);
+- the gaps the dogfood found, which are being fixed now: per-agent login directories, starting the Claude Code driver on a runner, a host per OS user, and services for the executor and the node.
 
-> **Design draft (v1, round <!--s:round-->32<!--/s-->).** The repository holds:
+## Try it
+
+Build the binaries. The Rust toolchain is pinned by `rust-toolchain.toml`.
+
+```sh
+cargo build --release -p han -p han-github     # target/release/han and target/release/han-github
+```
+
+Run a home, then a node for yourself that trusts the home through its ticket. `--file-keys` keeps the keys in the data folder; leave it out to use the OS keychain. `HAN_DATA` names the node's data folder for every later command.
+
+```sh
+han key me/keys/device.key                                  # prints your device's public key
+han seq --server han.home.arpa --data home --bind 0.0.0.0:7841 \
+        --register @me:han.home.arpa:human:d1:<your-public-key>
+han ticket --data home                                      # prints the home ticket, han1home.…
+export HAN_DATA=me
+han node --actor @me:han.home.arpa --file-keys --home <ticket>
+```
+
+Make a space and an agent, then open the board:
+
+```sh
+han space create --name team --home <ticket>                # prints the space id
+han space list
+han agent create --name me-coder --server han.home.arpa --operator @me:han.home.arpa
+#   restart han seq with one more --register for the agent, as the command prints, then:
+han agent confirm @me-coder:han.home.arpa --operator @me:han.home.arpa --home <ticket>
+han space member <space> @me-coder:han.home.arpa member
+han agent start --space <space> --agent @me-coder:han.home.arpa --harness pi --repo github:owner/repo
+han tui <space>                                             # or: han tui <space> --print 120x30
+```
+
+**More:**
+- A teammate gets the same ticket, runs `han node --home <ticket>` as their own actor, then `han space follow <space> --home <ticket>`.
+- `han space member` gives them a role, and `han space policy <space> <file>` sets the space's policy.
+- `han device` pairs a second device into your profile.
+- To surface GitHub issues, run `han-github run --config han-github.toml` ([integrations/han-github](integrations/han-github/README.md)).
+- A shared runner on a Linux VM is set up as in [docs/runner.md](docs/runner.md).
+
+The book's [Getting started](docs/getting-started.md) page walks through the same steps.
+
+## The specification
+
+> **Design draft (v1, round <!--s:round-->32<!--/s-->).** Spec rounds are paused while the product is built. The next round is queued with semantic gates, risk tiers for landing work, and the open review items. The repository holds:
 > - a specification;
 > - an executable reference ([ref/](ref/));
-> - a working but minimal Python implementation ([witnesses/impl-py/](witnesses/impl-py/));
-> - a clean-room TypeScript implementation written from the spec alone ([witnesses/cleanroom-ts/](witnesses/cleanroom-ts/)).
+> - the Rust implementation ([crates/](crates/), [apps/](apps/), [integrations/](integrations/));
+> - two Policy witnesses: a minimal Python implementation ([witnesses/impl-py/](witnesses/impl-py/)) and a clean-room TypeScript implementation written from the spec alone ([witnesses/cleanroom-ts/](witnesses/cleanroom-ts/)).
 >
-> There is no production implementation yet. Independent adversarial reviews against a fixed rubric ([grading-rubric.md](spec/decisions/grading-rubric.md)) scored <!--s:scores-->rounds 1–6 from 57.8 to 76.6 / 100, rounds 8–16 (after the scope change) 67.8, 67.5, 69.8, 69.2, 71.1, 72.5, 72.7, 73.1, 72.2, round 18 73.4 (round 17 was folded into it), round 19 73.9, round 21 73.7, round 22 74.0, round 23 73.0, round 24 74.7, round 25 74.3, round 26 74.9, round 27 76.5, round 28 77.8, round 29 77.9, round 30 75.6, round 31 75.7 and round 32 **76.5** (round 20 not graded yet)<!--/s-->. See [HISTORY.md](spec/decisions/HISTORY.md). Expect breaking changes.
+> Independent adversarial reviews against a fixed rubric ([grading-rubric.md](spec/decisions/grading-rubric.md)) scored <!--s:scores-->rounds 1–6 from 57.8 to 76.6 / 100, rounds 8–16 (after the scope change) 67.8, 67.5, 69.8, 69.2, 71.1, 72.5, 72.7, 73.1, 72.2, round 18 73.4 (round 17 was folded into it), round 19 73.9, round 21 73.7, round 22 74.0, round 23 73.0, round 24 74.7, round 25 74.3, round 26 74.9, round 27 76.5, round 28 77.8, round 29 77.9, round 30 75.6, round 31 75.7 and round 32 **76.5** (round 20 not graded yet)<!--/s-->. See [HISTORY.md](spec/decisions/HISTORY.md). Expect breaking changes.
 
-**The witnesses are Policy witnesses.** Both implementations pass the Policy vectors and are compared with the reference by differential fuzzing, as is the Rust core (`crates/han-core`). Their WebSocket servers are frozen at round 29 (the legacy carrier, §8.2) and leave the live interop; interop evidence for the QUIC binding comes with the Rust implementation.
+The spec's [§8](spec/core/architecture.md) binding (`han/1`) runs over QUIC with dial-by-key (iroh is the implementation, not a requirement), with a peer filter and tickets. Matrix and chat tools are integrations. [Architecture §10](spec/core/architecture.md) lists every rule with its check, and says plainly where there is none.
+
+**The witnesses are Policy witnesses.** Both pass the Policy vectors and are compared with the reference by differential fuzzing, as is `crates/han-core`. Their WebSocket servers are frozen at round 29 (the legacy carrier, §8.2); interop evidence for the QUIC binding comes from the Rust implementation.
 
 **What the Python witness contains:**
 - a sequencer (SQLite WAL store, the legacy WebSocket carrier, and the round-29 Matrix application service, which the spec no longer has);
@@ -44,13 +99,11 @@ The specification is mature. The next step is a product, planned in [PLAN.md](PL
 - <!--s:impl_n-->241<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
 
 **The honest gaps:**
-- **Interop:** the TypeScript and Python implementations have been run against each other ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations), and both servers pass all <!--s:wv_n-->113<!--/s--> wire vectors, all on the legacy WebSocket carrier. Nothing implements the QUIC binding yet.
+- **Interop:** the TypeScript and Python witnesses have been run against each other on the legacy WebSocket carrier ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations). Over QUIC, only the Rust implementation runs the wire vectors so far; there is no second QUIC implementation to interoperate with.
 - **Durability:** there is no power-cut or `replicated`-durability test.
-- **Windows:** `guarded` has no OS sandbox on Windows, so it is advisory there, and <!--s:advisory_claim-->the host says so in its `status` items (`test_host_p15.py::test_guarded_status_says_it_is_advisory_without_a_sandbox`)<!--/s-->.
-- **The gate:** <!--s:gate_claim-->the implementation's gate runs on a `PreToolUse` hook that sees every call, with `canUseTool` as a second check (`test_host_claude_gate.py`)<!--/s--> (§8.4).
+- **Windows:** in the Python witness, `guarded` has no OS sandbox on Windows, so it is advisory there, and <!--s:advisory_claim-->the host says so in its `status` items (`test_host_p15.py::test_guarded_status_says_it_is_advisory_without_a_sandbox`)<!--/s-->. The Rust host confines agents with MXC on Windows.
+- **The gate:** in the Python witness, <!--s:gate_claim-->the implementation's gate runs on a `PreToolUse` hook that sees every call, with `canUseTool` as a second check (`test_host_claude_gate.py`)<!--/s--> (§8.4). In the Rust host the sandbox is the gate: agents have no network except the egress proxy and no credentials, and they act on the outside world only through `propose`.
 - **Moves:** none between real servers.
-
-[Architecture §10](spec/core/architecture.md) lists every rule with its check, and says plainly where there is none.
 
 ## Repository
 
@@ -64,8 +117,12 @@ The specification is mature. The next step is a product, planned in [PLAN.md](PL
 | [spec/decisions/](spec/decisions/) | decision records per round, the review history and the grading rubric |
 | [ref/](ref/) | the executable reference: Policy, sequencer and verifier (real Ed25519), generators, mutation suites, fuzzers and model checkers |
 | [conformance/](conformance/) | generated vectors, wire vectors and the cross-implementation interop harness |
+| [crates/](crates/) | the Rust implementation: `han-core`, `han-net`, `han-seq`, `han-node`, `han-timeline`, `han-host`, `han-exec`, `han-mcp`, `han-vcs` |
+| [apps/](apps/) | the `han` binary and its terminal UI (`han-tui`); the GUI (`han-gui`) holds only its generated node API types so far |
+| [integrations/](integrations/) | `han-github`, the GitHub App integration |
+| [docs/](docs/) | the mdBook, the [shared runner guide](docs/runner.md) and the [release notes](docs/release.md) |
 | [witnesses/](witnesses/) | the Python and TypeScript implementations that check the spec against itself |
-| [PLAN.md](PLAN.md) | the implementation plan: MVP, architecture, stack, milestones |
+| [PLAN.md](PLAN.md) | the implementation plan: MVP, architecture, stack, decisions, milestones and their status |
 | [research/](research/) | build-or-adopt studies behind the plan |
 
 ## Run the checks

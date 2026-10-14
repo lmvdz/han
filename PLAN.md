@@ -1,6 +1,6 @@
 # HAN implementation plan
 
-Status: design, consolidated 2026-10-12. Nothing is built yet; the user decides when the build starts. Research behind the choices: `research/` (intentd, coordination, agent-plumbing, rust-blocks, gui). Spec decisions for the next round: `spec/decisions/DECISIONS-r30.md`.
+Status (2026-10-14): M1–M5, T0 and T1 are merged; the dogfood (M6) is in progress on a shared runner. Spec rounds are paused while the product is built (round 32 graded 76.5). §10 has every milestone with its pull requests and the decisions taken during the build. Design consolidated 2026-10-12. Research behind the choices: `research/` (intentd, coordination, agent-plumbing, rust-blocks, gui). Spec decisions for the next round: `spec/decisions/DECISIONS-r30.md`.
 
 ## 0. Principles
 
@@ -41,7 +41,7 @@ Status: design, consolidated 2026-10-12. Nothing is built yet; the user decides 
 - Every member reads every session in the team space.
 - Humans assign issues; agents may also claim issues labelled `agent-ready`.
 
-**Dogfood (M6):** the user plus 1–3 people, building HAN with HAN, on HAN's own GitHub issues.
+**Dogfood (M6):** the user plus 1–3 people, building HAN with HAN, on HAN's own GitHub issues. In progress: a shared runner on a boat.dev VM hosts the home, a solo dogfood space runs two agents, and han-github polls `lmvdz/han` (§10).
 
 **Done when:** the team uses it for two weeks of real work, and the verifier shows no action outside the sandbox without a valid approval.
 
@@ -101,9 +101,10 @@ han/
     han-host/      ACP client, sandbox launch, egress proxy, worktree mirroring, status, R-24 duties
     han-timeline/  work-timeline engine (clean room, §8)
     han-exec/      executor; actions: git_push, open_pr, http_request, file_write
+    han-vcs/       the Vcs seam and its git backend: workspaces, changesets, land, merge simulation
     han-mcp/       agent tools over the node API
   apps/
-    han/           one binary: init · node · seq · host · exec · tui · agent · invite · join · conform
+    han/           one binary: node · seq · ticket · space · agent · device · tui · board · host · exec · dial · conform · update · key
     han-tui/       ratatui faces
     han-gui/       Tauri 2 + React (after M3)
   integrations/
@@ -369,22 +370,57 @@ Full findings: `research/`. No existing tool gives a self-hosted, live view of e
 
 ## 10. Milestones
 
-| | Milestone | Done when |
-|---|---|---|
-| R | Repo restructure (§4) | every check passes from the new layout; CI runs on three operating systems |
-| S30 | Spec round 30 (`spec/decisions/DECISIONS-r30.md`) | checks pass; graded by an independent agent |
-| M1 | han-core | all policy vectors pass; 0 differential-fuzz divergences against ref over 1000 seeds |
-| T0 | Timeline spec (Team A) | `han.timeline/1` and its vectors reviewed: behaviour only |
-| M2 | han-net + han-seq over iroh | wire vectors pass over iroh; the peer filter and invite tickets work |
-| SR | Security requirements (before M3) | `research/security-requirements.md`: 103 controls with tests (SR-01…SR-103); the MUSTs listed there are required before M6 |
-| M3 | han-node: outbox, sync, views, node API, supervisor | a three-node turmoil simulation converges; JSON-RPC works on Windows; the snapshot-plus-diffs property holds |
-| T1 | han-timeline (Team B) | passes the T0 vectors and the randomized convergence and sync tests, with signed envelopes |
-| M4 | han-host (ACP client, MXC, proxy, mirroring, masking), han-mcp, han-exec | **first week, a spike answering:**<br>• which pi adapter works from a non-Zed client?<br>• can MXC confine a Node-based agent on Windows 11 with egress only to the proxy?<br>• does an ACP reject carry a reason?<br>• does a propose-only agent stay productive?<br>• does the cache-hit summary fork work?<br>Then: a real session streams status and a live timeline; an agent answers "who is on auth/?"; a gated push waits for approval and runs once |
-| M5 | han-tui (board, session pane, inbox) + han-github | the full MVP story across two machines and a shared runner; pi plus a smoke test of 2–3 other ACP agents |
-| M6 | Dogfood | the user plus 1–3 people, two weeks, building HAN with HAN |
-| G | GUI (after M3, parallel to M4–M6) | the board, session pane and inbox in Tauri, built from clean-room UI specs |
+| | Milestone | Done when | Status |
+|---|---|---|---|
+| R | Repo restructure (§4) | every check passes from the new layout; CI runs on three operating systems | done |
+| S30 | Spec round 30 (`spec/decisions/DECISIONS-r30.md`) | checks pass; graded by an independent agent | done (round 30 graded 75.6); rounds 31 and 32 followed (76.5); rounds paused since |
+| M1 | han-core | all policy vectors pass; 0 differential-fuzz divergences against ref over 1000 seeds | **done** (#29): 168/168 Policy vectors, 0 fuzz divergences |
+| T0 | Timeline spec (Team A) | `han.timeline/1` and its vectors reviewed: behaviour only | **done** (#24; answers to Team B's questions #26, #28) |
+| M2 | han-net + han-seq over iroh | wire vectors pass over iroh; the peer filter and invite tickets work | **done** (#32): 113/113 wire vectors over QUIC |
+| SR | Security requirements (before M3) | `research/security-requirements.md`: 103 controls with tests (SR-01…SR-103); the MUSTs listed there are required before M6 | done; the M6 MUSTs are tracked in `research/security-requirements.md` |
+| M3 | han-node: outbox, sync, views, node API, supervisor | a three-node turmoil simulation converges; JSON-RPC works on Windows; the snapshot-plus-diffs property holds | **done** (#35) |
+| T1 | han-timeline (Team B) | passes the T0 vectors and the randomized convergence and sync tests, with signed envelopes | **done** (#25; performance #30, #34, #39, #41) |
+| M4 | han-host (ACP client, MXC, proxy, mirroring, masking), han-mcp, han-exec | **first week, a spike answering:**<br>• which pi adapter works from a non-Zed client?<br>• can MXC confine a Node-based agent on Windows 11 with egress only to the proxy?<br>• does an ACP reject carry a reason?<br>• does a propose-only agent stay productive?<br>• does the cache-hit summary fork work?<br>Then: a real session streams status and a live timeline; an agent answers "who is on auth/?"; a gated push waits for approval and runs once | **done** (#49) |
+| M5 | han-tui (board, session pane, inbox) + han-github | the full MVP story across two machines and a shared runner; pi plus a smoke test of 2–3 other ACP agents | **done**: han-tui (#60), han-github (#50, #61) |
+| M6 | Dogfood | the user plus 1–3 people, two weeks, building HAN with HAN | **in progress** (below) |
+| G | GUI (after M3, parallel to M4–M6) | the board, session pane and inbox in Tauri, built from clean-room UI specs | clean-room UI specs written (#42, #44); the build has not started |
 
 **Parallel tracks:** R first; then S30, M1 and T0 in parallel; T1 alongside M2–M4. Timeline integration is on the MVP's critical path, with `git diff` hunks as the fallback.
+
+**Merged since round 32, besides the milestones:**
+- the Rust server enforces the hello-to-node binding (SR-13, #47);
+- the hosting rule (#48);
+- federation: fetching and pinning remote profiles (#52);
+- the operator's confirmation over `han/1` (#59);
+- joining a home by ticket or node address (#62);
+- node API gaps: view clocks, approval plan facts, the spaces list, the needs-me facet, `guardedFor`, view seq, Resync and End, board totals, the filter grammar, row reasons and overlaps (#63, #65, #67);
+- CLI: `han space create|follow|list|member|policy`, `han device`, `han tui --print`, and `HAN_DATA` (#64, #66);
+- release tooling: cargo-dist, `han update --check`, the nightly cross-OS CI, Actions pinned by SHA, and Dependabot (#51).
+
+### 10.1 M6: the dogfood, now
+
+- **Where it runs.** A shared runner on a boat.dev VM hosts the home and the runner's node, set up as in `docs/runner.md`.
+- **What runs.** A solo dogfood space with two agents. han-github polls `lmvdz/han` and surfaces its issues there.
+- **Being fixed now** (the remaining blockers):
+  - per-agent login directories;
+  - starting the Claude Code driver on the runner;
+  - a host per OS user;
+  - an executor service;
+  - a node logon service;
+  - a task CLI.
+- **Then:** teammates join by home ticket, and the two weeks of the "done when" start.
+
+### 10.2 Decisions taken during the build
+
+| Topic | Decision |
+|---|---|
+| Hosting rule | a home creates spaces only for known actors: its own users, agents and server actor, and holders of a role (not banned) in a space it hosts (`han seq --hosting known`, the default). `open` and an allow-list are options; test mode is `open` (#48) |
+| Agent pool | han-github doesn't assign. An `agent-ready` issue becomes one task addressed to the team's shared agent pool (`tasks.pool`), and the pool agent that takes it makes its own signed task with the same external ref (§6.6 Issue claims; #61) |
+| Home ticket | `han seq` writes a home ticket (`han1home.…`: ServerName, node id, addresses, receipt keys), and `han ticket` prints it. `han node`, `han space` and `han agent` take `--home <ticket>`, so a home needs no HTTPS well-known (#62) |
+| Ticket-pinned trust | a node given a ticket pins the home's node id and receipt keys in its own data folder (`node.db`), and later restarts need no flag (#62, #66). Round 32 treats a ticket as a dial hint checked against the well-known; the spec doesn't describe trust pinned from a ticket yet, so it goes to the next round |
+| Per-agent login directories | each agent actor gets its own harness login directory. The host binds only that directory into the agent's sandbox, never the operator's home or login, so agents don't share a login with their operator or with each other. Being built for M6 |
+| Spec rounds paused | no spec round runs while the product is built; round 32 (76.5) is the current spec. Queued for the next round: semantic gates, risk tiers for landing work (§12), and the round-32 review items AA1–AA5 (the build already fixes AA2 with the hosting rule, #48, and AA3 with the hello binding, #47) |
+| Dogfood runner | the M6 home and the first shared runner run on a boat.dev VM, set up as in `docs/runner.md`. Public files name no address, id, ticket or space of it |
 
 ## 11. Risks
 

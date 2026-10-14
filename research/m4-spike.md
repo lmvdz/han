@@ -2,6 +2,8 @@
 
 Run 2026-10-13 on the user's Windows 11 Pro machine (10.0.26200.9457, non-admin user, Node 25.8.2, Rust 1.97.1). The spike is throwaway code: everything lives in the session scratchpad (`…/scratchpad/m4-spike/`), and nothing in the repo changed except this file.
 
+**Since then:** M4 was built from these findings and merged (#49). The decisions now in force are in PLAN §6.4, §10 and §12; where this note and PLAN disagree, PLAN wins.
+
 **Versions tested:**
 - `agent-client-protocol` =3.3.0 (schema 1.11.0), `mxc-sdk` =1.0.0, `rmcp` =3.5.1;
 - pi `@earendil-works/pi-coding-agent` 1.2.0;

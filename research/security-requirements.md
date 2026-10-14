@@ -1,6 +1,6 @@
 # HAN security requirements (defensive controls and their tests)
 
-Status: draft, 2026-10-12. Input to milestone TM (PLAN §10) and to spec round planning. Sources: `PLAN.md`, `spec/core/architecture.md` (§4 incl. R-24, §7.5, §8 incl. N-01…N-04), `research/agent-plumbing.md`.
+Status: written 2026-10-12 as milestone SR (PLAN §10), and in force for the build since M3. The crates M1–M5 cite these controls by number in their code and tests; the MUSTs listed under "MUSTs required before dogfooding (M6)" are checked before M6 counts as done. Also an input to spec round planning. Sources: `PLAN.md`, `spec/core/architecture.md` (§4 incl. R-24, §7.5, §8 incl. N-01…N-04), `research/agent-plumbing.md`.
 
 **How to read this.** Each row is one control the implementation must have, with the test that proves it. MUST means a release blocker for the milestone that ships the component; SHOULD means expected unless a written exception exists. "Owner" names the crate or process and the PLAN.md section the control belongs to. Verification kinds:
 - **unit**: a `cargo nextest` test inside the crate;
