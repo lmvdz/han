@@ -228,6 +228,12 @@ impl ApprovalsState {
         if me.is_some_and(|m| row.approvals.iter().any(|a| a == m)) {
             return Some("You have already approved this effect.".to_owned());
         }
+        if !row.digest_verified {
+            return Some(
+                "The node could not check this plan against its digest, so it cannot be signed."
+                    .to_owned(),
+            );
+        }
         if !row.can_approve {
             return Some(if row.approvers.is_empty() {
                 "You cannot approve this effect.".to_owned()
@@ -239,6 +245,11 @@ impl ApprovalsState {
             });
         }
         None
+    }
+
+    /// Whether the actor may cancel the effect under the card (the node says: its proposer, or an owner).
+    pub fn can_cancel(&self) -> bool {
+        self.card_row().is_some_and(|r| r.can_cancel)
     }
 
     /// Re-reads the card after a digest change: the open card is kept, so the change is visible.

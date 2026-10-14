@@ -63,6 +63,7 @@ async fn a_face_drives_the_node_over_the_pipe() {
         total,
         offset: 0,
         next_cursor: None,
+        now_ms: 0,
     });
     until("the node status shows the space", || {
         while let Some(ev) = node_view.try_next() {

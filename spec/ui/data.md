@@ -498,6 +498,11 @@ These restate PLAN §6.6.1 so that they can be tested.
 
   The rest of Q-DAT-6 stays open, under Q-SES-5, Q-APR-8, Q-DAT-12 and Q-DAT-19.
 
+- **Q-DAT-6, Q-DAT-12 (in part), Q-DAT-14.** The node's clock (`now_ms` on every snapshot, diff and resnapshot, and on `NodeStatus`) for ages; `Invite` already returns `CallResult::Ticket`.
+- **Q-APR-8 (in part).** Approval rows carry `target`, `summary` (plain top-level plan arguments, cut), `plan`, `digest_verified` (the node hashed the plan itself, DAT-11) and `can_cancel`.
+- **Q-SES-5 (in part).** Tasks carry `guarded_for` and `accepted`; the `Guard` view carries `guards` (P-15, Z1).
+- **Spaces.** A `Spaces` query lists the followed spaces; the filter has a `needs_me` facet.
+
 PR #35 also provides:
 - Board `total`, `offset` and `collapsed` (Q-BRD-4, Q-BRD-5);
 - `DeviceOffer`, `DevicePair` and `DeviceRevoke` (Q-SHL-3, in part);

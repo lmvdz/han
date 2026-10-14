@@ -9,12 +9,13 @@ use interprocess::local_socket::tokio::{Stream, prelude::*};
 use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::{ErrorObject, Message, code, local_name, read_line};
 use crate::api::{Command, NodeApi, NodeError, Query};
 
-/// A listening node API. Dropping it stops accepting and ends the connections' views.
+/// A listening node API. Dropping it stops accepting, closes the connections that are open and ends their
+/// views.
 pub struct RpcServer {
     task: JoinHandle<()>,
     endpoint: String,
@@ -40,10 +41,13 @@ pub fn serve(api: Arc<dyn NodeApi>, endpoint: &str) -> io::Result<RpcServer> {
     let options = restrict(options)?;
     let listener = options.create_tokio()?;
     let task = tokio::spawn(async move {
+        // Aborting this task drops the set, and the set aborts every connection in it.
+        let mut conns = JoinSet::new();
         loop {
             match listener.accept().await {
                 Ok(conn) => {
-                    tokio::spawn(connection(conn, Arc::clone(&api)));
+                    while conns.try_join_next().is_some() {}
+                    conns.spawn(connection(conn, Arc::clone(&api)));
                 }
                 Err(e) => {
                     tracing::warn!("rpc accept: {e}");
@@ -102,7 +106,16 @@ fn current_user_sid() -> io::Result<String> {
         })
 }
 
-type Views = Arc<Mutex<HashMap<u64, JoinHandle<()>>>>;
+/// A task that ends when its owner lets go of it, so a connection that ends takes its work with it.
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+type Views = Arc<Mutex<HashMap<u64, AbortOnDrop>>>;
 
 fn respond(id: &Value, result: Result<Value, ErrorObject>) -> String {
     let msg = match result {
@@ -123,7 +136,9 @@ fn protocol_error(code: i64, message: &str) -> ErrorObject {
 async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
     let (recv, mut send) = conn.split();
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
-    let writer = tokio::spawn(async move {
+    // Every task of the connection is owned by it: when the connection is aborted (the server dropped) or
+    // ends, these drop and abort, the writer's half of the pipe closes, and the client sees the end.
+    let writer = AbortOnDrop(tokio::spawn(async move {
         while let Some(line) = lines.recv().await {
             if send.write_all(line.as_bytes()).await.is_err()
                 || send.write_all(b"\n").await.is_err()
@@ -132,7 +147,8 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
                 break;
             }
         }
-    });
+    }));
+    let mut calls = JoinSet::new();
     let views: Views = Arc::default();
     let mut reader = BufReader::new(recv);
     let mut buf = Vec::new();
@@ -160,7 +176,8 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
             Some("call") => match serde_json::from_value::<Command>(params) {
                 Ok(cmd) => {
                     let (api, out) = (Arc::clone(&api), out.clone());
-                    tokio::spawn(async move {
+                    while calls.try_join_next().is_some() {}
+                    calls.spawn(async move {
                         let result = match api.call(cmd).await {
                             Ok(r) => serde_json::to_value(r)
                                 .map_err(|e| ErrorObject::node(&NodeError::invalid(e.to_string()))),
@@ -184,7 +201,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
                     let _ = out.send(respond(&id, Ok(json!({ "sub": sub }))));
                     let mut stream = api.view(query);
                     let out = out.clone();
-                    let task = tokio::spawn(async move {
+                    let task = AbortOnDrop(tokio::spawn(async move {
                         while let Some(event) = stream.next().await {
                             let note = json!({
                                 "jsonrpc": "2.0",
@@ -195,7 +212,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
                                 break;
                             }
                         }
-                    });
+                    }));
                     views
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -216,10 +233,9 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
                 }
             },
             Some("unsubscribe") => {
-                if let Some(sub) = params["sub"].as_u64()
-                    && let Some(task) = views.lock().unwrap_or_else(|e| e.into_inner()).remove(&sub)
-                {
-                    task.abort();
+                if let Some(sub) = params["sub"].as_u64() {
+                    // Dropping the task aborts it.
+                    views.lock().unwrap_or_else(|e| e.into_inner()).remove(&sub);
                 }
             }
             Some(_) => {
@@ -229,9 +245,10 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
             None => {} // a response or a malformed message: nothing to do
         }
     }
-    for (_, task) in views.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-        task.abort();
-    }
+    views.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    calls.abort_all();
+    // Let what was already answered reach the client, then end.
     drop(out);
-    drop(writer);
+    let mut writer = writer;
+    let _ = (&mut writer.0).await;
 }

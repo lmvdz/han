@@ -17,6 +17,8 @@ pub enum ViewKind {
     Node,
     /// How the current space is doing on this device.
     Space,
+    /// The spaces this device follows (what `:space` switches between).
+    Spaces,
     /// Effects waiting for the local actor.
     Approvals,
     /// The open session.

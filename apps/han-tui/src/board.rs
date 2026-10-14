@@ -66,8 +66,9 @@ struct Collapsed {
     rows: u32,
 }
 
-/// The node's steady clock is not the face's, and the Board view carries no "now". The face estimates it as the
-/// latest activity it has seen, advanced by its own clock since it saw it. Ages are therefore lower bounds
+/// The node's steady clock is not the face's. Every event of the view carries the node's `now_ms`; the face
+/// takes it and advances it by its own clock until the next event, so ages are exact (BRD-2). Against a node
+/// that sends no clock, it estimates the time as the latest activity it has seen: ages are then lower bounds
 /// right after the first snapshot and exact once any session moves.
 #[derive(Clone, Copy, Debug, Default)]
 struct AgeClock {
@@ -81,6 +82,12 @@ impl AgeClock {
             Some(at) => self.node_ms + now.saturating_duration_since(at).as_millis() as u64,
             None => 0,
         }
+    }
+
+    /// The node said what time it is: that is exact, whatever was estimated before.
+    fn set(&mut self, node_ms: u64, now: Instant) {
+        self.node_ms = node_ms;
+        self.seen = Some(now);
     }
 
     fn observe(&mut self, latest: u64, now: Instant) {
@@ -224,8 +231,14 @@ impl BoardState {
                 _ => None,
             })
             .collect();
-        if let Some(latest) = self.rows.iter().map(|r| r.last_active_ms).max() {
-            self.age.observe(latest, now);
+        // The node's clock comes with every event; before it did (a node that sends 0) the newest row stands in.
+        match self.mirror.now_ms() {
+            0 => {
+                if let Some(latest) = self.rows.iter().map(|r| r.last_active_ms).max() {
+                    self.age.observe(latest, now);
+                }
+            }
+            node_now => self.age.set(node_now, now),
         }
         // Remember where each row of this window sits, so the window can come back to it.
         let offset = self.mirror.offset();

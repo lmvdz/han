@@ -88,6 +88,7 @@ impl NodeApi for Node {
             total: 0,
             offset: 0,
             next_cursor: None,
+            now_ms: 0,
         });
         stream
     }
@@ -104,6 +105,8 @@ fn task_row(external: &str) -> TaskRow {
         external: Some(external.into()),
         ask: None,
         open: false,
+        guarded_for: vec![],
+        accepted: vec![],
     }
 }
 

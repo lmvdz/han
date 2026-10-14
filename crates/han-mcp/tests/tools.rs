@@ -147,6 +147,7 @@ impl NodeApi for FakeNode {
             rows,
             offset: 0,
             next_cursor: None,
+            now_ms: 0,
         });
         stream
     }

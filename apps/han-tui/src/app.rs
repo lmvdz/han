@@ -84,6 +84,8 @@ pub struct App {
     pub node: Option<NodeStatusRow>,
     /// The space's status on this device.
     pub space_status: Option<SpaceStatusRow>,
+    /// The spaces this device follows, as the node last said.
+    pub spaces: Vec<SpaceStatusRow>,
     /// The link to the node.
     pub conn: Conn,
     /// The board.
@@ -108,6 +110,7 @@ pub struct App {
     pub now: Instant,
     /// Whether the program should end.
     pub quit: bool,
+    spaces_mirror: han_node::api::ViewMirror,
     pending_g: bool,
     epochs: HashMap<ViewKind, u64>,
     next_epoch: u64,
@@ -132,6 +135,7 @@ impl App {
             me: None,
             node: None,
             space_status: None,
+            spaces: Vec::new(),
             conn: Conn::Connecting { attempt: 0 },
             board: BoardState::new(group),
             session: None,
@@ -144,6 +148,7 @@ impl App {
             size: (100, 30),
             now,
             quit: false,
+            spaces_mirror: han_node::api::ViewMirror::new(),
             pending_g: false,
             epochs: HashMap::new(),
             next_epoch: 1,
@@ -225,12 +230,20 @@ impl App {
     /// Every view the screen needs, opened afresh (at start, and after a reconnect).
     fn resubscribe_all(&mut self) -> Vec<Action> {
         self.epochs.clear();
-        let mut out = vec![self.sub(
-            ViewKind::Node,
-            Query::NodeStatus {
-                window: Window::default(),
-            },
-        )];
+        let mut out = vec![
+            self.sub(
+                ViewKind::Node,
+                Query::NodeStatus {
+                    window: Window::default(),
+                },
+            ),
+            self.sub(
+                ViewKind::Spaces,
+                Query::Spaces {
+                    window: Window::default(),
+                },
+            ),
+        ];
         if let Some(space) = self.space.clone() {
             out.extend(self.board_sub());
             out.push(self.sub(
@@ -390,6 +403,22 @@ impl App {
                         },
                     )];
                 }
+                Vec::new()
+            }
+            ViewKind::Spaces => {
+                if matches!(event, ViewEvent::Failed { .. }) {
+                    return Vec::new();
+                }
+                self.spaces_mirror.apply(event);
+                self.spaces = self
+                    .spaces_mirror
+                    .rows()
+                    .into_iter()
+                    .filter_map(|r| match r {
+                        Row::SpaceStatus(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect();
                 Vec::new()
             }
             ViewKind::Space => {
@@ -1078,12 +1107,19 @@ impl App {
                     Vec::new()
                 }
                 KeyCode::Char('c') => {
-                    self.approvals.card = Card::Cancelling {
-                        key,
-                        keep: true,
-                        busy: false,
-                    };
-                    self.approvals.notice = None;
+                    if self.approvals.can_cancel() {
+                        self.approvals.card = Card::Cancelling {
+                            key,
+                            keep: true,
+                            busy: false,
+                        };
+                        self.approvals.notice = None;
+                    } else {
+                        self.approvals.notice = Some((
+                            Tone::Bad,
+                            "Only the proposer or an owner can cancel this effect.".to_owned(),
+                        ));
+                    }
                     Vec::new()
                 }
                 // Enter on the card never signs (APR-5).
@@ -1252,11 +1288,22 @@ impl App {
             }
             "space" | "s" => {
                 if arg.is_empty() {
-                    let text = format!("space: {}", self.space.as_deref().unwrap_or("none"));
+                    let mut text = format!("space: {}", self.space.as_deref().unwrap_or("none"));
+                    if !self.spaces.is_empty() {
+                        let names: Vec<&str> =
+                            self.spaces.iter().map(|s| s.space.as_str()).collect();
+                        text = format!("{text}. Followed: {}", names.join(", "));
+                    }
                     self.say(Tone::Info, text);
                     return Vec::new();
                 }
-                self.set_space(arg.to_owned())
+                // A part of a followed space's id is enough when it names only one.
+                let mut found = self.spaces.iter().filter(|s| s.space.contains(arg));
+                let pick = match (found.next(), found.next()) {
+                    (Some(only), None) => only.space.clone(),
+                    _ => arg.to_owned(),
+                };
+                self.set_space(pick)
             }
             "approvals" | "inbox" => {
                 self.approvals_open = true;

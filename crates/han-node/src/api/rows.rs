@@ -372,8 +372,24 @@ pub struct ApprovalRow {
     pub executor: String,
     /// The action.
     pub action: String,
+    /// What the action works on, from the plan (`plan.target`): a repository, a path, an address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target: Option<String>,
+    /// The plan's top-level arguments that are plain values, as `(name, text)`, at most [`SUMMARY_FIELDS`]
+    /// and each text cut to [`SUMMARY_TEXT`] characters. Text an agent wrote (a title, a message) is among
+    /// them: a face shows it as quoted, not as its own words.
+    #[serde(default)]
+    pub summary: Vec<(String, String)>,
+    /// The plan as JSON text, from the proposal's content (absent when redacted or not delivered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan: Option<String>,
     /// The digest of the plan.
     pub plan_digest: String,
+    /// The node hashed the plan itself and `sha256(JCS(plan))` equals `plan_digest` (DAT-11). False when the
+    /// plan is absent or does not hash to the digest: a face must not offer to sign it.
+    pub digest_verified: bool,
     /// Authors of approvals so far.
     pub approvals: Vec<String>,
     /// The cost unit and amount, when the proposal has one.
@@ -389,11 +405,19 @@ pub struct ApprovalRow {
     /// The asking actor may give an approval that is worth trying (a member, not the proposer, not yet
     /// approved); Policy has the last word when it is appended.
     pub can_approve: bool,
+    /// The asking actor may cancel the effect: its proposer, or an owner.
+    pub can_cancel: bool,
     /// Who must approve: the actors and roles of the approval rule that applies, or the owners by default.
     pub approvers: Vec<String>,
     /// Why the effect is gated: which rule or default required an approval.
     pub why_gated: String,
 }
+
+/// At most this many arguments are in an [`ApprovalRow`]'s summary.
+pub const SUMMARY_FIELDS: usize = 8;
+
+/// Each text of an [`ApprovalRow`]'s summary is cut to this many characters.
+pub const SUMMARY_TEXT: usize = 200;
 
 /// A steering input (`Inputs` view).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -441,6 +465,13 @@ pub struct TaskRow {
     pub ask: Option<String>,
     /// Whether it is still open.
     pub open: bool,
+    /// P-15: the agents whose guarding the task carries, fixed when it was created: its parent's list, then
+    /// the guards of its author. An assignee that accepts the task answers to their guards.
+    #[serde(default)]
+    pub guarded_for: Vec<String>,
+    /// The assignees that accepted it.
+    #[serde(default)]
+    pub accepted: Vec<String>,
 }
 
 /// Whether an actor is guarded (`Guard` view).
@@ -456,6 +487,10 @@ pub struct GuardRow {
     pub guarded: bool,
     /// The owners' `forceGuarded` is on (it applies to non-humans).
     pub forced: bool,
+    /// P-15, Z1: the agents whose guard the actor answers to: itself if it chose guarding or is forced, then
+    /// the `guardedFor` of the open tasks it accepted, each once. `guarded` is true when this is not empty.
+    #[serde(default)]
+    pub guards: Vec<String>,
     /// The head the answer is at.
     pub head: u64,
 }
@@ -671,6 +706,8 @@ pub struct NodeStatusRow {
     pub outbox_pending: u32,
     /// Supervised roles.
     pub roles: Vec<RoleInfo>,
+    /// This node's steady clock (ms), the one `last_active_ms` counts on, as of the last tick.
+    pub now_ms: u64,
 }
 
 /// A point in a session's work timeline (backed by han-timeline, M4).
@@ -829,6 +866,10 @@ pub enum ViewEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         next_cursor: Option<String>,
+        /// The node's steady clock (ms) when the window was computed: the clock `last_active_ms` counts on,
+        /// so a face computes ages as `now_ms - last_active_ms` without a clock of its own.
+        #[serde(default)]
+        now_ms: u64,
     },
     /// What changed in the window since the last event.
     Diff {
@@ -842,6 +883,9 @@ pub enum ViewEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         next_cursor: Option<String>,
+        /// The node's steady clock (ms) as of this diff.
+        #[serde(default)]
+        now_ms: u64,
     },
     /// Too much changed for a diff to be worth it: the window as it is now, replacing what the face holds.
     Resnapshot {
@@ -855,6 +899,9 @@ pub enum ViewEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         next_cursor: Option<String>,
+        /// The node's steady clock (ms) as of this window.
+        #[serde(default)]
+        now_ms: u64,
     },
     /// The view cannot be served; the stream ends.
     Failed {
@@ -870,6 +917,7 @@ pub struct ViewMirror {
     total: u32,
     offset: u32,
     next_cursor: Option<String>,
+    now_ms: u64,
     failed: Option<NodeError>,
 }
 
@@ -887,13 +935,16 @@ impl ViewMirror {
                 total,
                 offset,
                 next_cursor,
+                now_ms,
             }
             | ViewEvent::Resnapshot {
                 rows,
                 total,
                 offset,
                 next_cursor,
+                now_ms,
             } => {
+                self.now_ms = now_ms;
                 self.rows = rows;
                 self.total = total;
                 self.offset = offset;
@@ -904,7 +955,9 @@ impl ViewMirror {
                 total,
                 offset,
                 next_cursor,
+                now_ms,
             } => {
+                self.now_ms = now_ms;
                 for op in ops {
                     match op {
                         DiffOp::Remove { key } => self.rows.retain(|r| r.key() != key),
@@ -948,6 +1001,11 @@ impl ViewMirror {
     /// How many matching rows come before the window.
     pub fn offset(&self) -> u32 {
         self.offset
+    }
+
+    /// The node's clock (ms) as of the last event.
+    pub fn now_ms(&self) -> u64 {
+        self.now_ms
     }
 
     /// The cursor of the next page.

@@ -188,6 +188,9 @@ impl Connector for Arc<FakeConnector> {
 
 // ---- fixtures ------------------------------------------------------------------------------------------
 
+/// The node clock the fixtures use: the moment their rows were last active.
+pub const NOW_MS: u64 = 100_000_000;
+
 /// A snapshot event.
 pub fn snapshot(rows: Vec<Row>, total: u32, offset: u32, next_cursor: Option<String>) -> ViewEvent {
     ViewEvent::Snapshot {
@@ -195,6 +198,7 @@ pub fn snapshot(rows: Vec<Row>, total: u32, offset: u32, next_cursor: Option<Str
         total,
         offset,
         next_cursor,
+        now_ms: NOW_MS,
     }
 }
 
@@ -243,7 +247,7 @@ pub fn board_row(session: &str, agent: &str, person: &str, group: &str, step: &s
         }),
         summary: None,
         sandbox: None,
-        last_active_ms: 100_000,
+        last_active_ms: NOW_MS,
         closed: false,
         needs_me: false,
         can_steer: true,
@@ -262,6 +266,7 @@ pub fn node_status(actor: &str) -> Row {
         spaces_live: 1,
         outbox_pending: 0,
         roles: vec![],
+        now_ms: NOW_MS,
     })
 }
 
@@ -296,7 +301,7 @@ pub fn session_row(id: &str, agent: &str, state: SessionState, step: &str) -> Se
             seq: 1,
             at: "2026-10-13T10:00:01Z".into(),
         }),
-        last_active_ms: 100_000,
+        last_active_ms: NOW_MS,
     }
 }
 
@@ -309,13 +314,18 @@ pub fn approval(proposal: &str, proposer: &str, can_approve: bool) -> ApprovalRo
         proposer: proposer.into(),
         executor: "@git:han.example".into(),
         action: "git.push".into(),
+        target: Some("han".into()),
+        summary: vec![("branch".into(), "han/auth".into())],
+        plan: None,
         plan_digest: "sha256:9f3c41aa07bed2e1aabbccddeeff00112233445566778899aabbccddeeff0011"
             .into(),
+        digest_verified: true,
         approvals: vec![],
         cost: None,
         expires_at: None,
         seq: 7,
         can_approve,
+        can_cancel: true,
         approvers: vec!["@lars:han.example".into()],
         why_gated: "push of a han/* branch (space rule)".into(),
     }

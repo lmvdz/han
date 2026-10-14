@@ -9,12 +9,15 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use han_core::grammar;
-use han_core::policy::{Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel, Started};
+use han_core::policy::{
+    Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel, Started, TaskState,
+};
 use han_core::{LogRecord, Value};
 
 use crate::api::{
     ApprovalRow, BoardRow, CostRow, Facets, Group, OverlapKind, OverlapParty, OverlapRow,
-    SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody, WhoRow,
+    SUMMARY_FIELDS, SUMMARY_TEXT, SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody,
+    WhoRow,
 };
 
 /// The extension entry kind of an advisory path lease: body `{paths: [string], ttl: seconds, issue?: string}`.
@@ -72,6 +75,10 @@ pub(crate) struct TaskInfo {
     pub open: bool,
     pub seq: u64,
     pub ask: Option<String>,
+    /// P-15: fixed at creation, never shrinks.
+    pub guarded_for: Vec<String>,
+    /// The assignees that accepted and did not finish (Z2).
+    pub accepted: Vec<String>,
 }
 
 /// A `session.input` as its session's host reads it.
@@ -110,6 +117,8 @@ pub(crate) struct EffectInfo {
     /// Claims so far, and the latest.
     pub claims: u64,
     pub last_claim: Option<String>,
+    /// The node hashed the plan: `sha256(JCS(plan))` is the digest.
+    pub plan_ok: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -237,6 +246,42 @@ impl SpaceModel {
         by_role || s.actor == self.me
     }
 
+    /// Z2: an actor that can no longer read carries no task.
+    fn drop_carry(&mut self, actor: &str) {
+        for t in self.tasks.values_mut() {
+            t.accepted.retain(|a| a != actor);
+        }
+    }
+
+    /// Whether `actor` is forced into guarding: the owners' `forceGuarded` applies to non-humans, which the
+    /// node cannot tell from profiles, so it exempts the device's own person.
+    fn forced(&self, actor: &str) -> bool {
+        self.force_guarded && actor != self.me
+    }
+
+    /// P-15, Z1: the agents whose guard `actor` answers to: itself if it chose guarding or is forced, then
+    /// the `guardedFor` of the tasks it accepted, in the order the tasks were created; each once.
+    pub fn guards_of(&self, actor: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.forced(actor) || self.guarded.contains(actor) {
+            out.push(actor.to_owned());
+        }
+        let mut mine: Vec<&TaskInfo> = self
+            .tasks
+            .values()
+            .filter(|t| t.accepted.iter().any(|a| a == actor))
+            .collect();
+        mine.sort_by_key(|t| t.seq);
+        for t in mine {
+            for g in &t.guarded_for {
+                if !out.contains(g) {
+                    out.push(g.clone());
+                }
+            }
+        }
+        out
+    }
+
     /// The approval rule that applies to `action`, if the policy has one (the first match wins, P-08).
     fn rule_for(&self, action: &str) -> Option<&(String, Vec<String>)> {
         self.rules.iter().find(|(a, _)| a == "*" || a == action)
@@ -268,13 +313,34 @@ impl SpaceModel {
             Body::PolicySet(b) => self.set_policy(b.policy),
             Body::MemberSet(b) => match b.role.role() {
                 Some(r) => {
+                    if !r.reads() {
+                        self.drop_carry(&b.actor);
+                    }
                     self.roles.insert(b.actor, r);
                 }
                 None => {
+                    self.drop_carry(&b.actor);
                     self.roles.remove(&b.actor);
                 }
             },
             Body::Task(t) => {
+                // P-15: the parent's list, then the guards of the author; each once.
+                let mut guarded_for = t
+                    .parent
+                    .as_ref()
+                    .and_then(|p| self.tasks.get(p))
+                    .map(|p| p.guarded_for.clone())
+                    .unwrap_or_default();
+                for g in self.guards_of(&author) {
+                    if !guarded_for.contains(&g) {
+                        guarded_for.push(g);
+                    }
+                }
+                let accepted = if t.to.contains(&author) {
+                    vec![author.clone()]
+                } else {
+                    Vec::new()
+                };
                 self.tasks.insert(
                     id.clone(),
                     TaskInfo {
@@ -283,6 +349,8 @@ impl SpaceModel {
                         to: t.to,
                         external: t.external,
                         open: true,
+                        guarded_for,
+                        accepted,
                         seq,
                         ask: rec
                             .content
@@ -294,10 +362,19 @@ impl SpaceModel {
                 );
             }
             Body::TaskUpdate(u) => {
-                if let Some(t) = self.tasks.get_mut(&u.task)
-                    && u.state.is_final()
-                {
-                    t.open = false;
+                if let Some(t) = self.tasks.get_mut(&u.task) {
+                    if u.state == TaskState::Accepted && !t.accepted.contains(&author) {
+                        t.accepted.push(author.clone());
+                    }
+                    if u.state.is_final() {
+                        // An assignee's own final update ends what it carries; anyone else's, all of it.
+                        if t.to.contains(&author) {
+                            t.accepted.retain(|a| *a != author);
+                        } else {
+                            t.accepted.clear();
+                        }
+                        t.open = false;
+                    }
                 }
             }
             Body::TaskCancel(c) => {
@@ -330,6 +407,14 @@ impl SpaceModel {
                 }
             }
             Body::Propose(p) => {
+                let plan_json = rec.content.as_ref().and_then(|c| c.get("plan"));
+                let plan = plan_json
+                    .and_then(|p| han_core::json::canonicalize(p).ok())
+                    .and_then(|b| String::from_utf8(b).ok());
+                // DAT-11: the node hashes the plan itself; a face never trusts a plan without this.
+                let plan_ok = plan_json
+                    .and_then(|v| han_core::ids::json_digest(v).ok())
+                    .is_some_and(|d| d == p.plan_digest);
                 self.effects.insert(
                     id.clone(),
                     EffectInfo {
@@ -344,12 +429,8 @@ impl SpaceModel {
                         seq,
                         repeatable: p.repeatable,
                         phase: Phase::Open,
-                        plan: rec
-                            .content
-                            .as_ref()
-                            .and_then(|c| c.get("plan"))
-                            .and_then(|p| han_core::json::canonicalize(p).ok())
-                            .and_then(|b| String::from_utf8(b).ok()),
+                        plan,
+                        plan_ok,
                         task: p.task,
                         claims: 0,
                         last_claim: None,
@@ -827,6 +908,7 @@ impl SpaceModel {
                 actors: vec![s.actor.clone(), person.clone()],
                 issue: issue.clone(),
                 closed: s.closed,
+                needs_me,
                 text,
             };
             rows.push((
@@ -870,6 +952,7 @@ impl SpaceModel {
             actors: vec![s.actor.clone(), self.person_of(s)],
             issue: self.issue_of(s),
             closed: s.closed,
+            needs_me: false,
             text: format!(
                 "{} {} {}",
                 s.actor,
@@ -903,6 +986,7 @@ impl SpaceModel {
                     actors: o.parties.iter().map(|p| p.actor.clone()).collect(),
                     issue: (o.kind == OverlapKind::IssueClaim).then(|| o.subject.clone()),
                     closed: false,
+                    needs_me: false,
                     text: format!("{} {}", o.subject, o.detail),
                 };
                 (facets, crate::api::Row::Overlap(o.clone()))
@@ -926,6 +1010,7 @@ impl SpaceModel {
                         actors: vec![actor.to_owned()],
                         issue: session.and_then(|s| self.issue_of(s)),
                         closed: false,
+                        needs_me: false,
                         text: format!("{actor} {via} {subject}"),
                     },
                     crate::api::Row::WhoIsOn(WhoRow {
@@ -1026,13 +1111,21 @@ impl SpaceModel {
                         e.action
                     ),
                 };
+                let (target, summary) = plan_facts(e.plan.as_deref());
                 (
                     Facets {
                         state: None,
                         actors: vec![e.proposer.clone(), e.executor.clone()],
                         issue: None,
                         closed: false,
-                        text: format!("{} {} {}", e.action, e.proposer, e.executor),
+                        needs_me: true,
+                        text: format!(
+                            "{} {} {} {}",
+                            e.action,
+                            target.as_deref().unwrap_or(""),
+                            e.proposer,
+                            e.executor
+                        ),
                     },
                     crate::api::Row::Approval(ApprovalRow {
                         key: format!("{}|{:012}|{}", self.space, e.seq, e.id),
@@ -1041,12 +1134,17 @@ impl SpaceModel {
                         proposer: e.proposer.clone(),
                         executor: e.executor.clone(),
                         action: e.action.clone(),
+                        target,
+                        summary,
+                        plan: e.plan.clone(),
                         plan_digest: e.plan_digest.clone(),
+                        digest_verified: e.plan_ok,
                         approvals: e.approvals.clone(),
                         cost: e.cost.clone(),
                         expires_at: e.expires_at.clone(),
                         seq: e.seq,
                         can_approve: true,
+                        can_cancel: e.proposer == actor || self.is_owner(actor),
                         approvers,
                         why_gated,
                     }),
@@ -1189,6 +1287,8 @@ impl SpaceModel {
                         external: t.external.clone(),
                         ask: t.ask.clone(),
                         open: t.open,
+                        guarded_for: t.guarded_for.clone(),
+                        accepted: t.accepted.clone(),
                     }),
                 )
             })
@@ -1199,7 +1299,8 @@ impl SpaceModel {
     /// does not hold profiles, so it treats every actor without a human role-holder's device as forced when
     /// `forceGuarded` is on except the device's own person.
     pub fn guard_row(&self, actor: &str) -> (Facets, crate::api::Row) {
-        let forced = self.force_guarded && actor != self.me;
+        let forced = self.forced(actor);
+        let guards = self.guards_of(actor);
         (
             Facets {
                 actors: vec![actor.to_owned()],
@@ -1209,8 +1310,9 @@ impl SpaceModel {
                 key: format!("{}|{}", self.space, actor),
                 space: self.space.clone(),
                 actor: actor.to_owned(),
-                guarded: forced || self.guarded.contains(actor),
+                guarded: !guards.is_empty(),
                 forced,
+                guards,
                 head: self.head,
             }),
         )
@@ -1238,6 +1340,7 @@ impl SpaceModel {
                         actors: vec![e.proposer.clone(), e.executor.clone()],
                         issue: None,
                         closed: false,
+                        needs_me: false,
                         text: format!("{} {} {}", e.action, e.proposer, e.executor),
                     },
                     crate::api::Row::Effect(crate::api::EffectRow {
@@ -1270,4 +1373,36 @@ impl SpaceModel {
 /// Whether an effect still waits for approval at `now`.
 pub(crate) fn effect_open(e: &EffectInfo, now: &Now) -> bool {
     SpaceModel::effect_waiting(e, now)
+}
+
+/// The target and the plain-valued arguments of a plan (JSON text), for an approval card. Only top-level
+/// strings, numbers and booleans are listed; nested values are left to the plan itself.
+fn plan_facts(plan: Option<&str>) -> (Option<String>, Vec<(String, String)>) {
+    let Some(serde_json::Value::Object(plan)) = plan.and_then(|p| serde_json::from_str(p).ok())
+    else {
+        return (None, Vec::new());
+    };
+    let target = plan
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let summary = plan
+        .get("args")
+        .and_then(serde_json::Value::as_object)
+        .map(|args| {
+            args.iter()
+                .filter_map(|(k, v)| {
+                    let text = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => return None,
+                    };
+                    Some((k.clone(), text.chars().take(SUMMARY_TEXT).collect()))
+                })
+                .take(SUMMARY_FIELDS)
+                .collect()
+        })
+        .unwrap_or_default();
+    (target, summary)
 }

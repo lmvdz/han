@@ -22,9 +22,9 @@ pub use query::{Facets, Filter, Group, Query, Scope, Target, Window};
 pub use rows::{
     ApprovalRow, BoardRow, CostRow, DiffOp, EffectRow, Fidelity, FilePatchRow, FileTouch, GuardRow,
     InputRow, JoinProgressRow, JoinStage, NodeStatusRow, OutboxRow, OverlapKind, OverlapParty,
-    OverlapRow, PatchStatus, PlanItem, RoleInfo, Row, Sandbox, SandboxBackend, SessionRow,
-    SessionState, SpaceLink, SpaceStatusRow, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens,
-    ViewEvent, ViewMirror, WhoRow,
+    OverlapRow, PatchStatus, PlanItem, RoleInfo, Row, SUMMARY_FIELDS, SUMMARY_TEXT, Sandbox,
+    SandboxBackend, SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody, TaskRow,
+    Tests, TimelinePointRow, Tokens, ViewEvent, ViewMirror, WhoRow,
 };
 pub use stream::{BoxFuture, NodeApi, ViewSink, ViewStream};
 
