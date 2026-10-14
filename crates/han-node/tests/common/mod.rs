@@ -201,6 +201,12 @@ impl Watched {
 
     pub fn drain(&mut self) {
         while let Some(ev) = self.stream.try_next() {
+            // A watcher that is not read for 256 events is dropped by the node (DAT-9): a test reads often.
+            assert!(
+                !matches!(ev, ViewEvent::Resync { .. }),
+                "the view was dropped for lagging; drain it more often: {:?}",
+                self.query
+            );
             self.events.push(ev.clone());
             self.mirror.apply(ev);
         }
