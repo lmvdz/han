@@ -117,6 +117,8 @@ async fn scenario() {
             Command::Invite {
                 space: space.clone(),
                 ttl_secs: None,
+                expires_at: None,
+                auto_admit: false,
             },
         )
         .await

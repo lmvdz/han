@@ -449,6 +449,13 @@ pub struct Window {
     #[serde(default)]
     #[ts(optional)]
     pub cursor: Option<String>,
+    /// The window sits at the end: without a `cursor`, the last `limit` rows (a stream shows its latest).
+    #[serde(default)]
+    pub from_end: bool,
+    /// Scrolling back: the last `limit` rows before this key. It wins over `cursor` and `from_end`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub before: Option<String>,
 }
 
 impl Default for Window {
@@ -457,6 +464,8 @@ impl Default for Window {
             filter: Filter::default(),
             limit: DEFAULT_LIMIT,
             cursor: None,
+            from_end: false,
+            before: None,
         }
     }
 }
@@ -488,6 +497,20 @@ pub enum Target {
         /// The path.
         path: String,
     },
+}
+
+/// Which part of a session a `Session` view shows. They are separate subscriptions, so the stream and the
+/// signed record move independently (Q-DAT-3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPart {
+    /// The session's facts: one row.
+    #[default]
+    Facts,
+    /// The typed items of its stream, oldest first.
+    Items,
+    /// The entries of the log that are about it, oldest first.
+    Record,
 }
 
 /// What `Cost` adds up.
@@ -525,10 +548,14 @@ pub enum Query {
         #[serde(default)]
         window: Window,
     },
-    /// One session in full.
+    /// One session: its facts (`part: facts`, the default), the typed items of its stream (`items`; pages of
+    /// up to 200) or its signed record (`record`).
     Session {
         /// The session's entry id.
         id: String,
+        /// Which part.
+        #[serde(default)]
+        part: SessionPart,
         /// The window.
         #[serde(default)]
         window: Window,
@@ -553,7 +580,14 @@ pub enum Query {
         #[serde(default)]
         window: Window,
     },
-    /// Effects waiting for an approval that this actor may give.
+    /// The keys of this device's identity, with their state (the actor's profile space, followed on demand).
+    Devices {
+        /// The window.
+        #[serde(default)]
+        window: Window,
+    },
+    /// Effects waiting for an approval that this actor may give, and (for an owner) the actors waiting to be
+    /// admitted.
     Approvals {
         /// The approving actor.
         actor: String,
@@ -715,6 +749,7 @@ impl Query {
             | Query::WhoIsOn { window, .. }
             | Query::Overlaps { window, .. }
             | Query::Approvals { window, .. }
+            | Query::Devices { window }
             | Query::Spaces { window }
             | Query::SpaceStatus { window, .. }
             | Query::Cost { window, .. }

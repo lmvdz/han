@@ -61,6 +61,8 @@ struct SessionTimeline {
     session_tl: Option<OpId>,
     fork: Option<Version>,
     points: Vec<Point>,
+    /// How many paths the host said it kept out (`excluded` in an item body): the most it ever said.
+    excluded: u32,
 }
 
 struct Keys<'a> {
@@ -161,6 +163,7 @@ impl StreamTimelines {
                     session_tl: None,
                     fork: None,
                     points: Vec::new(),
+                    excluded: 0,
                 })
             }
         };
@@ -168,6 +171,9 @@ impl StreamTimelines {
             return false;
         }
         st.keys.entry(key.to_owned()).or_insert(pk);
+        if let Some(n) = body.get("excluded").and_then(Value::as_u64) {
+            st.excluded = st.excluded.max(u32::try_from(n).unwrap_or(u32::MAX));
+        }
         let creates = match batch.ops.first() {
             Some(Op::TimelineCreate { name, .. }) => Some((batch.op_id(0), name.clone())),
             _ => None,
@@ -457,6 +463,7 @@ impl TimelineSource for StreamTimelines {
                 patch,
                 added,
                 removed,
+                masked: Vec::new(),
             });
         }
         Ok(rows)
@@ -466,6 +473,10 @@ impl TimelineSource for StreamTimelines {
         Err(NodeError::unavailable(
             "change sets of proposals are read from the executor's plan, not the timeline",
         ))
+    }
+
+    fn excluded(&self, session: &str) -> u32 {
+        self.lock().get(session).map_or(0, |st| st.excluded)
     }
 }
 

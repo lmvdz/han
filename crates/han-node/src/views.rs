@@ -11,17 +11,19 @@
 //! is inserts (with their index), updates and removes, and a resnapshot replaces everything when a diff would
 //! be as big as the window.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use han_core::LogRecord;
 
 use crate::api::{
-    BoardTotals, DiffOp, Facets, FilePatchRow, GroupTotal, JoinProgressRow, JoinStage, NodeError,
-    NodeStatusRow, OutboxRow, Query, RoleInfo, Row, Scope, SpaceLink, StatusBody, TimelinePointRow,
-    ViewEvent, ViewSink,
+    BoardTotals, ChangeSummaryRow, DiffOp, ErrorNote, Facets, FilePatchRow, GroupTotal, ItemBody,
+    JoinProgressRow, JoinStage, NodeError, NodeStatusRow, OutboxRow, Query, RECENT_ERRORS,
+    RoleInfo, Row, Scope, SessionPart, SpaceLink, StatusBody, TimelinePointRow, ViewEvent,
+    ViewSink, masked_spans,
 };
+pub use crate::model::ProfileFacts;
 pub use crate::model::{Freshness, LEASE_KIND};
 use crate::model::{Now, SpaceModel};
 
@@ -72,6 +74,11 @@ pub trait TimelineSource: Send + Sync + 'static {
 
     /// The change set of an effect: a push plan or a merge preview.
     fn change_set(&self, space: &str, proposal: &str) -> Result<Vec<FilePatchRow>, NodeError>;
+
+    /// How many paths of a session the host kept out of its timeline (secrets, per its exclusion list).
+    fn excluded(&self, _session: &str) -> u32 {
+        0
+    }
 }
 
 /// The timeline source of a node with no timeline engine.
@@ -121,6 +128,16 @@ pub struct Engine {
     timeline: Arc<dyn TimelineSource>,
     /// Moves when something outside the spaces changes (node info, timeline).
     misc_rev: u64,
+    /// The id of this device's key in its actor's profile.
+    device_key: String,
+    /// Views ended with a `Resync` since the node started.
+    resyncs: u64,
+    /// The last errors the node answered.
+    errors: VecDeque<ErrorNote>,
+    /// Moves when what only the `NodeStatus` view shows changes: views opened and closed, resyncs, errors.
+    node_rev: u64,
+    /// How many views are open (kept apart from `subs`, which is taken while publishing).
+    live_subs: usize,
 }
 
 /// The rows of a window, ordered by key, with where the window sits among all matching rows.
@@ -188,20 +205,24 @@ fn page(mut rows: Vec<(Facets, Row)>, q: &Query) -> Page {
     rows.sort_by(|a, b| a.1.key().cmp(b.1.key()));
     let total = u32::try_from(rows.len()).unwrap_or(u32::MAX);
     let limit = w.limit.clamp(1, q.max_limit()) as usize;
-    let mut out = BTreeMap::new();
-    let mut next = None;
-    let mut offset = 0u32;
-    for (_, row) in rows {
-        if w.cursor.as_deref().is_some_and(|c| row.key() <= c) {
-            offset += 1;
-            continue;
-        }
-        if out.len() == limit {
-            next = out.keys().next_back().cloned();
-            break;
-        }
-        out.insert(row.key().to_owned(), row);
-    }
+    // Where the window sits among the matching rows: after a cursor, at the end, or before a key.
+    let (start, end) = if let Some(b) = w.before.as_deref() {
+        let end = rows.partition_point(|(_, r)| r.key() < b);
+        (end.saturating_sub(limit), end)
+    } else if let Some(c) = w.cursor.as_deref() {
+        let start = rows.partition_point(|(_, r)| r.key() <= c);
+        (start, (start + limit).min(rows.len()))
+    } else if w.from_end {
+        (rows.len().saturating_sub(limit), rows.len())
+    } else {
+        (0, limit.min(rows.len()))
+    };
+    let offset = u32::try_from(start).unwrap_or(u32::MAX);
+    let next = (end < rows.len() && end > start).then(|| rows[end - 1].1.key().to_owned());
+    let out: BTreeMap<String, Row> = rows
+        .drain(start..end)
+        .map(|(_, row)| (row.key().to_owned(), row))
+        .collect();
     Page {
         rows: out,
         total,
@@ -258,7 +279,94 @@ impl Engine {
             info: NodeInfo::default(),
             timeline: Arc::new(NoTimeline),
             misc_rev: 0,
+            device_key: String::new(),
+            resyncs: 0,
+            errors: VecDeque::new(),
+            node_rev: 0,
+            live_subs: 0,
         }
+    }
+
+    /// Tells the engine which key of the actor's profile this device holds.
+    pub fn set_device_key(&mut self, key_id: &str) {
+        key_id.clone_into(&mut self.device_key);
+    }
+
+    /// Notes an error the node answered (a command or a view), for the Node panel.
+    pub fn note_error(&mut self, what: &str, error: &NodeError) {
+        self.errors.push_back(ErrorNote {
+            code: error.code().to_owned(),
+            what: what.to_owned(),
+            at_ms: self.now.ms,
+        });
+        while self.errors.len() > RECENT_ERRORS {
+            self.errors.pop_front();
+        }
+        self.node_rev += 1;
+        self.publish();
+    }
+
+    /// Takes a join signal of `space`: `actor` asks to be admitted.
+    pub fn join_signal(&mut self, space: &str, actor: &str) {
+        let ms = self.now.ms;
+        if let Some(m) = self.spaces.get_mut(space) {
+            m.join_signal(actor, ms);
+            self.publish();
+        }
+    }
+
+    /// The actors of `space` whose profiles the node still has to read.
+    pub fn take_wanted(&mut self, space: &str) -> Vec<String> {
+        self.spaces
+            .get_mut(space)
+            .map(|m| std::mem::take(&mut m.wanted).into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// What the home says about an actor (`None`: it could not be read).
+    pub fn set_profile(&mut self, space: &str, actor: &str, facts: Option<ProfileFacts>) {
+        let ms = self.now.ms;
+        if let Some(m) = self.spaces.get_mut(space) {
+            m.set_profile(actor, facts, ms);
+            self.publish();
+        }
+    }
+
+    /// What the home says about an admission's actor, if it has been read.
+    pub fn profile_of(&self, space: &str, actor: &str) -> Option<Option<ProfileFacts>> {
+        self.spaces.get(space)?.profiles.get(actor).cloned()
+    }
+
+    /// Whether `actor` asked to join `space` and waits.
+    pub fn is_pending(&self, space: &str, actor: &str) -> bool {
+        self.spaces
+            .get(space)
+            .is_some_and(|m| m.pending.contains_key(actor) && !m.roles.contains_key(actor))
+    }
+
+    /// Whether `actor` holds a role in `space`.
+    pub fn has_role(&self, space: &str, actor: &str) -> bool {
+        self.spaces
+            .get(space)
+            .is_some_and(|m| m.roles.contains_key(actor))
+    }
+
+    /// Takes an item a host put on a session's stream. True if it changed what a face sees.
+    pub fn apply_item(
+        &mut self,
+        space: &str,
+        session: &str,
+        id: String,
+        turn: Option<u32>,
+        body: ItemBody,
+    ) -> bool {
+        let ms = self.now.ms;
+        let changed = self
+            .spaces
+            .get_mut(space)
+            .is_some_and(|m| m.push_item(session, id, turn, body, ms, true));
+        self.publish();
+        changed
     }
 
     /// Plugs in the timeline engine behind `Timeline`, `Patches` and `ChangeSet`.
@@ -442,6 +550,7 @@ impl Engine {
             .any(|s| matches!(s.query, Query::NodeStatus { .. }));
         for m in self.spaces.values_mut() {
             moved |= m.tick(&now);
+            m.recheck_profiles(now.ms);
         }
         if moved {
             self.publish();
@@ -500,22 +609,36 @@ impl Engine {
                 outbox_pending: pending,
                 roles: self.info.roles.clone(),
                 now_ms: self.now.ms,
+                subscriptions: u32::try_from(self.live_subs).unwrap_or(u32::MAX),
+                resyncs: self.resyncs,
+                recent_errors: self.errors.iter().cloned().collect(),
             }),
         )
     }
 
-    fn patch_rows(rows: Vec<FilePatchRow>) -> Vec<(Facets, Row)> {
-        rows.into_iter()
-            .map(|r| {
-                (
-                    Facets {
-                        text: r.path.clone(),
-                        ..Facets::default()
-                    },
-                    Row::FilePatch(r),
-                )
-            })
-            .collect()
+    fn patch_rows(rows: Vec<FilePatchRow>, excluded: u32) -> Vec<(Facets, Row)> {
+        let mut out: Vec<(Facets, Row)> = Vec::new();
+        if excluded > 0 {
+            out.push((
+                Facets::default(),
+                Row::ChangeSummary(ChangeSummaryRow {
+                    key: String::new(),
+                    excluded,
+                }),
+            ));
+        }
+        out.extend(rows.into_iter().map(|mut r| {
+            // The host masked the patch; the node says where.
+            r.masked = masked_spans(&r.patch);
+            (
+                Facets {
+                    text: r.path.clone(),
+                    ..Facets::default()
+                },
+                Row::FilePatch(r),
+            )
+        }));
+        out
     }
 
     fn gather(&mut self, q: &Query) -> Result<Vec<(Facets, Row)>, NodeError> {
@@ -529,12 +652,23 @@ impl Engine {
                 .get_mut(space)
                 .map(|m| m.board_rows(*group, &now))
                 .ok_or_else(|| not_found("space", space)),
-            Query::Session { id, .. } => self
-                .spaces
-                .values()
-                .find_map(|m| m.sessions.get(id).map(|s| m.session_row(s, &now)))
-                .map(|r| vec![r])
-                .ok_or_else(|| not_found("session", id)),
+            Query::Session { id, part, .. } => match part {
+                SessionPart::Facts => self
+                    .spaces
+                    .values()
+                    .find_map(|m| m.sessions.get(id).map(|s| m.session_row(s, &now)))
+                    .map(|r| vec![r])
+                    .ok_or_else(|| not_found("session", id)),
+                SessionPart::Items | SessionPart::Record => self
+                    .spaces
+                    .values()
+                    .find_map(|m| match part {
+                        SessionPart::Items => m.item_rows(id),
+                        _ => m.record_rows(id),
+                    })
+                    .ok_or_else(|| not_found("session", id))?
+                    .map_err(NodeError::denied),
+            },
             Query::WhoIsOn { space, target, .. } => match space {
                 Some(sp) => self
                     .spaces
@@ -589,8 +723,17 @@ impl Engine {
             Query::Approvals { actor, .. } => Ok(self
                 .spaces
                 .values()
-                .flat_map(|m| m.approval_rows(actor, &now))
+                .flat_map(|m| {
+                    let mut rows = m.approval_rows(actor, &now);
+                    rows.extend(m.admission_rows(actor));
+                    rows
+                })
                 .collect()),
+            Query::Devices { .. } => Ok(self
+                .spaces
+                .get(&format!("profile:{}", self.me))
+                .map(|m| m.device_rows(&self.device_key))
+                .unwrap_or_default()),
             Query::Spaces { .. } => Ok(self.spaces.values().map(SpaceModel::status_row).collect()),
             Query::SpaceStatus { space, .. } => self
                 .spaces
@@ -666,13 +809,13 @@ impl Engine {
             } => self
                 .timeline
                 .patches(session, from.as_deref(), to)
-                .map(Self::patch_rows),
+                .map(|rows| Self::patch_rows(rows, self.timeline.excluded(session))),
             Query::ChangeSet {
                 space, proposal, ..
             } => self
                 .timeline
                 .change_set(space, proposal)
-                .map(Self::patch_rows),
+                .map(|rows| Self::patch_rows(rows, 0)),
         }
     }
 
@@ -688,6 +831,7 @@ impl Engine {
         self.misc_rev.hash(&mut h);
         if matches!(q, Query::NodeStatus { .. }) {
             self.now.ms.hash(&mut h);
+            self.node_rev.hash(&mut h);
         }
         let one = |sp: &str, h: &mut DefaultHasher| {
             sp.hash(h);
@@ -723,9 +867,21 @@ impl Engine {
     /// Opens a view: sends the snapshot of its window now and diffs as inputs arrive. Returns the id to pass
     /// to [`Engine::unsubscribe`]. A query that cannot be served sends [`ViewEvent::Failed`] and opens nothing.
     pub fn subscribe(&mut self, query: Query, sink: ViewSink) -> Option<u64> {
+        // The node panel counts the view it is about to be shown to.
+        self.live_subs = self.subs.len() + 1;
         let last = match self.gather(&query) {
             Ok(rows) => page(rows, &query),
             Err(error) => {
+                self.errors.push_back(ErrorNote {
+                    code: error.code().to_owned(),
+                    what: "view".to_owned(),
+                    at_ms: self.now.ms,
+                });
+                while self.errors.len() > RECENT_ERRORS {
+                    self.errors.pop_front();
+                }
+                self.live_subs = self.subs.len();
+                self.node_rev += 1;
                 sink.send(ViewEvent::Failed { seq: 1, error });
                 return None;
             }
@@ -733,6 +889,7 @@ impl Engine {
         sink.send(snapshot(&last, 1, self.now.ms));
         let id = self.next_sub;
         self.next_sub += 1;
+        self.node_rev += 1;
         let sig = self.signature(&query);
         self.subs.push(Sub {
             id,
@@ -742,12 +899,16 @@ impl Engine {
             sig,
             seq: 1,
         });
+        self.publish();
         Some(id)
     }
 
     /// Closes a view.
     pub fn unsubscribe(&mut self, id: u64) {
         self.subs.retain(|s| s.id != id);
+        self.live_subs = self.subs.len();
+        self.node_rev += 1;
+        self.publish();
     }
 
     /// Ends every open view without an error: the node is shutting down.
@@ -755,6 +916,7 @@ impl Engine {
         for sub in std::mem::take(&mut self.subs) {
             sub.sink.send(ViewEvent::End { seq: sub.seq + 1 });
         }
+        self.live_subs = 0;
     }
 
     /// How many views are open.
@@ -763,11 +925,23 @@ impl Engine {
     }
 
     fn publish(&mut self) {
+        // A view dropped while publishing changes what the node panel counts: once more for it.
+        for _ in 0..3 {
+            let before = self.node_rev;
+            self.publish_once();
+            if self.node_rev == before {
+                break;
+            }
+        }
+    }
+
+    fn publish_once(&mut self) {
         let now = self.now;
         for m in self.spaces.values_mut() {
             m.sync_time(&now);
         }
         let mut subs = std::mem::take(&mut self.subs);
+        let before = subs.len();
         subs.retain_mut(|sub| {
             if sub.sink.is_closed() {
                 return false;
@@ -827,10 +1001,18 @@ impl Engine {
                 }
             };
             sub.last = new;
-            sub.sink.send(event)
+            let sent = sub.sink.send(event);
+            if !sent && sub.sink.was_resynced() {
+                self.resyncs += 1;
+            }
+            sent
         });
+        if subs.len() != before {
+            self.node_rev += 1;
+        }
         // Views opened while publishing cannot happen (the engine is locked), so this only puts them back.
         subs.append(&mut self.subs);
         self.subs = subs;
+        self.live_subs = self.subs.len();
     }
 }

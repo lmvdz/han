@@ -287,6 +287,9 @@ pub fn node_status(actor: &str) -> Row {
         outbox_pending: 0,
         roles: vec![],
         now_ms: NOW_MS,
+        subscriptions: 0,
+        resyncs: 0,
+        recent_errors: vec![],
     })
 }
 
@@ -323,6 +326,11 @@ pub fn session_row(id: &str, agent: &str, state: SessionState, step: &str) -> Se
             at: "2026-10-13T10:00:01Z".into(),
         }),
         last_active_ms: NOW_MS,
+        rights: han_node::api::SessionRights {
+            watch: true,
+            read: true,
+        },
+        is_mine: true,
     }
 }
 
@@ -349,6 +357,11 @@ pub fn approval(proposal: &str, proposer: &str, can_approve: bool) -> ApprovalRo
         can_cancel: true,
         approvers: vec!["@lars:han.example".into()],
         why_gated: "push of a han/* branch (space rule)".into(),
+        needed: han_node::api::Needed {
+            rule: 1,
+            guards: vec![],
+        },
+        agent_text: vec![],
     }
 }
 

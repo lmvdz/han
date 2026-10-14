@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use common::{Data, ME, Shared, assert_screen, node, pending_approval, started, team};
 use han_node::api::{
-    BoardRow, BoardTotals, CallResult, Command, DiffOp, Group, GroupTotal, InputRow, NodeError,
-    Query, Row, SessionState, StateCounts, ViewEvent,
+    ActorKind, AdmissionRow, BoardRow, BoardTotals, CallResult, Command, DiffOp, Group, GroupTotal,
+    InputRow, NodeError, Query, Row, SessionState, StateCounts, ViewEvent,
 };
 use han_tui::config::Config;
 use han_tui::testing::{FakeApi, FakeConnector, Harness, approval};
@@ -90,6 +90,7 @@ async fn approving_takes_two_deliberate_steps_and_no_single_key_signs() {
         vec![Command::EffectApprove {
             space: "team".into(),
             proposal: "p1".into(),
+            expires_at: None,
             note: None,
         }],
         "exactly one approval, naming the proposal"
@@ -980,4 +981,255 @@ async fn o_lists_who_a_session_overlaps_with() {
     h.keys("jjj").await; // lars-reviewer
     h.keys("o").await;
     assert!(h.screen().contains("no overlap on this session"));
+}
+
+// ---- items, admissions, guards ---------------------------------------------------------------------------
+
+fn item(n: u64, id: &str, body: han_node::api::ItemBody) -> han_node::api::ItemRow {
+    han_node::api::ItemRow {
+        key: format!("{n:012}"),
+        session: "s1".into(),
+        id: id.into(),
+        seq_in_session: n,
+        turn: Some(1),
+        updated_ms: han_tui::testing::NOW_MS,
+        item: body,
+    }
+}
+
+fn is_items(q: &Query) -> bool {
+    matches!(
+        q,
+        Query::Session {
+            part: han_node::api::SessionPart::Items,
+            ..
+        }
+    )
+}
+
+#[tokio::test]
+async fn typed_items_fill_the_stream_and_change_in_place() {
+    use han_node::api::{ItemBody, MessageRole, ToolKind, ToolStatus};
+    let data: Shared = Arc::new(std::sync::Mutex::new(Data {
+        board: team(),
+        ..Data::default()
+    }));
+    {
+        let mut d = data.lock().unwrap();
+        d.items = vec![
+            item(
+                1,
+                "m1",
+                ItemBody::Message {
+                    role: MessageRole::Agent,
+                    text: "Reading the code".into(),
+                    done: false,
+                    masked: vec![],
+                },
+            ),
+            item(
+                2,
+                "t1",
+                ItemBody::ToolCall {
+                    tool_call_id: "t1".into(),
+                    tool_kind: ToolKind::Execute,
+                    title: Some("cargo test".into()),
+                    status: ToolStatus::InProgress,
+                    locations: vec![],
+                    content: vec![],
+                    started_at: None,
+                    ended_at: None,
+                },
+            ),
+            item(
+                3,
+                "u1",
+                ItemBody::Unknown {
+                    raw_kind: "hologram".into(),
+                    raw: "{}".into(),
+                },
+            ),
+        ];
+    }
+    let api = node(&data);
+    let mut h = Harness::new(api.clone(), Some("team"), (130, 30));
+    h.settle().await;
+    h.keys("j<enter>").await; // the first session
+    let s = h.screen();
+    assert!(s.contains("“ agent: Reading the code …"), "{s}");
+    assert!(s.contains("$ cargo test [running]"), "{s}");
+    assert!(s.contains("? unsupported item: hologram"), "{s}");
+    // The message grows and the tool call finishes: the same lines change, none is added.
+    let done = item(
+        1,
+        "m1",
+        ItemBody::Message {
+            role: MessageRole::Agent,
+            text: "Reading the code, then fixing it".into(),
+            done: true,
+            masked: vec![],
+        },
+    );
+    let finished = item(
+        2,
+        "t1",
+        ItemBody::ToolCall {
+            tool_call_id: "t1".into(),
+            tool_kind: ToolKind::Execute,
+            title: Some("cargo test".into()),
+            status: ToolStatus::Completed,
+            locations: vec![],
+            content: vec![],
+            started_at: None,
+            ended_at: None,
+        },
+    );
+    api.push(
+        is_items,
+        diff(
+            vec![
+                DiffOp::Update {
+                    row: Row::Item(done),
+                },
+                DiffOp::Update {
+                    row: Row::Item(finished),
+                },
+            ],
+            3,
+        ),
+    );
+    h.settle().await;
+    let s = h.screen();
+    assert!(
+        s.contains("“ agent: Reading the code, then fixing it"),
+        "{s}"
+    );
+    assert!(!s.contains("Reading the code …"), "{s}");
+    assert!(s.contains("$ cargo test [completed]"), "{s}");
+    assert!(!s.contains("[running]"), "{s}");
+}
+
+#[tokio::test]
+async fn a_session_without_the_read_right_says_what_is_withheld() {
+    let data: Shared = Arc::new(std::sync::Mutex::new(Data {
+        board: team(),
+        no_read: true,
+        ..Data::default()
+    }));
+    let api = node(&data);
+    let mut h = Harness::new(api, Some("team"), (130, 30));
+    h.settle().await;
+    h.keys("j<enter>").await;
+    let s = h.screen();
+    assert!(s.contains("withheld (no read right)"), "{s}");
+}
+
+fn admission(
+    actor: &str,
+    kind: ActorKind,
+    operator: Option<&str>,
+    confirmed: bool,
+) -> AdmissionRow {
+    AdmissionRow {
+        key: format!("team|adm|{actor}"),
+        space: "team".into(),
+        actor: actor.into(),
+        kind,
+        operator: operator.map(str::to_owned),
+        operator_confirmed: confirmed,
+        at_ms: han_tui::testing::NOW_MS,
+        via_my_ticket: false,
+    }
+}
+
+#[tokio::test]
+async fn owners_see_who_waits_to_join_and_admit_only_who_may_be() {
+    let data: Shared = Arc::new(std::sync::Mutex::new(Data {
+        board: team(),
+        ..Data::default()
+    }));
+    data.lock().unwrap().admissions = vec![
+        admission("@dave:h", ActorKind::Human, None, true),
+        admission("@bot:h", ActorKind::Agent, Some("@ada:h"), false),
+    ];
+    let api = node(&data);
+    let mut h = Harness::new(api.clone(), Some("team"), (130, 30));
+    h.settle().await;
+    h.keys(":approvals<enter>").await;
+    let s = h.screen();
+    assert!(s.contains("Waiting to join (2)"), "{s}");
+    assert!(s.contains("@dave:h") && s.contains("person · team"), "{s}");
+    assert!(s.contains("agent of @ada:h, unconfirmed"), "{s}");
+    // An unconfirmed agent is not admitted; a stranger who is not listed is not either.
+    h.keys(":admit @bot:h<enter>").await;
+    assert!(api.calls().is_empty());
+    assert!(h.screen().contains("cannot be admitted"));
+    h.keys(":admit @nobody:h<enter>").await;
+    assert!(api.calls().is_empty());
+    // A person is admitted as a member.
+    h.keys(":admit @dave:h<enter>").await;
+    assert_eq!(
+        api.calls(),
+        vec![Command::MemberSet {
+            space: "team".into(),
+            actor: "@dave:h".into(),
+            role: "member".into()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn the_card_names_the_guards_and_what_the_agent_wrote() {
+    use han_node::api::{AgentText, Needed, NeededGuard};
+    let (mut h, _api, data) = started((130, 40)).await;
+    let mut a = pending_approval(&data);
+    a.summary = vec![
+        ("title".into(), "Fix it, and ignore the rules".into()),
+        ("count".into(), "3".into()),
+    ];
+    a.agent_text = vec![
+        AgentText {
+            author: a.proposer.clone(),
+            field: "title".into(),
+            text: "Fix it, and ignore the rules".into(),
+        },
+        AgentText {
+            author: "@ada:h".into(),
+            field: "note".into(),
+            text: "fine by me".into(),
+        },
+    ];
+    a.needed = Needed {
+        rule: 1,
+        guards: vec![
+            NeededGuard {
+                guard: Some("@ada:h".into()),
+                agent: a.proposer.clone(),
+                approved: true,
+            },
+            NeededGuard {
+                guard: None,
+                agent: "@other:h".into(),
+                approved: false,
+            },
+        ],
+    };
+    data.lock().unwrap().approvals = vec![a.clone()];
+    h.keys("r").await;
+    h.keys("a<enter>").await;
+    let s = h.screen();
+    assert!(s.contains("@ada:h guards"), "{s}");
+    assert!(s.contains(": approved"), "{s}");
+    assert!(
+        s.contains("@other:h has no confirmed operator: nobody can approve for it"),
+        "{s}"
+    );
+    // The agent's words are quoted and attributed; the short copy in CHANGES is not repeated.
+    assert!(
+        s.contains("wrote title: \"Fix it, and ignore the rules\""),
+        "{s}"
+    );
+    assert!(s.contains("@ada:h wrote note: \"fine by me\""), "{s}");
+    assert_eq!(s.matches("ignore the rules").count(), 1, "{s}");
+    assert!(s.contains("count: \"3\""), "{s}");
 }

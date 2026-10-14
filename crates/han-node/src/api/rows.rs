@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::error::NodeError;
+use super::items::{AdmissionRow, ChangeSummaryRow, DeviceRow, ItemRow, RecordRow, Span};
 
 /// The state of a session as the board shows it. The first five are what a host claims in `han.status/1`;
 /// `stale` and `failed` are derived by the node from silence (a status item's own `stale` counts as `idle`).
@@ -317,6 +318,17 @@ pub struct BoardRow {
     pub can_cancel: bool,
 }
 
+/// What this device's actor may see of a session (the space's `sessions.watch` and `sessions.read`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct SessionRights {
+    /// May watch the output: messages, tool calls, plans. Without it the `Items` and `Record` parts are
+    /// `denied`.
+    pub watch: bool,
+    /// May read the full context: reasoning and the content of tool calls. Without it the items leave those
+    /// out.
+    pub read: bool,
+}
+
 /// A session in full.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct SessionRow {
@@ -350,6 +362,10 @@ pub struct SessionRow {
     pub status: Option<StatusBody>,
     /// This node's steady clock (ms) when the last item arrived.
     pub last_active_ms: u64,
+    /// What this device's actor may see of it.
+    pub rights: SessionRights,
+    /// The session is this device's own work: its actor, or the person behind it.
+    pub is_mine: bool,
 }
 
 /// One session that is on an issue or a path.
@@ -507,7 +523,49 @@ pub struct ApprovalRow {
     pub approvers: Vec<String>,
     /// Why the effect is gated: which rule or default required an approval.
     pub why_gated: String,
+    /// What it takes to approve (Q-APR-8): the rule, and the guards that must also approve.
+    pub needed: Needed,
+    /// Text the proposer and the approvers wrote, in full: a face shows it as quoted, never as the node's
+    /// own words.
+    #[serde(default)]
+    pub agent_text: Vec<AgentText>,
 }
+
+/// What an effect needs before it may run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct Needed {
+    /// How many approvals the rule asks for (a rule is met by one approver).
+    pub rule: u32,
+    /// The guards of the proposing agent (P-15): each must approve too, unless it is the rule's approver.
+    pub guards: Vec<NeededGuard>,
+}
+
+/// A guard that must approve an effect.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct NeededGuard {
+    /// The guard: the agent's confirmed operator. Absent when the agent has none, so nobody can approve for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub guard: Option<String>,
+    /// The agent it guards (the proposer).
+    pub agent: String,
+    /// It has approved.
+    pub approved: bool,
+}
+
+/// A piece of text an actor wrote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct AgentText {
+    /// Who wrote it.
+    pub author: String,
+    /// Where it is: a plan argument's name, or `note` for an approval's note.
+    pub field: String,
+    /// The text, cut to [`AGENT_TEXT`] characters.
+    pub text: String,
+}
+
+/// Each [`AgentText`] is cut to this many characters.
+pub const AGENT_TEXT: usize = 2000;
 
 /// At most this many arguments are in an [`ApprovalRow`]'s summary.
 pub const SUMMARY_FIELDS: usize = 8;
@@ -804,6 +862,29 @@ pub struct NodeStatusRow {
     pub roles: Vec<RoleInfo>,
     /// This node's steady clock (ms), the one `last_active_ms` counts on, as of the last tick.
     pub now_ms: u64,
+    /// Views open on this node, as of the last tick.
+    #[serde(default)]
+    pub subscriptions: u32,
+    /// Views the node ended with a `Resync` because their reader fell behind, since it started.
+    #[serde(default)]
+    pub resyncs: u64,
+    /// The codes of the last errors (calls and views), oldest first, at most [`RECENT_ERRORS`].
+    #[serde(default)]
+    pub recent_errors: Vec<ErrorNote>,
+}
+
+/// How many errors `NodeStatusRow::recent_errors` holds.
+pub const RECENT_ERRORS: usize = 20;
+
+/// An error the node answered, for the Node panel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ErrorNote {
+    /// The error's code (`denied`, `invalid`, ...).
+    pub code: String,
+    /// What was asked: a command or a view.
+    pub what: String,
+    /// This node's steady clock (ms) when it happened.
+    pub at_ms: u64,
 }
 
 /// A point in a session's work timeline (backed by han-timeline, M4).
@@ -850,6 +931,9 @@ pub struct FilePatchRow {
     pub added: u32,
     /// Lines removed.
     pub removed: u32,
+    /// The masked spans of `patch` (set by the node).
+    #[serde(default)]
+    pub masked: Vec<Span>,
 }
 
 /// A row of any view.
@@ -888,6 +972,16 @@ pub enum Row {
     Input(InputRow),
     /// A task.
     Task(TaskRow),
+    /// An item of a session's stream.
+    Item(ItemRow),
+    /// An entry of a session's record.
+    Record(RecordRow),
+    /// An actor waiting to be admitted.
+    Admission(AdmissionRow),
+    /// A key of the identity.
+    Device(DeviceRow),
+    /// The totals of a change set.
+    ChangeSummary(ChangeSummaryRow),
 }
 
 impl Row {
@@ -910,6 +1004,11 @@ impl Row {
             Row::Guard(r) => &r.key,
             Row::Input(r) => &r.key,
             Row::Task(r) => &r.key,
+            Row::Item(r) => &r.key,
+            Row::Record(r) => &r.key,
+            Row::Admission(r) => &r.key,
+            Row::Device(r) => &r.key,
+            Row::ChangeSummary(r) => &r.key,
         }
     }
 }

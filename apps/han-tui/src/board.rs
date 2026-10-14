@@ -169,6 +169,7 @@ impl BoardState {
                 filter: self.filter.clone(),
                 limit: self.limit,
                 cursor: self.cursor.clone(),
+                ..Window::default()
             },
         }
     }

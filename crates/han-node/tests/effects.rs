@@ -155,6 +155,7 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
         Command::EffectApprove {
             space: space.clone(),
             proposal: proposal.clone(),
+            expires_at: None,
             note: None,
         },
     )

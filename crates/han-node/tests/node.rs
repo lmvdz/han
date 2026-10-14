@@ -63,6 +63,8 @@ async fn errors_are_the_closed_set() {
         Command::Invite {
             space: space.clone(),
             ttl_secs: None,
+            expires_at: None,
+            auto_admit: false,
         },
     )
     .await

@@ -133,6 +133,7 @@ pub async fn run(args: BoardArgs) -> Result<(), Box<dyn std::error::Error>> {
             },
             limit: args.limit,
             cursor: None,
+            ..Window::default()
         },
     };
     let mut view = client.view(query);

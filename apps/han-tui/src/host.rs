@@ -88,7 +88,7 @@ impl Host {
                     self.subs.insert(
                         view,
                         tokio::spawn(async move {
-                            let mut stream = api.view(query);
+                            let mut stream = api.view(*query);
                             while let Some(event) = stream.next().await {
                                 let failed = matches!(event, ViewEvent::Failed { .. });
                                 if tx.send(Msg::View { view, epoch, event }).is_err() || failed {

@@ -9,8 +9,8 @@
 use std::collections::HashSet;
 
 use han_node::api::{
-    BoardRow, FilePatchRow, InputRow, NodeError, Row, SessionRow, SessionState, StatusBody,
-    TimelinePointRow, ViewEvent, ViewMirror,
+    BoardRow, FilePatchRow, InputRow, ItemBody, ItemRow, MessageRole, NodeError, Row, SessionRow,
+    SessionState, StatusBody, TimelinePointRow, ToolStatus, TurnDriver, ViewEvent, ViewMirror,
 };
 
 use crate::input::LineEdit;
@@ -65,6 +65,20 @@ pub enum LogKind {
     Summary,
     /// A steering input.
     Steer,
+    /// A message of the agent (or of whoever steered).
+    Message,
+    /// The agent's reasoning.
+    Reasoning,
+    /// A tool call and how far it is.
+    Call,
+    /// A file a tool call changed.
+    File,
+    /// A turn begins or ends.
+    Turn,
+    /// The agent waits on an approval.
+    Decision,
+    /// An item this version cannot read.
+    Unsupported,
 }
 
 /// A line of the stream.
@@ -74,6 +88,80 @@ pub struct LogLine {
     pub kind: LogKind,
     /// The text (still to be cleaned for the terminal).
     pub text: String,
+    /// The key of the item the line shows, so that a later body of the same item changes it in place.
+    pub item: Option<String>,
+}
+
+/// The line an item takes in the stream. `None` for the items the pane shows from other views.
+fn item_line(body: &ItemBody) -> Option<(LogKind, String)> {
+    Some(match body {
+        ItemBody::Message {
+            role, text, done, ..
+        } => (
+            LogKind::Message,
+            format!(
+                "{}: {text}{}",
+                match role {
+                    MessageRole::Agent => "agent",
+                    MessageRole::User => "you",
+                },
+                if *done { "" } else { " …" }
+            ),
+        ),
+        ItemBody::Reasoning { text, .. } => (LogKind::Reasoning, format!("thinking: {text}")),
+        ItemBody::Plan { entries } => {
+            let done = entries.iter().filter(|e| e.done).count();
+            (
+                LogKind::Plan,
+                format!("plan: {done} of {} steps done", entries.len()),
+            )
+        }
+        ItemBody::ToolCall {
+            title,
+            tool_kind,
+            status,
+            ..
+        } => {
+            let what = title
+                .clone()
+                .unwrap_or_else(|| format!("{tool_kind:?}").to_lowercase());
+            let how = match status {
+                ToolStatus::Pending => "queued",
+                ToolStatus::InProgress => "running",
+                ToolStatus::Completed => "completed",
+                ToolStatus::Failed => "failed",
+            };
+            (LogKind::Call, format!("{what} [{how}]"))
+        }
+        ItemBody::FileChange {
+            path,
+            added,
+            removed,
+            ..
+        } => (LogKind::File, format!("{path} +{added} -{removed}")),
+        ItemBody::Decision { action, .. } => (
+            LogKind::Decision,
+            format!("waiting for an approval: {action}"),
+        ),
+        ItemBody::TurnStart { turn, driver, .. } => (
+            LogKind::Turn,
+            format!(
+                "turn {turn} starts ({})",
+                match driver {
+                    TurnDriver::Task => "a task",
+                    TurnDriver::Input => "your input",
+                    TurnDriver::Effect => "an outcome",
+                    TurnDriver::Own => "its own",
+                }
+            ),
+        ),
+        ItemBody::TurnEnd { turn, .. } => (LogKind::Turn, format!("turn {turn} ends")),
+        ItemBody::Unknown { raw_kind, .. } => (
+            LogKind::Unsupported,
+            format!("unsupported item: {raw_kind}"),
+        ),
+        ItemBody::Status { .. } | ItemBody::Input { .. } => return None,
+    })
 }
 
 /// A panel fed by a view that may not be served yet.
@@ -149,6 +237,7 @@ pub struct SessionPane {
     pub latest: Option<String>,
     inputs: HashSet<String>,
     inputs_seeded: bool,
+    items_mirror: ViewMirror,
     timeline_mirror: ViewMirror,
     patches_mirror: ViewMirror,
     session_mirror: ViewMirror,
@@ -177,6 +266,7 @@ impl SessionPane {
             latest: None,
             inputs: HashSet::new(),
             inputs_seeded: false,
+            items_mirror: ViewMirror::new(),
             timeline_mirror: ViewMirror::new(),
             patches_mirror: ViewMirror::new(),
             session_mirror: ViewMirror::new(),
@@ -201,6 +291,7 @@ impl SessionPane {
         self.log.push(LogLine {
             kind,
             text: text.into(),
+            item: None,
         });
         // A long session does not grow without bound.
         if self.log.len() > 2000 {
@@ -307,6 +398,46 @@ impl SessionPane {
             }
         }
         self.inputs_seeded = true;
+    }
+
+    /// Applies an event of the `Session` view's items: the typed stream. A message that grows, or a tool call
+    /// that moves on, changes its line in place. Status and input items are left out: the pane already shows
+    /// them from the session's status and its inputs.
+    pub fn apply_items(&mut self, event: ViewEvent) {
+        if matches!(event, ViewEvent::Failed { .. }) {
+            return;
+        }
+        self.items_mirror.apply(event);
+        let items: Vec<ItemRow> = self
+            .items_mirror
+            .rows()
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Item(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        for item in items {
+            let Some((kind, text)) = item_line(&item.item) else {
+                continue;
+            };
+            match self
+                .log
+                .iter_mut()
+                .find(|l| l.item.as_deref() == Some(item.key.as_str()))
+            {
+                Some(line) => {
+                    line.kind = kind;
+                    line.text = text;
+                }
+                None => {
+                    self.push(kind, text);
+                    if let Some(l) = self.log.last_mut() {
+                        l.item = Some(item.key.clone());
+                    }
+                }
+            }
+        }
     }
 
     /// Applies an event of the `Timeline` view. Returns the latest point, once there is one, so the changes can

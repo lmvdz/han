@@ -115,7 +115,7 @@ The snapshot carries:
 - `seq`;
 - `items` (in order) and `hasEarlier`;
 - `facts`:
-  - `can_steer` (PR #35); `rights {watch, read}` **[needs node, Q-DAT-9]**;
+  - `can_steer` (PR #35); `rights {watch, read}` (Q-DAT-9, §12.1);
   - `isMine`, `amGuard`, `agentGuarded`, `guard?`, `limited` **[needs node, Q-SES-5]**;
   - `steerMode`;
   - `displayState`, `stateReason?`;
@@ -124,7 +124,7 @@ The snapshot carries:
   - `header`: the board row's fields;
 - `decisions[]`: this session's open effects, in the shape of §4.4.
 
-The typed item vocabulary below is not yet in the node API **[needs node, Q-DAT-9]**. It is provisional (DAT-3) and modelled on ACP's session updates. An item has:
+The typed item vocabulary below is not yet in the node API (Q-DAT-9, §12.1). It is provisional (DAT-3) and modelled on ACP's session updates. An item has:
 - `id` (stable, assigned by the node);
 - `kind`;
 - `seqInSession`;
@@ -147,9 +147,9 @@ Diff ops:
 - update, by item id;
 - resnapshot, for changes to `facts` or `decisions`.
 
-The host masks secrets in text before it leaves the device. Items must mark the masked spans, so that the GUI can draw them as masked (SES-3) **[needs node, Q-DAT-18]**.
+The host masks secrets in text before it leaves the device. Items must mark the masked spans, so that the GUI can draw them as masked (SES-3) (Q-DAT-18, §12.1).
 
-The Record is a separate subscription, `Session{id, part: "record"}`, so that the stream window and the log facts move independently **[needs node, Q-DAT-3]**. Each Record entry is `{seq, entryId, kind, author, at, summary, verified, redacted?, redactReason?, effect?}`.
+The Record is a separate subscription, `Session{id, part: "record"}`, so that the stream window and the log facts move independently (Q-DAT-3, §12.1). Each Record entry is `{seq, entryId, kind, author, at, summary, verified, redacted?, redactReason?, effect?}`.
 
 ### 4.3 `Timeline`, `ChangeSet` and `Patches` (session.md §5, diffs.md)
 
@@ -161,7 +161,7 @@ Together, they carry:
 - `points[]`, the scrubber index, each `{version, step?, stepTitle?, turn?, checkpoint?, kind: batch | turn | checkpoint | merge, at, author}`, windowed if large **[needs node, Q-SES-1]**;
 - `changeSet` between `from` (default: base) and `at` (default: live):
   - `files[]`, each `{path, oldPath?, status, added, removed, binary?{oldSize, newSize}, mode?{old, new}, eol?{old, new}, overlap?{tier, sessions[]}, lastStep?}`;
-  - `excludedCount` **[needs node, Q-DAT-18]**.
+  - `excludedCount` (Q-DAT-18, §12.1).
 
 Diff ops: `point{…}` (new points while live), `file{…}` (insert, update or remove).
 
@@ -173,23 +173,23 @@ The query covers every followed space; an optional `space` narrows it.
 
 Each effect entry carries:
 - `effect`, `space`, `action`, `target`;
-- `planDigest`, `plan`, `digestVerified` **[needs node, Q-APR-8]**;
+- `planDigest`, `plan`, `digestVerified` (Q-APR-8, §12.1);
 - `phase`, `cancelRequested`;
 - `proposer {actor, kind, operator?}`, `executor`;
 - `session?`, `task? {id, title?, external?, budgetLeft?}`;
 - `cost?`, `chargedTo`, `expiresAt?`;
 - `why_gated` (PR #35);
 - `approvers` (PR #35) and `separateApprover`;
-- `needed {rule: n, guards[{guard, agent, approved}]}` **[needs node, Q-APR-8]**;
+- `needed {rule: n, guards[{guard, agent, approved}]}` (Q-APR-8, §12.1);
 - `approvals[]`, each `{author, at, expiresAt?, consumed, attempt?}`;
-- `agentText[]`, each `{author, text}` **[needs node, Q-APR-8]**;
+- `agentText[]`, each `{author, text}` (Q-APR-8, §12.1);
 - `overlaps[]`;
 - `can_approve` and `can_cancel` (PR #35), plus `approveAs[]`, `cannotApproveReason?` and `myApproval?{at, expiresAt?, queued}`;
 - `section`: `needsMe`, `waitingOthers` or `recent`.
 
-Each admission entry carries `{space, actor, kind, operator?, operatorConfirmed, at, viaMyTicket}`. Admissions are not part of the Approvals view yet **[needs node, Q-DAT-13]**.
+Each admission entry carries `{space, actor, kind, operator?, operatorConfirmed, at, viaMyTicket}`. Admissions are not part of the Approvals view yet (Q-DAT-13, §12.1).
 
-A plan's `argsBlob` is shown on request (approvals.md §3.3). That needs a way to fetch a blob through the node **[needs node, Q-DAT-16]**.
+A plan's `argsBlob` is shown on request (approvals.md §3.3). That needs a way to fetch a blob through the node (Q-DAT-16, §12.1).
 
 - **DAT-11.** `digestVerified` is true only when the node has fetched the plan content and checked `sha256(JCS(plan)) = planDigest` itself (P-08). The GUI never computes it and never trusts a plan without it. When the GUI asks the node to sign, the node MUST check it again.
 
@@ -205,14 +205,14 @@ The GUI needs:
 - `home {server, nodes[], reachable, offlineSince?}`;
 - `lastSyncAt`, `outboxDepth`;
 - `protocolVersionOk`;
-- `me {role, limited, limitedReason?}`; the identity's devices come from a Devices query **[needs node, Q-DAT-17]**;
+- `me {role, limited, limitedReason?}`; the identity's devices come from a Devices query (Q-DAT-17, §12.1);
 - `members[]`, each `{actor, kind, role, operator?, operatorConfirmed?, guarded: none | chosen | forced, liveSessions, joinedAt}`;
 - `policySummary`: join, invite, approvals, sessions rights, budget, gates;
 - `agents[]`: the local user's agents with their harnesses, for the start-session dialog;
 - `repos[]`;
 - `pendingJoin?` (for a space joined but not yet admitted).
 
-The node's own status (running, peers, version, data folder, startup step) comes from the `NodeStatus` query, and join progress from the `JoinProgress` query. Both are in PR #35. The Node panel's telemetry (subscription and resync counts, recent error codes) is not in `NodeStatus` yet **[needs node, Q-DAT-20]**. Queued commands are listed by the `Outbox` query (PR #35).
+The node's own status (running, peers, version, data folder, startup step) comes from the `NodeStatus` query, and join progress from the `JoinProgress` query. Both are in PR #35. The Node panel's telemetry (subscription and resync counts, recent error codes) is not in `NodeStatus` yet (Q-DAT-20, §12.1). Queued commands are listed by the `Outbox` query (PR #35).
 
 ### 4.7 `Cost{space | session}`
 
@@ -298,7 +298,7 @@ A surface's "Retry" button resets the atom, which subscribes again at once.
 | `DeviceOffer`, `DevicePair{code}`, `DeviceRevoke{key}` | onboarding, devices | PR #35 |
 | identity creation, recovery | onboarding | **[needs node, Q-SHL-7]** |
 
-The parameters in braces are what the surfaces collect. PR #35 fixes the commands' names but may not have all of these parameters, for example `expiresAt` and `note` on `EffectApprove`, `harness` on `AgentStart`, and `autoAdmit` on `Invite`. Missing parameters are provisional **[needs node, Q-DAT-15]**.
+The parameters in braces are what the surfaces collect. PR #35 fixes the commands' names but may not have all of these parameters, for example `expiresAt` and `note` on `EffectApprove`, `harness` on `AgentStart`, and `autoAdmit` on `Invite`. Missing parameters are provisional (Q-DAT-15, §12.1).
 
 ### 6.2 Lifecycle
 
@@ -306,7 +306,7 @@ The parameters in braces are what the surfaces collect. PR #35 fixes the command
 - **DAT-27.** A CallResult is one of:
   - `Recorded{seq, entryId}`: a receipt;
   - `Queued{outbox_id}` (PR #35): the node accepted it into its outbox and will send it when it can. The `Outbox` query then follows it until it is sent or refused;
-  - `Done{value}`: commands that return a value, such as `Invite`, which returns the ticket **[needs node, Q-DAT-14]**.
+  - `Done{value}`: commands that return a value, such as `Invite`, which returns the ticket (`CallResult::Ticket`, Q-DAT-14).
 - **DAT-28.** Commands that carry authority (`EffectApprove`, `EffectCancel`, `MemberSet`, `SessionInput`, `AgentStart`, `AgentStop`, `DevicePair`, `DeviceRevoke`) are **never retried automatically** by the GUI. Delivery retries are the node outbox's job. On `unavailable`, the surface offers a manual retry.
 - **DAT-29.** Optimistic display is used only for `SessionInput`, as the "sending" row (session.md §7.3), through `useOptimistic`. Approvals, cancels and role changes show their result only when the call returns, and their new state only when the view reflects it.
 - **DAT-30.** While a call has been pending for more than 10 s, its control shows "Still working…". Calls are not cancelled by the GUI.
@@ -534,24 +534,23 @@ PR #35 also provides:
   - `OverlapRow` gains `files[{path, ranges_a[], ranges_b[]}]` (tier 2; `parties[0]` is side A, `parties[1]` side B, and an empty range list means the whole file), `claim?{kind: issue | lease, ref, expires_at?}` (tier 1; for leases `ref` is the shorter of the two paths and `expires_at` the earlier expiry) and `conflict?{checked, conflicts}`. The pair is `parties`. The node simulates no merges yet, so `conflict` is never sent.
   - `BoardRow` gains `overlap_with[]`: one entry per other party, strongest first, folded over its overlaps with the row: `{session?, agent, person, issue?, tier, kind, files[]}`. `session` is absent for a lease or a claim by an actor with no session on it. `overlaps` (the kinds) stays for the badge.
 
+- **Q-DAT-3, Q-DAT-9.** The `Session` query has a `part`: `facts` (the default: one row, the session with `rights {watch, read}` and `is_mine`), `items` (the typed stream) and `record`. Each is its own subscription, with its own window.
+  - **Items.** A row is `{key, session, id, seq_in_session, turn?, updated_ms, item}`, with `item.kind` one of `message`, `reasoning`, `plan`, `tool_call`, `file_change`, `decision`, `input`, `turn_start`, `turn_end`, `status` and `unknown{raw_kind, raw}`. An item with an id the node has seen replaces that item's body in place (a message that grows, a tool call that moves on), and keeps its number.
+  - **Where they come from.** A host publishes `StreamPublish{name: "han.item/1"}` with a body `{id, turn?, kind, ...}` for `message`, `reasoning`, `plan`, `tool_call`, `file_change`, `turn_start` and `turn_end`. Any other kind, and any body that does not fit its kind, is kept as `unknown`; a host cannot send `status`, `decision` or `input`, which the node makes itself: `status` from each current `han.status/1` item (id `status:<seq>`), `input` from each `session.input` entry (id `input:<entry>`, state `recorded`, and `seen` once a `turn_start` names it as `driver_entry`) and `decision` from each effect the session's actor proposes while the session is open (id `decision:<proposal>`). An item without an id is dropped.
+  - **Window.** Pages of up to 200. `Window.from_end` asks for the latest `limit` (the default of a stream), `Window.before` for the `limit` before a key (scrolling back); `hasEarlier` is `offset > 0`. The node keeps 10,000 items and 10,000 record entries per session.
+  - **Rights.** Without `watch`, the `items` and `record` parts are `denied` (the `facts` row still answers). Without `read`, `reasoning` items are left out and `tool_call` content is empty. The rights are the policy's `sessions.watch` and `sessions.read` for the device's actor, and a session of the actor's own is always readable.
+  - **Memory.** Items are held in memory. A stream has no backlog, so a node that starts watching a session late has only what comes after, plus what the log replays (inputs, decisions).
+  - **Record.** A row is `{key, session, seq, entry_id, kind, author, at, summary, verified, redacted, redact_reason?, effect?}`: the entries of the log that are about the session (`session.open`, `session.input`, `session.close`, and the proposal, approvals, cancel, claim and outcome of effects its actor proposed while it was open). `verified` is true for every row: the node checks the receipt before it folds a record. `summary` is one line, with a steering input's text cut to 80 characters and quoted.
+- **Q-DAT-13.** Admissions are rows of the Approvals view (`Row::Admission`, keyed `<space>|adm|<actor>`), for an owner only. The node takes them from the home's `join` signal, so the list is live only: a join that came while the node was down is not listed. `kind` (`human`, `agent`, `service` or `unknown`), `operator` and `operator_confirmed` come from the joiner's profile space, which the node reads from the home (not followed, taken as the home says it); a person has nothing to confirm, so `operator_confirmed` is true; an unconfirmed agent's profile is read again every 30 s. An actor that gets a role leaves the list. `via_my_ticket` is false: the join signal does not say which ticket was used. The `needs_me` facet keeps admissions.
+- **Q-DAT-15.** `EffectApprove` takes `expires_at` (a HAN Time in the future; it becomes the approval's `expiresAt`). `Invite` takes `expires_at` instead of `ttl_secs` (both is `invalid`; at most 7 days ahead) and `auto_admit`: while this node runs and the invite lives, whoever joins that space is made a member when their profile says they are a person, or an agent its operator confirmed; anyone else waits in the admissions. `note` and `harness` were there already.
+- **Q-DAT-16.** `BlobFetch{space, hash, size, media_type}` returns `CallResult::Blob{hash, media_type, data}` (base64url) after the node has fetched it from the space's home, checked the size and that `sha256(data) = hash`. At most 4 MiB; a blob the space's records do not refer to is `not_found`; a size or hash that does not match is `invalid`.
+- **Q-DAT-17.** The `Devices` query lists the identity's keys (the actor's profile space, which the node starts to follow when the view opens): `{key_id, state: active | revoked, added_at, revoked_at?, this_device}`. There is no `last seen`: the protocol has no presence for devices.
+- **Q-DAT-18.** Excluded paths: the `Patches` and `ChangeSet` views start with a `ChangeSummary{key: "", excluded}` row when `excluded > 0`, never with a name. The count is the `excluded` member of the host's `han.timeline/1` item bodies (the most it has said); han-host does not send it yet, and a change set of a proposal has none. Masked spans: the host replaces a secret with `[masked:<rule>]`; the node marks each such marker as `[start, end)` in UTF-16 code units (what a JavaScript `slice` takes) in `masked` of message, reasoning, input and tool-content text, and of `FilePatchRow.patch`. The node reads the marker itself and ignores spans a host might send.
+- **Q-DAT-20.** `NodeStatusRow` has `subscriptions` (views open), `resyncs` (views ended by `Resync` since the node started) and `recent_errors` (at most 20 of `{code, what, at_ms}`: the code of each error a command or a view answered, `what` the command's name or `view`). They change the row without a tick; a face still gets them as a diff.
+- **Q-APR-8.** Approval rows have `needed{rule, guards[{guard?, agent, approved}]}`: `rule` is 1 (one approval of the rule's approvers), and for each guarded agent the proposal involves (P-15) its guard is the operator the home's profile names, if that operator confirmed it (`guard` is absent otherwise: nobody can approve for it); one operator guarding several agents is one entry. `agent_text[{author, field, text}]` holds the plan's string arguments in full (up to 2,000 characters) as the proposer's and the notes approvers wrote as theirs; a face shows them quoted.
+
 ### 12.2 Still open
 
-Each item is a request to the node API's design, not a decision made here. Until an item lands, it is a provisional type (DAT-3).
-
-- **Q-DAT-3.** The Session view's parts (stream items, facts, decisions and the Record): one view or several? This spec uses `part: "record"` as a second subscription.
-- **Q-DAT-9.** The typed Session item vocabulary (§4.2), which also covers the watch and read rights. It has these kinds:
-  - messages, reasoning and plans;
-  - tool calls, in ACP's shapes;
-  - file changes and decisions;
-  - inputs, with their delivery state;
-  - turn starts that name their driver, and turn ends;
-  - status, and an explicit unknown.
-- **Q-DAT-13.** Admissions (pending joins, shown to owners) in the Approvals view.
-- **Q-DAT-14.** A CallResult that carries a value, for example `Invite` returning the ticket.
-- **Q-DAT-15.** The command parameters that the surfaces collect and PR #35 may not have (§6.1).
-- **Q-DAT-16.** Fetching a blob through the node, for a plan's `argsBlob`.
-- **Q-DAT-17.** A Devices query that lists the identity's keys, with each key's status and when it was added and last seen.
-- **Q-DAT-18.** The count of excluded paths in a change set, and markers for secret-masked spans in stream items and patches.
-- **Q-DAT-20.** Node panel telemetry in `NodeStatus`: subscription and resync counts, and recent error codes.
+Every Q-DAT item of the first list has an answer in 12.1. What is left sits in the surface specs.
 
 The surface specs' own open questions (Q-BRD-*, Q-SES-*, Q-APR-*, Q-DIF-*, Q-SHL-*) list the remaining items.

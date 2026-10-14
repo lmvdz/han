@@ -106,7 +106,12 @@ pub(crate) struct Inner<T: Transport> {
     ticker: Mutex<Option<JoinHandle<()>>>,
     /// The work timelines of watched sessions, fed by their `han.timeline/1` items.
     pub timelines: Arc<crate::timeline::StreamTimelines>,
+    /// Spaces whose invite asked for `auto_admit`, and until when (wall seconds).
+    pub auto_admit: Mutex<HashMap<String, i64>>,
 }
+
+/// The most a face may fetch of a blob through the node.
+const MAX_FACE_BLOB: u64 = 4 * 1024 * 1024;
 
 /// The runtime of one device.
 pub struct Node<T: Transport> {
@@ -195,7 +200,7 @@ impl<T: Transport> Inner<T> {
         )
     }
 
-    fn now_secs(&self) -> i64 {
+    pub(crate) fn now_secs(&self) -> i64 {
         i64::try_from(self.clock.now_ms() / 1000).unwrap_or(0)
     }
 
@@ -378,6 +383,7 @@ impl<T: Transport> Node<T> {
             node_id,
             roles: Vec::new(),
         });
+        engine.set_device_key(&config.key_id);
         let follows = db.follows().map_err(unavailable)?;
         for f in &follows {
             engine.add_space(
@@ -411,6 +417,7 @@ impl<T: Transport> Node<T> {
             links: Mutex::new(HashMap::new()),
             space_locks: Mutex::new(HashMap::new()),
             ticker: Mutex::new(None),
+            auto_admit: Mutex::new(HashMap::new()),
         });
         let node = Node { inner };
         let pinned: Vec<HomeTicket> = node
@@ -593,6 +600,24 @@ impl<T: Transport> Node<T> {
 
     // ───────────────────────── writing the log ─────────────────────────
 
+    /// The node around an inner, for the tasks of a link.
+    pub(crate) fn from_inner(inner: Arc<Inner<T>>) -> Node<T> {
+        Node { inner }
+    }
+
+    /// Starts following this actor's profile space (where its keys are), if it is not followed yet.
+    fn follow_profile(&self) {
+        let actor = self.inner.cfg.actor.clone();
+        let space = format!("profile:{actor}");
+        if self.inner.engine().has_space(&space) {
+            return;
+        }
+        let Some(home) = grammar::server_of(&actor).and_then(|s| self.home_ref(s)) else {
+            return;
+        };
+        let _ = self.follow(&home, vec![home.node.clone()], &space);
+    }
+
     /// Signs an entry as this device's actor, queues it in the outbox and tries to send it.
     async fn append(
         &self,
@@ -769,7 +794,7 @@ impl<T: Transport> Node<T> {
         Ok(n)
     }
 
-    async fn execute(&self, cmd: Command) -> Result<CallResult, NodeError> {
+    pub(crate) async fn execute(&self, cmd: Command) -> Result<CallResult, NodeError> {
         let inner = &self.inner;
         match cmd {
             Command::SpaceCreate {
@@ -869,15 +894,37 @@ impl<T: Transport> Node<T> {
                 }
                 Ok(CallResult::Space { space })
             }
-            Command::Invite { space, ttl_secs } => {
+            Command::Invite {
+                space,
+                ttl_secs,
+                expires_at,
+                auto_admit,
+            } => {
+                let ttl = match (ttl_secs, expires_at) {
+                    (Some(_), Some(_)) => {
+                        return Err(NodeError::invalid("give ttl_secs or expires_at, not both"));
+                    }
+                    (None, Some(t)) => {
+                        let ahead = grammar::epoch_seconds(&t)
+                            .ok_or_else(|| NodeError::invalid("expires_at is not a HAN Time"))?
+                            - inner.now_secs();
+                        if !(1..=7 * 86_400).contains(&ahead) {
+                            return Err(NodeError::invalid(
+                                "expires_at must be within the next 7 days",
+                            ));
+                        }
+                        ahead
+                    }
+                    (secs, None) => {
+                        i64::try_from(secs.unwrap_or(86_400).clamp(1, 7 * 86_400)).unwrap_or(86_400)
+                    }
+                };
                 let (server, client) = self.client_of(&space).await?;
                 let home = self
                     .home_ref(&server)
                     .ok_or_else(|| NodeError::unavailable("no link to the home"))?;
                 let mut secret = [0u8; 32];
                 getrandom::fill(&mut secret).map_err(unavailable)?;
-                let ttl = i64::try_from(ttl_secs.unwrap_or(86_400).clamp(1, 7 * 86_400))
-                    .unwrap_or(86_400);
                 client
                     .call(
                         "invite",
@@ -899,6 +946,12 @@ impl<T: Transport> Node<T> {
                     space,
                     secret: base64url::encode(&secret),
                 };
+                if auto_admit {
+                    let until = inner.now_secs() + ttl;
+                    let mut window = inner.auto_admit.lock().unwrap_or_else(|p| p.into_inner());
+                    let slot = window.entry(ticket.space.clone()).or_insert(until);
+                    *slot = (*slot).max(until);
+                }
                 Ok(CallResult::Ticket {
                     text: ticket.to_text(),
                 })
@@ -1190,9 +1243,72 @@ impl<T: Transport> Node<T> {
                 self.profile_append("key.revoke", obj([("keyId", s(&key_id))]))
                     .await
             }
+            Command::BlobFetch {
+                space,
+                hash,
+                size,
+                media_type,
+            } => {
+                self.require_followed(&space)?;
+                if hash.len() != 64 || !grammar::is_hex(&hash) {
+                    return Err(NodeError::invalid("hash is 64 lowercase hex digits"));
+                }
+                if !grammar::is_media_type(&media_type) {
+                    return Err(NodeError::invalid("not a media type"));
+                }
+                if size > MAX_FACE_BLOB {
+                    return Err(NodeError::invalid(format!(
+                        "a face fetches at most {MAX_FACE_BLOB} bytes of a blob"
+                    )));
+                }
+                let (_, client) = self.client_of(&space).await?;
+                let r = obj([
+                    ("hash", s(&hash)),
+                    ("size", int(size)),
+                    ("type", s(&media_type)),
+                ]);
+                let mut data: Vec<u8> = Vec::new();
+                while (data.len() as u64) < size {
+                    let want = (size - data.len() as u64).min(786_432);
+                    let part = client
+                        .call(
+                            "blobGet",
+                            args([
+                                ("ref", r.clone()),
+                                ("space", s(&space)),
+                                ("offset", int(data.len() as u64)),
+                                ("length", int(want)),
+                            ]),
+                        )
+                        .await
+                        .map_err(|e| map_net_error(&e))?;
+                    if part["size"].as_u64() != Some(size) {
+                        return Err(NodeError::invalid(
+                            "the home holds a blob of another size than the reference names",
+                        ));
+                    }
+                    let bytes = part["data"]
+                        .as_str()
+                        .and_then(|d| base64url::decode(d).ok())
+                        .filter(|b| !b.is_empty() && b.len() as u64 <= want)
+                        .ok_or_else(|| NodeError::unavailable("the home sent no bytes"))?;
+                    data.extend_from_slice(&bytes);
+                }
+                if ids::sha256_hex(&data) != hash {
+                    return Err(NodeError::invalid(
+                        "the blob does not hash to what the reference names",
+                    ));
+                }
+                Ok(CallResult::Blob {
+                    hash,
+                    media_type,
+                    data: base64url::encode(&data),
+                })
+            }
             Command::EffectApprove {
                 space,
                 proposal,
+                expires_at,
                 note,
             } => {
                 let found = inner.engine().plan_digest(&space, &proposal);
@@ -1204,10 +1320,19 @@ impl<T: Transport> Node<T> {
                         "the proposal no longer waits for approval",
                     ));
                 }
+                let mut body = vec![("proposal", s(&proposal)), ("planDigest", s(&digest))];
+                if let Some(t) = &expires_at {
+                    if !grammar::epoch_seconds(t).is_some_and(|at| at > inner.now_secs()) {
+                        return Err(NodeError::invalid(
+                            "expires_at must be a HAN Time in the future",
+                        ));
+                    }
+                    body.push(("expiresAt", s(t)));
+                }
                 self.append(
                     &space,
                     "effect.approve",
-                    obj([("proposal", s(&proposal)), ("planDigest", s(&digest))]),
+                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
                     note.map(|n| obj([("note", s(&n))])),
                 )
                 .await
@@ -1356,10 +1481,23 @@ impl Drop for Unsubscribe {
 
 impl<T: Transport> NodeApi for Node<T> {
     fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
-        Box::pin(self.execute(cmd))
+        Box::pin(async move {
+            let what = serde_json::to_value(&cmd)
+                .ok()
+                .and_then(|v| v["type"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let result = self.execute(cmd).await;
+            if let Err(e) = &result {
+                self.inner.engine().note_error(&what, e);
+            }
+            result
+        })
     }
 
     fn view(&self, query: Query) -> ViewStream {
+        if matches!(query, Query::Devices { .. }) {
+            self.follow_profile();
+        }
         let (sink, stream) = ViewStream::channel();
         let id = self.inner.engine().subscribe(query, sink);
         match id {
