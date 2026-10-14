@@ -113,6 +113,8 @@ impl TestConfig {
                 key,
                 key_id: self.server_key_id.clone(),
                 durability: han_core::types::Durability::Local,
+                // the wire vectors' strangers create spaces
+                hosting: han_seq::HostingPolicy::Open,
             },
             clock,
             store,

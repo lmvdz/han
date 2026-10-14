@@ -44,6 +44,11 @@ fn home(test_mode: bool) -> Home {
         key: key(6),
         key_id: "h1".into(),
         durability: Durability::Local,
+        hosting: if test_mode {
+            han_seq::HostingPolicy::Open
+        } else {
+            han_seq::HostingPolicy::KnownActors
+        },
     };
     let home = if test_mode {
         Home::open_test(

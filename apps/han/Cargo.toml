@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# `han seq --test-mode` and `han conform`: a test-mode home for the wire conformance vectors. Off in release builds.
+conformance = ["han-net/conformance"]
+
 [dependencies]
 clap.workspace = true
 han-core.workspace = true

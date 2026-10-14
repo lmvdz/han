@@ -11,7 +11,7 @@
 //! is inserts (with their index), updates and removes, and a resnapshot replaces everything when a diff would
 //! be as big as the window.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -148,6 +148,12 @@ pub struct Engine {
     node_rev: u64,
     /// How many views are open (kept apart from `subs`, which is taken while publishing).
     live_subs: usize,
+    /// Moves whenever the engine changes (a record folded, a space added or removed, a link changed): what
+    /// a command waits on for the state it needs (`Engine::watch`).
+    progress: tokio::sync::watch::Sender<u64>,
+    /// Sessions `(space, session)` whose live stream the node has asked the home for (and got its answer):
+    /// from then on the items a session publishes come back to this node.
+    watch_settled: BTreeSet<(String, String)>,
 }
 
 /// The rows of a window, ordered by key, with where the window sits among all matching rows.
@@ -291,6 +297,8 @@ impl Engine {
             misc_rev: 0,
             device_key: String::new(),
             resyncs: 0,
+            progress: tokio::sync::watch::channel(0).0,
+            watch_settled: BTreeSet::new(),
             errors: VecDeque::new(),
             node_rev: 0,
             live_subs: 0,
@@ -427,6 +435,25 @@ impl Engine {
             );
             self.publish();
         }
+    }
+
+    /// Moves whenever the engine changes. Take it, then check the state wanted, then wait on it: nothing
+    /// between the check and the wait is missed.
+    pub fn watch(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.progress.subscribe()
+    }
+
+    /// The node's watch of a session's stream is up (or the home refused it): items sent from now on are seen.
+    pub fn session_watch_settled(&mut self, space: &str, session: &str) {
+        self.watch_settled
+            .insert((space.to_owned(), session.to_owned()));
+        self.progress.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Whether the watch of a session's stream has settled (`session_watch_settled`).
+    pub fn is_session_watched(&self, space: &str, session: &str) -> bool {
+        self.watch_settled
+            .contains(&(space.to_owned(), session.to_owned()))
     }
 
     /// Stops projecting `space`.
@@ -1012,6 +1039,7 @@ impl Engine {
     }
 
     fn publish(&mut self) {
+        self.progress.send_modify(|n| *n = n.wrapping_add(1));
         // A view dropped while publishing changes what the node panel counts: once more for it.
         for _ in 0..3 {
             let before = self.node_rev;

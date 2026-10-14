@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The wire-vector runner (`wirevec`) and test-mode homes; see han-seq's `conformance`.
+conformance = ["han-seq/conformance"]
+
 [dependencies]
 han-core.workspace = true
 han-seq.workspace = true
@@ -24,6 +28,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 getrandom.workspace = true
+# the tests run the wire vectors against test-mode homes
+han-net = { path = ".", features = ["conformance"] }
 
 [lints]
 workspace = true

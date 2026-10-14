@@ -4,6 +4,7 @@
 
 mod actor;
 mod agent;
+#[cfg(feature = "conformance")]
 mod conform;
 mod dev;
 mod dial;
@@ -75,6 +76,7 @@ enum Cmd {
     /// A complete local HAN on loopback for trying things and for the end-to-end tests.
     Dev(dev::DevArgs),
     /// Run conformance vectors against a home.
+    #[cfg(feature = "conformance")]
     Conform(conform::ConformArgs),
     /// Create, confirm, start and stop agents through the running node.
     Agent(agent::AgentArgs),
@@ -130,6 +132,7 @@ async fn run(cli: Cli) {
         Cmd::Seq(a) => seq::run(*a).await,
         Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,
+        #[cfg(feature = "conformance")]
         Cmd::Conform(a) => conform::run(a).await,
         Cmd::Home(a) => homecmd::run(a).await,
         Cmd::Actor(a) => actor::run(a).await,

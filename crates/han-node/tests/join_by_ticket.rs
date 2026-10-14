@@ -80,6 +80,7 @@ async fn scenario() {
                 key: key(30),
                 key_id: "h1".into(),
                 durability: han_core::types::Durability::Local,
+                hosting: han_seq::HostingPolicy::KnownActors,
             },
             Arc::new(SystemClock::new()),
             Arc::new(SqliteStore::open(&dir.join("home")).unwrap()),
@@ -132,21 +133,17 @@ async fn scenario() {
                     space: PROFILE.into(),
                 })
                 .await;
-            loop {
-                match node
-                    .call(Command::MemberSet {
-                        space: PROFILE.into(),
-                        actor: ALICE.into(),
-                        role: "owner".into(),
-                    })
-                    .await
-                {
-                    Err(NodeError::NotFound { .. }) => {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                    other => return other,
-                }
-            }
+            node.call(Command::SpaceAwait {
+                space: PROFILE.into(),
+                timeout_ms: Some(30_000),
+            })
+            .await?;
+            node.call(Command::MemberSet {
+                space: PROFILE.into(),
+                actor: ALICE.into(),
+                role: "owner".into(),
+            })
+            .await
         }
     };
 

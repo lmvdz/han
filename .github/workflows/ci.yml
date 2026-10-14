@@ -28,6 +28,15 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rust tests
         run: cargo test --workspace --locked
+      - name: Test mode is compiled out of the release binary (R9)
+        run: |
+          cargo build --release -p han --locked
+          ! ./target/release/han seq --help | grep -e '--test-mode'
+          ! ./target/release/han --help | grep -e '^  conform '
+      - name: Conformance feature (clippy, test-mode wire vectors)
+        run: |
+          cargo clippy -p han --features conformance --all-targets --locked -- -D warnings
+          cargo test -p han-net -p han-seq --locked
       - name: Timeline vectors (conformance/timeline-vectors through han-timeline, the profile's reference runner)
         run: cargo test -p han-timeline --test vectors --locked
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0

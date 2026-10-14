@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{World, call, pubkey, space_of};
 use han_net::{HomeTicket, NodeAddr};
-use han_node::api::{CallResult, Command, NodeApi, NodeError};
+use han_node::api::{CallResult, Command, NodeApi, NodeError, Pending};
 use han_node::supervisor::{RoleSpec, RoleStatus, Supervisor, SupervisorError};
 use han_registry::{HarnessInstall, HomeRef};
 
@@ -94,17 +94,15 @@ async fn follow_profile(s: &Setup) {
     .await;
 }
 
-/// Starts until the profile has arrived (the node fetches it in the background).
+/// Starts once the profile has arrived: the node waits for it, then the start is one call.
 async fn start_when_known(s: &Setup, harness: &str) -> Result<CallResult, NodeError> {
-    for _ in 0..500 {
-        match s.bob.call(start(&s.space, harness)).await {
-            Err(NodeError::Unavailable { message, .. }) if message.contains("has not arrived") => {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            other => return other,
-        }
-    }
-    panic!("the profile never arrived");
+    s.bob
+        .call(Command::SpaceAwait {
+            space: format!("profile:{AGENT}"),
+            timeout_ms: Some(30_000),
+        })
+        .await?;
+    s.bob.call(start(&s.space, harness)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -296,4 +294,46 @@ async fn a_spaces_budget_and_the_nodes_prices_reach_the_host() {
     let budget = budget.expect("the space's budget reaches the host");
     assert_eq!((budget.unit.as_str(), budget.limit), ("USD-cent", 500));
     assert_eq!(budget.prices["claude-sonnet"].output, 1500);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn space_await_answers_typed_not_followed_and_not_arrived() {
+    let s = setup().await;
+    let profile = format!("profile:{AGENT}");
+    let wait = |ms| Command::SpaceAwait {
+        space: profile.clone(),
+        timeout_ms: Some(ms),
+    };
+    // not followed: nothing to wait for
+    let e = s.bob.call(wait(200)).await.unwrap_err();
+    assert!(matches!(e, NodeError::NotFound { .. }), "{e:?}");
+    // a space the home does not have never arrives: the wait ends in a typed pending, not a text
+    let ghost = "profile:@ghost:a.localhost";
+    call(
+        &s.bob,
+        Command::SpaceFollow {
+            home: s.world.home_ref.clone(),
+            space: ghost.into(),
+        },
+    )
+    .await;
+    let e = s
+        .bob
+        .call(Command::SpaceAwait {
+            space: ghost.into(),
+            timeout_ms: Some(300),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.waiting_for(),
+        Some(&Pending::Space {
+            space: ghost.into()
+        }),
+        "{e:?}"
+    );
+    // one that exists is there as soon as it has synced
+    follow_profile(&s).await;
+    let r = s.bob.call(wait(30_000)).await.unwrap();
+    assert!(matches!(r, CallResult::Space { .. }), "{r:?}");
 }

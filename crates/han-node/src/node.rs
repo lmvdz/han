@@ -19,8 +19,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    BoxFuture, CallResult, Command, HomeRef, NodeApi, NodeError, Query, RoleInfo, ViewEvent,
-    ViewStream,
+    BoxFuture, CallResult, Command, HomeRef, NodeApi, NodeError, Pending, Query, RoleInfo,
+    ViewEvent, ViewStream,
 };
 use crate::db::{NodeDb, OutboxRow};
 use crate::home::HomeAddr;
@@ -47,6 +47,8 @@ pub struct NodeConfig {
     pub space_freshness: HashMap<String, Freshness>,
     /// How long a command waits for the link to its home before it is queued in the outbox.
     pub connect_wait: Duration,
+    /// The longest a command waits on the node for state that is still syncing (`SpaceAwait`).
+    pub sync_wait: Duration,
     /// The first wait before dialing a home again; it doubles up to 30 s.
     pub retry: Duration,
     /// How often a link looks for entries in the outbox to send.
@@ -76,6 +78,7 @@ impl NodeConfig {
             freshness: Freshness::default(),
             space_freshness: HashMap::new(),
             connect_wait: Duration::from_secs(3),
+            sync_wait: Duration::from_secs(60),
             retry: Duration::from_secs(1),
             flush_every: Duration::from_secs(5),
             outbox_max_attempts: 12,
@@ -875,12 +878,10 @@ impl<T: Transport> Node<T> {
             Some(Outcome::Sent(r)) => {
                 // Read your own writes: the record comes back on the subscription; wait for it, so that
                 // the next command (and the views) see what this one did.
-                let deadline = tokio::time::Instant::now() + inner.cfg.connect_wait;
-                while inner.engine().head(space).unwrap_or(0) < r.seq
-                    && tokio::time::Instant::now() < deadline
-                {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
+                self.wait_engine(inner.cfg.connect_wait, |e| {
+                    (e.head(space).unwrap_or(0) >= r.seq).then_some(())
+                })
+                .await;
                 Ok(CallResult::Receipt {
                     space: r.space,
                     seq: r.seq,
@@ -894,6 +895,26 @@ impl<T: Transport> Node<T> {
                 space: space.to_owned(),
                 id,
             }),
+        }
+    }
+
+    /// Waits, at most `limit`, until `ready` holds of the engine; `None` when it did not. It wakes when the
+    /// engine changes, never on a timer: the receiver is taken before the check, so no change is missed.
+    async fn wait_engine<R>(
+        &self,
+        limit: Duration,
+        mut ready: impl FnMut(&Engine) -> Option<R>,
+    ) -> Option<R> {
+        let mut changes = self.inner.engine().watch();
+        let deadline = tokio::time::Instant::now() + limit;
+        loop {
+            if let Some(r) = ready(&self.inner.engine()) {
+                return Some(r);
+            }
+            match tokio::time::timeout_at(deadline, changes.changed()).await {
+                Ok(Ok(())) => {}
+                _ => return ready(&self.inner.engine()),
+            }
         }
     }
 
@@ -943,12 +964,10 @@ impl<T: Transport> Node<T> {
             self.follow(&home, vec![home.node.clone()], &space)?;
         }
         // The profile's records must have arrived before an entry can say what it has seen.
-        let deadline = tokio::time::Instant::now() + self.inner.cfg.connect_wait;
-        while self.inner.engine().head(&space).unwrap_or(0) == 0
-            && tokio::time::Instant::now() < deadline
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        self.wait_engine(self.inner.cfg.connect_wait, |e| {
+            (e.head(&space).unwrap_or(0) > 0).then_some(())
+        })
+        .await;
         self.append(&space, kind, body, None).await
     }
 
@@ -1093,6 +1112,22 @@ impl<T: Transport> Node<T> {
                     return Err(NodeError::conflict("the space is already followed"));
                 }
                 Ok(CallResult::Space { space })
+            }
+            Command::SpaceAwait { space, timeout_ms } => {
+                self.require_followed(&space)?;
+                let limit = timeout_ms.map_or(inner.cfg.sync_wait, |ms| {
+                    Duration::from_millis(ms).min(inner.cfg.sync_wait)
+                });
+                match self
+                    .wait_engine(limit, |e| (e.head(&space).unwrap_or(0) > 0).then_some(()))
+                    .await
+                {
+                    Some(()) => Ok(CallResult::Space { space }),
+                    None => Err(NodeError::pending(
+                        format!("the records of {space} have not arrived yet"),
+                        Pending::Space { space },
+                    )),
+                }
             }
             Command::Invite {
                 space,
@@ -1241,9 +1276,10 @@ impl<T: Transport> Node<T> {
                     match engine.profile_operator(&profile) {
                         Some(op) => op,
                         None if engine.head(&profile).unwrap_or(0) == 0 => {
-                            return Err(NodeError::unavailable(format!(
-                                "the profile of {agent} has not arrived yet"
-                            )));
+                            return Err(NodeError::pending(
+                                format!("the profile of {agent} has not arrived yet"),
+                                Pending::Profile { actor: agent },
+                            ));
                         }
                         None => {
                             return Err(NodeError::invalid(format!(
@@ -1375,13 +1411,23 @@ impl<T: Transport> Node<T> {
                     body.push(("task", s(t)));
                 }
                 let content = title.map(|t| obj([("title", s(&t))]));
-                self.append(
-                    &space,
-                    "session.open",
-                    Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
-                    content,
-                )
-                .await
+                let opened = self
+                    .append(
+                        &space,
+                        "session.open",
+                        Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+                        content,
+                    )
+                    .await?;
+                // The session's items (status, steering lines) reach this node only through its watch:
+                // return once that is up, so what the caller publishes next is seen.
+                if let CallResult::Receipt { id, .. } = &opened {
+                    self.wait_engine(inner.cfg.connect_wait, |e| {
+                        e.is_session_watched(&space, id).then_some(())
+                    })
+                    .await;
+                }
+                Ok(opened)
             }
             Command::SessionClose { space, session } => {
                 self.append(

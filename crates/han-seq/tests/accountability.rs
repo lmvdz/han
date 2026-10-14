@@ -48,6 +48,7 @@ fn home() -> Home {
             key: key(6),
             key_id: "h1".into(),
             durability: Durability::Local,
+            hosting: han_seq::HostingPolicy::Open,
         },
         Arc::new(TestClock::new(1_767_225_600)),
         Arc::new(MemStore::new()),

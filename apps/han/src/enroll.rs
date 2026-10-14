@@ -170,7 +170,7 @@ pub async fn run(e: &Enroll<'_>) -> Res<Outcome> {
     }
     if i_am_operator {
         // Give the profile time to arrive when we just made it; a short look when somebody else did.
-        let wait = if registered { 600 } else { 30 };
+        let wait = Duration::from_secs(if registered { 60 } else { 3 });
         match confirm(client, e.actor, e.home, e.operator, wait).await {
             Ok(true) => {
                 changed(&format!("{} confirmed {}", e.operator, e.actor));
@@ -259,13 +259,13 @@ pub enum Pending {
 }
 
 /// The operator's confirmation of `actor`: `member.set {operator: owner}` in the actor's profile space. Returns
-/// whether it changed anything. `tries` x 100 ms is how long the profile may take to arrive.
+/// whether it changed anything. `wait` is how long the node may take for the profile to arrive.
 pub async fn confirm(
     client: &RpcClient,
     actor: &str,
     home: Option<&HomeRef>,
     operator: &str,
-    tries: u32,
+    wait: Duration,
 ) -> Result<bool, Pending> {
     let profile = format!("profile:{actor}");
     let _ = client
@@ -274,26 +274,32 @@ pub async fn confirm(
             space: profile.clone(),
         })
         .await;
-    // The operator holds no role in the profile space; the peer filter admits this member.set because the
-    // profile names it as the operator (N-02, P-03). Retry while the node is still fetching the space.
-    let mut n = 0;
-    loop {
-        match client
-            .call(Command::MemberSet {
-                space: profile.clone(),
-                actor: operator.to_owned(),
-                role: "owner".into(),
-            })
-            .await
-        {
-            Err(NodeError::NotFound { .. }) if n < tries => {
-                n += 1;
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            Err(NodeError::NotFound { .. }) => return Err(Pending::Profile),
-            Ok(CallResult::Done) => return Ok(false),
-            Ok(_) => return Ok(true),
-            Err(e) => return Err(Pending::Other(e.to_string())),
+    // The node waits for the space to sync, bounded by `wait`; the answer says what it waits for.
+    match client
+        .call(Command::SpaceAwait {
+            space: profile.clone(),
+            timeout_ms: Some(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+        })
+        .await
+    {
+        Ok(_) => {}
+        Err(e) if matches!(e.waiting_for(), Some(han_node::api::Pending::Space { .. })) => {
+            return Err(Pending::Profile);
         }
+        Err(e) => return Err(Pending::Other(e.to_string())),
+    }
+    // The operator holds no role in the profile space; the peer filter admits this member.set because the
+    // profile names it as the operator (N-02, P-03).
+    match client
+        .call(Command::MemberSet {
+            space: profile,
+            actor: operator.to_owned(),
+            role: "owner".into(),
+        })
+        .await
+    {
+        Ok(CallResult::Done) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(Pending::Other(e.to_string())),
     }
 }

@@ -74,6 +74,7 @@ pub(crate) fn node_error(e: &NetError) -> NodeError {
             Code::Limit | Code::Unavailable => NodeError::Unavailable {
                 message: w.message.clone(),
                 retry_after_ms: w.retry_after_ms,
+                pending: None,
             },
             Code::Moved => NodeError::unavailable(format!(
                 "the space moved to {}",

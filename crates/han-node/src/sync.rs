@@ -666,6 +666,7 @@ async fn watch_session<T: Transport>(
     space: String,
     session: String,
 ) {
+    let watched = session.clone();
     let started = client
         .stream(
             "watch",
@@ -675,6 +676,9 @@ async fn watch_session<T: Transport>(
             ]),
         )
         .await;
+    // The home has the watch (it answers the barrier after registering it), or it refused: either way a
+    // command that waits for this can go on.
+    inner.engine().session_watch_settled(&space, &watched);
     let Ok(mut stream) = started else { return };
     while let Some(Ok(item)) = stream.next().await {
         inner.status_item(&space, &item);

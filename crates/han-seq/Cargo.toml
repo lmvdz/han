@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Test mode (G-11): `Home::open_test`, the `test.clock` and `test.limits` calls, the peer filter admitting every node and `hello` binding no node. Never in a release build; the wire-vector and conformance runners and the tests enable it.
+conformance = []
+
 [dependencies]
 han-core.workspace = true
 getrandom.workspace = true
@@ -20,6 +24,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true
+# the tests run against test-mode homes
+han-seq = { path = ".", features = ["conformance"] }
 
 [lints]
 workspace = true

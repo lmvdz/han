@@ -82,6 +82,7 @@ async fn side(
                 key: key(seed),
                 key_id: "h1".into(),
                 durability: Durability::Local,
+                hosting: han_seq::HostingPolicy::KnownActors,
             },
             clock.clone(),
             Arc::new(MemStore::new()),
