@@ -1096,11 +1096,13 @@ impl<T: Transport> Node<T> {
                         "--sandbox".into(),
                         file.sandbox_of(&agent),
                     ]);
-                    for t in file.toolchains_of(&agent) {
-                        a.extend(["--toolchain".into(), t]);
-                    }
-                    for p in file.toolchain_path_args() {
-                        a.extend(["--toolchain-path".into(), p]);
+                    let tools = file.toolchain_spec(dir, &agent);
+                    if !tools.is_empty() {
+                        a.extend([
+                            "--toolchains".into(),
+                            serde_json::to_string(&tools)
+                                .map_err(|e| NodeError::invalid(e.to_string()))?,
+                        ]);
                     }
                     // The harness as `han agent setup-harness` installed it: node and adapter.
                     let key = match harness.as_str() {

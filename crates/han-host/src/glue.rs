@@ -212,6 +212,7 @@ impl Egress {
         // piece fails the session here, before anything runs.
         let tools = crate::toolchain::plan(
             &cfg.sandbox.toolchains,
+            crate::toolchain::Target::of(backend),
             agent_dir.parent().unwrap_or(agent_dir),
             &workspace.dir,
         )
@@ -219,12 +220,9 @@ impl Egress {
         ro.extend(tools.ro.iter().cloned());
         rw.extend(tools.rw.iter().cloned());
         crate::toolchain::apply(&tools, &mut env);
-        // An MXC container cannot unpack the packages a build downloads; the host fetches them first.
+        // Steps a backend cannot do inside (MXC cannot unpack downloaded packages): the host does them first.
         let mut tool_gaps = tools.gaps.clone();
-        if backend == Preference::Mxc {
-            tool_gaps
-                .extend(crate::toolchain::prewarm(&tools, self.proxy.addr(), &self.token).await);
-        }
+        tool_gaps.extend(crate::toolchain::prewarm(&tools, self.proxy.addr(), &self.token).await);
         bind_login(login, &mut env, &mut rw);
         let spec = SandboxSpec {
             session: self.session.clone(),

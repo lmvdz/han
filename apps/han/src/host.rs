@@ -61,12 +61,9 @@ pub struct HostArgs {
     /// Sandbox: `auto`, `mxc`, `bwrap` or `none`.
     #[arg(long, default_value = "auto")]
     sandbox: String,
-    /// A toolchain to give the agent inside its sandbox (`rust`); repeat for several.
-    #[arg(long = "toolchain")]
-    toolchains: Vec<String>,
-    /// Where a toolchain lives: `<toolchain>.<name>=<path>`, for example `rust.rustupHome=/opt/rust/rustup`.
-    #[arg(long = "toolchain-path")]
-    toolchain_paths: Vec<String>,
+    /// The toolchains this agent's sandbox gets: a JSON `ToolchainSpec` (the node writes it from `agents.json`).
+    #[arg(long)]
+    toolchains: Option<String>,
     /// Allow running without an OS sandbox (advisory; it shows in status).
     #[arg(long)]
     allow_advisory: bool,
@@ -119,7 +116,11 @@ fn repo(spec: Option<&str>, base: &str, default_branch: &str) -> RepoConfig {
 
 pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
     let driver = driver(&args.harness)?;
-    toolchain::validate(&args.toolchains)?;
+    let mut tools: ToolchainConfig = match &args.toolchains {
+        Some(j) => serde_json::from_str(j)?,
+        None => ToolchainConfig::default(),
+    };
+    toolchain::validate(&tools.enabled)?;
     // The agent's own login must exist before a session opens: it is the one thing of the user's that the
     // sandbox gets (`han agent login <agent>`).
     let login_dir = args
@@ -180,15 +181,12 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
             ro: Vec::new(),
             login_dir: Some(login_dir),
             allow_hosts: Vec::new(),
-            toolchains: ToolchainConfig {
-                enabled: args.toolchains.clone(),
-                paths: args
-                    .toolchain_paths
-                    .iter()
-                    .map(|s| toolchain::parse_path_entry(s))
-                    .collect::<Result<_, _>>()?,
-                // Per agent: the agent's own state directory, shared by its sessions.
-                cargo_home: Some(args.data.join("cargo-home")),
+            toolchains: {
+                // Per agent: a cache in its own state directory, shared by its sessions.
+                tools
+                    .cargo_home
+                    .get_or_insert_with(|| args.data.join("cargo-home"));
+                tools
             },
             test_loopback_upstream: false,
             test_roots: Vec::new(),

@@ -33,6 +33,14 @@ fn available(b: SandboxBackend) -> bool {
     }
 }
 
+fn target() -> toolchain::Target {
+    if cfg!(windows) {
+        toolchain::Target::Mxc
+    } else {
+        toolchain::Target::Bwrap
+    }
+}
+
 fn config(enabled: bool) -> ToolchainConfig {
     ToolchainConfig {
         enabled: if enabled { vec!["rust".into()] } else { vec![] },
@@ -43,7 +51,7 @@ fn config(enabled: bool) -> ToolchainConfig {
 /// Whether this machine has a Rust toolchain to share (else the tests skip).
 fn has_rust() -> bool {
     let probe = tempfile::tempdir().unwrap();
-    match toolchain::plan(&config(true), probe.path(), probe.path()) {
+    match toolchain::plan(&config(true), target(), probe.path(), probe.path()) {
         Ok(_) => true,
         Err(e) => {
             eprintln!("SKIP: no Rust toolchain to share: {e}");
@@ -104,18 +112,15 @@ async fn run(
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
     }
-    let plan = toolchain::plan(tools, &session, &wt).unwrap_or_else(|e| panic!("plan: {e}"));
+    let plan = toolchain::plan(tools, toolchain::Target::of(backend), &session, &wt)
+        .unwrap_or_else(|e| panic!("plan: {e}"));
     let mut env = vec![
         ("ANTHROPIC_API_KEY".to_owned(), "han-dummy-key".to_owned()),
         ("CARGO_NET_RETRY".to_owned(), "1".to_owned()),
     ];
     toolchain::apply(&plan, &mut env);
     // As the host does under MXC, which cannot unpack the crates a build downloads.
-    let gaps = if backend == Preference::Mxc {
-        toolchain::prewarm(&plan, proxy.addr(), TOKEN).await
-    } else {
-        Vec::new()
-    };
+    let gaps = toolchain::prewarm(&plan, proxy.addr(), TOKEN).await;
     let (program, args) = if cfg!(windows) {
         let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
         (
@@ -223,7 +228,7 @@ async fn absent_when_off(backend: Preference, b: SandboxBackend) {
     let off = config(false);
     let p = proxy(&off).await;
     let probe = tempfile::tempdir().unwrap();
-    let on = toolchain::plan(&config(true), probe.path(), probe.path()).unwrap();
+    let on = toolchain::plan(&config(true), target(), probe.path(), probe.path()).unwrap();
     let script = if cfg!(windows) {
         "where cargo"
     } else {

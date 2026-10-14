@@ -22,37 +22,37 @@
 //!   `PATH`, `LIB` and the linker are set so rustc needs neither the registry nor COM to find them. Without
 //!   MSVC, the GNU toolchain is the fallback (it needs no grants beyond the toolchain's own directory).
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// The toolchains this host knows.
 pub const KNOWN: &[&str] = &["rust"];
 
-/// Which toolchains an agent gets and where they live.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ToolchainConfig {
-    /// Names from [`KNOWN`].
-    pub enabled: Vec<String>,
-    /// Overrides, keyed `<toolchain>.<name>`: `rust.rustupHome`, `rust.cargoBin`, `rust.msvcDir`,
-    /// `rust.sdkLibDir`.
-    pub paths: BTreeMap<String, PathBuf>,
-    /// The per-agent `CARGO_HOME` (default: `cargo-home` in the session directory).
-    pub cargo_home: Option<PathBuf>,
+/// Which toolchains an agent gets and where they live: the node's typed value, as it arrives.
+pub use han_node::agents::ToolchainSpec as ToolchainConfig;
+
+/// What the sandbox can do, which decides what a toolchain must be given. One value per backend; every
+/// backend-specific grant or step of a toolchain is a branch on it in that toolchain's planner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// MXC: no path canonicalization (cargo cannot unpack downloads, so the host prefetches), and an MSVC
+    /// linker and Windows SDK to grant.
+    Mxc,
+    /// bubblewrap: the system directories are already bound; nothing more.
+    Bwrap,
+    /// No sandbox: advisory, nothing to grant.
+    None,
 }
 
-impl ToolchainConfig {
-    /// Whether any toolchain is on.
-    pub fn is_empty(&self) -> bool {
-        self.enabled.is_empty()
-    }
-
-    fn on(&self, name: &str) -> bool {
-        self.enabled.iter().any(|n| n == name)
-    }
-
-    fn path(&self, key: &str) -> Option<PathBuf> {
-        self.paths.get(key).cloned()
+impl Target {
+    /// The target of a resolved sandbox preference.
+    pub fn of(p: crate::sandbox::Preference) -> Target {
+        use crate::sandbox::Preference;
+        match p {
+            Preference::Mxc => Target::Mxc,
+            Preference::Bwrap => Target::Bwrap,
+            _ => Target::None,
+        }
     }
 }
 
@@ -67,14 +67,6 @@ pub fn validate(names: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// Parses `--toolchain-path rust.rustupHome=/path` entries.
-pub fn parse_path_entry(s: &str) -> Result<(String, PathBuf), String> {
-    match s.split_once('=') {
-        Some((k, v)) if k.contains('.') && !v.is_empty() => Ok((k.to_owned(), PathBuf::from(v))),
-        _ => Err(format!("{s:?}: expected <toolchain>.<name>=<path>")),
-    }
 }
 
 /// What the enabled toolchains add to a session.
@@ -131,11 +123,16 @@ fn hosts_of(name: &str) -> &'static [&'static str] {
 
 /// Plans every enabled toolchain for a session whose files live in `session_dir` and whose worktree is
 /// `worktree`. Fails, with a message for the operator, when something the toolchain needs is missing.
-pub fn plan(cfg: &ToolchainConfig, session_dir: &Path, worktree: &Path) -> Result<Plan, String> {
+pub fn plan(
+    cfg: &ToolchainConfig,
+    target: Target,
+    session_dir: &Path,
+    worktree: &Path,
+) -> Result<Plan, String> {
     validate(&cfg.enabled)?;
     let mut out = Plan::default();
     for name in KNOWN.iter().filter(|n| cfg.on(n)) {
-        plan_one(name, cfg, session_dir, worktree, &mut out)?;
+        plan_one(name, cfg, target, session_dir, worktree, &mut out)?;
     }
     out.allow_hosts = allow_hosts(cfg);
     for d in &out.rw {
@@ -147,12 +144,13 @@ pub fn plan(cfg: &ToolchainConfig, session_dir: &Path, worktree: &Path) -> Resul
 fn plan_one(
     name: &str,
     cfg: &ToolchainConfig,
+    target: Target,
     session_dir: &Path,
     worktree: &Path,
     out: &mut Plan,
 ) -> Result<(), String> {
     match name {
-        "rust" => plan_rust(cfg, session_dir, worktree, out),
+        "rust" => plan_rust(cfg, target, session_dir, worktree, out),
         other => Err(format!("unknown toolchain {other:?}")),
     }
 }
@@ -264,6 +262,7 @@ fn cargo_bin_of(out: &Plan) -> PathBuf {
 
 fn plan_rust(
     cfg: &ToolchainConfig,
+    target: Target,
     session_dir: &Path,
     worktree: &Path,
     out: &mut Plan,
@@ -316,11 +315,11 @@ fn plan_rust(
         .cargo_home
         .clone()
         .unwrap_or_else(|| session_dir.join("cargo-home"));
-    let target = session_dir.join("target");
+    let build_dir = session_dir.join("target");
     out.ro.push(rustup_home.clone());
     out.ro.push(cargo_bin.clone());
     out.rw.push(cargo_home.clone());
-    out.rw.push(target.clone());
+    out.rw.push(build_dir.clone());
     out.path.push(cargo_bin);
     let s = |p: &Path| p.to_string_lossy().into_owned();
     out.env.extend([
@@ -328,16 +327,16 @@ fn plan_rust(
         // Never download a toolchain: a missing one is an error naming it.
         ("RUSTUP_AUTO_INSTALL".into(), "0".into()),
         ("CARGO_HOME".into(), s(&cargo_home)),
-        ("CARGO_TARGET_DIR".into(), s(&target)),
+        ("CARGO_TARGET_DIR".into(), s(&build_dir)),
         // Certificate revocation checks (schannel) would reach hosts the proxy denies.
         ("CARGO_HTTP_CHECK_REVOKE".into(), "false".into()),
     ]);
-    if cfg!(windows) {
+    if target == Target::Mxc {
         plan_msvc(cfg, session_dir, out);
     }
     // Dependencies of the repository, fetched by the host through the proxy (used under MXC).
     let manifest = worktree.join("Cargo.toml");
-    if manifest.is_file() && worktree.join("Cargo.lock").is_file() {
+    if target == Target::Mxc && manifest.is_file() && worktree.join("Cargo.lock").is_file() {
         let scratch = session_dir.join("prewarm");
         let mut env = out.env.clone();
         env.retain(|(k, _)| k != "CARGO_TARGET_DIR");
@@ -553,9 +552,6 @@ mod tests {
                 .unwrap_err()
                 .contains("known: rust")
         );
-        assert!(parse_path_entry("rust.rustupHome=/x").is_ok());
-        assert!(parse_path_entry("rustupHome=/x").is_err());
-        assert!(parse_path_entry("rust.rustupHome=").is_err());
     }
 
     #[test]
@@ -602,7 +598,7 @@ mod tests {
             .into(),
             cargo_home: None,
         };
-        let err = plan(&cfg, &d.path().join("session"), &wt).unwrap_err();
+        let err = plan(&cfg, Target::Bwrap, &d.path().join("session"), &wt).unwrap_err();
         assert!(
             err.contains("1.97.1") && err.contains("not installed"),
             "{err}"
@@ -613,7 +609,7 @@ mod tests {
             cfg.paths["rust.rustupHome"].join("toolchains/1.97.1-x86_64-unknown-linux-gnu"),
         )
         .unwrap();
-        let p = plan(&cfg, &d.path().join("session"), &wt).unwrap();
+        let p = plan(&cfg, Target::Bwrap, &d.path().join("session"), &wt).unwrap();
         assert!(p.ro.contains(&cfg.paths["rust.rustupHome"]));
         assert!(p.rw.contains(&d.path().join("session/cargo-home")));
         assert!(p.env.contains(&("RUSTUP_AUTO_INSTALL".into(), "0".into())));

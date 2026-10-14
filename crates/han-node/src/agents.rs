@@ -74,6 +74,40 @@ impl HarnessInstall {
     }
 }
 
+/// The toolchains one agent's sandbox gets (PLAN 6.4 Toolchains): the one typed value that travels from the
+/// node to the host, whatever carries it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolchainSpec {
+    /// Names: `rust`.
+    #[serde(default)]
+    pub enabled: Vec<String>,
+    /// Location overrides, keyed `<toolchain>.<name>`: `rust.rustupHome`, `rust.cargoBin`, `rust.msvcDir`,
+    /// `rust.sdkLibDir`.
+    #[serde(default)]
+    pub paths: BTreeMap<String, PathBuf>,
+    /// The per-agent `CARGO_HOME` (default: in the session directory).
+    #[serde(default)]
+    pub cargo_home: Option<PathBuf>,
+}
+
+impl ToolchainSpec {
+    /// Whether no toolchain is on.
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_empty()
+    }
+
+    /// Whether `name` is on.
+    pub fn on(&self, name: &str) -> bool {
+        self.enabled.iter().any(|n| n == name)
+    }
+
+    /// An override.
+    pub fn path(&self, key: &str) -> Option<PathBuf> {
+        self.paths.get(key).cloned()
+    }
+}
+
 /// How one agent is launched.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -147,15 +181,20 @@ impl AgentsFile {
             .unwrap_or_else(|| self.toolchains.clone())
     }
 
-    /// The toolchain location overrides as `<toolchain>.<name>=<path>`, the form `han host` takes.
-    pub fn toolchain_path_args(&self) -> Vec<String> {
-        self.toolchain_paths
-            .iter()
-            .flat_map(|(tool, m)| {
-                m.iter()
-                    .map(move |(k, v)| format!("{tool}.{k}={}", v.display()))
-            })
-            .collect()
+    /// The toolchains `actor` gets, with the file's location overrides and a `CARGO_HOME` in its state.
+    pub fn toolchain_spec(&self, data_dir: &Path, actor: &str) -> ToolchainSpec {
+        ToolchainSpec {
+            enabled: self.toolchains_of(actor),
+            paths: self
+                .toolchain_paths
+                .iter()
+                .flat_map(|(tool, m)| {
+                    m.iter()
+                        .map(move |(k, v)| (format!("{tool}.{k}"), v.clone()))
+                })
+                .collect(),
+            cargo_home: Some(self.state_dir(data_dir, actor).join("cargo-home")),
+        }
     }
 
     /// The agent's state directory: its sessions, taint store, node data and login directory.
@@ -204,13 +243,12 @@ mod tests {
         assert_eq!(file.toolchains_of("@a:x"), ["rust"]);
         assert!(file.toolchains_of("@b:x").is_empty());
         assert_eq!(file.toolchains_of("@nobody:x"), ["rust"]);
+        let spec = file.toolchain_spec(Path::new("/d"), "@a:x");
         assert_eq!(
-            file.toolchain_path_args(),
-            [
-                "rust.cargoBin=/opt/rust/cargo/bin",
-                "rust.rustupHome=/opt/rust/rustup"
-            ]
+            spec.path("rust.rustupHome"),
+            Some("/opt/rust/rustup".into())
         );
+        assert!(spec.cargo_home.unwrap().ends_with("cargo-home"));
         // The default is none, and an unknown key is still refused.
         assert!(AgentsFile::default().toolchains_of("@a:x").is_empty());
         assert!(serde_json::from_str::<AgentsFile>(r#"{"toolchain": []}"#).is_err());
