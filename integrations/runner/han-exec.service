@@ -1,0 +1,33 @@
+[Unit]
+Description=HAN executor (han exec) as @exec:<server>
+After=network-online.target han-seq.service
+Wants=network-online.target
+
+[Service]
+User=han-exec
+Group=han-exec
+EnvironmentFile=/etc/han/exec.env
+ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home-ticket ${HAN_HOME_TICKET} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /etc/han/exec.json --relay ${HAN_RELAY}
+KillSignal=SIGINT
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/han-exec
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

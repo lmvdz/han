@@ -43,6 +43,39 @@ pub struct RoleSpec {
     /// Environment variables to set on top of the allow-list (SR-08). Never a secret the role should not
     /// hold (SR-09): model keys go only to a host, GitHub credentials only to an executor.
     pub env: Vec<(String, String)>,
+    /// Run the role as this OS user (SR-83); `None` runs it as the node's own user.
+    pub run_as: Option<RunAs>,
+}
+
+/// Another OS user to run a role as. The node never needs root for it: the runner's admin installs the
+/// `han-agent@.service` template once (docs/runner.md), and the node starts and stops that unit.
+#[derive(Clone, Debug)]
+pub struct RunAs {
+    /// The OS user (the instance of the template).
+    pub os_user: String,
+    /// The user's state directory, where the node leaves the role's arguments (`spawn/host.json`) for the
+    /// unit to read.
+    pub state_dir: PathBuf,
+}
+
+/// The systemd unit that runs a role as `os_user`.
+pub fn unit_of(os_user: &str) -> String {
+    format!("han-agent@{os_user}.service")
+}
+
+/// The file the unit of an OS user reads its role's arguments from, under the user's state directory.
+pub fn spawn_file(state_dir: &std::path::Path) -> PathBuf {
+    state_dir.join("spawn").join("host.json")
+}
+
+/// Whether `user` can be the instance of a unit: a plain portable user name.
+fn valid_os_user(user: &str) -> bool {
+    let mut chars = user.chars();
+    user.len() <= 32
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// The variables a child role inherits from the node (SR-08): what processes need to run on each OS, logging
@@ -137,7 +170,10 @@ impl Supervisor for NoSupervisor {
 /// (`kill_on_drop`), so a stopped node leaves no roles behind.
 pub struct ProcessSpawner {
     program: PathBuf,
+    systemctl: PathBuf,
     children: Mutex<HashMap<String, Child>>,
+    /// Roles running as another OS user, by name: their unit.
+    units: Mutex<HashMap<String, String>>,
 }
 
 impl ProcessSpawner {
@@ -145,8 +181,95 @@ impl ProcessSpawner {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         ProcessSpawner {
             program: program.into(),
+            systemctl: PathBuf::from("systemctl"),
             children: Mutex::new(HashMap::new()),
+            units: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Uses this `systemctl` to start and stop the units of roles that run as another OS user.
+    pub fn with_systemctl(mut self, systemctl: impl Into<PathBuf>) -> Self {
+        self.systemctl = systemctl.into();
+        self
+    }
+
+    fn systemctl(&self, args: &[&str]) -> std::io::Result<std::process::Output> {
+        std::process::Command::new(&self.systemctl)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+    }
+
+    fn unit_active(&self, unit: &str) -> bool {
+        self.systemctl(&["is-active", unit])
+            .map(|o| {
+                matches!(
+                    String::from_utf8_lossy(&o.stdout).trim(),
+                    "active" | "activating"
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    /// Starts a role as another OS user: its arguments go to the user's spawn file and the unit
+    /// `han-agent@<user>` is started. One role per OS user at a time.
+    fn start_as(&self, spec: RoleSpec, run_as: &RunAs) -> Result<(), SupervisorError> {
+        if spec.role != Role::Host {
+            return Err(SupervisorError::Unavailable(spec.role.subcommand()));
+        }
+        if !valid_os_user(&run_as.os_user) {
+            return Err(SupervisorError::Spawn(format!(
+                "{:?} is not an OS user name",
+                run_as.os_user
+            )));
+        }
+        let unit = unit_of(&run_as.os_user);
+        if self.unit_active(&unit) {
+            return Err(SupervisorError::Running(spec.name));
+        }
+        // The unit has no environment of ours: the one variable a host needs travels as its argument.
+        let mut args = spec.args;
+        for (k, v) in spec.env {
+            if k != "HAN_HOME_TICKET" {
+                return Err(SupervisorError::Spawn(format!(
+                    "{k} cannot reach a role that runs as another user"
+                )));
+            }
+            args.extend(["--home-ticket".to_owned(), v]);
+        }
+        let file = spawn_file(&run_as.state_dir);
+        let spawn = |e: std::io::Error| SupervisorError::Spawn(format!("{}: {e}", file.display()));
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(spawn)?;
+        }
+        let text = serde_json::json!({ "args": args }).to_string();
+        std::fs::write(&file, text).map_err(spawn)?;
+        // The unit runs as the OS user, who shares the state directory's group (and nothing else of ours).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let set = |p: &std::path::Path, mode| {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
+            };
+            set(&file, 0o660).map_err(spawn)?;
+            if let Some(dir) = file.parent() {
+                set(dir, 0o770).map_err(spawn)?;
+            }
+        }
+        let out = self
+            .systemctl(&["start", "--no-block", &unit])
+            .map_err(|e| SupervisorError::Spawn(format!("systemctl: {e}")))?;
+        if !out.status.success() {
+            return Err(SupervisorError::Spawn(format!(
+                "systemctl start {unit}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        self.units
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(spec.name, unit);
+        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Child>> {
@@ -156,6 +279,9 @@ impl ProcessSpawner {
 
 impl Supervisor for ProcessSpawner {
     fn start(&self, spec: RoleSpec) -> Result<(), SupervisorError> {
+        if let Some(run_as) = spec.run_as.clone() {
+            return self.start_as(spec, &run_as);
+        }
         let mut children = self.lock();
         if let Some(child) = children.get_mut(&spec.name) {
             // A role that has ended may be started again.
@@ -181,6 +307,24 @@ impl Supervisor for ProcessSpawner {
     }
 
     fn stop(&self, name: &str) -> Result<(), SupervisorError> {
+        let unit = self
+            .units
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(name);
+        if let Some(unit) = unit {
+            let out = self
+                .systemctl(&["stop", &unit])
+                .map_err(|e| SupervisorError::Spawn(format!("systemctl: {e}")))?;
+            return if out.status.success() {
+                Ok(())
+            } else {
+                Err(SupervisorError::Spawn(format!(
+                    "systemctl stop {unit}: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )))
+            };
+        }
         let mut child = self
             .lock()
             .remove(name)
@@ -202,6 +346,22 @@ impl Supervisor for ProcessSpawner {
                 (name.clone(), status)
             })
             .collect();
+        drop(children);
+        let units: Vec<(String, String)> = self
+            .units
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(n, u)| (n.clone(), u.clone()))
+            .collect();
+        for (name, unit) in units {
+            let status = if self.unit_active(&unit) {
+                RoleStatus::Running
+            } else {
+                RoleStatus::Exited(None)
+            };
+            out.push((name, status));
+        }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
     }

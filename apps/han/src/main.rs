@@ -8,13 +8,17 @@ mod conform;
 mod device;
 mod dial;
 mod exec;
+mod harness;
 mod home;
 mod host;
 mod keys;
 mod node;
 mod rolenode;
 mod seq;
+mod seqadmin;
+mod service;
 mod space;
+mod task;
 mod tui;
 mod update;
 
@@ -34,17 +38,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Run the daemon of this device: keys, endpoint, sync, views, and the node API on a local pipe.
-    Node(node::NodeArgs),
+    #[command(args_conflicts_with_subcommands = true)]
+    Node(Box<node::NodeArgs>),
     /// Print a space's board as text, from the running node.
     Board(board::BoardArgs),
     /// The live board in the terminal: sessions, the session pane, approvals. Needs the running node.
     Tui(tui::TuiArgs),
     /// Create, follow and list spaces, set roles and policy, through the running node.
     Space(space::SpaceArgs),
+    /// List and cancel tasks through the running node.
+    Task(task::TaskArgs),
     /// Pair a new device into this person's profile, or revoke one, through the running node.
     Device(device::DeviceArgs),
     /// Run a home: the sequencer of one server on a QUIC endpoint.
-    Seq(seq::SeqArgs),
+    #[command(args_conflicts_with_subcommands = true)]
+    Seq(Box<seq::SeqArgs>),
     /// Print the home ticket a running `han seq` wrote to its data directory, to hand to teammates.
     Ticket(seq::TicketArgs),
     /// Dial a home and make calls.
@@ -70,8 +78,41 @@ enum Cmd {
     Key { file: std::path::PathBuf },
 }
 
+/// `han host --args-file <file>`: the arguments come from a JSON file `{"args": [...]}` instead (the
+/// `han-agent@.service` unit of a host that runs as another OS user reads what the node left for it).
+fn argv() -> Vec<std::ffi::OsString> {
+    let mut argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv.len() == 4 && argv[1] == "host" && argv[2] == "--args-file" {
+        let args = std::fs::read_to_string(&argv[3])
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| e.to_string()))
+            .ok()
+            .and_then(|v| {
+                v["args"].as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(std::ffi::OsString::from))
+                        .collect::<Vec<_>>()
+                })
+            });
+        match args {
+            Some(a) => {
+                argv.truncate(2);
+                argv.extend(a);
+            }
+            None => {
+                eprintln!(
+                    "han: {}: not a JSON file with an args list",
+                    argv[3].to_string_lossy()
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+    argv
+}
+
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(argv());
     // The shim runs inside the sandbox with its own small runtime, before anything else starts.
     if let Cmd::Shim { args } = cli.command {
         std::process::exit(han_host::shim::main(args));
@@ -95,12 +136,13 @@ async fn run(cli: Cli) {
         .with_writer(std::io::stderr)
         .init();
     let result = match cli.command {
-        Cmd::Node(a) => node::run(a).await,
+        Cmd::Node(a) => node::run(*a).await,
         Cmd::Board(a) => board::run(a).await,
         Cmd::Tui(a) => tui::run(a).await,
         Cmd::Space(a) => space::run(a).await,
+        Cmd::Task(a) => task::run(a).await,
         Cmd::Device(a) => device::run(a).await,
-        Cmd::Seq(a) => seq::run(a).await,
+        Cmd::Seq(a) => seq::run(*a).await,
         Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,
         Cmd::Conform(a) => conform::run(a).await,

@@ -210,6 +210,7 @@ async fn story(backend: &str) {
             allow_advisory: backend == "none",
             // The replay script is the agent's own input: readable inside the sandbox.
             ro: vec![script.clone()],
+            login_dir: None,
             allow_hosts: Vec::new(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),

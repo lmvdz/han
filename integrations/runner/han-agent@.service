@@ -1,0 +1,22 @@
+[Unit]
+Description=HAN agent host as %i (han host)
+After=network-online.target
+
+[Service]
+User=%i
+Group=%i
+Environment=HOME=/var/lib/han-agents/%i
+WorkingDirectory=/var/lib/han-agents/%i
+ExecStart=/usr/local/bin/han host --args-file /var/lib/han-agents/%i/spawn/host.json
+KillSignal=SIGINT
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/han-agents/%i
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# no RestrictNamespaces: bubblewrap inside needs user namespaces

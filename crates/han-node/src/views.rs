@@ -429,6 +429,13 @@ impl Engine {
             .collect()
     }
 
+    /// The operator the profile space `space` names, once its first record has arrived.
+    pub fn profile_operator(&self, space: &str) -> Option<String> {
+        self.spaces
+            .get(space)
+            .and_then(|m| m.profile_operator.clone())
+    }
+
     /// The last seq folded for `space`.
     pub fn head(&self, space: &str) -> Option<u64> {
         self.spaces.get(space).map(|m| m.head)

@@ -5,13 +5,14 @@
 //! opens one session per repository (titled `github:owner/repo`) and publishes its items on that session's
 //! stream, which only the session's actor may do (T-07). It creates a task only for an open issue with the
 //! trigger label (or on a human's request) and only when no task with that `external` exists; it never
-//! assigns a session to anything. An agent that takes the issue makes its own signed task.
+//! assigns a session to anything. An agent that takes the issue makes its own signed task. It cancels a task it
+//! made when the issue is closed or loses the label before anyone accepted the task.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use han_node::api::{
-    BoxFuture, CallResult, Command, NodeApi, NodeError, Query, Row, ViewEvent, Window,
+    BoxFuture, CallResult, Command, NodeApi, NodeError, Query, Row, TaskRow, ViewEvent, Window,
 };
 use serde_json::{Value, json};
 
@@ -90,6 +91,8 @@ pub struct Tick {
     pub published: usize,
     /// Tasks created.
     pub tasks: Vec<String>,
+    /// Tasks cancelled because their issue was closed or lost the trigger label before anyone accepted them.
+    pub cancelled: Vec<String>,
 }
 
 /// The state of every repository and the means to poll them.
@@ -103,6 +106,10 @@ pub struct Syncer<S: Source> {
     repos: HashMap<String, RepoState>,
     /// External references this process already made a task for (the Tasks view may lag behind).
     requested: HashSet<String>,
+    /// The references a human asked for with [`Syncer::request`]: the label does not govern those.
+    asked: HashSet<String>,
+    /// The actor of this process's node (the author of the tasks it made), once known.
+    me: Option<String>,
 }
 
 impl<S: Source> Syncer<S> {
@@ -121,6 +128,8 @@ impl<S: Source> Syncer<S> {
                 .map(|r| (r.clone(), RepoState::default()))
                 .collect(),
             requested: HashSet::new(),
+            asked: HashSet::new(),
+            me: None,
         }
     }
 
@@ -201,6 +210,12 @@ impl<S: Source> Syncer<S> {
             .filter(|i| i.state == "open" && i.labels.contains(&self.label))
             .collect();
         let tasks = self.suggest(repo, &candidates).await?;
+        let stale: Vec<String> = changed
+            .iter()
+            .filter(|i| i.state != "open" || !i.labels.contains(&self.label))
+            .map(|i| format!("github:{repo}#{}", i.number))
+            .collect();
+        let cancelled = self.cancel_stale(&stale).await?;
 
         let state = self.repos.get_mut(repo).expect("configured");
         state.etag = new_etag;
@@ -213,6 +228,7 @@ impl<S: Source> Syncer<S> {
             not_modified: false,
             published: changed.len(),
             tasks,
+            cancelled,
         })
     }
 
@@ -227,7 +243,68 @@ impl<S: Source> Syncer<S> {
         if existing.contains(reference) || self.requested.contains(reference) {
             return Ok(None);
         }
-        self.create_task(reference, title).await.map(Some)
+        let id = self.create_task(reference, title).await?;
+        self.asked.insert(reference.to_owned());
+        Ok(Some(id))
+    }
+
+    /// Cancels the open tasks this process's node made for `references` (issues that were closed or lost the
+    /// trigger label) that nobody accepted yet. A task an agent accepted is left to its assignee, and a task
+    /// of another author is not ours to cancel (only the author may).
+    async fn cancel_stale(&mut self, references: &[String]) -> Result<Vec<String>, SyncError> {
+        if references.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = self.task_rows().await?;
+        let ours: Vec<&TaskRow> = rows
+            .iter()
+            .filter(|t| {
+                t.open
+                    && t.accepted.is_empty()
+                    && t.external
+                        .as_ref()
+                        .is_some_and(|e| references.contains(e) && !self.asked.contains(e))
+            })
+            .collect();
+        if ours.is_empty() {
+            return Ok(Vec::new());
+        }
+        let me = self.actor().await?;
+        let mut done = Vec::new();
+        for t in ours.into_iter().filter(|t| t.author == me) {
+            self.api
+                .call(Command::TaskCancel {
+                    space: self.space.clone(),
+                    task: t.task.clone(),
+                })
+                .await?;
+            done.push(t.task.clone());
+        }
+        Ok(done)
+    }
+
+    /// The actor of the node this process talks to.
+    async fn actor(&mut self) -> Result<String, SyncError> {
+        if let Some(me) = &self.me {
+            return Ok(me.clone());
+        }
+        let mut stream = self.api.view(Query::NodeStatus {
+            window: Window::default(),
+        });
+        let first = tokio::time::timeout(VIEW_TIMEOUT, stream.next())
+            .await
+            .map_err(|_| SyncError::Node("the NodeStatus view did not answer".into()))?;
+        let me = match first {
+            Some(ViewEvent::Snapshot { rows, .. }) => rows.into_iter().find_map(|r| match r {
+                Row::NodeStatus(n) => Some(n.actor),
+                _ => None,
+            }),
+            Some(ViewEvent::Failed { error, .. }) => return Err(error.into()),
+            _ => None,
+        }
+        .ok_or_else(|| SyncError::Node("the node did not say who it acts as".into()))?;
+        self.me = Some(me.clone());
+        Ok(me)
     }
 
     async fn suggest(
@@ -308,7 +385,17 @@ impl<S: Source> Syncer<S> {
 
     /// Every `external` of the space's tasks, open or not.
     async fn task_externals(&self) -> Result<HashSet<String>, SyncError> {
-        let mut out = HashSet::new();
+        Ok(self
+            .task_rows()
+            .await?
+            .into_iter()
+            .filter_map(|t| t.external)
+            .collect())
+    }
+
+    /// The space's tasks, open or not.
+    async fn task_rows(&self) -> Result<Vec<TaskRow>, SyncError> {
+        let mut out = Vec::new();
         let mut cursor = None;
         for _ in 0..50 {
             let mut stream = self.api.view(Query::Tasks {
@@ -331,7 +418,7 @@ impl<S: Source> Syncer<S> {
                 _ => return Err(SyncError::Node("the Tasks view ended".into())),
             };
             out.extend(rows.into_iter().filter_map(|r| match r {
-                Row::Task(t) => t.external,
+                Row::Task(t) => Some(t),
                 _ => None,
             }));
             match next {

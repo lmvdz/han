@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use clap::Args;
 use han_net::wellknown::Fetcher;
-use han_net::{IrohOptions, IrohTransport};
+use han_net::{HomeTicket, IrohOptions, IrohTransport};
 use han_node::api::{Command, HomeRef, NodeError};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyError, KeyStore, KeyringStore};
 use han_node::supervisor::NoSupervisor;
@@ -19,12 +19,12 @@ use crate::seq::relay_choice;
 /// Where the space's home is, as the supervisor passes it.
 #[derive(Args, Clone, Debug)]
 pub struct HomeArgs {
-    /// The home's ServerName.
+    /// The home's ServerName (not needed when `--home-ticket` is given).
     #[arg(long)]
-    pub home_server: String,
-    /// The home's node id.
+    pub home_server: Option<String>,
+    /// The home's node id (not needed when `--home-ticket` is given).
     #[arg(long)]
-    pub home_node: String,
+    pub home_node: Option<String>,
     /// The home's direct addresses.
     #[arg(long)]
     pub home_addr: Vec<String>,
@@ -39,14 +39,32 @@ pub struct HomeArgs {
 }
 
 impl HomeArgs {
-    /// The home as the node API takes it.
-    pub fn home_ref(&self) -> HomeRef {
-        HomeRef {
-            server: self.home_server.clone(),
-            node: self.home_node.clone(),
-            addrs: self.home_addr.clone(),
-            relays: self.home_relay.clone(),
+    /// The home as the node API takes it: from the flags, else from the ticket.
+    pub fn home_ref(&self) -> Result<HomeRef, String> {
+        if let (Some(server), Some(node)) = (&self.home_server, &self.home_node) {
+            return Ok(HomeRef {
+                server: server.clone(),
+                node: node.clone(),
+                addrs: self.home_addr.clone(),
+                relays: self.home_relay.clone(),
+            });
         }
+        let ticket = self
+            .home_ticket
+            .as_deref()
+            .and_then(|t| HomeTicket::parse(t.trim()))
+            .ok_or("give --home-ticket, or --home-server and --home-node")?;
+        Ok(HomeRef {
+            server: ticket.server,
+            node: ticket.node.node,
+            addrs: ticket.node.addrs,
+            relays: ticket.node.relays,
+        })
+    }
+
+    /// The home's ServerName.
+    pub fn server(&self) -> Result<String, String> {
+        self.home_ref().map(|h| h.server)
     }
 }
 
@@ -136,7 +154,7 @@ pub async fn start(
     }
     match node
         .call(Command::SpaceFollow {
-            home: home.home_ref(),
+            home: home.home_ref()?,
             space: space.to_owned(),
         })
         .await

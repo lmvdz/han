@@ -95,6 +95,11 @@ pub struct Isolation {
     /// An environment variable that points the harness at a per-session config directory.
     #[serde(default)]
     pub config_dir_env: Option<String>,
+    /// An environment variable that points the harness at the agent's own login directory (a subscription
+    /// login lives in the harness's config directory). The host binds that directory read-write into this
+    /// agent's sandbox and nothing else of the user's home (see [`login_binding`]).
+    #[serde(default)]
+    pub login_dir_env: Option<String>,
     /// Extra arguments for the adapter.
     #[serde(default)]
     pub extra_args: Vec<String>,
@@ -251,12 +256,13 @@ fn pi() -> DriverConfig {
         adapter: Adapter {
             package: "pi-acp".into(),
             version: "0.0.34".into(),
-            integrity: String::new(),
+            integrity: "sha512-MrCp37UbpUzkTkzTIMJQf1RYrT+kr4fgGDGFoLmBN26UupuCZp0XxVIY+7XYsMo3yDnzDeZUJ0jPyM3Si6Bkkg==".into(),
             entry: "dist/index.js".into(),
         },
         gate_fidelity: GateFidelity::PromptOnly,
         isolation: Isolation {
             config_dir_env: Some("PI_CODING_AGENT_DIR".into()),
+            login_dir_env: None,
             extra_args: vec![],
             settings_sources_empty: false,
             strict_mcp: false,
@@ -297,22 +303,23 @@ fn claude() -> DriverConfig {
         adapter: Adapter {
             package: "@agentclientprotocol/claude-agent-acp".into(),
             version: "0.89.1".into(),
-            integrity: String::new(),
+            integrity: "sha512-t1k8YPDvo/zUghL3x2pFs40tWfYTLhYmK8jt37CVBpY7eq1Ztj2hLZBAmy9ZX++tUyJaGfuuMrzvJGvU9tjBsg==".into(),
             entry: "dist/index.js".into(),
         },
         gate_fidelity: GateFidelity::EveryCall,
         isolation: Isolation {
             // Claude Code's login lives in its config directory, so the subscription mode cannot point it at
-            // a fresh one; settingSources: [] and strictMcpConfig keep user and project settings and MCP
-            // servers out instead.
+            // a fresh one per session; it gets one per agent instead (`login_dir_env`), and settingSources: []
+            // and strictMcpConfig keep user and project settings and MCP servers out.
             config_dir_env: None,
+            login_dir_env: Some("CLAUDE_CONFIG_DIR".into()),
             extra_args: vec![],
             settings_sources_empty: true,
             strict_mcp: true,
             gaps: vec![
-                "the subscription login lives in ~/.claude, inside the agent's trust boundary"
+                "per-agent login dir inside the agent's trust boundary: the agent can read and use its own Claude login (CLAUDE_CONFIG_DIR is bound read-write into this sandbox only; nothing else of the user's home is)"
                     .into(),
-                "global skills may still load from the user's config directory (spike Q4)".into(),
+                "a skill or setting placed in the agent's login dir may still load (spike Q4)".into(),
             ],
         },
         node_flags: vec![
@@ -322,6 +329,55 @@ fn claude() -> DriverConfig {
         strict_mode: Some("default".into()),
         auto_mode: Some("acceptEdits".into()),
         session_log_dir: None,
+    }
+}
+
+/// The file Claude Code writes its subscription login to, inside its config directory.
+pub const CLAUDE_LOGIN_FILE: &str = ".credentials.json";
+
+/// Whether `dir` holds a login (never reads or returns its contents).
+pub fn login_present(dir: &Path) -> bool {
+    std::fs::metadata(dir.join(CLAUDE_LOGIN_FILE)).is_ok_and(|m| m.is_file() && m.len() > 0)
+}
+
+/// The per-agent login directory a driver needs bound into its sandbox: the environment variable that names
+/// it, and the absolute directory (created if missing). `None` for a driver with no subscription login. It is
+/// an error when the driver needs one and the agent has none (`han agent login <agent>` makes it).
+pub fn login_binding(
+    cfg: &DriverConfig,
+    dir: Option<&Path>,
+) -> Result<Option<(String, PathBuf)>, String> {
+    let Some(var) = &cfg.isolation.login_dir_env else {
+        return Ok(None);
+    };
+    let dir = dir.ok_or_else(|| {
+        format!(
+            "{} needs a login directory for the agent (run `han agent login <agent>`)",
+            cfg.name
+        )
+    })?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if !login_present(&dir) {
+        return Err(format!(
+            "no {} login in {} (run `han agent login <agent>`)",
+            cfg.name,
+            dir.display()
+        ));
+    }
+    Ok(Some((var.clone(), dir)))
+}
+
+/// Adds a login binding to a launch: the variable to the environment and the directory to the read-write
+/// paths. This is the only thing of the user's home the sandbox gets.
+pub fn bind_login(
+    binding: Option<(String, PathBuf)>,
+    env: &mut Vec<(String, String)>,
+    rw: &mut Vec<PathBuf>,
+) {
+    if let Some((var, dir)) = binding {
+        env.push((var, dir.to_string_lossy().into_owned()));
+        rw.push(dir);
     }
 }
 
@@ -666,6 +722,32 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "PI_CODING_AGENT_DIR" && v.ends_with("agent"))
         );
+    }
+
+    #[test]
+    fn claude_gets_its_own_login_dir_and_pi_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let login = dir.path().join("claude-config");
+        let cfg = builtin("claude").unwrap();
+        // no login dir given, or none logged in yet: the session does not start
+        assert!(login_binding(&cfg, None).unwrap_err().contains("login"));
+        assert!(!login_present(&login));
+        assert!(
+            login_binding(&cfg, Some(&login))
+                .unwrap_err()
+                .contains("han agent login")
+        );
+        std::fs::write(login.join(CLAUDE_LOGIN_FILE), "{}").unwrap();
+        let (var, bound) = login_binding(&cfg, Some(&login)).unwrap().unwrap();
+        assert_eq!(var, "CLAUDE_CONFIG_DIR");
+        assert!(bound.is_absolute() && bound.ends_with("claude-config"));
+        assert!(
+            cfg.isolation
+                .gaps
+                .iter()
+                .any(|g| g.contains("per-agent login dir inside the agent's trust boundary"))
+        );
+        assert_eq!(login_binding(&builtin("pi").unwrap(), None).unwrap(), None);
     }
 
     #[test]

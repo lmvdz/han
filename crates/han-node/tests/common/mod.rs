@@ -51,9 +51,12 @@ impl World {
     pub fn offline(people: &[(&str, u8)]) -> World {
         let net = MemNetwork::default();
         let clock = Arc::new(TestClock::new(START_SECS));
+        // The counter keeps two worlds of one process apart even when the clock is coarse.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "han-node-test-{}-{}",
+            "han-node-test-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -129,6 +132,17 @@ impl World {
         n: u8,
         tweak: impl FnOnce(&mut NodeConfig),
     ) -> Node<MemTransport> {
+        self.node_supervised(actor, n, Arc::new(NoSupervisor), tweak)
+    }
+
+    /// Like `node_with`, with a supervisor.
+    pub fn node_supervised(
+        &self,
+        actor: &str,
+        n: u8,
+        supervisor: Arc<dyn han_node::supervisor::Supervisor>,
+        tweak: impl FnOnce(&mut NodeConfig),
+    ) -> Node<MemTransport> {
         let key_dir = self.dir.join(format!("keys-{n}"));
         let store = FileKeyStore::new(&key_dir);
         store.store(DEVICE_KEY, seed(n)).unwrap();
@@ -144,7 +158,7 @@ impl World {
             clock: self.clock.clone(),
             keys: Arc::new(store),
             server_keys: self.keys.clone(),
-            supervisor: Arc::new(NoSupervisor),
+            supervisor,
         })
         .unwrap()
     }

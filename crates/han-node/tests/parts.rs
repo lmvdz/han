@@ -80,6 +80,7 @@ async fn the_supervisor_seam_starts_and_watches_a_process() {
     let none = NoSupervisor;
     let spec = |name: &str| RoleSpec {
         env: Vec::new(),
+        run_as: None,
         role: Role::Host,
         name: name.into(),
         args: vec![],
@@ -140,6 +141,7 @@ async fn a_role_starts_with_a_cleared_environment() {
                 "--include-ignored".into(),
             ],
             env: vec![("HAN_DUMP_TO".into(), out.to_string_lossy().into_owned())],
+            run_as: None,
         })
         .unwrap();
     for _ in 0..400 {

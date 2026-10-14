@@ -322,6 +322,8 @@ pub(crate) struct SpaceModel {
     /// Actors that chose guarding (sticky until `agent.unguard`), and whether owners force non-humans.
     pub guarded: BTreeSet<String>,
     pub force_guarded: bool,
+    /// In a profile space: the operator its profile names (§4.3), fixed when the space was created.
+    pub profile_operator: Option<String>,
     /// Counts every change a view could show; a view recomputes when it moves.
     pub rev: u64,
     claims: BTreeMap<String, String>,
@@ -384,6 +386,7 @@ impl SpaceModel {
             launch_window: 30,
             guarded: BTreeSet::new(),
             force_guarded: false,
+            profile_operator: None,
             rev: 1,
             claims: BTreeMap::new(),
             time_sig: 0,
@@ -624,6 +627,8 @@ impl SpaceModel {
             Body::SpaceCreate(b) => {
                 if !self.space.starts_with("profile:") {
                     self.roles.insert(author, Role::Owner);
+                } else if let Some(op) = b.profile.as_ref().and_then(|p| p.operator.as_ref()) {
+                    self.profile_operator = Some(op.to_string());
                 }
                 if let Some(p) = &b.profile {
                     self.devices.insert(

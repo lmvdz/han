@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use han_core::types::Durability;
 use han_net::wellknown::{document, serve_http, wellknown_routes};
 use han_net::{
@@ -17,9 +17,11 @@ use crate::keys;
 /// Options of `han seq`.
 #[derive(Args)]
 pub struct SeqArgs {
+    #[command(subcommand)]
+    cmd: Option<SeqCmd>,
     /// The ServerName this home answers to (lowercase DNS name).
     #[arg(long)]
-    server: String,
+    server: Option<String>,
     /// The data directory (one SQLite file per space, plus `home.db` and the keys).
     #[arg(long, default_value = "han-data")]
     data: PathBuf,
@@ -48,6 +50,33 @@ pub struct SeqArgs {
     /// `config.json` of the wire vectors, for `--test-mode`.
     #[arg(long, default_value = "conformance/wire-vectors/config.json")]
     test_config: PathBuf,
+}
+
+#[derive(Subcommand)]
+enum SeqCmd {
+    /// Creates a profile space on the running home at `--data`, with no restart. Admin only: it goes over the
+    /// home's local admin socket, which only the OS user that runs `han seq` can reach. (Registration is out of
+    /// scope of the protocol, section 4.3, so there is no wire call for it.)
+    Register {
+        /// The data directory of the running `han seq`.
+        #[arg(long, default_value = "han-data")]
+        data: PathBuf,
+        /// The actor, `@name:server`.
+        #[arg(long)]
+        actor: String,
+        /// `human`, `agent` or `service`.
+        #[arg(long, default_value = "agent")]
+        kind: String,
+        /// The key's id.
+        #[arg(long, default_value = "k1")]
+        key_id: String,
+        /// The key, base64url (`han agent create` prints it).
+        #[arg(long)]
+        public_key: String,
+        /// The operator, for an agent or a service.
+        #[arg(long)]
+        operator: Option<String>,
+    },
 }
 
 fn parse_hosting(spec: &str) -> Result<HostingPolicy, String> {
@@ -96,6 +125,29 @@ pub fn relay_choice(spec: &str) -> RelayChoice {
 }
 
 pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(SeqCmd::Register {
+        data,
+        actor,
+        kind,
+        key_id,
+        public_key,
+        operator,
+    }) = args.cmd
+    {
+        let seq = crate::seqadmin::ask(
+            &data,
+            &crate::seqadmin::Register {
+                actor: actor.clone(),
+                kind,
+                key_id,
+                public_key,
+                operator,
+            },
+        )
+        .await?;
+        println!("registered {actor} (profile:{actor} at seq {seq})");
+        return Ok(());
+    }
     std::fs::create_dir_all(&args.data)?;
     let store = Arc::new(SqliteStore::open(&args.data)?);
     let home = if args.test_mode {
@@ -105,7 +157,7 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
         let key = keys::signing_key(keys::load_or_create(&args.data.join("server.key"))?);
         Arc::new(Home::open(
             HomeConfig {
-                server: args.server.clone(),
+                server: args.server.clone().ok_or("han seq needs --server")?,
                 key,
                 key_id: "h1".into(),
                 durability: Durability::Local,
@@ -179,6 +231,8 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
         document(&doc_home, &[addr])
     });
     let http = serve_http(args.http, routes).await?;
+    // `han seq register` reaches the running home here, so a new agent's profile needs no restart.
+    let _admin = crate::seqadmin::serve(Arc::clone(&home), &crate::seqadmin::endpoint(&args.data))?;
     println!("server {}", home.server());
     println!("node {}", transport.node_id());
     let mut addrs = transport.addr().addrs;

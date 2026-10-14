@@ -121,6 +121,9 @@ pub struct SandboxChoice {
     pub allow_advisory: bool,
     /// Extra read-only paths the agent needs (node, the adapter, the shim).
     pub ro: Vec<PathBuf>,
+    /// The agent's own login directory (for example its Claude config directory), bound read-write into this
+    /// agent's sandbox only, for drivers with `login_dir_env`.
+    pub login_dir: Option<PathBuf>,
     /// Upstream allow-list additions.
     pub allow_hosts: Vec<String>,
     /// Test only: let the proxy connect to loopback upstreams (a mock provider).

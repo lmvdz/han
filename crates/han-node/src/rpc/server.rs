@@ -62,6 +62,13 @@ pub fn serve(api: Arc<dyn NodeApi>, endpoint: &str) -> io::Result<RpcServer> {
     })
 }
 
+/// A listener on `endpoint` that only the current user can reach (same restriction as [`serve`]), for local
+/// tools with their own protocol, such as a home's admin socket.
+pub fn listen_local(endpoint: &str) -> io::Result<interprocess::local_socket::tokio::Listener> {
+    let options = ListenerOptions::new().name(local_name(endpoint)?);
+    restrict(options)?.create_tokio()
+}
+
 #[cfg(windows)]
 fn restrict(options: ListenerOptions<'_>) -> io::Result<ListenerOptions<'_>> {
     use interprocess::os::windows::local_socket::ListenerOptionsExt as _;
