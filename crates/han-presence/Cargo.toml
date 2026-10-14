@@ -1,0 +1,33 @@
+[package]
+name = "han-presence"
+description = "Human-presence check for HAN approvals: the node asks the operating system (Windows Hello, Touch ID, polkit) to confirm that a person is at the device, bound to the plan being approved."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Doubles that allow or script a confirmation. For tests only: never enable it in a release build.
+test-doubles = []
+
+[dependencies]
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Foundation", "Security_Credentials_UI"] }
+windows-future = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError"] }
+objc2-local-authentication = "0.3"
+
+[lints.rust]
+# The macOS backend calls Objective-C and needs `unsafe`; it is the only module that allows it.
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

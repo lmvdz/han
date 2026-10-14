@@ -1237,7 +1237,7 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
             )));
             lines.push(Line::styled(
                 if *busy {
-                    "Signing…".to_owned()
+                    presence_wait().to_owned()
                 } else {
                     "[Enter] Sign approval    [Esc] Back".to_owned()
                 },
@@ -1516,4 +1516,16 @@ fn draw_help(f: &mut Frame, area: Rect) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// What the sign panel says while the node waits for the person to confirm on the device. The node runs on
+/// this machine, so the platform names the check it runs.
+fn presence_wait() -> &'static str {
+    if cfg!(windows) {
+        "Waiting for Windows Hello… confirm on this device"
+    } else if cfg!(target_os = "macos") {
+        "Waiting for Touch ID… confirm on this device"
+    } else {
+        "Waiting for the system's authentication prompt… confirm on this device"
+    }
 }

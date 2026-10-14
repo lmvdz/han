@@ -133,6 +133,29 @@ async fn a_refused_approval_says_why_and_is_not_retried() {
 }
 
 #[tokio::test]
+async fn a_cancelled_presence_check_says_nothing_was_signed_and_can_be_confirmed_again() {
+    let (mut h, api, data) = started((130, 26)).await;
+    api.answer(|_| {
+        Err(NodeError::denied(format!(
+            "{}presence check cancelled",
+            han_node::api::APPROVAL_NOT_SIGNED
+        )))
+    });
+    pending_approval(&data);
+    h.keys("r").await;
+    h.keys("a<enter>a<enter>").await;
+    let s = h.screen();
+    assert!(
+        s.contains("Approval not signed: presence check cancelled."),
+        "{s}"
+    );
+    assert!(!s.contains("The space refused"), "{s}");
+    // The person may try again: Enter asks the node again.
+    h.keys("<enter>").await;
+    assert_eq!(api.calls().len(), 2);
+}
+
+#[tokio::test]
 async fn an_unavailable_node_can_be_retried_and_a_queued_approval_says_so() {
     let (mut h, api, data) = started((130, 26)).await;
     api.answer(|_| Err(NodeError::unavailable("no route to the home")));

@@ -233,6 +233,18 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 | Gates (defaults, all configurable per space and per repo) | push to protected branches; outside HTTP writes; accepting timeline work into main; opening or merging PRs |
 | Approval surfaces | MVP: the TUI inbox and OS notifications. Later: chat notifiers that link to a HAN face (approvals must be signed), and a phone face |
 
+#### Approvals: human presence
+
+Terminal input is shared and injectable (other processes, terminal plugins, built-in agents, attached clients), so the TUI's two-step `a` then Enter (APR-5) only guards against accidents. The authority is the node: it signs `effect.approve` only after a person has confirmed on the device, out of band, for the plan digest being signed (SR-106). `Command::EffectApprove` keeps its shape; it now means an intent.
+
+| Topic | Decision |
+|---|---|
+| Flow | on `EffectApprove` the node reads the proposal's plan digest, then asks the presence check (`han-presence`) with the action, target, short digest (12 hex), space and proposer. Only on success does it re-check that the proposal still waits with the same digest, and sign. A cancel, a timeout, a failed check or a device without a check returns `denied` with a message starting `approval not signed: `, which faces show as is. The prompt runs on the node, never in a face; prompts are one at a time |
+| Backends | Windows: Windows Hello (`UserConsentVerifier`; the message is the action and the short digest). macOS: LocalAuthentication through objc2 (`DeviceOwnerAuthentication`: Touch ID, then the password); compiled, not yet run on a Mac. Linux: polkit through `pkcheck` under `dev.han.approve` (policy file in `crates/han-presence/polkit/`); the fixed polkit message cannot show the digest until the D-Bus `CheckAuthorization` call replaces `pkcheck`, and a FIDO2 security-key backend comes later. None: `Presence::deny_all()`. Doubles that allow exist only under `cfg(test)` or the `test-doubles` feature |
+| Setting | device-local, in `node.db` `config`: `presence.require` is `all` (the default) or a comma-separated list of action kinds (`effect.approve`), the empty list requiring nothing; `presence.backend` is `auto` (default), `windows-hello`, `touch-id`, `polkit` or `none`. With `none` while presence is required, approving fails: "this device has no presence check; …". No node API command reads or writes it, so a face or an agent cannot turn it off; a malformed value refuses and never defaults |
+| Connections | the local pipe's class comes from the endpoint: a face endpoint takes every command, a host endpoint only agent commands, an executor endpoint agent and executor commands (SR-107). A host or executor endpoint cannot send `EffectApprove` |
+| Wire | no change. Whether an approval should carry an attestation that a presence check passed (so a home or other members can see it) is the UI spec's open question, pending round 33 |
+
 ### 6.3 Storage and data
 
 | Topic | Decision |

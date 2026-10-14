@@ -39,6 +39,7 @@ widestring = "1"
 [dev-dependencies]
 han-exec = { path = "../han-exec", version = "0.1.0" }
 han-net = { path = "../han-net", version = "0.1.0" }
+han-presence = { path = "../han-presence", version = "0.1.0", features = ["test-doubles"] }
 han-seq = { path = "../han-seq", version = "0.1.0" }
 han-node = { path = "../han-node", version = "0.1.0", features = ["runtime"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
