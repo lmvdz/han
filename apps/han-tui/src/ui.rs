@@ -1,7 +1,7 @@
 //! Drawing: the board, the session pane, the approvals pane, the status line and the overlays. Pure functions
 //! of the [`App`]; colour is never the only signal (every state has a glyph and a word).
 
-use han_node::api::{BoardRow, Fidelity, PatchStatus, SandboxBackend, SessionState};
+use han_node::api::{BoardRow, Fidelity, OverlapKind, PatchStatus, SandboxBackend, SessionState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -65,6 +65,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
     if app.help {
         draw_help(f, area);
+    }
+    if app.overlap_detail {
+        draw_overlaps(f, app, area);
     }
 }
 
@@ -422,9 +425,15 @@ fn row_line(
         state.push_str(" (awaits you)");
     }
     let step = clean(&r.step);
+    // The node says why a session failed or is blocked; the step is what it was doing.
+    let said = r
+        .state_reason
+        .as_deref()
+        .map_or_else(|| step.clone(), clean);
     let state_text = match r.state {
         SessionState::Stale => format!("{state} · last heard {} ago · {step}", age(age_ms)),
-        SessionState::Failed => format!("failed: {step}"),
+        SessionState::Failed => format!("failed: {said}"),
+        SessionState::Blocked => format!("{state}: {said}"),
         _ => {
             let tool = r
                 .tool
@@ -1291,9 +1300,12 @@ const HELP: &[(&str, &str)] = &[
     ("t", "group by issue, person, state (remembered per space)"),
     (
         "/  x  c",
-        "filter box (person: agent: issue: state: is:closed ...), clear, closed on/off",
+        "filter box (person: agent: harness: repo: path: label: state: overlap: mine: ...), clear, closed",
     ),
-    ("o  a", "overlap detail; approvals for this session"),
+    (
+        "o  a",
+        "overlap detail (who, tier, files); approvals for this session",
+    ),
     ("Session", ""),
     ("1 2 3 / [ ]", "stream, timeline, changes"),
     ("j k  G", "scroll; G follows the live end"),
@@ -1317,6 +1329,67 @@ const HELP: &[(&str, &str)] = &[
     ("Tab", "next pane"),
     ("?  q  Ctrl-c", "this help; quit (or close the pane); quit"),
 ];
+
+/// The overlaps of the selected session: who, how high, and which files.
+fn draw_overlaps(f: &mut Frame, app: &App, area: Rect) {
+    let Some(r) = app.board.selected_row() else {
+        return;
+    };
+    let width = area.width.saturating_sub(6).min(110);
+    let height = (r.overlap_with.len() as u16 * 2 + 4).min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    f.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .title(format!(
+            " Overlaps of {} (any key closes) ",
+            clean(&r.agent)
+        ))
+        .border_style(Style::new().fg(Color::Yellow));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let w = inner.width as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for o in &r.overlap_with {
+        let word = match o.kind {
+            OverlapKind::IssueClaim => "same issue",
+            OverlapKind::PathLease => "path lease",
+            OverlapKind::SameFile => "same file",
+            OverlapKind::HunkRange => "same lines",
+        };
+        let on = o
+            .issue
+            .as_deref()
+            .map(|i| format!(" on {}", clean(i)))
+            .unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::styled(
+                pad(&format!("⚑ tier {} {word}", o.tier), 24),
+                Style::new().fg(Color::Yellow),
+            ),
+            Span::raw(fit(
+                &format!("{} ({}){on}", clean(&o.person), clean(&o.agent)),
+                w.saturating_sub(24),
+            )),
+        ]));
+        if !o.files.is_empty() {
+            let files: Vec<String> = o.files.iter().map(|p| clean(p)).collect();
+            lines.push(Line::styled(
+                format!(
+                    "{}{}",
+                    " ".repeat(24),
+                    fit(&files.join(", "), w.saturating_sub(24))
+                ),
+                quiet(),
+            ));
+        }
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
 
 fn draw_help(f: &mut Frame, area: Rect) {
     let width = area.width.saturating_sub(6).min(96);

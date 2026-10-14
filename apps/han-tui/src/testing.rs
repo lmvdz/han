@@ -257,6 +257,8 @@ pub fn board_row(session: &str, agent: &str, person: &str, group: &str, step: &s
             hunks: vec![(1, 5)],
         }],
         overlaps: vec![],
+        overlap_with: vec![],
+        state_reason: None,
         tests: None,
         tokens: Some(Tokens {
             input: 30_000,
@@ -299,6 +301,7 @@ pub fn session_row(id: &str, agent: &str, state: SessionState, step: &str) -> Se
         external: None,
         closed: false,
         state,
+        state_reason: None,
         status: Some(StatusBody {
             session: id.into(),
             agent: agent.into(),

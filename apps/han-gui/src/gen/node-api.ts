@@ -438,7 +438,39 @@ include_closed: boolean,
  * Only rows that wait on this device's actor (`needs_me`): a blocked or approval-waiting session of its
  * own work, an effect it may approve.
  */
-needs_me: boolean, };
+needs_me: boolean, 
+/**
+ * Only work for these people (empty: any).
+ */
+person: Array<string>, 
+/**
+ * Only sessions run by these agents (empty: any).
+ */
+agent: Array<string>, 
+/**
+ * Only these harnesses (empty: any).
+ */
+harness: Array<string>, 
+/**
+ * Only these repositories (empty: any).
+ */
+repo: Array<string>, 
+/**
+ * Only rows with one of these labels (empty: any).
+ */
+label: Array<string>, 
+/**
+ * Only sessions that changed a file matching one of these globs (empty: any).
+ */
+path: Array<string>, 
+/**
+ * Only rows in an overlap of at least this tier (1 to 3).
+ */
+overlap_min?: number, 
+/**
+ * Only this device's own work.
+ */
+mine: boolean, };
 
 export type Window = { 
 /**
@@ -792,6 +824,36 @@ actor: string,
  */
 session?: string, };
 
+export type OverlapSummary = { 
+/**
+ * The other party's session, when it has one (a lease or a claim has only an actor).
+ */
+session?: string, 
+/**
+ * The other party's actor.
+ */
+agent: string, 
+/**
+ * The person behind it: its session's person, or the actor itself.
+ */
+person: string, 
+/**
+ * The issue it is on, when it is on one.
+ */
+issue?: string, 
+/**
+ * The highest tier of the overlaps with this party: 1 (claim or lease) or 2 (file or hunk).
+ */
+tier: number, 
+/**
+ * The kind of that overlap.
+ */
+kind: OverlapKind, 
+/**
+ * The paths that meet, sorted (none for a claim on an issue).
+ */
+files: Array<string>, };
+
 export type BoardRow = { 
 /**
  * Orders and identifies the row: the group, then the session.
@@ -849,6 +911,15 @@ files: Array<FileTouch>,
  * Kinds of overlap this session is part of (none: no badge).
  */
 overlaps: Array<OverlapKind>, 
+/**
+ * Who it overlaps with, strongest first (Q-DAT-19): what the badge counts and what `o` lists.
+ */
+overlap_with: Array<OverlapSummary>, 
+/**
+ * Why the state is `failed` or `blocked`, in words: what the host said, or how long it has been silent.
+ * It holds no time that moves, so a row only changes when the reason does (Q-DAT-12).
+ */
+state_reason?: string, 
 /**
  * Test counts.
  */
@@ -921,6 +992,10 @@ closed: boolean,
  */
 state: SessionState, 
 /**
+ * Why the state is `failed` or `blocked` (see [`BoardRow::state_reason`]).
+ */
+state_reason?: string, 
+/**
  * The latest status item.
  */
 status?: StatusBody, 
@@ -959,6 +1034,46 @@ subject: string,
  */
 state?: SessionState, };
 
+export type OverlapFile = { 
+/**
+ * The path, relative to the repository.
+ */
+path: string, 
+/**
+ * The ranges changed by the first party of the pair.
+ */
+ranges_a: Array<[number, number]>, 
+/**
+ * The ranges changed by the second party of the pair.
+ */
+ranges_b: Array<[number, number]>, };
+
+export type ClaimKind = "issue" | "lease";
+
+export type OverlapClaim = { 
+/**
+ * Issue or lease.
+ */
+kind: ClaimKind, 
+/**
+ * The issue, or the path the leases meet on.
+ */
+ref: string, 
+/**
+ * When the overlap ends by itself: the earlier expiry of the two leases.
+ */
+expires_at?: string, };
+
+export type OverlapConflict = { 
+/**
+ * Whether a merge was simulated. The node does not simulate merges yet, so it sends no `conflict`.
+ */
+checked: boolean, 
+/**
+ * How many conflicts the merge has.
+ */
+conflicts: number, };
+
 export type OverlapRow = { 
 /**
  * Orders and identifies the row.
@@ -987,7 +1102,19 @@ parties: Array<OverlapParty>,
 /**
  * What overlaps, in words.
  */
-detail: string, };
+detail: string, 
+/**
+ * The files that meet (tier 2), with each side's changed ranges; `parties[0]` is side A.
+ */
+files: Array<OverlapFile>, 
+/**
+ * The claim or lease behind a tier 1 overlap.
+ */
+claim?: OverlapClaim, 
+/**
+ * The merge simulation, once there is one (tier 3).
+ */
+conflict?: OverlapConflict, };
 
 export type ApprovalRow = { 
 /**

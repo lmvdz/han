@@ -102,6 +102,8 @@ pub struct App {
     pub mode: Mode,
     /// Whether the help overlay is up.
     pub help: bool,
+    /// Whether the overlap detail of the selected session is up.
+    pub overlap_detail: bool,
     /// The transient message.
     pub toast: Option<Toast>,
     /// Terminal size, columns and rows.
@@ -146,6 +148,7 @@ impl App {
             focus: Focus::Board,
             mode: Mode::Normal,
             help: false,
+            overlap_detail: false,
             toast: None,
             size: (100, 30),
             now,
@@ -619,8 +622,9 @@ impl App {
             self.quit = true;
             return vec![Action::Quit];
         }
-        if self.help {
+        if self.help || self.overlap_detail {
             self.help = false;
+            self.overlap_detail = false;
             return Vec::new();
         }
         match self.mode.clone() {
@@ -734,6 +738,7 @@ impl App {
             KeyCode::Char('l') | KeyCode::Right => self.board_right(),
             KeyCode::Char('o') => {
                 match self.board.selected_row() {
+                    Some(r) if !r.overlap_with.is_empty() => self.overlap_detail = true,
                     Some(r) if !r.overlaps.is_empty() => {
                         let words = BoardState::overlap_words(&r.overlaps);
                         let text = format!("{} overlaps: {}", r.agent, words);
@@ -865,9 +870,11 @@ impl App {
     }
 
     fn apply_filter(&mut self, text: &str) -> Vec<Action> {
-        let me = self.me.clone();
-        self.board.set_filter(text, me.as_deref());
-        self.board_sub()
+        if self.board.set_filter(text) {
+            self.board_sub()
+        } else {
+            Vec::new()
+        }
     }
 
     fn open_approvals_for_selection(&mut self) {

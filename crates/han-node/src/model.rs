@@ -13,11 +13,12 @@ use han_core::policy::{
     Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel, Started, TaskState,
 };
 use han_core::{LogRecord, Value};
+use han_seq::time::format_time;
 
 use crate::api::{
-    ApprovalRow, BoardRow, CostRow, Facets, Group, OverlapKind, OverlapParty, OverlapRow,
-    SUMMARY_FIELDS, SUMMARY_TEXT, SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody,
-    WhoRow,
+    ApprovalRow, BoardRow, ClaimKind, CostRow, Facets, Group, OverlapClaim, OverlapFile,
+    OverlapKind, OverlapParty, OverlapRow, OverlapSummary, SUMMARY_FIELDS, SUMMARY_TEXT,
+    SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody, WhoRow,
 };
 
 /// The extension entry kind of an advisory path lease: body `{paths: [string], ttl: seconds, issue?: string}`.
@@ -163,6 +164,18 @@ pub(crate) struct SpaceModel {
     claims: BTreeMap<String, String>,
     time_sig: u64,
     overlap_cache: Option<(u64, Arc<Vec<OverlapRow>>)>,
+}
+
+/// A span of time in words, for a reason that names a threshold.
+fn span(ms: u64) -> String {
+    let (n, unit) = if ms.is_multiple_of(60_000) {
+        (ms / 60_000, "minute")
+    } else if ms.is_multiple_of(1000) {
+        (ms / 1000, "second")
+    } else {
+        (ms, "millisecond")
+    };
+    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
 }
 
 /// Whether `a` and `b` name overlapping paths: equal, or one is a directory prefix (ending in `/`) of the other.
@@ -577,6 +590,33 @@ impl SpaceModel {
         }
     }
 
+    /// Why a session is `failed` or `blocked`, in words (Q-DAT-12): what its host said, or how long it may be
+    /// silent. The text holds no elapsed time, so the row does not change with every tick.
+    pub fn state_reason(&self, s: &SessionInfo, now: &Now) -> Option<String> {
+        let st = s.status.as_ref();
+        let said = || {
+            st.and_then(|x| {
+                x.summary
+                    .clone()
+                    .filter(|t| !t.is_empty())
+                    .or_else(|| Some(x.step.clone()).filter(|t| !t.is_empty()))
+            })
+        };
+        match self.derived_state(s, now) {
+            SessionState::Failed => {
+                let claimed_terminal = st.is_some_and(|x| x.state.is_terminal());
+                let silent = now.ms.saturating_sub(s.last_item_ms) >= self.fresh.failed_ms;
+                if !s.closed && !claimed_terminal && silent {
+                    Some(format!("no status for {}", span(self.fresh.failed_ms)))
+                } else {
+                    said()
+                }
+            }
+            SessionState::Blocked => said(),
+            _ => None,
+        }
+    }
+
     fn live(&self, s: &SessionInfo, now: &Now) -> bool {
         !s.closed && !self.derived_state(s, now).is_terminal()
     }
@@ -720,6 +760,13 @@ impl SpaceModel {
                 subject: issue.clone(),
                 detail: format!("{} are on {issue}", names.join(" and ")),
                 parties,
+                files: Vec::new(),
+                claim: Some(OverlapClaim {
+                    kind: ClaimKind::Issue,
+                    reference: issue.clone(),
+                    expires_at: None,
+                }),
+                conflict: None,
             });
         }
     }
@@ -765,6 +812,13 @@ impl SpaceModel {
                         subject: subject.clone(),
                         detail: format!("{} leases {pa}, {} leases {pb}", a.actor, b.actor),
                         parties,
+                        files: Vec::new(),
+                        claim: Some(OverlapClaim {
+                            kind: ClaimKind::Lease,
+                            reference: subject.clone(),
+                            expires_at: Some(format_time(a.until_secs.min(b.until_secs))),
+                        }),
+                        conflict: None,
                     });
                 }
             }
@@ -815,6 +869,8 @@ impl SpaceModel {
                         },
                     ];
                     parties.sort_by(|a, b| a.session.cmp(&b.session));
+                    // Side A is the first party: the ranges follow the order of the parties.
+                    let (ra, rb) = if sa.id <= sb.id { (ha, hb) } else { (hb, ha) };
                     out.push(OverlapRow {
                         key: format!(
                             "2|{path}|{}|{}",
@@ -827,6 +883,13 @@ impl SpaceModel {
                         subject: path.to_owned(),
                         detail,
                         parties,
+                        files: vec![OverlapFile {
+                            path: path.to_owned(),
+                            ranges_a: ra.to_vec(),
+                            ranges_b: rb.to_vec(),
+                        }],
+                        claim: None,
+                        conflict: None,
                     });
                 }
             }
@@ -835,18 +898,84 @@ impl SpaceModel {
 
     // ───────────────────────── rows ─────────────────────────
 
+    /// Who session `s` overlaps with, strongest first: one entry per other party, folded over the overlaps
+    /// (`touching`, indices into `overlaps`) that name it.
+    fn overlap_summaries(
+        &self,
+        s: &SessionInfo,
+        touching: &[usize],
+        overlaps: &[OverlapRow],
+    ) -> Vec<OverlapSummary> {
+        let mut out: BTreeMap<(String, String), OverlapSummary> = BTreeMap::new();
+        for &oi in touching {
+            let o = &overlaps[oi];
+            for p in &o.parties {
+                let me = p.session.as_deref() == Some(s.id.as_str())
+                    || (p.session.is_none() && p.actor == s.actor)
+                    || (o.kind == OverlapKind::IssueClaim && p.actor == s.actor);
+                if me {
+                    continue;
+                }
+                let other = p.session.as_ref().and_then(|id| self.sessions.get(id));
+                let e = out
+                    .entry((p.session.clone().unwrap_or_default(), p.actor.clone()))
+                    .or_insert_with(|| OverlapSummary {
+                        session: p.session.clone(),
+                        agent: p.actor.clone(),
+                        person: other.map_or_else(|| p.actor.clone(), |x| self.person_of(x)),
+                        issue: other.and_then(|x| self.issue_of(x)).or_else(|| {
+                            (o.kind == OverlapKind::IssueClaim).then(|| o.subject.clone())
+                        }),
+                        tier: o.tier,
+                        kind: o.kind,
+                        files: Vec::new(),
+                    });
+                if o.kind > e.kind {
+                    e.kind = o.kind;
+                    e.tier = o.tier;
+                }
+                let paths: Vec<String> = match o.kind {
+                    OverlapKind::IssueClaim => Vec::new(),
+                    OverlapKind::PathLease => vec![o.subject.clone()],
+                    _ => o.files.iter().map(|f| f.path.clone()).collect(),
+                };
+                for f in paths {
+                    if !e.files.contains(&f) {
+                        e.files.push(f);
+                    }
+                }
+            }
+        }
+        let mut v: Vec<OverlapSummary> = out.into_values().collect();
+        for o in &mut v {
+            o.files.sort();
+        }
+        v.sort_by(|a, b| {
+            b.tier
+                .cmp(&a.tier)
+                .then_with(|| a.agent.cmp(&b.agent))
+                .then_with(|| a.session.cmp(&b.session))
+        });
+        v
+    }
+
     pub fn board_rows(&mut self, group: Group, now: &Now) -> Vec<(Facets, crate::api::Row)> {
         let overlaps = self.overlaps(now);
         let mut kinds: BTreeMap<&str, BTreeSet<OverlapKind>> = BTreeMap::new();
         let mut actor_kinds: BTreeMap<&str, BTreeSet<OverlapKind>> = BTreeMap::new();
-        for o in overlaps.iter() {
+        // The overlaps (indices into `overlaps`) each session and each actor without a session is in.
+        let mut by_session: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        let mut by_actor: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (oi, o) in overlaps.iter().enumerate() {
             for p in &o.parties {
                 match (&p.session, o.kind) {
                     (Some(s), _) => {
                         kinds.entry(s).or_default().insert(o.kind);
+                        by_session.entry(s).or_default().push(oi);
                     }
                     (None, k) => {
                         actor_kinds.entry(&p.actor).or_default().insert(k);
+                        by_actor.entry(&p.actor).or_default().push(oi);
                     }
                 }
             }
@@ -854,6 +983,9 @@ impl SpaceModel {
             if o.kind == OverlapKind::IssueClaim {
                 for p in &o.parties {
                     actor_kinds.entry(&p.actor).or_default().insert(o.kind);
+                    if p.session.is_some() {
+                        by_actor.entry(&p.actor).or_default().push(oi);
+                    }
                 }
             }
         }
@@ -882,6 +1014,17 @@ impl SpaceModel {
                 overlap_kinds.extend(k.iter().copied());
             }
             let files = st.map(|x| x.files.clone()).unwrap_or_default();
+            let mut touching: Vec<usize> =
+                by_session.get(s.id.as_str()).cloned().unwrap_or_default();
+            if !s.closed
+                && let Some(v) = by_actor.get(s.actor.as_str())
+            {
+                touching.extend(v.iter().copied());
+            }
+            touching.sort_unstable();
+            touching.dedup();
+            let overlap_with = self.overlap_summaries(s, &touching, &overlaps);
+            let tier = overlap_with.iter().map(|o| o.tier).max().unwrap_or(0);
             let needs_me = !s.closed
                 && matches!(state, SessionState::WaitingApproval | SessionState::Blocked)
                 && (person == self.me || s.actor == self.me);
@@ -910,6 +1053,14 @@ impl SpaceModel {
                 closed: s.closed,
                 needs_me,
                 text,
+                person: Some(person.clone()),
+                agent: Some(s.actor.clone()),
+                harness: st.map(|x| x.harness.clone()),
+                repo: st.and_then(|x| x.repo.clone()),
+                labels: Vec::new(),
+                paths: files.iter().map(|f| f.path.clone()).collect(),
+                overlap_tier: tier,
+                mine: person == self.me || s.actor == self.me,
             };
             rows.push((
                 facets,
@@ -928,6 +1079,8 @@ impl SpaceModel {
                     tool: st.and_then(|x| x.tool.clone()),
                     files,
                     overlaps: overlap_kinds.into_iter().collect(),
+                    overlap_with,
+                    state_reason: self.state_reason(s, now),
                     tests: st.and_then(|x| x.tests),
                     tokens: st.and_then(|x| x.tokens),
                     summary: st.and_then(|x| x.summary.clone()),
@@ -947,9 +1100,10 @@ impl SpaceModel {
         let state = self.derived_state(s, now);
         let task = s.task.as_ref().and_then(|t| self.tasks.get(t));
         let st = s.status.as_ref();
+        let person = self.person_of(s);
         let facets = Facets {
             state: Some(state),
-            actors: vec![s.actor.clone(), self.person_of(s)],
+            actors: vec![s.actor.clone(), person.clone()],
             issue: self.issue_of(s),
             closed: s.closed,
             needs_me: false,
@@ -959,6 +1113,15 @@ impl SpaceModel {
                 st.map_or("", |x| x.step.as_str()),
                 st.and_then(|x| x.summary.as_deref()).unwrap_or("")
             ),
+            mine: person == self.me || s.actor == self.me,
+            person: Some(person),
+            agent: Some(s.actor.clone()),
+            harness: st.map(|x| x.harness.clone()),
+            repo: st.and_then(|x| x.repo.clone()),
+            paths: st
+                .map(|x| x.files.iter().map(|f| f.path.clone()).collect())
+                .unwrap_or_default(),
+            ..Facets::default()
         };
         (
             facets,
@@ -971,6 +1134,7 @@ impl SpaceModel {
                 external: task.and_then(|t| t.external.clone()),
                 closed: s.closed,
                 state,
+                state_reason: self.state_reason(s, now),
                 status: s.status.clone(),
                 last_active_ms: s.last_item_ms,
             }),
@@ -988,6 +1152,9 @@ impl SpaceModel {
                     closed: false,
                     needs_me: false,
                     text: format!("{} {}", o.subject, o.detail),
+                    paths: o.files.iter().map(|f| f.path.clone()).collect(),
+                    overlap_tier: o.tier,
+                    ..Facets::default()
                 };
                 (facets, crate::api::Row::Overlap(o.clone()))
             })
@@ -1012,6 +1179,7 @@ impl SpaceModel {
                         closed: false,
                         needs_me: false,
                         text: format!("{actor} {via} {subject}"),
+                        ..Facets::default()
                     },
                     crate::api::Row::WhoIsOn(WhoRow {
                         key,
@@ -1126,6 +1294,7 @@ impl SpaceModel {
                             e.proposer,
                             e.executor
                         ),
+                        ..Facets::default()
                     },
                     crate::api::Row::Approval(ApprovalRow {
                         key: format!("{}|{:012}|{}", self.space, e.seq, e.id),
@@ -1342,6 +1511,7 @@ impl SpaceModel {
                         closed: false,
                         needs_me: false,
                         text: format!("{} {} {}", e.action, e.proposer, e.executor),
+                        ..Facets::default()
                     },
                     crate::api::Row::Effect(crate::api::EffectRow {
                         key: format!("{}|{:012}|{}", self.space, e.seq, e.id),

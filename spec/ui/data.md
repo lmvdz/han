@@ -77,7 +77,7 @@ Field names below are the GUI's view of the row. They are derived from the profi
 
 ### 4.1 `Board{space, filter, group, window}` (board.md)
 
-- `filter` holds `person[]`, `agent[]`, `harness[]`, `repo[]`, `issue[]`, `label[]`, `path[]` (globs), `state[]`, `overlapMin?`, `mine?`, `needsMe?` and `text?`. The node-side filter grammar (which keys it accepts, and how globs and free text match) is not fixed yet **[needs node, Q-DAT-11]**.
+- `filter` holds `person[]`, `agent[]`, `harness[]`, `repo[]`, `issue`, `label[]`, `path[]` (globs), `states[]`, `overlap_min?`, `mine`, `needs_me` and `text?`, with `actor?` and `include_closed`. The node fixes the grammar (§12.1, Q-DAT-11).
 - `group` is `issue`, `person` or `state`.
 - `window` is `{offset, limit}`, and `collapsed` lists the collapsed group keys (both PR #35).
 
@@ -96,10 +96,10 @@ Each entry is a group header or a row:
   - `person`: `{actor, displayName?, operatorConfirmed}`;
   - `agentName`;
   - `displayState`: derived by the node, including `stale` and `failed` (PR #35);
-  - `stateReason?`: for failed and blocked **[needs node, Q-DAT-12]**;
-  - `receivedAt`: node clock, in ms **[needs node, Q-DAT-12]**;
+  - `state_reason?`: for failed and blocked (Q-DAT-12);
+  - `receivedAt` is `last_active_ms`, on the clock of `now_ms` (Q-DAT-12);
   - `needs_me` (PR #35), with `needsMeReasons[]`, each of `approval`, `blocked`, `failed`, `stale` or `overlap`;
-  - `overlaps[]`, each `{session, agentName, person, issue?, tier, files[]?}` **[needs node, Q-DAT-19]**;
+  - `overlap_with[]`, each `{session?, agent, person, issue?, tier, kind, files[]}` (Q-DAT-19); `overlaps` stays the list of kinds;
   - `pendingEffects[]`, each `{effect, action, waitingOn[], waitingOnMe}`;
   - `sandbox`: `{backend, fidelity: "enforced" | "advisory"}` (PR #35);
   - `issueTitle?`;
@@ -195,7 +195,7 @@ A plan's `argsBlob` is shown on request (approvals.md §3.3). That needs a way t
 
 ### 4.5 `Overlaps{space}` and `WhoIsOn{issue | path}`
 
-- Overlaps: entries `{pair: [sessionA, sessionB], tier, files[{path, rangesA[], rangesB[]}], claim?{kind: issue | lease, ref, expiresAt?}, conflict?{checked, conflicts}}` **[needs node, Q-DAT-19]**. The pairwise view reads it filtered to one pair.
+- Overlaps: entries `{parties: [A, B], tier, files[{path, ranges_a[], ranges_b[]}], claim?{kind: issue | lease, ref, expires_at?}, conflict?{checked, conflicts}}` (Q-DAT-19). The pairwise view reads it filtered to one pair.
 - WhoIsOn is used by the palette's `#` and `@` modes for "who is on this issue", and returns sessions.
 
 ### 4.6 `SpaceStatus{space}` and node status
@@ -521,6 +521,18 @@ PR #35 also provides:
 
   `total` stays what it was: matching rows with collapsed groups left out.
 - **Q-DAT-7.** A window's `limit` is cut to the view's bound, and to at least 1: 2,000 for `Timeline` points, 200 for `Session` items, 10,000 for every other view (`Query::max_limit`). The default stays 200. A larger limit is not an error; `next_cursor` says whether more follows.
+- **Q-DAT-11.** The filter grammar. `Filter` is a closed object: an unknown member is a decode error (`invalid`), not ignored. Inside one key any value matches; across keys all must hold; a facet a row lacks does not match.
+  - `person`, `agent`, `actor`: an actor id, or its `@local` part (`@ada` matches `@ada:a.example`, `@ad` matches nothing). `person` is who the work is for, `agent` the actor running the session, `actor` either.
+  - `harness`, `label`: case-insensitive equality. `repo`: case-insensitive, by `github:owner/name`, `owner/name` or `name`.
+  - `path`: globs on the files a session changed, case-sensitive. `*` is a run of characters except `/`, `**` a run including `/` (`**/` may be empty), `?` one character except `/`; a pattern ending in `/` covers everything under it. At most 256 characters and 8 stars per glob, 64 values per key.
+  - `overlap_min`: 1 to 3, the lowest overlap tier the row is in. `mine`: the device's own work (it is the person or the agent). `text`: every word, case-insensitively, in the row's searchable text. `needs_me`, `include_closed`, `states` and `issue` are as before.
+  - A value that serde accepts but is wrong (`overlap_min` of 0, an empty value, a glob over the limits) fails the view with `invalid` when it opens.
+  - The text form is `Filter::parse`: `key:value` terms (`"..."` keeps spaces, a repeated key adds values), any other word is free text, `is:mine|closed|needs_me` set the flags. A word before a `:` that is no key is an `invalid` error, never free text; quote a word to search for one with a colon.
+  - The node has no source of labels yet, so `label` matches nothing until Q-BRD-3 lands. `issue` stays a single value; `actor` and `issue` keep their old shape.
+- **Q-DAT-12.** `state_reason` on board rows and on the session row, for `failed` and `blocked`: what the host said (its `summary`, else its `step`), or, for a session that failed from silence, `no status for 30 minutes` (the threshold, so the row does not change with every tick). Stale rows have none: the face shows "last heard" from `last_active_ms`. `receivedAt` is `last_active_ms`: the node's clock when the last item arrived, the clock `now_ms` counts on. No second field.
+- **Q-DAT-19.** Overlaps, additively:
+  - `OverlapRow` gains `files[{path, ranges_a[], ranges_b[]}]` (tier 2; `parties[0]` is side A, `parties[1]` side B, and an empty range list means the whole file), `claim?{kind: issue | lease, ref, expires_at?}` (tier 1; for leases `ref` is the shorter of the two paths and `expires_at` the earlier expiry) and `conflict?{checked, conflicts}`. The pair is `parties`. The node simulates no merges yet, so `conflict` is never sent.
+  - `BoardRow` gains `overlap_with[]`: one entry per other party, strongest first, folded over its overlaps with the row: `{session?, agent, person, issue?, tier, kind, files[]}`. `session` is absent for a lease or a claim by an actor with no session on it. `overlaps` (the kinds) stays for the badge.
 
 ### 12.2 Still open
 
@@ -534,15 +546,12 @@ Each item is a request to the node API's design, not a decision made here. Until
   - inputs, with their delivery state;
   - turn starts that name their driver, and turn ends;
   - status, and an explicit unknown.
-- **Q-DAT-11.** The node-side filter grammar: the accepted keys, the glob semantics for `path`, the case rules for free text, and the error for an unknown key.
-- **Q-DAT-12.** `receivedAt` (the node's receive time for each row, used for ages) and `stateReason` (for failed and blocked rows).
 - **Q-DAT-13.** Admissions (pending joins, shown to owners) in the Approvals view.
 - **Q-DAT-14.** A CallResult that carries a value, for example `Invite` returning the ticket.
 - **Q-DAT-15.** The command parameters that the surfaces collect and PR #35 may not have (§6.1).
 - **Q-DAT-16.** Fetching a blob through the node, for a plan's `argsBlob`.
 - **Q-DAT-17.** A Devices query that lists the identity's keys, with each key's status and when it was added and last seen.
 - **Q-DAT-18.** The count of excluded paths in a change set, and markers for secret-masked spans in stream items and patches.
-- **Q-DAT-19.** The Overlaps entry shape (§4.5), and the overlap summary on Board rows.
 - **Q-DAT-20.** Node panel telemetry in `NodeStatus`: subscription and resync counts, and recent error codes.
 
 The surface specs' own open questions (Q-BRD-*, Q-SES-*, Q-APR-*, Q-DIF-*, Q-SHL-*) list the remaining items.
