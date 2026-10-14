@@ -115,6 +115,7 @@ async fn the_final_message_arrives_through_a_slow_node_after_stop() {
             allow_hosts: Vec::new(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),
+            toolchains: Default::default(),
         },
         shim: PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim")),
         node: PathBuf::from("node"),

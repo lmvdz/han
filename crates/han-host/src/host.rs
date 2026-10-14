@@ -280,6 +280,15 @@ impl Shared {
         }
     }
 
+    /// Whether nobody listens any more: the channel was closed at shutdown, or the publisher is gone.
+    fn signals_closed(&self) -> bool {
+        self.signals
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_none_or(|tx| tx.is_closed())
+    }
+
     /// Ends the signal channel: the publisher drains what is queued, publishes the final state and returns.
     fn close_signals(&self) {
         self.signals
@@ -463,7 +472,7 @@ async fn follow_outbox(sh: &Shared, outbox_id: u64, wait: Duration) -> Fate {
                 }
             }
         }
-        if sh.signals.is_closed() || start.elapsed() >= wait {
+        if sh.signals_closed() || start.elapsed() >= wait {
             return Fate::Pending;
         }
         tokio::time::sleep(OUTBOX_POLL).await;
