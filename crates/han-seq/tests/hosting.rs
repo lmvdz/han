@@ -105,7 +105,13 @@ fn create(
     key_id: &str,
     k: &SigningKey,
 ) -> Result<(), WireError> {
-    let body = Value::Object([("policy".to_owned(), space_policy("members", "invite"))].into());
+    // a server actor (a service with no operator) is made a member below: these tests are about hosting, so
+    // the space lets in agents and services without a confirmed operator
+    let mut policy = space_policy("members", "invite");
+    if let Value::Object(m) = &mut policy {
+        m.insert("allowAgents".into(), Value::Str("any".into()));
+    }
+    let body = Value::Object([("policy".to_owned(), policy)].into());
     let (e, content) = entry(home, space, "space.create", author, key_id, k, body);
     home.append(&e, content.as_ref()).map(|_| ())
 }

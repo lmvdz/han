@@ -66,7 +66,7 @@ han space create --name team --home <ticket>     # prints the space id
 han space list
 ```
 
-`han space member <space> <actor> <role>` sets a role (`owner`, `member`, `guest`, `banned` or `none`; setting a role someone holds already changes nothing), and `han space policy <space> <file>` replaces the space's policy with a JSON policy document. `han dev up` uses a policy that makes `git_push`, `open_pr` and `http_request` wait for an owner's approval.
+`han space member <space> <actor> <role>` sets a role (`owner`, `member`, `guest`, `banned` or `none`; setting a role someone holds already changes nothing), and `han space policy <space> <file>` replaces the space's policy with a JSON policy document. A new space admits an agent or a service only once its operator has confirmed it (`allowAgents: "with-operator"`; `han agent add` and `han executor add` do that when the operator runs them), and an agent whose operator withdraws stops proposing and claiming. `han dev up` uses a policy that makes `git_push`, `open_pr` and `http_request` wait for an owner's approval.
 
 ## 5. Add an agent
 

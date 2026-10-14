@@ -82,14 +82,16 @@ pub fn entry_id(entry: &Value) -> Result<String> {
 }
 
 /// A `PolicyDoc` for a new space: `members` or `public` to read, joining by `invite` or `open` or `closed`.
-/// The rest are the defaults the vectors use: no approval rules, sessions visible to members, steerable by owners.
+/// Agents need a confirmed operator (`allowAgents: "with-operator"`): an agent whose operator never confirmed
+/// it gets no role and can't propose or claim (P-03). The rest are the defaults the vectors use: no approval
+/// rules, sessions visible to members, steerable by owners.
 pub fn space_policy(visibility: &str, join: &str) -> Value {
     use crate::jv::{int, obj, s};
     obj([
         ("visibility", s(visibility)),
         ("join", s(join)),
         ("membersMayInvite", Value::Bool(false)),
-        ("allowAgents", s("any")),
+        ("allowAgents", s("with-operator")),
         ("approvals", Value::Array(vec![])),
         ("separateApprover", Value::Bool(false)),
         ("budget", Value::Null),
