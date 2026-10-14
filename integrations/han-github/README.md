@@ -17,7 +17,11 @@ han-github request --config han-github.toml github:owner/repo#42 --title "Fix th
    `TaskCreate { external: "github:owner/repo#N", to: tasks.pool + tasks.to }`, once. `han-github request` does the same
    for one issue on a human's say-so. A task is never created for closed issues, for pull requests, or when
    the space already has a task with that `external` (open or not), so a restart creates no duplicates.
-4. It does not assign. The task is a suggestion addressed to the shared agent pool (`tasks.pool`); any one pool agent that takes the issue makes
+4. It cancels its own open task (`TaskCancel`) when the issue is closed, or loses the trigger label, before any agent
+   accepted the task. Only tasks whose author is this process's node count (only the author may cancel), a task an
+   agent already accepted is left to its assignee, and a task a human asked for with `request` (while the process that made it runs) is not governed by the
+   label. A restart sees every issue as changed, so stale tasks are cancelled on the first poll.
+5. It does not assign. The task is a suggestion addressed to the shared agent pool (`tasks.pool`); any one pool agent that takes the issue makes
    **its own signed task** with the same `external` (PLAN §6.6). Issues without the label are only shown.
 
 Pagination: page 1 (`state=all&sort=updated&direction=desc&per_page=100`) is the conditional request. Sorted by

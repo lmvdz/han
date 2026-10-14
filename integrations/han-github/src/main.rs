@@ -65,7 +65,7 @@ async fn real_main(cli: Cli) -> Result<(), String> {
                         for repo in syncer.repos() {
                             match syncer.poll(&repo).await {
                                 Ok(t) if t.not_modified => tracing::debug!(%repo, "not modified"),
-                                Ok(t) => tracing::info!(%repo, published = t.published, tasks = t.tasks.len(), "polled"),
+                                Ok(t) => tracing::info!(%repo, published = t.published, tasks = t.tasks.len(), cancelled = t.cancelled.len(), "polled"),
                                 Err(e) => tracing::warn!(%repo, error = %e, "poll failed"),
                             }
                         }

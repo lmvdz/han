@@ -102,6 +102,7 @@ async fn steering_a_guarded_agent_runs_strict_and_taints_it() {
             backend: "none".into(),
             allow_advisory: true,
             ro: vec![script.clone()],
+            login_dir: None,
             allow_hosts: Vec::new(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),

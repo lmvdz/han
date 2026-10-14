@@ -136,6 +136,10 @@ fn run(spec: &Value, prefix: &str) {
             .map_err(|e| e.to_string());
         emit(prefix, format!("read:{p}"), r);
     }
+    for n in strs(spec, "envvar") {
+        let r = std::env::var(&n).map_err(|_| "unset".to_owned());
+        emit(prefix, format!("envvar:{n}"), r);
+    }
     for a in strs(spec, "tcp") {
         emit(prefix, format!("tcp:{a}"), tcp(&a));
     }

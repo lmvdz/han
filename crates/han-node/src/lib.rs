@@ -18,6 +18,8 @@ pub mod rpc;
 pub use api::{NodeApi, NodeError, ViewStream};
 
 #[cfg(feature = "runtime")]
+pub mod agents;
+#[cfg(feature = "runtime")]
 pub mod db;
 #[cfg(feature = "runtime")]
 pub mod keys;

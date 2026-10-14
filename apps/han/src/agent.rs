@@ -6,6 +6,9 @@
 //! * `han agent start --space S --agent @coder:han.example --harness pi|claude --repo github:o/r --issue
 //!   github:o/r#12` asks the node's supervisor to start a `han host` for the session.
 //! * `han agent stop @coder:han.example` stops its sessions.
+//! * `han agent setup-harness claude|pi` installs the pinned ACP adapter into the data directory, so `start`
+//!   needs no flags; `han agent login @coder:han.example` logs the agent in to Claude Code once, in its own
+//!   login directory (`--check` only says whether a login exists).
 
 use std::path::PathBuf;
 
@@ -73,6 +76,34 @@ enum AgentCmd {
         #[command(flatten)]
         home: HomeOpts,
     },
+    /// Installs a harness's pinned ACP adapter (npm, with Node 22) into the data directory and records where.
+    SetupHarness {
+        /// `claude` or `pi`.
+        harness: String,
+        /// Install here instead of `<data>/harness/<harness>` (for example a directory an OS-user agent can
+        /// read).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// A Node 22 to use, instead of the one on the PATH or the pinned build `han` downloads.
+        #[arg(long)]
+        node: Option<PathBuf>,
+    },
+    /// Logs an agent in to Claude Code, once, in the agent's own login directory (`CLAUDE_CONFIG_DIR`). Runs
+    /// `claude` interactively outside the sandbox; the login is the only thing of yours the agent's sandbox
+    /// will see. With `--check` it only says whether a login exists, and never shows its contents.
+    Login {
+        /// The agent actor.
+        agent: String,
+        /// Only report whether a login exists (exit code 1 if not).
+        #[arg(long)]
+        check: bool,
+        /// The login directory, if it is not the agent's default.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// The `claude` program, if it is not on the PATH.
+        #[arg(long)]
+        claude: Option<PathBuf>,
+    },
     /// Stops an agent's sessions, or one `host-<agent>#<issue>`.
     Stop {
         /// The agent or session name.
@@ -81,6 +112,35 @@ enum AgentCmd {
 }
 
 pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // These two work on the data directory and need no running node.
+    match &args.cmd {
+        AgentCmd::Login {
+            agent,
+            check,
+            dir,
+            claude,
+        } => {
+            return crate::harness::login(
+                &args.data,
+                agent,
+                *check,
+                dir.as_deref(),
+                claude.as_deref(),
+            );
+        }
+        AgentCmd::SetupHarness { harness, dir, node } => {
+            let r = crate::harness::setup(&args.data, harness, dir.as_deref(), node.as_deref())?;
+            println!(
+                "{} {} installed: node {}, adapter {}",
+                r.package,
+                r.version,
+                r.node.display(),
+                r.adapter_dir.display()
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
     let endpoint = args
         .endpoint
         .clone()
@@ -108,7 +168,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                 println!("actor {actor}");
                 println!("key {key_id} {public_key}");
                 println!(
-                    "register at its home: profile {{actorKind: agent, operator: {operator}, key: {{keyId: {key_id}, publicKey: {public_key}}}}}"
+                    "register at its home (admin, no restart): han seq register --data <home data> --actor {actor} --kind agent --key-id {key_id} --public-key {public_key} --operator {operator}"
                 );
                 println!("then confirm: han agent confirm {actor} --operator {operator} …");
             }
@@ -162,24 +222,55 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             if let Some(choice) = home.resolve(Some(agent.as_str()))? {
                 pin(&client, &choice).await?;
+                // The node names the agent's operator from its profile, so it follows the profile first.
+                let _ = client
+                    .call(Command::SpaceFollow {
+                        home: choice.home,
+                        space: format!("profile:{agent}"),
+                    })
+                    .await;
             }
-            client
-                .call(Command::AgentStart {
-                    space,
-                    agent: agent.clone(),
-                    harness,
-                    repo,
-                    issue,
-                })
-                .await?;
+            let mut tries = 0;
+            loop {
+                let r = client
+                    .call(Command::AgentStart {
+                        space: space.clone(),
+                        agent: agent.clone(),
+                        harness: harness.clone(),
+                        repo: repo.clone(),
+                        issue: issue.clone(),
+                    })
+                    .await;
+                if tries < 100 && profile_pending(&r) {
+                    // The profile is still being fetched.
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                }
+                r?;
+                break;
+            }
             println!("started a session of {agent}");
         }
+        AgentCmd::Login { .. } | AgentCmd::SetupHarness { .. } => {}
         AgentCmd::Stop { target } => {
             client.call(Command::AgentStop { target }).await?;
             println!("stopped");
         }
     }
     Ok(())
+}
+
+/// Whether a failed start only waits for the agent's profile to arrive.
+fn profile_pending(r: &Result<CallResult, han_node::api::NodeError>) -> bool {
+    match r {
+        Err(e) => {
+            let m = e.to_string();
+            m.contains("profile of")
+                && (m.contains("has not arrived") || m.contains("is not followed"))
+        }
+        Ok(_) => false,
+    }
 }
 
 /// Hands the node a home named by ticket or keys, so it dials and trusts it with no HTTPS well-known.

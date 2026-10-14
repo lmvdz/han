@@ -17,13 +17,14 @@ use han_seq::time::format_time;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
+use crate::agents::{AgentsFile, HarnessInstall};
 use crate::api::{
     BoxFuture, CallResult, Command, HomeRef, NodeApi, NodeError, Query, RoleInfo, ViewEvent,
     ViewStream,
 };
 use crate::db::{NodeDb, OutboxRow};
-use crate::keys::{DEVICE_KEY, KeyStore};
-use crate::supervisor::{Role, RoleSpec, RoleStatus, Supervisor, SupervisorError};
+use crate::keys::{DEVICE_KEY, FileKeyStore, KeyStore};
+use crate::supervisor::{Role, RoleSpec, RoleStatus, RunAs, Supervisor, SupervisorError};
 use crate::sync::{LinkCmd, LinkHandle, ServerKeys, is_final, map_net_error, run_link};
 pub use crate::views::Freshness;
 use crate::views::{Engine, NodeInfo};
@@ -143,6 +144,18 @@ fn home_of_ticket(t: &HomeTicket) -> HomeRef {
         addrs: t.node.addrs.clone(),
         relays: t.node.relays.clone(),
     }
+}
+
+/// Lets the group of the file's directory read and write it, for a key an OS user's host reads (the
+/// directory is shared with that user's group by the runner's admin).
+fn share_with_group(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn unavailable(e: impl std::fmt::Display) -> NodeError {
@@ -977,10 +990,31 @@ impl<T: Transport> Node<T> {
                 if !grammar::is_actor_id(&actor) || name.is_empty() {
                     return Err(NodeError::invalid("not an ActorId"));
                 }
-                let seed = inner
-                    .key_store
-                    .load_or_create(&format!("agent-{name}-{server}"))
-                    .map_err(unavailable)?;
+                let key_name = format!("agent-{name}-{server}");
+                // An agent that runs as another OS user keeps its key in its own state directory, where that
+                // user (and not the node's other keys) can read it.
+                let own = match &inner.cfg.data_dir {
+                    Some(dir) => {
+                        let file = AgentsFile::load(dir).map_err(NodeError::invalid)?;
+                        file.agent(&actor)
+                            .os_user
+                            .is_some()
+                            .then(|| file.keys_dir(dir, &actor).join("keys"))
+                    }
+                    None => None,
+                };
+                let seed = match own {
+                    Some(dir) => {
+                        let store = FileKeyStore::new(dir.clone());
+                        let seed = store.load_or_create(&key_name).map_err(unavailable)?;
+                        share_with_group(&dir.join(format!("{key_name}.key")));
+                        seed
+                    }
+                    None => inner
+                        .key_store
+                        .load_or_create(&key_name)
+                        .map_err(unavailable)?,
+                };
                 Ok(CallResult::Agent {
                     actor,
                     key_id: "k1".into(),
@@ -1003,6 +1037,29 @@ impl<T: Transport> Node<T> {
                     .home_of(&space)
                     .and_then(|server| self.home_ref(&server))
                     .ok_or_else(|| NodeError::unavailable("no link to the space's home yet"))?;
+                // The agent's operator is the one its profile names (§4.3), never this node's actor.
+                let profile = format!("profile:{agent}");
+                let operator = {
+                    let engine = inner.engine();
+                    if !engine.has_space(&profile) {
+                        return Err(NodeError::not_found(format!(
+                            "the profile of {agent} is not followed: follow {profile} first"
+                        )));
+                    }
+                    match engine.profile_operator(&profile) {
+                        Some(op) => op,
+                        None if engine.head(&profile).unwrap_or(0) == 0 => {
+                            return Err(NodeError::unavailable(format!(
+                                "the profile of {agent} has not arrived yet"
+                            )));
+                        }
+                        None => {
+                            return Err(NodeError::invalid(format!(
+                                "the profile of {agent} names no operator"
+                            )));
+                        }
+                    }
+                };
                 let name = match &issue {
                     Some(i) => format!("host-{agent}#{i}"),
                     None => format!("host-{agent}"),
@@ -1013,9 +1070,9 @@ impl<T: Transport> Node<T> {
                     "--agent".into(),
                     agent.clone(),
                     "--harness".into(),
-                    harness,
+                    harness.clone(),
                     "--operator".into(),
-                    inner.cfg.actor.clone(),
+                    operator,
                     "--home-server".into(),
                     home.server.clone(),
                     "--home-node".into(),
@@ -1027,17 +1084,48 @@ impl<T: Transport> Node<T> {
                 for relay in &home.relays {
                     a.extend(["--home-relay".into(), relay.clone()]);
                 }
+                let mut run_as = None;
                 if let Some(dir) = &inner.cfg.data_dir {
-                    let safe: String = agent
-                        .chars()
-                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                        .collect();
+                    let file = AgentsFile::load(dir).map_err(NodeError::invalid)?;
+                    let state = file.state_dir(dir, &agent);
                     a.extend([
                         "--data".into(),
-                        dir.join("agents").join(safe).to_string_lossy().into_owned(),
+                        state.to_string_lossy().into_owned(),
                         "--keys".into(),
-                        dir.to_string_lossy().into_owned(),
+                        file.keys_dir(dir, &agent).to_string_lossy().into_owned(),
+                        "--sandbox".into(),
+                        file.sandbox_of(&agent),
                     ]);
+                    // The harness as `han agent setup-harness` installed it: node and adapter.
+                    let key = match harness.as_str() {
+                        "claude-code" => "claude",
+                        other => other,
+                    };
+                    match HarnessInstall::load(dir, key).map_err(NodeError::invalid)? {
+                        Some(h) => a.extend([
+                            "--node".into(),
+                            h.node.to_string_lossy().into_owned(),
+                            "--adapter-dir".into(),
+                            h.adapter_dir.to_string_lossy().into_owned(),
+                        ]),
+                        None if matches!(key, "claude" | "pi") => {
+                            return Err(NodeError::unavailable(format!(
+                                "the {key} harness is not set up on this node: run `han agent setup-harness {key}`"
+                            )));
+                        }
+                        None => {}
+                    }
+                    if let Some(os_user) = file.agent(&agent).os_user {
+                        if !cfg!(target_os = "linux") {
+                            return Err(NodeError::unavailable(
+                                "running an agent as another OS user is for Linux runners",
+                            ));
+                        }
+                        run_as = Some(RunAs {
+                            os_user,
+                            state_dir: state,
+                        });
+                    }
                 }
                 if let Some(r) = repo {
                     a.extend(["--repo".into(), r]);
@@ -1060,6 +1148,7 @@ impl<T: Transport> Node<T> {
                         name,
                         args: a,
                         env,
+                        run_as,
                     })
                     .map_err(|e| match e {
                         SupervisorError::Running(_) => NodeError::conflict(e.to_string()),

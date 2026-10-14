@@ -9,7 +9,9 @@ use han_node::api::{Fidelity, Sandbox, SandboxBackend};
 use han_vcs::Workspace;
 
 use crate::acp::McpServerSpec;
-use crate::driver::{CredentialMode, KeyHeader, PrepareCtx, prepare_session_dir};
+use crate::driver::{
+    CredentialMode, KeyHeader, PrepareCtx, bind_login, login_binding, prepare_session_dir,
+};
 use crate::host::HostConfig;
 use crate::proxy::{
     AllowEntry, KeySource, KeyStyle, ModelRoute, Proxy, ProxyConfig, ProxyHandle, Roots,
@@ -156,6 +158,7 @@ impl Egress {
             _ => Some(sandbox::pick_inside_port().map_err(|e| e.to_string())?),
         };
         let port = inside_port.unwrap_or_else(|| self.proxy.addr().port());
+        let login = login_binding(&cfg.driver, cfg.sandbox.login_dir.as_deref())?;
         let prepared = prepare_session_dir(
             &cfg.driver,
             &PrepareCtx {
@@ -183,14 +186,17 @@ impl Egress {
             ro.push(store.clone());
         }
         ro.extend(cfg.sandbox.ro.iter().cloned());
+        let mut env = prepared.env.clone();
+        let mut rw = vec![workspace.dir.clone(), agent_dir.to_path_buf(), temp.clone()];
+        bind_login(login, &mut env, &mut rw);
         let spec = SandboxSpec {
             session: self.session.clone(),
             backend,
             program: prepared.program.clone(),
             args: prepared.args.clone(),
             cwd: workspace.dir.clone(),
-            env: prepared.env.clone(),
-            rw: vec![workspace.dir.clone(), agent_dir.to_path_buf(), temp.clone()],
+            env,
+            rw,
             ro,
             temp,
             proxy: Some(ProxyTarget {

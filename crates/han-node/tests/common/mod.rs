@@ -129,6 +129,17 @@ impl World {
         n: u8,
         tweak: impl FnOnce(&mut NodeConfig),
     ) -> Node<MemTransport> {
+        self.node_supervised(actor, n, Arc::new(NoSupervisor), tweak)
+    }
+
+    /// Like `node_with`, with a supervisor.
+    pub fn node_supervised(
+        &self,
+        actor: &str,
+        n: u8,
+        supervisor: Arc<dyn han_node::supervisor::Supervisor>,
+        tweak: impl FnOnce(&mut NodeConfig),
+    ) -> Node<MemTransport> {
         let key_dir = self.dir.join(format!("keys-{n}"));
         let store = FileKeyStore::new(&key_dir);
         store.store(DEVICE_KEY, seed(n)).unwrap();
@@ -144,7 +155,7 @@ impl World {
             clock: self.clock.clone(),
             keys: Arc::new(store),
             server_keys: self.keys.clone(),
-            supervisor: Arc::new(NoSupervisor),
+            supervisor,
         })
         .unwrap()
     }

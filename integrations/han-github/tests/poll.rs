@@ -7,11 +7,15 @@ use han_exec::github::{GithubMinter, JwtSource};
 use han_exec::{GithubApp, Secret};
 use han_github::{Config, Reader, Syncer};
 use han_node::api::{
-    BoxFuture, CallResult, Command, NodeApi, NodeError, Query, Row, TaskRow, ViewEvent, ViewStream,
+    BoxFuture, CallResult, Command, NodeApi, NodeError, NodeStatusRow, Query, Row, TaskRow,
+    ViewEvent, ViewStream,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// The actor of the mock node: the author of the tasks han-github made.
+const ME: &str = "@gh:h";
 
 struct StaticJwt;
 
@@ -73,16 +77,32 @@ impl NodeApi for Node {
     }
 
     fn view(&self, query: Query) -> ViewStream {
-        assert!(matches!(query, Query::Tasks { .. }));
         let (sink, stream) = ViewStream::channel();
-        let rows: Vec<Row> = self
-            .tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .cloned()
-            .map(Row::Task)
-            .collect();
+        let rows: Vec<Row> = match query {
+            Query::Tasks { .. } => self
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .map(Row::Task)
+                .collect(),
+            Query::NodeStatus { .. } => vec![Row::NodeStatus(NodeStatusRow {
+                key: "node".into(),
+                actor: ME.into(),
+                node_id: "n".into(),
+                version: "0".into(),
+                spaces: 1,
+                spaces_live: 1,
+                outbox_pending: 0,
+                roles: vec![],
+                now_ms: 0,
+                subscriptions: 0,
+                resyncs: 0,
+                recent_errors: vec![],
+            })],
+            other => panic!("unexpected view {other:?}"),
+        };
         sink.send(ViewEvent::Snapshot {
             seq: 1,
             rows,
@@ -456,4 +476,110 @@ fn tasks_go_to_the_pool_and_to_is_merged_in_without_duplicates() {
     assert_eq!(cfg.tasks.addressees(), ["@r1:h", "@r2:h", "@lars:h"]);
     assert_eq!(parse("to = [\"@lars:h\"]").tasks.addressees(), ["@lars:h"]);
     assert!(parse("").tasks.addressees().is_empty());
+}
+
+fn open_task(task: &str, external: &str, author: &str, accepted: &[&str]) -> TaskRow {
+    TaskRow {
+        task: task.into(),
+        author: author.into(),
+        open: true,
+        accepted: accepted.iter().map(|a| (*a).to_owned()).collect(),
+        ..task_row(external)
+    }
+}
+
+fn cancelled(node: &Node) -> Vec<String> {
+    node.calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::TaskCancel { task, .. } => Some(task),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn poll_list(server: &MockServer, node: &Arc<Node>, issues: Vec<Value>) -> han_github::Tick {
+    mock_tokens(server).await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issues))
+        .mount(server)
+        .await;
+    rig(server, "\"@bot:h\"", node).poll("o/r").await.unwrap()
+}
+
+#[tokio::test]
+async fn a_closed_issue_cancels_its_unaccepted_task() {
+    let server = MockServer::start().await;
+    let node = Arc::new(Node::default());
+    {
+        let mut t = node.tasks.lock().unwrap();
+        t.push(open_task("t-closed", "github:o/r#1", ME, &[]));
+        // accepted by an agent: its assignee closes it
+        t.push(open_task("t-taken", "github:o/r#2", ME, &["@bot:h"]));
+        // somebody else's task: not ours to cancel
+        t.push(open_task("t-theirs", "github:o/r#3", "@lars:h", &[]));
+        // a different issue that is still ready
+        t.push(open_task("t-ready", "github:o/r#4", ME, &[]));
+    }
+    let closed = |n: u64| {
+        let mut i = issue(n, "Done", &["agent-ready"], "2026-10-05T00:00:00Z");
+        i["state"] = json!("closed");
+        i
+    };
+    let issues = vec![
+        closed(1),
+        closed(2),
+        closed(3),
+        issue(4, "Ready", &["agent-ready"], "2026-10-04T00:00:00Z"),
+    ];
+    let t = poll_list(&server, &node, issues).await;
+    assert_eq!(t.cancelled, ["t-closed"]);
+    assert_eq!(cancelled(&node), ["t-closed"]);
+}
+
+#[tokio::test]
+async fn losing_the_label_cancels_the_task_before_anyone_accepts_it() {
+    let server = MockServer::start().await;
+    let node = Arc::new(Node::default());
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(open_task("t1", "github:o/r#1", ME, &[]));
+    let t = poll_list(
+        &server,
+        &node,
+        vec![issue(1, "Unlabelled", &["bug"], "2026-10-05T00:00:00Z")],
+    )
+    .await;
+    assert_eq!(t.cancelled, ["t1"]);
+    assert_eq!(cancelled(&node), ["t1"]);
+    // nothing else was written
+    assert!(node.task_externals().is_empty());
+}
+
+#[tokio::test]
+async fn a_task_a_human_asked_for_is_not_governed_by_the_label() {
+    let server = MockServer::start().await;
+    mock_tokens(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([issue(
+            1,
+            "No label",
+            &[],
+            "2026-10-05T00:00:00Z"
+        )])))
+        .mount(&server)
+        .await;
+    let node = Arc::new(Node::default());
+    let mut s = rig(&server, "\"@bot:h\"", &node);
+    s.request("github:o/r#1", "By request").await.unwrap();
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(open_task("t1", "github:o/r#1", ME, &[]));
+    let t = s.poll("o/r").await.unwrap();
+    assert!(t.cancelled.is_empty());
+    assert!(cancelled(&node).is_empty());
 }

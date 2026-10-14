@@ -75,6 +75,10 @@ pub struct HostArgs {
     /// Relays: `n0`, `none`, or URLs.
     #[arg(long, default_value = "n0")]
     relay: String,
+    /// The agent's own login directory (the harness's config directory), bound read-write into this agent's
+    /// sandbox only. Default `<data>/claude-config`; `han agent login` makes the login in it.
+    #[arg(long)]
+    login_dir: Option<PathBuf>,
     /// API-key mode: a file (readable only by this user) holding the model key. It stays in the proxy.
     #[arg(long)]
     model_key_file: Option<PathBuf>,
@@ -107,6 +111,14 @@ fn repo(spec: Option<&str>, base: &str, default_branch: &str) -> RepoConfig {
 }
 
 pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let driver = driver(&args.harness)?;
+    // The agent's own login must exist before a session opens: it is the one thing of the user's that the
+    // sandbox gets (`han agent login <agent>`).
+    let login_dir = args
+        .login_dir
+        .clone()
+        .unwrap_or_else(|| args.data.join(han_node::agents::LOGIN_DIR));
+    han_host::driver::login_binding(&driver, Some(&login_dir))?;
     let a = args.agent.trim_start_matches('@');
     let (name, server) = a.split_once(':').unwrap_or((a, ""));
     let key_name = format!("agent-{name}-{server}");
@@ -121,7 +133,6 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         &args.space,
     )
     .await?;
-    let driver = driver(&args.harness)?;
     // API-key mode: the real key stays in the proxy (SR-33, SR-39); the agent sees a dummy.
     let model_key = match (&driver.credentials, &args.model_key_file) {
         (han_host::driver::CredentialMode::ApiKey { .. }, Some(f)) => {
@@ -150,7 +161,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         executor: args
             .executor
             .clone()
-            .unwrap_or_else(|| format!("@exec:{}", args.home.home_server)),
+            .unwrap_or(format!("@exec:{}", args.home.server()?)),
         session_dir,
         taint_db: args.data.join("taint.db"),
         guarded: args.guarded,
@@ -159,6 +170,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
             backend: args.sandbox.clone(),
             allow_advisory: args.allow_advisory,
             ro: Vec::new(),
+            login_dir: Some(login_dir),
             allow_hosts: Vec::new(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),

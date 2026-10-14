@@ -26,7 +26,7 @@ use crate::api::NodeError;
 
 pub use client::RpcClient;
 #[cfg(feature = "runtime")]
-pub use server::{RpcServer, serve};
+pub use server::{RpcServer, listen_local, serve};
 
 /// The longest message, in bytes, either side accepts.
 pub const MAX_LINE: usize = 4 * 1024 * 1024;
@@ -96,6 +96,14 @@ pub(crate) fn local_name(endpoint: &str) -> io::Result<Name<'_>> {
     {
         endpoint.to_fs_name::<interprocess::local_socket::GenericFilePath>()
     }
+}
+
+/// Connects to a local endpoint, for tools with their own protocol (see `listen_local`).
+pub async fn connect_local(
+    endpoint: &str,
+) -> io::Result<interprocess::local_socket::tokio::Stream> {
+    use interprocess::local_socket::tokio::{Stream, prelude::*};
+    Stream::connect(local_name(endpoint)?).await
 }
 
 /// The endpoint a daemon with data directory `data_dir` listens on: `<data_dir>/node.sock` on Unix; on
