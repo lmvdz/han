@@ -729,3 +729,84 @@ fn only_allowed_protocols_are_used() {
         .unwrap_err();
     assert!(matches!(e, VcsError::Tool { .. }), "{e}");
 }
+
+/// R15: the host bundles `base..head`; an executor with its own store, which can't read the workspace,
+/// imports it, finds the same changeset, and lands it from its own repository.
+#[test]
+fn a_bundle_lands_from_an_executors_own_repository() {
+    let f = fixture();
+    let ws = f.workspace("w", "han/bundle");
+    write(&ws.dir.join("src/lib.rs"), "fn a() {}\nfn b2() {}\n");
+    write(&ws.dir.join("new.txt"), "new\n");
+    let head = f.vcs.commit_all(&ws.dir, "change", "Agent").unwrap();
+    let cs = f.vcs.changeset_between(&ws.dir, &ws.base, &head).unwrap();
+    let bundle = f.vcs.bundle(&ws.dir, &ws.base, &head).unwrap();
+    // the temporary ref is gone from the workspace
+    assert!(!git(&ws.dir, &["for-each-ref"]).contains(han_vcs::BUNDLE_REF));
+
+    let exec = GitVcs::new(f.root.join("exec-store"));
+    let remote = f.source();
+    let repo = exec
+        .import_bundle(&remote, None, &bundle, &ws.base, &head)
+        .unwrap();
+    assert_eq!(repo, exec.landing_for(&remote));
+    let theirs = exec.changeset_between(&repo, &ws.base, &head).unwrap();
+    assert_eq!(theirs.digest, cs.digest, "the same changeset");
+    // importing again is harmless
+    exec.import_bundle(&remote, None, &bundle, &ws.base, &head)
+        .unwrap();
+    let r = refname("han/bundle");
+    let spec = LandSpec {
+        remote: remote.clone(),
+        refname: r.clone(),
+        expected: None,
+        new: head.clone(),
+    };
+    assert_eq!(exec.land(&repo, &spec, None).unwrap(), LandOutcome::Landed);
+    assert_eq!(git(&f.remote, &["rev-parse", &r]), head);
+}
+
+#[test]
+fn a_bundle_that_is_not_base_to_head_is_refused() {
+    let f = fixture();
+    let ws = f.workspace("w", "han/b");
+    write(&ws.dir.join("a.txt"), "a\n");
+    let c1 = f.vcs.commit_all(&ws.dir, "one", "Agent").unwrap();
+    write(&ws.dir.join("b.txt"), "b\n");
+    let c2 = f.vcs.commit_all(&ws.dir, "two", "Agent").unwrap();
+    let bundle = f.vcs.bundle(&ws.dir, &ws.base, &c2).unwrap();
+    let exec = GitVcs::new(f.root.join("exec-store"));
+    let remote = f.source();
+    let invalid = |r: han_vcs::Result<PathBuf>| {
+        assert!(matches!(r, Err(VcsError::Invalid(_))), "{r:?}");
+    };
+    // another head, another base, garbage
+    invalid(exec.import_bundle(&remote, None, &bundle, &ws.base, &c1));
+    invalid(exec.import_bundle(&remote, None, &bundle, &c1, &c2));
+    invalid(exec.import_bundle(&remote, None, b"# v2 git bundle\n\nPACK", &ws.base, &c2));
+    // a bundle whose pack was tampered with is refused by git
+    let mut bad = bundle.clone();
+    let n = bad.len();
+    bad[n - 30] ^= 0xff;
+    assert!(
+        exec.import_bundle(&remote, None, &bad, &ws.base, &c2)
+            .is_err()
+    );
+    // nothing to bundle
+    invalid(f.vcs.bundle(&ws.dir, &c2, &c2).map(|_| PathBuf::new()));
+}
+
+#[test]
+fn a_remote_without_the_base_is_not_found() {
+    let f = fixture();
+    let ws = f.workspace("w", "han/b");
+    write(&ws.dir.join("a.txt"), "a\n");
+    let c1 = f.vcs.commit_all(&ws.dir, "one", "Agent").unwrap();
+    write(&ws.dir.join("b.txt"), "b\n");
+    let c2 = f.vcs.commit_all(&ws.dir, "two", "Agent").unwrap();
+    // based on c1, which only the workspace holds
+    let bundle = f.vcs.bundle(&ws.dir, &c1, &c2).unwrap();
+    let exec = GitVcs::new(f.root.join("exec-store"));
+    let r = exec.import_bundle(&f.source(), None, &bundle, &c1, &c2);
+    assert!(matches!(r, Err(VcsError::NotFound(_))), "{r:?}");
+}

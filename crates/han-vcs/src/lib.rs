@@ -21,6 +21,12 @@ use serde::{Deserialize, Serialize};
 
 pub use git::GitVcs;
 
+/// The one ref of a bundle made by [`Vcs::bundle`].
+pub const BUNDLE_REF: &str = "refs/han/bundle";
+
+/// The media type of a bundle made by [`Vcs::bundle`] (the `type` of its `BlobRef`).
+pub const BUNDLE_MEDIA_TYPE: &str = "application/x-git-bundle";
+
 /// Why a version-control operation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum VcsError {
@@ -298,6 +304,35 @@ pub trait Vcs: Send + Sync + 'static {
 
     /// Moves a ref on a remote by compare-and-swap, pushing the objects `new` needs from `dir`.
     fn land(&self, dir: &Path, spec: &LandSpec, auth: Option<&RemoteAuth>) -> Result<LandOutcome>;
+
+    /// The commits `base..head` of the repository at `dir` as one self-describing file (for git, a bundle
+    /// whose one ref, [`BUNDLE_REF`], is `head` and whose prerequisite is `base`). The host hands it to an
+    /// executor that can't read `dir` (R15).
+    fn bundle(&self, dir: &Path, base: &str, head: &str) -> Result<Vec<u8>> {
+        let _ = (dir, base, head);
+        Err(VcsError::Invalid(format!(
+            "{} makes no bundles",
+            self.name()
+        )))
+    }
+
+    /// Imports a [`Vcs::bundle`] into a repository of this backend's own for `remote`, fetching `base` from
+    /// `remote` (with `auth`) when the repository lacks it, and returns that repository, which then holds
+    /// `head`. Fails if the bundle's head is not `head` or its prerequisite is not `base`.
+    fn import_bundle(
+        &self,
+        remote: &str,
+        auth: Option<&RemoteAuth>,
+        bundle: &[u8],
+        base: &str,
+        head: &str,
+    ) -> Result<PathBuf> {
+        let _ = (remote, auth, bundle, base, head);
+        Err(VcsError::Invalid(format!(
+            "{} imports no bundles",
+            self.name()
+        )))
+    }
 
     /// Simulates merging `theirs` into `ours` in the repository at `dir`, without touching its working tree,
     /// index or refs.

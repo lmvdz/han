@@ -8,6 +8,7 @@
 //! `cargo test -p han --test e2e -- --ignored --test-threads=1`. They need
 //! `han-fake-agent` and `han-github` built next to `han` (`cargo build --workspace --bins`).
 
+mod os_user;
 mod stack;
 
 use std::time::Duration;
