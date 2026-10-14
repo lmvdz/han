@@ -104,13 +104,45 @@ pub enum Signal {
 /// The step shown while a proposal waits in the node's outbox.
 pub const QUEUED_STEP: &str = "queued: waiting for the home to accept the proposal";
 
+/// Where the session's one proposal stands, as the host's bridge reported it.
+#[derive(Clone, Debug, PartialEq)]
+enum Proposal {
+    /// None is open.
+    None,
+    /// Signed, but the home has not accepted it.
+    Queued,
+    /// Accepted; an approver has to decide.
+    Waiting,
+    /// Refused, or delivery gave up; why.
+    Refused(String),
+}
+
 /// Folds signals into the status of one session.
+///
+/// Signals come from two producers that nothing orders against each other: the agent (ACP events: tools, plan,
+/// messages, and the turn's start and end) and the host's bridge (what became of a proposal). A tool call's
+/// event is emitted *before* the `propose` call it announces, but it can be read *after* the bridge has
+/// reported the proposal. So the state is not one last-writer-wins cell. It is derived from facets that each
+/// have one writer, and the rules for combining them are explicit and independent of arrival order:
+///
+/// * **activity** (`act_state`, `act_step`): written by the agent's signals and the turn lifecycle only.
+/// * **proposal**: written by the bridge's signals only; cleared by [`Signal::Resumed`] and by a new turn.
+/// * **terminal**: `Failed` and `Done` are sticky; only a new turn revives.
+///
+/// Shown: a terminal state; else a refused or queued proposal (`Blocked`, with its own step); else a waiting
+/// proposal (`WaitingApproval`, with the activity's step); else the activity.
 #[derive(Clone, Debug)]
 pub struct StatusDeriver {
     body: StatusBody,
     tests: Option<Tests>,
     /// The start of the agent's latest message this turn.
     last_message: Option<String>,
+    act_state: SessionState,
+    act_step: String,
+    proposal: Proposal,
+    /// Between a turn's start and end. The agent's tool events outside a turn are stale (read late) and
+    /// change nothing: the turn's end is the bridge's word, and it wins.
+    turn_active: bool,
 }
 
 impl StatusDeriver {
@@ -144,12 +176,40 @@ impl StatusDeriver {
                 tokens: None,
                 summary: None,
                 sandbox: Some(sandbox),
+                publish_errors: 0,
                 seq: 0,
                 at: String::new(),
             },
             tests: None,
             last_message: None,
+            act_state: SessionState::Idle,
+            act_step: "starting".into(),
+            proposal: Proposal::None,
+            turn_active: false,
         }
+    }
+
+    fn terminal(&self) -> bool {
+        matches!(self.act_state, SessionState::Failed | SessionState::Done)
+    }
+
+    /// Combines the facets into the shown state and step (see the type's rules).
+    fn derive(&mut self) {
+        let (state, step) = if self.terminal() {
+            (self.act_state, self.act_step.clone())
+        } else {
+            match &self.proposal {
+                Proposal::None => (self.act_state, self.act_step.clone()),
+                Proposal::Waiting => (SessionState::WaitingApproval, self.act_step.clone()),
+                Proposal::Queued => (SessionState::Blocked, QUEUED_STEP.to_owned()),
+                Proposal::Refused(why) => (
+                    SessionState::Blocked,
+                    bound(&format!("proposal refused: {why}"), MAX_STEP),
+                ),
+            }
+        };
+        self.body.state = state;
+        self.body.step = step;
     }
 
     /// Applies one signal. Returns whether the status changed.
@@ -158,16 +218,22 @@ impl StatusDeriver {
         let b = &mut self.body;
         match signal {
             Signal::TurnStarted { step } => {
-                b.state = SessionState::Working;
-                b.step = bound(&step, MAX_STEP);
+                self.turn_active = true;
+                self.act_state = SessionState::Working;
+                self.act_step = bound(&step, MAX_STEP);
+                self.proposal = Proposal::None;
                 b.tool = None;
                 self.last_message = None;
             }
             Signal::LastMessage(m) => self.last_message = Some(m),
             Signal::Tool { title, kind } => {
-                b.state = SessionState::Working;
-                b.step = bound(&title, MAX_STEP);
-                b.tool = Some(bound(kind.as_deref().unwrap_or(&title), MAX_TOOL));
+                if self.turn_active
+                    && !matches!(self.act_state, SessionState::Failed | SessionState::Done)
+                {
+                    self.act_state = SessionState::Working;
+                    self.act_step = bound(&title, MAX_STEP);
+                    b.tool = Some(bound(kind.as_deref().unwrap_or(&title), MAX_TOOL));
+                }
             }
             Signal::ToolDone { output } => {
                 if let Some(t) = output.as_deref().and_then(parse_tests) {
@@ -197,45 +263,39 @@ impl StatusDeriver {
             }
             Signal::Summary(s) => b.summary = Some(bound(&s, MAX_SUMMARY)),
             Signal::Tokens(t) => b.tokens = Some(t),
-            Signal::WaitingApproval => b.state = SessionState::WaitingApproval,
-            Signal::ProposalQueued => {
-                b.state = SessionState::Blocked;
-                b.step = QUEUED_STEP.into();
-            }
-            Signal::ProposalRefused(why) => {
-                b.state = SessionState::Blocked;
-                b.step = bound(&format!("proposal refused: {why}"), MAX_STEP);
-            }
-            Signal::Resumed => b.state = SessionState::Working,
-            Signal::TurnEnded => {
-                // A proposal that waits (for the home, or for an approver) or was refused keeps the state and,
-                // when it is not an approval wait, its step: they say more than "waiting for input".
-                if !matches!(
-                    b.state,
-                    SessionState::WaitingApproval | SessionState::Blocked
-                ) {
-                    b.state = SessionState::Idle;
+            Signal::WaitingApproval => self.proposal = Proposal::Waiting,
+            Signal::ProposalQueued => self.proposal = Proposal::Queued,
+            Signal::ProposalRefused(why) => self.proposal = Proposal::Refused(why),
+            Signal::Resumed => {
+                self.proposal = Proposal::None;
+                if !matches!(self.act_state, SessionState::Failed | SessionState::Done) {
+                    self.act_state = SessionState::Working;
                 }
-                b.tool = None;
-                let step = match self.last_message.take() {
-                    Some(m) => waiting_step(&m),
-                    None => "waiting for input".into(),
-                };
-                if b.state != SessionState::Blocked {
-                    b.step = step;
+            }
+            Signal::TurnEnded => {
+                self.turn_active = false;
+                if !matches!(self.act_state, SessionState::Failed | SessionState::Done) {
+                    self.act_state = SessionState::Idle;
+                    self.act_step = match self.last_message.take() {
+                        Some(m) => waiting_step(&m),
+                        None => "waiting for input".into(),
+                    };
+                    b.tool = None;
                 }
             }
             Signal::Failed(why) => {
-                b.state = SessionState::Failed;
-                b.step = bound(&format!("failed: {why}"), MAX_STEP);
+                self.act_state = SessionState::Failed;
+                self.act_step = bound(&format!("failed: {why}"), MAX_STEP);
                 b.tool = None;
             }
             Signal::Done => {
-                b.state = SessionState::Done;
+                self.act_state = SessionState::Done;
+                self.act_step = "done".into();
                 b.tool = None;
-                b.step = "done".into();
             }
         }
+        self.derive();
+        let b = &self.body;
         *b != before
     }
 
@@ -393,6 +453,7 @@ branch should I
     #[test]
     fn free_text_is_bounded() {
         let mut s = d();
+        s.apply(Signal::TurnStarted { step: "w".into() });
         s.apply(Signal::Summary("x".repeat(5000)));
         s.apply(Signal::Tool {
             title: "y".repeat(5000),
@@ -429,6 +490,96 @@ branch should I
         s.apply(Signal::TurnEnded);
         assert_eq!(s.state(), SessionState::Blocked);
         assert!(s.snapshot("t").step.contains("has no profile"));
+    }
+
+    /// Every merge of `a` and `b` that keeps each one's own order.
+    fn interleavings(a: &[Signal], b: &[Signal]) -> Vec<Vec<Signal>> {
+        match (a.split_first(), b.split_first()) {
+            (None, _) => vec![b.to_vec()],
+            (_, None) => vec![a.to_vec()],
+            (Some((x, ra)), Some((y, rb))) => {
+                let mut out = Vec::new();
+                for mut rest in interleavings(ra, b) {
+                    rest.insert(0, x.clone());
+                    out.push(rest);
+                }
+                for mut rest in interleavings(a, rb) {
+                    rest.insert(0, y.clone());
+                    out.push(rest);
+                }
+                out
+            }
+        }
+    }
+
+    fn tool(title: &str) -> Signal {
+        Signal::Tool {
+            title: title.into(),
+            kind: Some("other".into()),
+        }
+    }
+
+    #[test]
+    fn the_state_does_not_depend_on_how_agent_events_and_bridge_signals_interleave() {
+        // The agent's events: the propose call's own tool events (emitted before the call, so read before or
+        // after the bridge's word about it), its result, and more work.
+        let agent = [
+            tool("mcp__han__propose"),
+            tool("mcp__han__propose"),
+            Signal::ToolDone { output: None },
+            tool("cargo test"),
+            Signal::Files(Vec::new()),
+        ];
+        // The bridge's signals, in their own order, ending the turn.
+        let bridge = [
+            Signal::Summary("push".into()),
+            Signal::ProposalQueued,
+            Signal::WaitingApproval,
+            Signal::TurnEnded,
+        ];
+        let all = interleavings(&agent, &bridge);
+        assert_eq!(all.len(), 126);
+        let mut shown = None;
+        for order in all {
+            let mut s = d();
+            s.apply(Signal::TurnStarted { step: "w".into() });
+            for sig in order.clone() {
+                s.apply(sig);
+            }
+            let snap = s.snapshot("t");
+            assert_eq!(snap.state, SessionState::WaitingApproval, "{order:?}");
+            assert_eq!(snap.step, "waiting for input", "{order:?}");
+            assert_eq!(snap.tool, None, "{order:?}");
+            if let Some(prev) = &shown {
+                assert_eq!(&snap, prev, "{order:?}");
+            }
+            shown = Some(snap);
+        }
+    }
+
+    #[test]
+    fn a_late_tool_event_never_revives_a_failed_session_or_a_refused_proposal() {
+        let agent = [tool("a"), tool("b")];
+        let bridge = [
+            Signal::ProposalQueued,
+            Signal::ProposalRefused("no profile".into()),
+            Signal::Failed("the agent exited".into()),
+        ];
+        let mut shown = None;
+        for order in interleavings(&agent, &bridge) {
+            let mut s = d();
+            s.apply(Signal::TurnStarted { step: "w".into() });
+            for sig in order.clone() {
+                s.apply(sig);
+            }
+            let snap = s.snapshot("t");
+            assert_eq!(snap.state, SessionState::Failed, "{order:?}");
+            if let Some(prev) = &shown {
+                // The tool shown is cleared by the failure whatever came first.
+                assert_eq!(&snap, prev, "{order:?}");
+            }
+            shown = Some(snap);
+        }
     }
 
     #[test]

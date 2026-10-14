@@ -866,6 +866,11 @@ summary?: string,
  */
 sandbox?: Sandbox, 
 /**
+ * How many status or stream publishes of this session the node refused or failed, so far. A node-side
+ * extension like `sandbox` (unknown members are ignored); `0` for a host that does not send it.
+ */
+publish_errors: number, 
+/**
  * A counter per session, starting at 1.
  */
 seq: number, 
@@ -998,6 +1003,10 @@ summary?: string,
  * The sandbox, when the host reports one.
  */
 sandbox?: Sandbox, 
+/**
+ * Publishes of the session that failed (see `StatusBody::publish_errors`).
+ */
+publish_errors: number, 
 /**
  * This node's steady clock (ms) when the last item arrived; a face computes the age from its own clock.
  */

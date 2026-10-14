@@ -86,9 +86,16 @@ async fn the_supervisor_seam_starts_and_watches_a_process() {
         args: vec![],
     };
     assert!(none.start(spec("h")).is_err());
-    // `cargo host` is not a command: the process starts and ends, which is all the seam has to show.
-    let spawner = ProcessSpawner::new(env!("CARGO"));
-    spawner.start(spec("h1")).unwrap();
+    // The process is this test binary, which the build made (never `cargo` or a `han` found on PATH, which
+    // may have no `host` subcommand). It is asked for a test that does not exist, so it starts and ends
+    // quietly, which is all the seam has to show.
+    let spawner = ProcessSpawner::new(std::env::current_exe().unwrap());
+    spawner
+        .start(RoleSpec {
+            args: vec!["--exact".into(), "no_such_test".into(), "--quiet".into()],
+            ..spec("h1")
+        })
+        .unwrap();
     let mut ended = false;
     for _ in 0..200 {
         if matches!(spawner.status().as_slice(), [(n, RoleStatus::Exited(Some(_)))] if n == "h1") {
