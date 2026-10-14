@@ -120,7 +120,7 @@ pub(crate) struct Inner<T: Transport> {
     pub auto_admit: Mutex<HashMap<String, i64>>,
 }
 
-/// The most a face may fetch of a blob through the node.
+/// The most a face may fetch or put of a blob through the node.
 const MAX_FACE_BLOB: u64 = 4 * 1024 * 1024;
 
 /// The runtime of one device.
@@ -1530,6 +1530,54 @@ impl<T: Transport> Node<T> {
                     hash,
                     media_type,
                     data: base64url::encode(&data),
+                })
+            }
+            Command::BlobPut {
+                space,
+                media_type,
+                data,
+            } => {
+                self.require_followed(&space)?;
+                if !grammar::is_media_type(&media_type) {
+                    return Err(NodeError::invalid("not a media type"));
+                }
+                let bytes = base64url::decode(&data)
+                    .map_err(|_| NodeError::invalid("data is not base64url"))?;
+                if bytes.is_empty() {
+                    return Err(NodeError::invalid("a blob has at least one byte"));
+                }
+                let size = bytes.len() as u64;
+                if size > MAX_FACE_BLOB {
+                    return Err(NodeError::invalid(format!(
+                        "a blob put through the node is at most {MAX_FACE_BLOB} bytes"
+                    )));
+                }
+                let hash = ids::sha256_hex(&bytes);
+                let (_, client) = self.client_of(&space).await?;
+                let r = obj([
+                    ("hash", s(&hash)),
+                    ("size", int(size)),
+                    ("type", s(&media_type)),
+                ]);
+                let mut offset = 0u64;
+                for part in bytes.chunks(786_432) {
+                    client
+                        .call(
+                            "blobPut",
+                            args([
+                                ("ref", r.clone()),
+                                ("offset", int(offset)),
+                                ("data", s(&base64url::encode(part))),
+                            ]),
+                        )
+                        .await
+                        .map_err(|e| map_net_error(&e))?;
+                    offset += part.len() as u64;
+                }
+                Ok(CallResult::BlobRef {
+                    hash,
+                    size,
+                    media_type,
                 })
             }
             Command::EffectApprove {

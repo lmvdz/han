@@ -146,6 +146,18 @@ pub enum Command {
         /// The media type the reference names.
         media_type: String,
     },
+    /// Uploads bytes as a blob (`blobPut`, in parts) to the home of the space and returns its reference, for a
+    /// record of this node's actor to refer to (an effect's `argsBlob`): the home supplies it for the space
+    /// once such a record is in its log (G-01). At most 4 MiB. The agent's host hands a `git_push`'s changeset
+    /// to the executor this way (R15).
+    BlobPut {
+        /// The space.
+        space: String,
+        /// The media type of the bytes.
+        media_type: String,
+        /// The bytes, base64url.
+        data: String,
+    },
     /// Calls a task off.
     TaskCancel {
         /// The space.
@@ -351,6 +363,8 @@ impl Command {
             | Command::DevicePair { .. }
             | Command::DeviceRevoke { .. }
             | Command::BlobFetch { .. }
+            // the agent's host calls it in process; an agent's tools never upload blobs
+            | Command::BlobPut { .. }
             | Command::EffectApprove { .. }
             | Command::EffectCancel { .. }
             | Command::OutboxRetry { .. }
@@ -434,6 +448,15 @@ pub enum CallResult {
         media_type: String,
         /// The bytes, base64url.
         data: String,
+    },
+    /// A blob was uploaded (`BlobPut`): its reference.
+    BlobRef {
+        /// `sha256` of the bytes, lowercase hex.
+        hash: String,
+        /// The size in bytes.
+        size: u64,
+        /// The media type.
+        media_type: String,
     },
     /// A status item was sent (`StatusPublish`).
     Status {

@@ -292,11 +292,19 @@ impl Home {
             .and_then(|m| m.get(who))
             .is_some_and(|at| self.clock.now_ms().saturating_sub(*at) < OWN_BLOB_MS)
             && can_read(state, who, state.head);
-        // supply (2): this home holds the bytes for that space
+        // supply (2): this home holds the bytes for that space: fetched for it, or uploaded by the author of
+        // a record of it that references them, whether the upload came before or after that record
         let supplied = g
             .blobs
             .supplied
-            .contains(&(space.to_owned(), r.hash.clone()));
+            .contains(&(space.to_owned(), r.hash.clone()))
+            || sp.records.iter().any(|rec| {
+                !rec.redacted
+                    && g.blobs.uploaded_by(&r.hash, &rec.entry.author)
+                    && blob_refs(&rec.entry.kind, rec.content.as_ref())
+                        .iter()
+                        .any(|b| b.hash == r.hash && b.size == r.size)
+            });
         if !((referenced && supplied) || context || own) {
             return Err(not_found());
         }

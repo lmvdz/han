@@ -347,8 +347,10 @@ impl Shared {
     }
 
     /// The plan of a proposal, built by the host (never by the agent): git pushes carry the committed
-    /// changeset and its digest, which the executor checks before landing.
-    fn plan_for(&self, req: &ProposeRequest) -> Result<Value, String> {
+    /// changeset and its digest, which the executor checks before landing, and the commits themselves as a
+    /// bundle (`argsBlob`, R15): the executor may run as another OS user that can't read the workspace. The
+    /// bundle's bytes come back with the plan, to upload before the proposal.
+    fn plan_for(&self, req: &ProposeRequest) -> Result<(Value, Option<Vec<u8>>), String> {
         let effect = req.effect.as_object().cloned().unwrap_or_default();
         let branch = self.workspace.branch.clone();
         match req.kind.as_str() {
@@ -374,7 +376,17 @@ impl Shared {
                     .remote_ref(&self.workspace.dir, &self.cfg.repo.source, &refname, None)
                     .ok()
                     .flatten();
-                Ok(json!({
+                let bundle = self
+                    .vcs
+                    .bundle(&self.workspace.dir, &self.workspace.base, &head)
+                    .map_err(|e| format!("the changeset can't be bundled: {e}"))?;
+                if bundle.len() > MAX_BUNDLE {
+                    return Err(format!(
+                        "the changeset is too large to hand to the executor: {} bytes as a bundle, at most {MAX_BUNDLE}",
+                        bundle.len()
+                    ));
+                }
+                let plan = json!({
                     "action": "git_push",
                     "target": self.cfg.repo.name,
                     "args": {
@@ -383,10 +395,15 @@ impl Shared {
                         "from": from,
                         "to": head,
                         "changeset": cs.digest,
-                        "source": self.workspace.dir.to_string_lossy(),
                         "changes": cs.summary(),
+                    },
+                    "argsBlob": {
+                        "hash": han_core::ids::sha256_hex(&bundle),
+                        "size": bundle.len(),
+                        "type": han_vcs::BUNDLE_MEDIA_TYPE,
                     }
-                }))
+                });
+                Ok((plan, Some(bundle)))
             }
             "open_pr" => {
                 let title = effect
@@ -401,7 +418,10 @@ impl Shared {
                 if let Some(b) = effect.get("body").and_then(Value::as_str) {
                     args["body"] = Value::String(crate::status::bound(b, 20_000));
                 }
-                Ok(json!({"action": "open_pr", "target": self.cfg.repo.name, "args": args}))
+                Ok((
+                    json!({"action": "open_pr", "target": self.cfg.repo.name, "args": args}),
+                    None,
+                ))
             }
             "http_request" => {
                 let url = effect
@@ -419,12 +439,67 @@ impl Shared {
                         args.insert(k.into(), v.clone());
                     }
                 }
-                Ok(json!({"action": "http_request", "target": host, "args": args}))
+                Ok((
+                    json!({"action": "http_request", "target": host, "args": args}),
+                    None,
+                ))
             }
             other => Err(format!(
                 "unknown kind {other}: use git_push, open_pr or http_request"
             )),
         }
+    }
+}
+
+/// The largest bundle a `git_push` hands over: what the node API carries as one blob.
+const MAX_BUNDLE: usize = 4 * 1024 * 1024;
+
+/// How often an upload of a `git_push`'s bundle is tried again while the home is away, and for how long.
+const BLOB_RETRY: Duration = Duration::from_secs(2);
+const BLOB_RETRY_FOR: Duration = Duration::from_secs(3600);
+/// How long a proposal waits for the first upload of its bundle before it goes ahead (the upload goes on).
+const BLOB_FIRST_TRY: Duration = Duration::from_secs(5);
+
+/// Uploads a proposal's `argsBlob` (the bundle of a `git_push`) to the space's home. The home supplies it to
+/// the executor because this agent authored the proposal (G-01), whether the upload comes before or after
+/// the proposal is ordered, so a home that is away is tried again in the background while the proposal waits
+/// in the outbox. Any other refusal refuses the proposal.
+async fn put_args_blob(sh: &Arc<Shared>, bytes: Vec<u8>) -> Result<(), String> {
+    let call = |sh: Arc<Shared>, data: String| async move {
+        sh.api
+            .call(Command::BlobPut {
+                space: sh.cfg.space.clone(),
+                media_type: han_vcs::BUNDLE_MEDIA_TYPE.into(),
+                data,
+            })
+            .await
+    };
+    let data = han_core::base64url::encode(&bytes);
+    // A home that is away can take long to fail: the proposal does not wait for it.
+    let first = tokio::time::timeout(BLOB_FIRST_TRY, call(Arc::clone(sh), data.clone()))
+        .await
+        .unwrap_or_else(|_| Err(NodeError::unavailable("the home did not answer in time")));
+    match first {
+        Ok(_) => Ok(()),
+        Err(NodeError::Unavailable { .. }) => {
+            let sh = Arc::clone(sh);
+            tokio::spawn(async move {
+                let start = tokio::time::Instant::now();
+                while start.elapsed() < BLOB_RETRY_FOR && !sh.signals_closed() {
+                    tokio::time::sleep(BLOB_RETRY).await;
+                    match call(Arc::clone(&sh), data.clone()).await {
+                        Ok(_) => return,
+                        Err(NodeError::Unavailable { .. }) => {}
+                        Err(e) => {
+                            sh.publish_failed("the changeset's bundle", &e);
+                            return;
+                        }
+                    }
+                }
+            });
+            Ok(())
+        }
+        Err(e) => Err(format!("the changeset could not be handed over: {e}")),
     }
 }
 
@@ -485,10 +560,15 @@ impl HostBridge for Bridge {
     fn propose(&self, req: ProposeRequest) -> BoxFuture<'_, ProposeAnswer> {
         Box::pin(async move {
             let sh = &self.0;
-            let plan = match sh.plan_for(&req) {
+            let (plan, args_blob) = match sh.plan_for(&req) {
                 Ok(p) => p,
                 Err(reason) => return ProposeAnswer::Refused { reason },
             };
+            if let Some(bytes) = args_blob
+                && let Err(reason) = put_args_blob(sh, bytes).await
+            {
+                return ProposeAnswer::Refused { reason };
+            }
             let plan_text = han_core::json::parse(plan.to_string().as_bytes())
                 .ok()
                 .and_then(|v| han_core::json::canonicalize(&v).ok())
