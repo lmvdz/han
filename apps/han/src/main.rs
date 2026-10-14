@@ -13,6 +13,7 @@ mod keys;
 mod node;
 mod rolenode;
 mod seq;
+mod space;
 mod tui;
 mod update;
 
@@ -37,6 +38,8 @@ enum Cmd {
     Board(board::BoardArgs),
     /// The live board in the terminal: sessions, the session pane, approvals. Needs the running node.
     Tui(tui::TuiArgs),
+    /// Follow a space and list the followed ones, through the running node.
+    Space(space::SpaceArgs),
     /// Run a home: the sequencer of one server on a QUIC endpoint.
     Seq(seq::SeqArgs),
     /// Print the home ticket a running `han seq` wrote to its data directory, to hand to teammates.
@@ -92,6 +95,7 @@ async fn run(cli: Cli) {
         Cmd::Node(a) => node::run(a).await,
         Cmd::Board(a) => board::run(a).await,
         Cmd::Tui(a) => tui::run(a).await,
+        Cmd::Space(a) => space::run(a).await,
         Cmd::Seq(a) => seq::run(a).await,
         Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,

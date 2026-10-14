@@ -1,6 +1,6 @@
 //! Naming a home on the command line without its HTTPS well-known: by a home ticket, or by node address.
 //!
-//! `han seq` prints a home ticket (and `han ticket` prints it again). A node given one keeps the home's node and
+//! `han seq` writes a home ticket to its data directory (`han ticket --data` prints it). A node given one keeps the home's node and
 //! receipt keys, as ticket-pinned trust, in its data directory (`Command::HomePin`).
 
 use clap::Args;
