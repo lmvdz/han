@@ -82,7 +82,12 @@ The app's own status row and footer stay below the pane, unchanged.
   3. the decision band, folded into the activity line as "· approval waits on you";
   4. the transcript, down to 3 rows.
 
-  The steering field, while open, keeps at least 1 row. Below 8 rows of pane height, the header and the activity line also take 1 row each. Below 5 rows, the app's existing "too small" screen applies.
+  All of these rules count the **pane's** height: the rows the session pane gets after the app's own header, status row and footer. The pane's height rules are:
+  - While the steering field is open, it keeps at least 1 row.
+  - Under 8 rows, the header and the activity line take 1 row each.
+  - Under 3 rows, the pane shows only the transcript, or only the steering field while it is open.
+
+  The app's existing whole-screen check is separate and comes first. It is made on the whole terminal, not the pane: when the terminal is narrower than 20 columns or shorter than 5 rows, the app shows its "too small" screen in place of everything.
 - **TSV-R2.** On a wide terminal (the existing wide threshold of the TUI), the pane sits beside the board as today. On a narrow one it takes the whole body. The Stream tab's layout is the same in both. Only its width differs.
 
 Indicative wireframe, 100 columns. The marks are placeholders: Team B chooses the glyph set. Their shapes must differ (§8).
@@ -103,7 +108,7 @@ Indicative wireframe, 100 columns. The marks are placeholders: Team B chooses th
  run    [run] ran cargo test board                                                      running
       | test board::fresh ... ok
       | test board::failed ... ok
-      | (6 of 31 lines, e to expand)
+      | 6 of 31 lines shown · e shows all
  ask    waiting for approval: git.push → origin       open · a to review
  ────────────────────────────────────────────────────────────────────────────────────────────────
  working · ran cargo test board · 12s                                                following
@@ -126,7 +131,7 @@ Each entry has a **kind label** in the gutter (a short word: `agent`, `you`, `th
 - **TSV-R5.** A `reasoning` item is labelled `think`. By default it is **folded** to a head line, "(folded)", with its duration when `duration_ms` is known. Expanding it shows the text, in a quieter style that also has a non-colour distinction (§8).
   - `:thinking show` makes reasoning unfolded by default for this session.
   - `:thinking hide` restores the default.
-  - The choice is remembered per user, in the TUI config.
+  - The choice is remembered in `tui.json` as `thinking` (§8.1).
 - **TSV-R6.** Without the read right, the node leaves reasoning out. The view MUST NOT show a placeholder per missing item. The watch-only notice (§7) covers it once.
 
 ### 3.3 Plans
@@ -173,7 +178,7 @@ gutter: verb label │ status mark │ subject                                �
 
 The body is the call's content (`content[]`), drawn as **output lines** under a gutter continuation mark. Locations are listed for `read` and `search`.
 
-- **TSV-R8. Folded preview.** A tool call's body is folded to a **preview** of at most 6 output lines, followed by one line "(S of T lines, e to expand)". The preview lines depend on the kind and state:
+- **TSV-R8. Folded preview.** A tool call's body is folded to a **preview** of at most 6 output lines, followed by one line "S of T lines shown · e shows all". The preview lines depend on the kind and state:
   - an `execute` call that is running shows its **last** 6 lines, so new output stays in sight;
   - a finished `execute` call shows its first 2 and last 4 lines, with "… N lines …" between them when it has more than 6;
   - every other kind shows its first 6 lines.
@@ -298,6 +303,7 @@ The Stream tab has an entry cursor, the focused entry, drawn by a marker in the 
   - `:steps`, `:conversation`
   - `:find <text>`
   - `:thinking show|hide`
+  - `:color auto|always|never`, `:plain on|off`, `:motion reduced|full` (§8.1)
   - `:status`
   - `:notices`
   - `:record`
@@ -358,10 +364,22 @@ The Stream tab has an entry cursor, the focused entry, drawn by a marker in the 
   - decisions;
   - turn dividers.
 
-  In steps mode, each agent message folds to one line, "said: <first line>", which `e` unfolds. Steps is the default when the session is not the local user's own (`is_mine` false), as in the GUI (session.md §3.4). `s` toggles the mode. The last choice is remembered per user in the TUI config, and it overrides the default once made.
+  In steps mode, each agent message folds to one line, "said: <first line>", which `e` unfolds. Steps is the default when the session is not the local user's own (`is_mine` false), as in the GUI (session.md §3.4). `s` toggles the mode. The last choice is remembered in `tui.json` as `session_mode` (§8.1). Once it is set, it overrides the default.
 
 ### 4.7 The Record tab
 
+- **TSV-R32a. Four tabs.** The pane now has four tabs: Stream, Timeline, Changes, Record.
+  - `]` goes to the next tab, in that order, and wraps from Record to Stream.
+  - `[` goes to the previous tab, and wraps from Stream to Record.
+  - Today's previous-tab handler assumes three tabs (it takes the next tab twice), so it MUST be changed to step back one tab among four.
+  - `1` to `4` pick a tab directly.
+- **TSV-R32b. Keys on the Record tab.**
+  - `j` / `k` move a row cursor, drawn as in the Stream tab.
+  - `g g` / `G` go to the first or last row. `Ctrl-d` / `Ctrl-u` and `PageDown` / `PageUp` move by half a page or a page.
+  - `e` unfolds the focused row's summary to its full wrapped text.
+  - `/` searches the rows' cleaned text. `n` / `N` go to the next or previous match, and without a search they do nothing.
+  - `i` and `a` keep their meaning.
+  - `(`, `)`, `E`, `o`, `c` and `s` do nothing on this tab.
 - **TSV-R32.** Tab `4`, "Record", lists `Session{part: record}` rows oldest first. Each row shows:
   - the sequence number;
   - the time;
@@ -412,6 +430,8 @@ All foreign text is data: agent messages and reasoning, tool titles, subjects, c
   - **Other controls.** Every other C0 or C1 control character, DEL, and the bidirectional controls the TUI already escapes (the marks, embeddings, overrides and isolates) become visible escapes, as the TUI's existing clean function does (`<U+XXXX>`).
   - **Line breaks.** In multi-line text (bodies, messages, output), `\n`, `\r\n` and a lone `\r` are line breaks. A lone `\r` never moves the cursor back over text already drawn. A tab becomes spaces to the next multiple of 8 columns (the terminal default). In single-line text (head lines, subjects, labels), every line break becomes a space.
   - **No styles.** No foreign text sets colours or attributes, and none produces a hyperlink sequence.
+
+  This needs a new **multi-line sanitiser**. It keeps the line breaks and tabs, turning them into the breaks and spaces described above, and removes escape sequences whole and counts them. The TUI's existing `clean()` turns every line break and tab into a space, so it stays the sanitiser for single-line fields only: head lines, subjects, labels, handles and paths. Bodies, messages, reasoning, tool output and raw unknown items go through the new one.
 - **TSV-R39. Masked spans.** A span listed in an item's `masked` is drawn as a masked marker, the word "masked" set apart in more than colour, in place of the span's text. The view never tries to unmask it. The span offsets are UTF-16 code units (data.md Q-DAT-18). The view maps them onto the text before it sanitises.
 - **TSV-R40. No impersonation.** The gutter, the dividers, the header, the notice band, the activity line, the decision band and the steering label are drawn only by the TUI, and only from facts. Foreign text is drawn only to the right of the gutter, so no item text can pass itself off as a turn divider, a decision, a notice or a Record line.
 - **TSV-R41. Width safety.** Every line is measured by display width, with wide and zero-width characters counted as the TUI's fit functions count them. A long single-line field is cut with an ellipsis. A long body line is wrapped (in code with the continued mark); in the reader it is cut with a mark and scrolls sideways. Neither a line nor its wide characters may run past the pane's right edge.
@@ -448,8 +468,13 @@ All foreign text is data: agent messages and reasoning, tool titles, subjects, c
   - the delivery states.
 
   With colour off, a screen dump of the pane carries the same information as with colour on.
-- **TSV-R43. Colour off.** Colour is off when `NO_COLOR` is set to a non-empty value, when the TUI's `color = "never"` setting applies, or when the terminal reports no colour support. Text attributes (bold, reverse, underline, dim) stay on unless `:set plain` or the `plain` setting turns them off too. With attributes off, reverse-video focus falls back to the gutter marker, which is always drawn anyway.
-- **TSV-R44. Motion.** A running mark MAY animate at most 4 times a second. With the `reduced_motion` setting, or with colour and attributes both off, it does not animate. A static running mark plus the word "running" carries the state.
+- **TSV-R43. Colour off.** The `color` setting (§8.1) decides:
+  - `never`: colour is off;
+  - `always`: colour is on;
+  - `auto`: colour is on unless the terminal reports no colour support.
+
+  A non-empty `NO_COLOR` environment variable is honoured as `color = never`, whatever `tui.json` says. Text attributes (bold, reverse, underline, dim) stay on unless `plain` is true. With attributes off, reverse-video focus falls back to the gutter marker, which is always drawn anyway.
+- **TSV-R44. Motion.** A running mark MAY animate at most 4 times a second. When `reduced_motion` is true, or colour and attributes are both off, it does not animate. A static running mark plus the word "running" carries the state.
 - **TSV-R45. Narrow terminals.** The transcript keeps every entry at any width of 20 columns or more. Columns give way in this order:
   1. the duration;
   2. the "+a −d" counts;
@@ -458,6 +483,24 @@ All foreign text is data: agent messages and reasoning, tool titles, subjects, c
 
   The status word of a failed, running or queued tool call is never dropped. Body text wraps to the space that is left.
 - **TSV-R46. Light and dark.** The TUI uses the terminal's default foreground and background for body text. It sets colours only on marks, labels and diff lines, so text stays readable on light and dark backgrounds alike.
+
+### 8.1 Settings
+
+`apps/han-tui` keeps its choices in `tui.json`. Today the file holds only `groups` and `last_space`. This spec adds five **new** top-level keys:
+
+| Key | Type and values | Default | Set by |
+|---|---|---|---|
+| `color` | string: `"auto"`, `"always"` or `"never"` | `"auto"` | `:color auto`, `:color always`, `:color never` |
+| `plain` | bool | `false` | `:plain on`, `:plain off` |
+| `reduced_motion` | bool | `false` | `:motion reduced`, `:motion full` |
+| `thinking` | string: `"hide"` or `"show"` | `"hide"` | `:thinking hide`, `:thinking show` (TSV-R5) |
+| `session_mode` | string: `"conversation"` or `"steps"`, or absent | absent: the default by `is_mine` (TSV-R31) | `s`, `:steps`, `:conversation` |
+
+- **TSV-R46a.** Each key is optional.
+  - A missing key, or a value of the wrong type or outside its list, reads as the default for that key alone. The rest of the file still loads, as a bad config never stops the TUI today.
+  - Each command takes effect at once and saves the file the way the TUI saves it today.
+  - `NO_COLOR` is not written to the file. It overrides `color` only for the run it is set in.
+  - There is no general `:set` command. Each setting has the named command above.
 
 ---
 
@@ -506,7 +549,7 @@ Each criterion runs on ratatui's TestBackend through the TUI's test harness (`ap
 | TSV-2 | an agent message item | the fake node sends 20 updates of the same id, each a longer prefix, the last with `done: true` | the screen shows the text once, equal to the final text; no "still writing" mark remains |
 | TSV-3 | an agent message with `done: false` | the screen is drawn | its last line ends with the "still writing" mark |
 | TSV-4 | a tool call `execute` | its status goes pending → in_progress → completed | one head line throughout; the status word reads "queued", then "running", then none; the gutter label is `run` |
-| TSV-5 | a completed `execute` call with 31 output lines | the screen is drawn | the body shows its first 2 lines, a "… N lines …" line and its last 4 lines, then "(6 of 31 lines, e to expand)" |
+| TSV-5 | a completed `execute` call with 31 output lines | the screen is drawn | the body shows its first 2 lines, a "… N lines …" line and its last 4 lines, then "6 of 31 lines shown · e shows all" |
 | TSV-6 | an in-progress `execute` call | 10 more output lines arrive | the preview shows the newest 6 lines |
 | TSV-7 | the call of TSV-5, focused | `e` | 31 output lines show; the head line's screen row does not change; `e` again restores the preview |
 | TSV-8 | a tool call with 1,000 output lines, expanded | the screen is drawn | 400 lines show, then "(400 of 1000 lines, o opens the reader)"; `o` opens the reader, and `G` there shows line 1000 |
@@ -552,6 +595,8 @@ Each criterion runs on ratatui's TestBackend through the TUI's test harness (`ap
 | TSV-48 | following, one message streaming 200 deltas a second | 2 s pass | at most 40 redraws from item diffs; a key pressed during the stream is drawn within 50 ms |
 | TSV-49 | a tool body of 100,000 lines with one line of 1 MB | the entry is expanded and the reader opened | each frame stays within TSV-R47's budget; the long line shows "(line cut, N more characters)" in the transcript, and is complete in the reader |
 | TSV-50 | the palette | `:expand all`, `:steps`, `:follow`, `:find fresh` in turn | each has the same effect as its key |
+| TSV-51 | the pane on the Stream tab, with record rows | `[`, then `]`, then `4`, `j`, `n` | `[` shows Record; `]` shows Stream; `4` shows Record; `j` moves the row cursor to the second row; `n` without a search changes nothing on screen |
+| TSV-52 | `tui.json` holding `{"groups":{},"color":"sideways","plain":true}` | the TUI starts | colour is as for `auto`; attributes are off; the groups still load; `:color never` writes `"color":"never"` to the file |
 
 Criteria TSV-4 to TSV-11 and TSV-49 are *pending node API (P-1, P-3)* for their line counts and exit text. TSV-13 is pending (P-1) for diff-derived counts. TSV-33 is pending (P-7) for the single-entry rule when the host also echoes the input as a user message. TSV-36 is pending (P-8, Q-SES-5) for the guarded wording. Every other criterion runs on the item shapes that exist today.
 
