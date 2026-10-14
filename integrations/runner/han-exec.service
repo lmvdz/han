@@ -1,13 +1,13 @@
 [Unit]
-Description=HAN executor (han exec) as @exec:<server>
+Description=HAN executor (han exec); set up with `han executor add`, left disabled by `han runner setup`
 After=network-online.target han-seq.service
 Wants=network-online.target
 
 [Service]
 User=han-exec
 Group=han-exec
-EnvironmentFile=/etc/han/exec.env
-ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home-ticket ${HAN_HOME_TICKET} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /etc/han/exec.json --relay ${HAN_RELAY}
+EnvironmentFile=/var/lib/han-exec/exec.env
+ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home-ticket ${HAN_HOME_TICKET} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /var/lib/han-exec/exec.json --relay ${HAN_RELAY}
 KillSignal=SIGINT
 Restart=always
 RestartSec=5
@@ -22,7 +22,7 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 LockPersonality=yes
 SystemCallArchitectures=native

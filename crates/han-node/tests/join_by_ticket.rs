@@ -11,7 +11,9 @@ use han_net::wellknown::Fetcher;
 use han_net::{
     HomeTicket, IrohOptions, IrohTransport, RelayChoice, ServeOptions, Transport, serve,
 };
-use han_node::api::{CallResult, Command, HomeRef, NodeApi, NodeError};
+use han_node::api::{
+    CallResult, Command, HomeRef, NodeApi, NodeError, Query, Row, SpaceLink, ViewEvent, Window,
+};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore};
 use han_node::supervisor::NoSupervisor;
 use han_node::{Node, NodeConfig, NodeParts, StaticKeys};
@@ -165,14 +167,14 @@ async fn scenario() {
     let node = start(&dir).await;
     let mut linked = false;
     for _ in 0..100 {
-        let r = node
-            .call(Command::MemberSet {
-                space: PROFILE.into(),
-                actor: ALICE.into(),
-                role: "owner".into(),
-            })
-            .await;
-        if matches!(r, Ok(CallResult::Receipt { .. })) {
+        let mut v = node.view(Query::Spaces {
+            window: Window::default(),
+        });
+        if let Some(ViewEvent::Snapshot { rows, .. }) = v.try_next()
+            && rows.iter().any(
+                |r| matches!(r, Row::SpaceStatus(x) if x.space == PROFILE && x.link == SpaceLink::Live),
+            )
+        {
             linked = true;
             break;
         }

@@ -79,7 +79,7 @@ pub struct NodeOpts {
     #[arg(long)]
     bind: Option<SocketAddr>,
     /// Relays: `n0` (n0's public relays and DNS discovery), `none`, or relay URLs separated by commas.
-    #[arg(long, default_value = "n0")]
+    #[arg(long, env = "HAN_RELAY", default_value = "n0")]
     relay: String,
     /// The pipe or socket to serve the node API on, if it is not the default of `--data`.
     #[arg(long)]

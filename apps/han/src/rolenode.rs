@@ -87,10 +87,23 @@ impl KeyStore for AliasKeys {
     }
 }
 
+/// The directory of the key files of a role whose `--keys` is `keys`. The one place that says where they are:
+/// `han exec` and `han host` read here, and `han executor add` and `han agent add` write here.
+pub fn key_dir(keys: &Path) -> PathBuf {
+    keys.join("keys")
+}
+
+/// The name of a role actor's key in its key store: `agent-<name>-<server>`.
+pub fn key_name(actor: &str) -> String {
+    let a = actor.trim_start_matches('@');
+    let (name, server) = a.split_once(':').unwrap_or((a, ""));
+    format!("agent-{name}-{server}")
+}
+
 /// The key store holding `name`: the file store under `<keys>/keys` when the file is there, else the OS
 /// keychain. Never creates a key: a role without its key does not start.
 pub fn key_store(keys: &Path, name: &str) -> Result<Arc<dyn KeyStore>, Box<dyn std::error::Error>> {
-    let file: Arc<dyn KeyStore> = Arc::new(FileKeyStore::new(keys.join("keys")));
+    let file: Arc<dyn KeyStore> = Arc::new(FileKeyStore::new(key_dir(keys)));
     let inner: Arc<dyn KeyStore> = if file.load(name)?.is_some() {
         file
     } else {

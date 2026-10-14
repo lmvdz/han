@@ -18,6 +18,17 @@ pub const LOGIN_DIR: &str = "claude-config";
 /// Where the OS-user agents of a runner keep their state when `agents.json` does not say.
 pub const DEFAULT_STATE_ROOT: &str = "/var/lib/han-agents";
 
+/// Whether `user` is an OS user name `han` will use: the one rule for the supervisor, `han runner setup` and
+/// `han agent add` (a plain portable name; the polkit rule narrows it further to `han-agent<N>`).
+pub fn valid_os_user(user: &str) -> bool {
+    let mut chars = user.chars();
+    user.len() <= 32
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 /// An agent actor as a plain directory name.
 pub fn safe_name(actor: &str) -> String {
     actor
@@ -43,6 +54,9 @@ pub struct HarnessInstall {
     /// The tarball's npm integrity (`sha512-…`).
     #[serde(default)]
     pub integrity: String,
+    /// A driver file (TOML or JSON) for a harness that is not built in; `han host` runs it as `--harness`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<PathBuf>,
 }
 
 impl HarnessInstall {
@@ -123,6 +137,12 @@ pub struct AgentSettings {
     /// The sandbox for this agent, over the file's.
     #[serde(default)]
     pub sandbox: Option<String>,
+    /// Allow this agent to run with no OS sandbox when none is available (advisory, SR-23). It shows in status.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_advisory: bool,
+    /// The harness `han agent start` uses when it is not given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     /// The toolchains this agent gets inside its sandbox, over the file's (`["rust"]`; `[]` for none).
     #[serde(default)]
     pub toolchains: Option<Vec<String>>,

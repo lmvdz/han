@@ -39,17 +39,16 @@ pub struct ExecArgs {
     #[arg(long)]
     config: PathBuf,
     /// Relays: `n0`, `none`, or URLs.
-    #[arg(long, default_value = "n0")]
+    #[arg(long, env = "HAN_RELAY", default_value = "n0")]
     relay: String,
 }
 
 pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
     let config: ExecConfig = serde_json::from_slice(&std::fs::read(&args.config)?)?;
-    let key_name = args.key_name.clone().unwrap_or_else(|| {
-        let a = args.actor.trim_start_matches('@');
-        let (name, server) = a.split_once(':').unwrap_or((a, ""));
-        format!("agent-{name}-{server}")
-    });
+    let key_name = args
+        .key_name
+        .clone()
+        .unwrap_or_else(|| rolenode::key_name(&args.actor));
     let role = rolenode::start(
         &args.actor,
         &args.key_id,

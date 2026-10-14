@@ -1,8 +1,10 @@
-//! `han agent`: create, start and stop agents through the running node (a face over its pipe).
+//! `han agent`: set up, start and stop agents through the running node (a face over its pipe).
 //!
-//! * `han agent create --name coder --server han.example --operator @lars:han.example` makes the agent's key
-//!   in the node's key store and prints what its home must register (the profile with its operator), then the
-//!   operator confirms it with `--confirm` once the profile exists.
+//! * `han agent add coder --operator @lars:han.example` makes the agent's key and launch settings, then
+//!   registers, confirms and admits it where this device may, and prints what other parties run where it may
+//!   not. Safe to repeat.
+//! * `han agent create --name coder --server han.example --operator @lars:han.example` makes only the agent's
+//!   key in the node's key store and prints what its home must register (the profile with its operator).
 //! * `han agent start --space S --agent @coder:han.example --harness pi|claude --repo github:o/r --issue
 //!   github:o/r#12` asks the node's supervisor to start a `han host` for the session.
 //! * `han agent stop @coder:han.example` stops its sessions.
@@ -10,13 +12,15 @@
 //!   needs no flags; `han agent login @coder:han.example` logs the agent in to Claude Code once, in its own
 //!   login directory (`--check` only says whether a login exists).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::home::{HomeChoice, HomeOpts};
 use clap::{Args, Subcommand};
 use han_node::NodeApi;
 use han_node::api::{CallResult, Command};
 use han_node::rpc::{RpcClient, default_endpoint};
+
+type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// Options of `han agent`.
 #[derive(Args)]
@@ -33,6 +37,41 @@ pub struct AgentArgs {
 
 #[derive(Subcommand)]
 enum AgentCmd {
+    /// Sets an agent up: its key, its launch settings and, where this device may, its profile at the home, the
+    /// operator's confirmation and its membership of a space. Safe to repeat. Whatever another party has to do
+    /// is printed as the exact command to run.
+    Add {
+        /// The agent's name, without `@` and server (`coder` makes `@coder:<server>`).
+        name: String,
+        /// Its operator (a person, `@name:server`). The agent's server defaults to the operator's.
+        #[arg(long)]
+        operator: String,
+        /// The agent's server, if it is not the operator's.
+        #[arg(long)]
+        server: Option<String>,
+        /// Linux: run the agent's host as this OS user (SR-83; `sudo han runner setup` makes the user).
+        #[arg(long)]
+        os_user: Option<String>,
+        /// The sandbox for this agent: `auto`, `mxc`, `bwrap` or `none`.
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Let this agent run with no OS sandbox when none is available (advisory; it shows in status).
+        #[arg(long)]
+        allow_advisory: bool,
+        /// The harness this agent uses: `claude` or `pi` (installed now if it is not), or one recorded in the
+        /// node's `harness/` directory.
+        #[arg(long)]
+        harness: Option<String>,
+        /// Make the agent a member of this space.
+        #[arg(long)]
+        space: Option<String>,
+        /// The data directory of the home, when this machine runs it: the profile is then registered here,
+        /// over the home's admin socket.
+        #[arg(long)]
+        home_data: Option<PathBuf>,
+        #[command(flatten)]
+        home: HomeOpts,
+    },
     /// Makes an agent's key and prints what its home registers.
     Create {
         /// The agent's name, without `@` and server.
@@ -46,7 +85,7 @@ enum AgentCmd {
         operator: String,
     },
     /// The operator confirms an agent whose profile exists: `member.set {actor: <operator>, role: owner}` in
-    /// the agent's profile space (§4.3).
+    /// the agent's profile space (§4.3). The same as `han actor confirm`.
     Confirm {
         /// The agent.
         agent: String,
@@ -64,9 +103,10 @@ enum AgentCmd {
         /// The agent actor.
         #[arg(long)]
         agent: String,
-        /// The harness: `pi`, `claude`, or a driver configured by name.
+        /// The harness: `pi`, `claude`, or a driver configured by name. Default: the one `han agent add`
+        /// recorded for the agent.
         #[arg(long)]
-        harness: String,
+        harness: Option<String>,
         /// The repository, `github:owner/repo` (or a local path for tests).
         #[arg(long)]
         repo: Option<String>,
@@ -145,8 +185,39 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
         .endpoint
         .clone()
         .unwrap_or_else(|| default_endpoint(&args.data));
-    let client = RpcClient::connect(&endpoint).await?;
+    let client = RpcClient::connect(&endpoint).await.map_err(|e| {
+        format!(
+            "cannot reach the node at {endpoint}: {e} (is `han node` running with --data {}?)",
+            args.data.display()
+        )
+    })?;
     match args.cmd {
+        AgentCmd::Add {
+            name,
+            operator,
+            server,
+            os_user,
+            sandbox,
+            allow_advisory,
+            harness,
+            space,
+            home_data,
+            home,
+        } => {
+            let opts = Add {
+                allow_advisory,
+                name,
+                operator,
+                server,
+                os_user,
+                sandbox,
+                harness,
+                space,
+                home_data,
+                home,
+            };
+            add(&client, &args.data, opts).await?;
+        }
         AgentCmd::Create {
             name,
             server,
@@ -168,50 +239,16 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                 println!("actor {actor}");
                 println!("key {key_id} {public_key}");
                 println!(
-                    "register at its home (admin, no restart): han seq register --data <home data> --actor {actor} --kind agent --key-id {key_id} --public-key {public_key} --operator {operator}"
+                    "register at its home (admin, no restart): han home register {actor} --data <home data> --kind agent --key-id {key_id} --public-key {public_key} --operator {operator}"
                 );
-                println!("then confirm: han agent confirm {actor} --operator {operator} …");
+                println!("then confirm: han actor confirm {actor} --operator {operator} …");
             }
         }
         AgentCmd::Confirm {
             agent,
             home,
             operator,
-        } => {
-            let profile = format!("profile:{agent}");
-            // The agent's profile lives at the agent's own server.
-            let choice = home
-                .resolve(Some(agent.as_str()))?
-                .ok_or("give --home <ticket>, or --home-node (and --home-server)")?;
-            pin(&client, &choice).await?;
-            let home = choice.home;
-            let _ = client
-                .call(Command::SpaceFollow {
-                    home,
-                    space: profile.clone(),
-                })
-                .await;
-            // The operator holds no role in the profile space; the peer filter admits this member.set because
-            // the profile names it as the operator (N-02, P-03). Retry while the node is still fetching the space.
-            let mut tries = 0;
-            let r = loop {
-                match client
-                    .call(Command::MemberSet {
-                        space: profile.clone(),
-                        actor: operator.clone(),
-                        role: "owner".into(),
-                    })
-                    .await
-                {
-                    Err(han_node::api::NodeError::NotFound { .. }) if tries < 100 => {
-                        tries += 1;
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                    other => break other?,
-                }
-            };
-            println!("{r:?}");
-        }
+        } => confirm_cmd(&client, &agent, &home, &operator).await?,
         AgentCmd::Start {
             space,
             agent,
@@ -220,6 +257,11 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             issue,
             home,
         } => {
+            let harness = match harness {
+                Some(h) => h,
+                None => crate::harness::default_harness(&args.data, &agent)?
+                    .ok_or("give --harness (or record one with `han agent add --harness`)")?,
+            };
             if let Some(choice) = home.resolve(Some(agent.as_str()))? {
                 pin(&client, &choice).await?;
                 // The node names the agent's operator from its profile, so it follows the profile first.
@@ -241,7 +283,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                         issue: issue.clone(),
                     })
                     .await;
-                if tries < 100 && profile_pending(&r) {
+                if tries < 600 && profile_pending(&r) {
                     // The profile is still being fetched.
                     tries += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -274,13 +316,129 @@ fn profile_pending(r: &Result<CallResult, han_node::api::NodeError>) -> bool {
 }
 
 /// Hands the node a home named by ticket or keys, so it dials and trusts it with no HTTPS well-known.
-async fn pin(client: &RpcClient, choice: &HomeChoice) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn pin(client: &RpcClient, choice: &HomeChoice) -> Res<()> {
     if let Some(t) = &choice.pin {
         client
             .call(Command::HomePin {
                 ticket: t.to_text(),
             })
             .await?;
+    }
+    Ok(())
+}
+
+/// `han agent confirm` and `han actor confirm`.
+pub async fn confirm_cmd(
+    client: &RpcClient,
+    actor: &str,
+    home: &HomeOpts,
+    operator: &str,
+) -> Res<()> {
+    match crate::enroll::confirm(client, actor, home, operator, 600).await {
+        Ok(true) => println!("changed: {operator} confirmed {actor}"),
+        Ok(false) => println!("unchanged: {actor} is already confirmed by {operator}"),
+        Err(crate::enroll::Pending::Profile) => {
+            return Err(format!(
+                "the home has no profile for {actor} yet: its admin runs `han home register {actor} …`"
+            )
+            .into());
+        }
+        Err(crate::enroll::Pending::Other(m)) => return Err(m.into()),
+    }
+    Ok(())
+}
+
+/// The options of `han agent add`.
+struct Add {
+    name: String,
+    operator: String,
+    server: Option<String>,
+    os_user: Option<String>,
+    sandbox: Option<String>,
+    allow_advisory: bool,
+    harness: Option<String>,
+    space: Option<String>,
+    home_data: Option<PathBuf>,
+    home: HomeOpts,
+}
+
+/// `han agent add`.
+async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
+    let server = match (&a.server, a.operator.rsplit_once(':')) {
+        (Some(s), _) => s.clone(),
+        (None, Some((_, s))) => s.to_owned(),
+        (None, None) => return Err("--operator is @name:server".into()),
+    };
+    let actor = format!("@{}:{server}", a.name);
+    println!("agent {actor} (operator {})", a.operator);
+
+    // 1. launch settings, before the key: an OS-user agent's key lives in that user's state directory
+    let changed = crate::harness::record_settings(
+        data,
+        &actor,
+        a.os_user.as_deref(),
+        a.sandbox.as_deref(),
+        a.allow_advisory,
+        a.harness.as_deref(),
+    )?;
+    if changed {
+        println!(
+            "  changed:   launch settings in {}",
+            data.join("agents.json").display()
+        );
+    } else {
+        println!("  unchanged: launch settings");
+    }
+
+    // 2. the harness, when it is one `han` installs
+    if let Some(h) = a
+        .harness
+        .as_deref()
+        .filter(|h| matches!(*h, "claude" | "pi"))
+    {
+        if crate::harness::is_set_up(data, h)? {
+            println!("  unchanged: the {h} harness is set up");
+        } else {
+            let r = crate::harness::setup(data, h, None, None)?;
+            println!("  changed:   installed {} {} for {h}", r.package, r.version);
+        }
+    }
+
+    // 3. the key
+    let CallResult::Agent {
+        key_id, public_key, ..
+    } = client
+        .call(Command::AgentCreate {
+            name: a.name.clone(),
+            server: server.clone(),
+            operator: a.operator.clone(),
+        })
+        .await?
+    else {
+        return Err("the node did not make a key".into());
+    };
+    println!("  key {key_id} {public_key}");
+
+    // 4. profile, confirmation, membership
+    let outcome = crate::enroll::run(&crate::enroll::Enroll {
+        actor: &actor,
+        kind: "agent",
+        key_id: &key_id,
+        public_key: &public_key,
+        operator: &a.operator,
+        home: &a.home,
+        home_data: a.home_data.as_deref(),
+        space: a.space.as_deref(),
+        client: Some(client),
+    })
+    .await?;
+    if outcome.todo.is_empty() {
+        println!("ready: {actor}");
+    } else {
+        println!(
+            "not ready: {} step(s) wait for somebody else; run this command again afterwards",
+            outcome.todo.len()
+        );
     }
     Ok(())
 }

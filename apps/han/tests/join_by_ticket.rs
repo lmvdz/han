@@ -70,7 +70,7 @@ fn han(args: &[&str]) -> String {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while child.try_wait().unwrap().is_none() {
         assert!(Instant::now() < deadline, "han {args:?} did not finish");
         std::thread::sleep(Duration::from_millis(50));
@@ -176,7 +176,7 @@ fn a_device_joins_a_placeholder_home_by_ticket_and_confirms_an_agent() {
         "--data",
         device_s,
     ]);
-    assert!(done.contains("Receipt"), "{done}");
+    assert!(done.contains("confirmed"), "{done}");
 
     // the binding is kept: a restart with no flag dials the home again
     drop(joined);

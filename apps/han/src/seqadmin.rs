@@ -42,8 +42,9 @@ pub struct Register {
     pub operator: Option<String>,
 }
 
-/// Registers a profile on `home`; the result is the seq of its first record.
-pub fn register(home: &Home, r: &Register) -> Result<u64, String> {
+/// Registers a profile on `home`; the result is the seq of its first record, and whether the profile was
+/// there already (registering again leaves it as it is).
+pub fn register(home: &Home, r: &Register) -> Result<(u64, bool), String> {
     let (name, server) = r
         .actor
         .rsplit_once(':')
@@ -58,6 +59,7 @@ pub fn register(home: &Home, r: &Register) -> Result<u64, String> {
     if !name.starts_with('@') {
         return Err("the actor is @name:server".into());
     }
+    let already = home.state_of(&format!("profile:{}", r.actor)).is_some();
     home.register(
         &r.actor,
         &r.kind,
@@ -65,7 +67,7 @@ pub fn register(home: &Home, r: &Register) -> Result<u64, String> {
         &r.public_key,
         r.operator.as_deref(),
     )
-    .map(|receipt| receipt.seq)
+    .map(|receipt| (receipt.seq, already))
     .map_err(|e| e.to_string())
 }
 
@@ -93,13 +95,31 @@ pub fn serve(home: Arc<Home>, endpoint: &str) -> std::io::Result<tokio::task::Jo
                 if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
                     return;
                 }
-                let reply = match serde_json::from_str::<Value>(&line)
-                    .ok()
+                let request = serde_json::from_str::<Value>(&line).ok();
+                if let Some(actor) = request
+                    .as_ref()
+                    .and_then(|v| v.get("profile"))
+                    .and_then(Value::as_str)
+                {
+                    let state = home.state_of(&format!("profile:{actor}"));
+                    let confirmed = state
+                        .as_ref()
+                        .and_then(|s| s.profile.as_ref())
+                        .is_some_and(|p| p.operator_confirmed);
+                    let reply =
+                        json!({"ok": {"registered": state.is_some(), "confirmed": confirmed}});
+                    let _ = send.write_all(format!("{reply}\n").as_bytes()).await;
+                    let _ = send.flush().await;
+                    return;
+                }
+                let reply = match request
                     .and_then(|v| v.get("register").cloned())
                     .and_then(|v| serde_json::from_value::<Register>(v).ok())
                 {
                     Some(r) => match register(&home, &r) {
-                        Ok(seq) => json!({"ok": {"actor": r.actor, "seq": seq}}),
+                        Ok((seq, already)) => {
+                            json!({"ok": {"actor": r.actor, "seq": seq, "already": already}})
+                        }
                         Err(e) => json!({"error": e}),
                     },
                     None => {
@@ -113,13 +133,41 @@ pub fn serve(home: Arc<Home>, endpoint: &str) -> std::io::Result<tokio::task::Jo
     }))
 }
 
+/// Asks the running home at `data` whether `actor` has a profile and whether its operator confirmed it:
+/// `(registered, confirmed)`.
+pub async fn profile(data: &Path, actor: &str) -> Result<(bool, bool), Box<dyn std::error::Error>> {
+    use interprocess::local_socket::traits::tokio::Stream as _;
+    let conn = han_node::rpc::connect_local(&endpoint(data)).await?;
+    let (recv, mut send) = conn.split();
+    send.write_all(format!("{}\n", json!({ "profile": actor })).as_bytes())
+        .await?;
+    send.flush().await?;
+    let mut line = String::new();
+    BufReader::new(recv).read_line(&mut line).await?;
+    let v: Value = serde_json::from_str(&line).map_err(|_| "the home did not answer")?;
+    if let Some(e) = v.get("error").and_then(Value::as_str) {
+        return Err(e.to_owned().into());
+    }
+    Ok((
+        v["ok"]["registered"].as_bool().unwrap_or(false),
+        v["ok"]["confirmed"].as_bool().unwrap_or(false),
+    ))
+}
+
 /// Asks the running home at `data` to register a profile.
-pub async fn ask(data: &Path, r: &Register) -> Result<u64, Box<dyn std::error::Error>> {
+pub async fn ask(data: &Path, r: &Register) -> Result<(u64, bool), Box<dyn std::error::Error>> {
     use interprocess::local_socket::traits::tokio::Stream as _;
     let endpoint = endpoint(data);
     let conn = han_node::rpc::connect_local(&endpoint).await.map_err(|e| {
+        let stale = crate::homecmd::stale_home(data)
+            .map(|pid| {
+                format!(
+                    "; the home (pid {pid}) is running a binary that was replaced, so it has no admin socket: restart it (for example `systemctl restart han-seq`)"
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "{endpoint}: {e} (is `han seq` running with --data {}?)",
+            "{endpoint}: {e} (is `han seq` running with --data {}?){stale}",
             data.display()
         )
     })?;
@@ -133,7 +181,8 @@ pub async fn ask(data: &Path, r: &Register) -> Result<u64, Box<dyn std::error::E
     if let Some(e) = v.get("error").and_then(Value::as_str) {
         return Err(e.to_owned().into());
     }
-    v["ok"]["seq"]
+    let seq = v["ok"]["seq"]
         .as_u64()
-        .ok_or_else(|| "the home's answer has no seq".into())
+        .ok_or("the home's answer has no seq")?;
+    Ok((seq, v["ok"]["already"].as_bool().unwrap_or(false)))
 }
