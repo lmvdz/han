@@ -327,7 +327,7 @@ impl<S: Source> Syncer<S> {
                 Some(ViewEvent::Snapshot {
                     rows, next_cursor, ..
                 }) => (rows, next_cursor),
-                Some(ViewEvent::Failed { error }) => return Err(error.into()),
+                Some(ViewEvent::Failed { error, .. }) => return Err(error.into()),
                 _ => return Err(SyncError::Node("the Tasks view ended".into())),
             };
             out.extend(rows.into_iter().filter_map(|r| match r {

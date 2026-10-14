@@ -342,7 +342,7 @@ async fn dropping_the_rpc_server_closes_its_connections() {
     let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             match view.next().await {
-                Some(ViewEvent::Failed { error }) => break Some(error),
+                Some(ViewEvent::Failed { error, .. }) => break Some(error),
                 Some(_) => {}
                 None => break None,
             }

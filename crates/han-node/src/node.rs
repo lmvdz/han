@@ -461,6 +461,7 @@ impl<T: Transport> Node<T> {
         {
             link.task.abort();
         }
+        self.inner.engine().end_all();
     }
 
     /// This device's node id.

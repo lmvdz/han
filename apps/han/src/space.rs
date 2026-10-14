@@ -80,7 +80,7 @@ pub async fn run(args: SpaceArgs) -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                Some(ViewEvent::Failed { error }) => return Err(error.into()),
+                Some(ViewEvent::Failed { error, .. }) => return Err(error.into()),
                 _ => return Err("the node sent no list of spaces".into()),
             }
         }

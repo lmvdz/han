@@ -1545,7 +1545,77 @@ key: string,
  */
 index: number, };
 
+export type StateCounts = { 
+/**
+ * Doing work.
+ */
+working: number, 
+/**
+ * Waiting for an approval.
+ */
+"waiting-approval": number, 
+/**
+ * Stuck.
+ */
+blocked: number, 
+/**
+ * Nothing to do.
+ */
+idle: number, 
+/**
+ * Finished.
+ */
+done: number, 
+/**
+ * Silent for a while.
+ */
+stale: number, 
+/**
+ * Failed.
+ */
+failed: number, };
+
+export type GroupTotal = { 
+/**
+ * The group, as `BoardRow::group` names it.
+ */
+group: string, 
+/**
+ * Sessions of the group that match the filter, collapsed or not.
+ */
+count: number, 
+/**
+ * How many of them need this device's actor.
+ */
+needs_me: number, 
+/**
+ * The highest overlap tier among them (0: none).
+ */
+max_overlap_tier: number, };
+
+export type BoardTotals = { 
+/**
+ * Sessions per display state with the filter ignored (but for `include_closed`): the state strip.
+ */
+all: StateCounts, 
+/**
+ * Sessions per display state that match the filter, collapsed groups included.
+ */
+filtered: StateCounts, 
+/**
+ * Sessions that need this device's actor, with the filter ignored: the badge.
+ */
+needs_me_total: number, 
+/**
+ * One entry per group that has a session matching the filter, in board order.
+ */
+groups: Array<GroupTotal>, };
+
 export type ViewEvent = { "type": "snapshot", 
+/**
+ * The view's event number.
+ */
+seq: number, 
 /**
  * The rows.
  */
@@ -1566,7 +1636,15 @@ next_cursor?: string,
  * The node's steady clock (ms) when the window was computed: the clock `last_active_ms` counts on,
  * so a face computes ages as `now_ms - last_active_ms` without a clock of its own.
  */
-now_ms: number, } | { "type": "diff", 
+now_ms: number, 
+/**
+ * The board's totals (Board views only).
+ */
+totals?: BoardTotals, } | { "type": "diff", 
+/**
+ * The view's event number: the last one plus 1.
+ */
+seq: number, 
 /**
  * The changes.
  */
@@ -1586,7 +1664,15 @@ next_cursor?: string,
 /**
  * The node's steady clock (ms) as of this diff.
  */
-now_ms: number, } | { "type": "resnapshot", 
+now_ms: number, 
+/**
+ * The board's totals as of this diff (Board views only); they replace the face's.
+ */
+totals?: BoardTotals, } | { "type": "resnapshot", 
+/**
+ * The view's event number: the last one plus 1.
+ */
+seq: number, 
 /**
  * The rows.
  */
@@ -1606,7 +1692,23 @@ next_cursor?: string,
 /**
  * The node's steady clock (ms) as of this window.
  */
-now_ms: number, } | { "type": "failed", 
+now_ms: number, 
+/**
+ * The board's totals (Board views only).
+ */
+totals?: BoardTotals, } | { "type": "resync", 
+/**
+ * The number the dropped event would have had.
+ */
+seq: number, } | { "type": "end", 
+/**
+ * The view's event number: the last one plus 1.
+ */
+seq: number, } | { "type": "failed", 
+/**
+ * The view's event number: the last one plus 1 (1 when no snapshot was sent).
+ */
+seq: number, 
 /**
  * Why.
  */

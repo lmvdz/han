@@ -74,6 +74,7 @@ async fn empty_and_failed_boards_say_why() {
     api.push(
         |q| matches!(q, han_node::api::Query::Board { .. }),
         han_node::api::ViewEvent::Failed {
+            seq: 1,
             error: NodeError::denied("not a member"),
         },
     );

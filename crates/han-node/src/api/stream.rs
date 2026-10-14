@@ -1,11 +1,12 @@
 //! The two methods as a trait, and the stream a view yields.
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Context, Poll, Waker};
 
 use futures_core::Stream;
-use tokio::sync::mpsc;
 
 use super::{CallResult, Command, NodeError, Query, ViewEvent};
 
@@ -22,39 +23,118 @@ pub trait NodeApi: Send + Sync + 'static {
     fn view(&self, query: Query) -> ViewStream;
 }
 
+/// A view's backlog may hold this many events. A reader further behind than this is not served the backlog:
+/// the view drops it, says [`ViewEvent::Resync`] and ends, so a slow face takes a new snapshot instead of the
+/// node's memory growing without bound (DAT-9). The bound counts events, not bytes.
+pub const MAX_BACKLOG: usize = 256;
+
+struct State {
+    queue: VecDeque<ViewEvent>,
+    waker: Option<Waker>,
+    sinks: usize,
+    reader_gone: bool,
+    resynced: bool,
+}
+
+struct Shared(Mutex<State>);
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
 /// The sending end of a view stream.
-#[derive(Clone)]
-pub struct ViewSink(mpsc::UnboundedSender<ViewEvent>);
+pub struct ViewSink(Arc<Shared>);
+
+impl Clone for ViewSink {
+    fn clone(&self) -> Self {
+        self.0.lock().sinks += 1;
+        ViewSink(Arc::clone(&self.0))
+    }
+}
+
+impl Drop for ViewSink {
+    fn drop(&mut self) {
+        let mut st = self.0.lock();
+        st.sinks -= 1;
+        if st.sinks == 0
+            && let Some(w) = st.waker.take()
+        {
+            w.wake();
+        }
+    }
+}
 
 impl ViewSink {
-    /// Sends an event; false when the reader is gone.
+    /// Sends an event; false when the reader is gone, or has fallen so far behind that the view ended with a
+    /// [`ViewEvent::Resync`] (the sender drops the view then).
     pub fn send(&self, event: ViewEvent) -> bool {
-        self.0.send(event).is_ok()
+        let mut st = self.0.lock();
+        if st.reader_gone || st.resynced {
+            return false;
+        }
+        let terminal = matches!(event, ViewEvent::Failed { .. } | ViewEvent::End { .. });
+        if st.queue.len() >= MAX_BACKLOG && !terminal {
+            let seq = event.seq();
+            st.queue.clear();
+            st.queue.push_back(ViewEvent::Resync { seq });
+            st.resynced = true;
+            if let Some(w) = st.waker.take() {
+                w.wake();
+            }
+            return false;
+        }
+        st.queue.push_back(event);
+        if let Some(w) = st.waker.take() {
+            w.wake();
+        }
+        true
     }
 
     /// Whether the reader is gone.
     pub fn is_closed(&self) -> bool {
-        self.0.is_closed()
+        self.0.lock().reader_gone
     }
 }
 
 /// What a view yields: [`ViewEvent::Snapshot`] first, then [`ViewEvent::Diff`]s. Dropping it ends the view.
 pub struct ViewStream {
-    rx: mpsc::UnboundedReceiver<ViewEvent>,
+    shared: Arc<Shared>,
     _guard: Option<Box<dyn Send + Sync>>,
+}
+
+impl Drop for ViewStream {
+    fn drop(&mut self) {
+        let mut st = self.shared.lock();
+        st.reader_gone = true;
+        st.queue.clear();
+    }
 }
 
 impl ViewStream {
     /// A stream and the sink that feeds it.
     pub fn channel() -> (ViewSink, ViewStream) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        (ViewSink(tx), ViewStream { rx, _guard: None })
+        let shared = Arc::new(Shared(Mutex::new(State {
+            queue: VecDeque::new(),
+            waker: None,
+            sinks: 1,
+            reader_gone: false,
+            resynced: false,
+        })));
+        (
+            ViewSink(Arc::clone(&shared)),
+            ViewStream {
+                shared,
+                _guard: None,
+            },
+        )
     }
 
     /// A stream that only says why the view failed.
     pub fn failed(error: NodeError) -> ViewStream {
         let (sink, stream) = Self::channel();
-        sink.send(ViewEvent::Failed { error });
+        sink.send(ViewEvent::Failed { seq: 1, error });
         stream
     }
 
@@ -67,12 +147,24 @@ impl ViewStream {
 
     /// The next event; `None` when the view has ended.
     pub async fn next(&mut self) -> Option<ViewEvent> {
-        self.rx.recv().await
+        std::future::poll_fn(|cx| self.poll_recv(cx)).await
     }
 
     /// The next event if one is already there.
     pub fn try_next(&mut self) -> Option<ViewEvent> {
-        self.rx.try_recv().ok()
+        self.shared.lock().queue.pop_front()
+    }
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<ViewEvent>> {
+        let mut st = self.shared.lock();
+        if let Some(e) = st.queue.pop_front() {
+            return Poll::Ready(Some(e));
+        }
+        if st.sinks == 0 || st.resynced {
+            return Poll::Ready(None);
+        }
+        st.waker = Some(cx.waker().clone());
+        Poll::Pending
     }
 }
 
@@ -80,6 +172,6 @@ impl Stream for ViewStream {
     type Item = ViewEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<ViewEvent>> {
-        self.rx.poll_recv(cx)
+        self.poll_recv(cx)
     }
 }

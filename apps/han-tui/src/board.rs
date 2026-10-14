@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use han_node::api::{
-    BoardRow, Filter, Group, NodeError, OverlapKind, Query, Row, ViewEvent, ViewMirror, Window,
+    BoardRow, BoardTotals, Filter, Group, GroupTotal, NodeError, OverlapKind, Query, Row,
+    ViewEvent, ViewMirror, Window,
 };
 
 use crate::filter;
@@ -213,7 +214,7 @@ impl BoardState {
     /// Applies one event of the board view. True when the face wants to move the window (it was asked to go to
     /// the end and the end is not here yet).
     pub fn apply(&mut self, event: ViewEvent, now: Instant) -> bool {
-        if let ViewEvent::Failed { error } = event {
+        if let ViewEvent::Failed { error, .. } = event {
             self.error = Some(error);
             self.loading = false;
             return false;
@@ -300,6 +301,20 @@ impl BoardState {
         }
     }
 
+    /// The node's totals of a group (also of a collapsed one, whose rows are not in the window).
+    fn group_total(&self, group: &str) -> Option<&GroupTotal> {
+        self.mirror
+            .totals()?
+            .groups
+            .iter()
+            .find(|t| t.group == group)
+    }
+
+    /// The node's totals of the board: per display state with and without the filter, and what needs me.
+    pub fn totals(&self) -> Option<&BoardTotals> {
+        self.mirror.totals()
+    }
+
     /// The lines of the board: a header before the first row of each group, collapsed groups as a header alone.
     pub fn entries(&self) -> Vec<Entry> {
         // The groups present, in order.
@@ -318,12 +333,21 @@ impl BoardState {
                 .flat_map(|i| self.rows[*i].overlaps.iter().map(|k| k.tier()))
                 .max()
                 .unwrap_or(0);
+            // The node counts the whole group (the window may hold part of it); the window is the fallback.
+            let (rows, tier, needs_me) = match self.group_total(g) {
+                Some(t) => (t.count, t.max_overlap_tier, t.needs_me),
+                None => (
+                    idx.len() as u32,
+                    tier,
+                    idx.iter().filter(|i| self.rows[**i].needs_me).count() as u32,
+                ),
+            };
             headers.push(Entry::Group {
                 group: (*g).to_owned(),
-                rows: idx.len() as u32,
+                rows,
                 collapsed: false,
                 tier,
-                needs_me: idx.iter().filter(|i| self.rows[**i].needs_me).count() as u32,
+                needs_me,
             });
             rows_of.push(idx.clone());
         }
@@ -332,14 +356,18 @@ impl BoardState {
         collapsed.sort_by_key(|(_, c)| c.position);
         for (g, c) in collapsed {
             let at = c.position.min(headers.len());
+            let (rows, tier, needs_me) = match self.group_total(g) {
+                Some(t) => (t.count, t.max_overlap_tier, t.needs_me),
+                None => (c.rows, 0, 0),
+            };
             headers.insert(
                 at,
                 Entry::Group {
                     group: g.clone(),
-                    rows: c.rows,
+                    rows,
                     collapsed: true,
-                    tier: 0,
-                    needs_me: 0,
+                    tier,
+                    needs_me,
                 },
             );
             rows_of.insert(at, Vec::new());

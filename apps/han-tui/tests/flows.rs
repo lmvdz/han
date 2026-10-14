@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use common::{Data, ME, Shared, assert_screen, node, pending_approval, started, team};
 use han_node::api::{
-    BoardRow, CallResult, Command, DiffOp, Group, InputRow, NodeError, Query, Row, SessionState,
-    ViewEvent,
+    BoardRow, BoardTotals, CallResult, Command, DiffOp, Group, GroupTotal, InputRow, NodeError,
+    Query, Row, SessionState, StateCounts, ViewEvent,
 };
 use han_tui::config::Config;
 use han_tui::testing::{FakeApi, FakeConnector, Harness, approval};
@@ -36,11 +36,14 @@ fn last_board(api: &FakeApi) -> (Group, Vec<String>, han_node::api::Window) {
 
 fn diff(ops: Vec<DiffOp>, total: u32) -> ViewEvent {
     ViewEvent::Diff {
+        // The fake node numbers what it sends.
+        seq: 0,
         ops,
         total,
         offset: 0,
         next_cursor: None,
         now_ms: han_tui::testing::NOW_MS,
+        totals: None,
     }
 }
 
@@ -807,5 +810,109 @@ async fn space_lists_the_followed_spaces_and_a_part_of_one_switches_to_it() {
         api.opened()
             .iter()
             .any(|q| matches!(q, Query::Board { space, .. } if space == "ops"))
+    );
+}
+
+// ---- the node's numbering and totals --------------------------------------------------------------------
+
+fn board_totals(group: &str, count: u32, needs_me: u32, tier: u8) -> BoardTotals {
+    BoardTotals {
+        all: StateCounts {
+            working: 12,
+            ..StateCounts::default()
+        },
+        filtered: StateCounts {
+            working: 9,
+            ..StateCounts::default()
+        },
+        needs_me_total: needs_me,
+        groups: vec![GroupTotal {
+            group: group.to_owned(),
+            count,
+            needs_me,
+            max_overlap_tier: tier,
+        }],
+    }
+}
+
+fn resnapshot_with(h: &Harness, totals: BoardTotals) -> ViewEvent {
+    ViewEvent::Resnapshot {
+        seq: 0,
+        rows: h
+            .rt
+            .app
+            .board
+            .rows()
+            .iter()
+            .cloned()
+            .map(Row::Board)
+            .collect(),
+        total: h.rt.app.board.total(),
+        offset: 0,
+        next_cursor: None,
+        now_ms: han_tui::testing::NOW_MS,
+        totals: Some(totals),
+    }
+}
+
+#[tokio::test]
+async fn group_headers_show_the_nodes_totals_not_the_windows() {
+    let (mut h, api, _data) = started((130, 26)).await;
+    assert!(h.screen().contains("▾ #41 Board freshness (2)"));
+    api.push(
+        is_board,
+        resnapshot_with(&h, board_totals("#41 Board freshness", 9, 2, 2)),
+    );
+    h.settle().await;
+    let s = h.screen();
+    assert!(
+        s.contains("▾ #41 Board freshness (9)  ⚑ hunk  2 await you"),
+        "{s}"
+    );
+    // The filter hides some of the space: the footer says how many are in all.
+    assert!(s.contains("of 7 · 12 in the space"), "{s}");
+
+    // A collapsed group keeps the node's count even though its rows are not in the window.
+    h.keys("<enter>").await;
+    api.push(
+        is_board,
+        resnapshot_with(&h, board_totals("#41 Board freshness", 9, 2, 2)),
+    );
+    h.settle().await;
+    assert!(
+        h.screen().contains("▸ #41 Board freshness (9)"),
+        "{}",
+        h.screen()
+    );
+}
+
+#[tokio::test]
+async fn a_resync_from_the_node_opens_the_views_again() {
+    let (mut h, api, _data) = started((130, 26)).await;
+    let before = boards(&api).len();
+    api.push(is_board, ViewEvent::Resync { seq: 0 });
+    h.settle().await;
+    assert_eq!(
+        boards(&api).len(),
+        before + 1,
+        "a new snapshot was asked for"
+    );
+    assert!(h.screen().contains("lars-coder"), "the rows stay on screen");
+}
+
+#[tokio::test]
+async fn a_diff_that_skips_a_number_is_not_applied() {
+    let (mut h, api, _data) = started((130, 26)).await;
+    let before = boards(&api).len();
+    let row = changed(&h, "s2", |r| r.step = "never shown".into());
+    // Number 7 does not follow the snapshot's 1.
+    api.push_raw(is_board, diff(vec![DiffOp::Update { row }], 7).with_seq(7));
+    h.settle().await;
+    let s = h.screen();
+    assert!(!s.contains("never shown"), "{s}");
+    assert_eq!(
+        boards(&api).len(),
+        before + 1,
+        "it asked for a new snapshot"
     );
 }

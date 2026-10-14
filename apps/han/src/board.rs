@@ -138,7 +138,7 @@ pub async fn run(args: BoardArgs) -> Result<(), Box<dyn std::error::Error>> {
     let mut view = client.view(query);
     let mut mirror = ViewMirror::new();
     while let Some(event) = view.next().await {
-        if let ViewEvent::Failed { error } = &event {
+        if let ViewEvent::Failed { error, .. } = &event {
             return Err(error.to_string().into());
         }
         mirror.apply(event);

@@ -18,15 +18,12 @@ use std::sync::Arc;
 use han_core::LogRecord;
 
 use crate::api::{
-    DiffOp, Facets, FilePatchRow, JoinProgressRow, JoinStage, NodeError, NodeStatusRow, OutboxRow,
-    Query, RoleInfo, Row, Scope, SpaceLink, StatusBody, TimelinePointRow, ViewEvent, ViewSink,
-    Window,
+    BoardTotals, DiffOp, Facets, FilePatchRow, GroupTotal, JoinProgressRow, JoinStage, NodeError,
+    NodeStatusRow, OutboxRow, Query, RoleInfo, Row, Scope, SpaceLink, StatusBody, TimelinePointRow,
+    ViewEvent, ViewSink,
 };
 pub use crate::model::{Freshness, LEASE_KIND};
 use crate::model::{Now, SpaceModel};
-
-/// The largest window a view may ask for.
-const MAX_LIMIT: u32 = 10_000;
 
 /// A diff with at least this many ops, and as many as half the window, is sent as a resnapshot.
 const RESNAPSHOT_OPS: usize = 64;
@@ -108,6 +105,8 @@ struct Sub {
     sink: ViewSink,
     last: Page,
     sig: u64,
+    /// The `seq` of the last event sent.
+    seq: u64,
 }
 
 /// The projections of every followed space and the views open on them.
@@ -131,13 +130,64 @@ struct Page {
     total: u32,
     offset: u32,
     next: Option<String>,
+    totals: Option<BoardTotals>,
 }
 
-fn page(mut rows: Vec<(Facets, Row)>, w: &Window) -> Page {
+/// The board's totals, from every row of the space (before the filter and the collapsed groups apply).
+fn board_totals(rows: &[(Facets, Row)], w: &crate::api::Window) -> BoardTotals {
+    let mut t = BoardTotals::default();
+    // group -> (the first key of the group, its totals)
+    let mut groups: BTreeMap<String, (String, GroupTotal)> = BTreeMap::new();
+    for (f, row) in rows {
+        let Row::Board(b) = row else { continue };
+        if b.closed && !w.filter.include_closed {
+            continue;
+        }
+        t.all.add(b.state);
+        if b.needs_me {
+            t.needs_me_total += 1;
+        }
+        if w.filter.matches(f) {
+            t.filtered.add(b.state);
+            let tier = b.overlaps.iter().map(|k| k.tier()).max().unwrap_or(0);
+            let g = groups.entry(b.group.clone()).or_insert_with(|| {
+                (
+                    b.key.clone(),
+                    GroupTotal {
+                        group: b.group.clone(),
+                        count: 0,
+                        needs_me: 0,
+                        max_overlap_tier: 0,
+                    },
+                )
+            });
+            if b.key < g.0 {
+                g.0 = b.key.clone();
+            }
+            g.1.count += 1;
+            g.1.needs_me += u32::from(b.needs_me);
+            g.1.max_overlap_tier = g.1.max_overlap_tier.max(tier);
+        }
+    }
+    let mut groups: Vec<(String, GroupTotal)> = groups.into_values().collect();
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+    t.groups = groups.into_iter().map(|(_, g)| g).collect();
+    t
+}
+
+fn page(mut rows: Vec<(Facets, Row)>, q: &Query) -> Page {
+    let w = q.window();
+    let totals = matches!(q, Query::Board { .. }).then(|| board_totals(&rows, w));
+    if let Query::Board { collapsed, .. } = q {
+        rows.retain(|(_, r)| match r {
+            Row::Board(b) => !collapsed.contains(&b.group),
+            _ => true,
+        });
+    }
     rows.retain(|(f, _)| w.filter.matches(f));
     rows.sort_by(|a, b| a.1.key().cmp(b.1.key()));
     let total = u32::try_from(rows.len()).unwrap_or(u32::MAX);
-    let limit = w.limit.clamp(1, MAX_LIMIT) as usize;
+    let limit = w.limit.clamp(1, q.max_limit()) as usize;
     let mut out = BTreeMap::new();
     let mut next = None;
     let mut offset = 0u32;
@@ -157,6 +207,7 @@ fn page(mut rows: Vec<(Facets, Row)>, w: &Window) -> Page {
         total,
         offset,
         next,
+        totals,
     }
 }
 
@@ -181,13 +232,15 @@ fn diff(old: &BTreeMap<String, Row>, new: &BTreeMap<String, Row>) -> Vec<DiffOp>
     ops
 }
 
-fn snapshot(p: &Page, now_ms: u64) -> ViewEvent {
+fn snapshot(p: &Page, seq: u64, now_ms: u64) -> ViewEvent {
     ViewEvent::Snapshot {
+        seq,
         rows: p.rows.values().cloned().collect(),
         total: p.total,
         offset: p.offset,
         next_cursor: p.next.clone(),
         now_ms,
+        totals: p.totals.clone(),
     }
 }
 
@@ -470,22 +523,10 @@ impl Engine {
         let not_found =
             |what: &str, id: &str| NodeError::not_found(format!("no such {what}: {id}"));
         match q {
-            Query::Board {
-                space,
-                group,
-                collapsed,
-                ..
-            } => self
+            Query::Board { space, group, .. } => self
                 .spaces
                 .get_mut(space)
-                .map(|m| {
-                    let mut rows = m.board_rows(*group, &now);
-                    rows.retain(|(_, r)| match r {
-                        Row::Board(b) => !collapsed.contains(&b.group),
-                        _ => true,
-                    });
-                    rows
-                })
+                .map(|m| m.board_rows(*group, &now))
                 .ok_or_else(|| not_found("space", space)),
             Query::Session { id, .. } => self
                 .spaces
@@ -637,7 +678,7 @@ impl Engine {
     /// A fresh read of a window: its rows ordered by key, and the snapshot event that carries them.
     pub fn read(&mut self, q: &Query) -> Result<ViewEvent, NodeError> {
         let rows = self.gather(q)?;
-        Ok(snapshot(&page(rows, q.window()), self.now.ms))
+        Ok(snapshot(&page(rows, q), 1, self.now.ms))
     }
 
     /// The revisions a query's rows are computed from.
@@ -682,13 +723,13 @@ impl Engine {
     /// to [`Engine::unsubscribe`]. A query that cannot be served sends [`ViewEvent::Failed`] and opens nothing.
     pub fn subscribe(&mut self, query: Query, sink: ViewSink) -> Option<u64> {
         let last = match self.gather(&query) {
-            Ok(rows) => page(rows, query.window()),
+            Ok(rows) => page(rows, &query),
             Err(error) => {
-                sink.send(ViewEvent::Failed { error });
+                sink.send(ViewEvent::Failed { seq: 1, error });
                 return None;
             }
         };
-        sink.send(snapshot(&last, self.now.ms));
+        sink.send(snapshot(&last, 1, self.now.ms));
         let id = self.next_sub;
         self.next_sub += 1;
         let sig = self.signature(&query);
@@ -698,6 +739,7 @@ impl Engine {
             sink,
             last,
             sig,
+            seq: 1,
         });
         Some(id)
     }
@@ -705,6 +747,13 @@ impl Engine {
     /// Closes a view.
     pub fn unsubscribe(&mut self, id: u64) {
         self.subs.retain(|s| s.id != id);
+    }
+
+    /// Ends every open view without an error: the node is shutting down.
+    pub fn end_all(&mut self) {
+        for sub in std::mem::take(&mut self.subs) {
+            sub.sink.send(ViewEvent::End { seq: sub.seq + 1 });
+        }
     }
 
     /// How many views are open.
@@ -728,9 +777,12 @@ impl Engine {
             }
             sub.sig = sig;
             let new = match self.gather(&sub.query) {
-                Ok(rows) => page(rows, sub.query.window()),
+                Ok(rows) => page(rows, &sub.query),
                 Err(error) => {
-                    sub.sink.send(ViewEvent::Failed { error });
+                    sub.sink.send(ViewEvent::Failed {
+                        seq: sub.seq + 1,
+                        error,
+                    });
                     return false;
                 }
             };
@@ -739,30 +791,38 @@ impl Engine {
             }
             let ops = diff(&sub.last.rows, &new.rows);
             let now_ms = self.now.ms;
+            sub.seq += 1;
+            let seq = sub.seq;
             let event = if ops.len() >= RESNAPSHOT_OPS && ops.len() * 2 >= new.rows.len() {
-                match snapshot(&new, now_ms) {
+                match snapshot(&new, seq, now_ms) {
                     ViewEvent::Snapshot {
+                        seq,
                         rows,
                         total,
                         offset,
                         next_cursor,
                         now_ms,
+                        totals,
                     } => ViewEvent::Resnapshot {
+                        seq,
                         rows,
                         total,
                         offset,
                         next_cursor,
                         now_ms,
+                        totals,
                     },
                     other => other,
                 }
             } else {
                 ViewEvent::Diff {
+                    seq,
                     ops,
                     total: new.total,
                     offset: new.offset,
                     next_cursor: new.next.clone(),
                     now_ms,
+                    totals: new.totals.clone(),
                 }
             };
             sub.last = new;

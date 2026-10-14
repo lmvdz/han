@@ -263,6 +263,10 @@ async fn scenario() {
             },
         )
         .await;
+        // Read every view each time round: a view nobody reads is dropped by the node.
+        for w in overlaps.iter_mut().chain(&mut people).chain(&mut boards) {
+            w.drain();
+        }
         let done = boards.iter_mut().all(|b| {
             let rows = board_rows(b.rows());
             rows.iter()
@@ -404,6 +408,9 @@ async fn scenario() {
             },
         )
         .await;
+        for w in overlaps.iter_mut().chain(&mut people).chain(&mut boards) {
+            w.drain();
+        }
         let back = boards.iter_mut().all(|b| {
             board_rows(b.rows())
                 .iter()

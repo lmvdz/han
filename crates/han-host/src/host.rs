@@ -149,7 +149,7 @@ pub async fn snapshot(api: &dyn NodeApi, q: Query) -> Result<Vec<Row>, NodeError
     let mut v = api.view(q);
     match tokio::time::timeout(Duration::from_secs(10), v.next()).await {
         Ok(Some(ViewEvent::Snapshot { rows, .. })) => Ok(rows),
-        Ok(Some(ViewEvent::Failed { error })) => Err(error),
+        Ok(Some(ViewEvent::Failed { error, .. })) => Err(error),
         Ok(_) => Err(NodeError::unavailable("the view ended")),
         Err(_) => Err(NodeError::unavailable("the view did not answer")),
     }
