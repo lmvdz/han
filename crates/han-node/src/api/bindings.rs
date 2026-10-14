@@ -4,13 +4,16 @@
 use ts_rs::{Config, TS};
 
 use super::{
-    ApprovalRow, BoardRow, BoardTotals, CallResult, ClaimKind, Command, CostRow, DiffOp, EffectRow,
-    Fidelity, FilePatchRow, FileTouch, Filter, Group, GroupTotal, GuardRow, HomeRef, InputRow,
-    JoinProgressRow, JoinStage, NodeError, NodeStatusRow, OutboxRow, OverlapClaim, OverlapConflict,
-    OverlapFile, OverlapKind, OverlapParty, OverlapRow, OverlapSummary, PatchStatus, PlanItem,
-    Query, RoleInfo, Row, Sandbox, SandboxBackend, Scope, SessionRow, SessionState, SpaceLink,
-    SpaceStatusRow, StateCounts, StatusBody, Target, TaskRow, Tests, TimelinePointRow, Tokens,
-    ViewEvent, WhoRow, Window,
+    ActorKind, AdmissionRow, AgentText, ApprovalRow, BoardRow, BoardTotals, CallResult,
+    ChangeSummaryRow, ClaimKind, Command, CostRow, DeviceRow, DeviceState, DiffOp, EffectRow,
+    ErrorNote, Fidelity, FilePatchRow, FileTouch, Filter, Group, GroupTotal, GuardRow, HomeRef,
+    InputRow, InputState, ItemBody, ItemRow, JoinProgressRow, JoinStage, MessageRole, Needed,
+    NeededGuard, NodeError, NodeStatusRow, OutboxRow, OverlapClaim, OverlapConflict, OverlapFile,
+    OverlapKind, OverlapParty, OverlapRow, OverlapSummary, PatchStatus, PlanItem, Query, RecordRow,
+    RoleInfo, Row, Sandbox, SandboxBackend, Scope, SessionPart, SessionRights, SessionRow,
+    SessionState, SpaceLink, SpaceStatusRow, StateCounts, StatusBody, Target, TaskRow, Tests,
+    TimelinePointRow, Tokens, ToolKind, ToolLocation, ToolStatus, ToolText, TurnDriver, ViewEvent,
+    WhoRow, Window,
 };
 
 const HEADER: &str = "// Generated from crates/han-node by `cargo test -p han-node --test parts` (set HAN_UPDATE_GEN=1 to rewrite).\n// Do not edit by hand. These are the node API types: call(Command) and view(Query).\n\n";
@@ -82,6 +85,27 @@ pub fn typescript() -> String {
         GroupTotal,
         BoardTotals,
         ViewEvent,
+        SessionPart,
+        SessionRights,
+        Needed,
+        NeededGuard,
+        AgentText,
+        ErrorNote,
+        MessageRole,
+        ToolKind,
+        ToolStatus,
+        ToolLocation,
+        ToolText,
+        TurnDriver,
+        InputState,
+        ItemBody,
+        ItemRow,
+        RecordRow,
+        ActorKind,
+        AdmissionRow,
+        DeviceState,
+        DeviceRow,
+        ChangeSummaryRow,
     );
     out.truncate(out.trim_end().len());
     out.push('\n');

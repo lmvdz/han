@@ -374,6 +374,7 @@ async fn story(backend: &str) {
         Command::EffectApprove {
             space: space.clone(),
             proposal: e.proposal.clone(),
+            expires_at: None,
             note: None,
         },
     )

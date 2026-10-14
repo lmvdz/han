@@ -5,7 +5,7 @@
 //! signs. The node says whether the actor may approve (`can_approve`) and why the effect is gated
 //! (`why_gated`); this module does not decide either.
 
-use han_node::api::{ApprovalRow, NodeError, Row, ViewEvent, ViewMirror};
+use han_node::api::{AdmissionRow, ApprovalRow, NodeError, Row, ViewEvent, ViewMirror};
 
 /// What the card is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +44,7 @@ pub enum Card {
 pub struct ApprovalsState {
     mirror: ViewMirror,
     rows: Vec<ApprovalRow>,
+    admissions: Vec<AdmissionRow>,
     selected: Option<String>,
     sel_index: usize,
     /// The card.
@@ -81,6 +82,7 @@ impl ApprovalsState {
         ApprovalsState {
             mirror: ViewMirror::new(),
             rows: Vec::new(),
+            admissions: Vec::new(),
             selected: None,
             sel_index: 0,
             card: Card::Closed,
@@ -94,6 +96,11 @@ impl ApprovalsState {
     /// The effects, in the node's order.
     pub fn rows(&self) -> &[ApprovalRow] {
         &self.rows
+    }
+
+    /// The actors waiting to be admitted (owners only).
+    pub fn admissions(&self) -> &[AdmissionRow] {
+        &self.admissions
     }
 
     /// How many effects wait.
@@ -145,6 +152,15 @@ impl ApprovalsState {
             .into_iter()
             .filter_map(|r| match r {
                 Row::Approval(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        self.admissions = self
+            .mirror
+            .rows()
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Admission(a) => Some(a),
                 _ => None,
             })
             .collect();

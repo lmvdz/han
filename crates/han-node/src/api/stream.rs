@@ -92,6 +92,11 @@ impl ViewSink {
         true
     }
 
+    /// Whether the view ended because its reader fell behind.
+    pub fn was_resynced(&self) -> bool {
+        self.0.lock().resynced
+    }
+
     /// Whether the reader is gone.
     pub fn is_closed(&self) -> bool {
         self.0.lock().reader_gone

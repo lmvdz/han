@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use han_node::api::{
-    BoardRow, CallResult, Command, Group, NodeError, NodeStatusRow, Query, Row, SessionState,
-    SpaceStatusRow, ViewEvent, Window,
+    BoardRow, CallResult, Command, Group, NodeError, NodeStatusRow, Query, Row, SessionPart,
+    SessionState, SpaceStatusRow, ViewEvent, Window,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -70,6 +70,7 @@ enum CallKind {
     Approve,
     Cancel,
     Steer,
+    Admit,
 }
 
 /// The whole state of the TUI.
@@ -170,7 +171,11 @@ impl App {
         self.next_epoch += 1;
         self.epochs.insert(view, epoch);
         self.seqs.remove(&view);
-        Action::Subscribe { view, epoch, query }
+        Action::Subscribe {
+            view,
+            epoch,
+            query: Box::new(query),
+        }
     }
 
     fn unsub(&mut self, view: ViewKind) -> Action {
@@ -198,6 +203,7 @@ impl App {
                 ViewKind::Session,
                 Query::Session {
                     id: id.clone(),
+                    part: SessionPart::Facts,
                     window: Window::default(),
                 },
             ),
@@ -206,6 +212,19 @@ impl App {
                 Query::Inputs {
                     session: id.clone(),
                     window: Window::default(),
+                },
+            ),
+            // The latest page of the typed stream; the node leaves out what this actor may not read.
+            self.sub(
+                ViewKind::Items,
+                Query::Session {
+                    id: id.clone(),
+                    part: SessionPart::Items,
+                    window: Window {
+                        limit: 200,
+                        from_end: true,
+                        ..Window::default()
+                    },
                 },
             ),
             self.sub(
@@ -508,6 +527,12 @@ impl App {
                 }
                 Vec::new()
             }
+            ViewKind::Items => {
+                if let Some(p) = &mut self.session {
+                    p.apply_items(event);
+                }
+                Vec::new()
+            }
             ViewKind::Timeline => {
                 let Some(p) = &mut self.session else {
                     return Vec::new();
@@ -576,6 +601,14 @@ impl App {
                 }
                 Err(e) => self.card_failed(&e),
             },
+            CallKind::Admit => match result {
+                Ok(CallResult::Queued { .. }) => self.say(
+                    Tone::Good,
+                    "Admission signed and queued; it will be sent when the space's home is reachable",
+                ),
+                Ok(_) => self.say(Tone::Good, "Admitted as a member"),
+                Err(e) => self.say(Tone::Bad, format!("Not admitted: {e}")),
+            },
             CallKind::Steer => {
                 if let Some(p) = &mut self.session {
                     p.delivery = Some(match result {
@@ -587,6 +620,36 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `:admit <actor>`: makes an actor that waits to join a member. Only a listed admission is admitted, and an
+    /// agent whose operator has not confirmed it is not.
+    fn admit(&mut self, actor: &str) -> Vec<Action> {
+        let found = self
+            .approvals
+            .admissions()
+            .iter()
+            .find(|a| a.actor == actor)
+            .cloned();
+        let Some(a) = found else {
+            self.say(Tone::Info, format!("{actor} is not waiting to join"));
+            return Vec::new();
+        };
+        if !a.operator_confirmed {
+            self.say(
+                Tone::Bad,
+                "Its operator has not confirmed it, so it cannot be admitted",
+            );
+            return Vec::new();
+        }
+        vec![self.call(
+            CallKind::Admit,
+            Command::MemberSet {
+                space: a.space,
+                actor: a.actor,
+                role: "member".into(),
+            },
+        )]
     }
 
     fn card_failed(&mut self, e: &NodeError) {
@@ -901,6 +964,7 @@ impl App {
         [
             ViewKind::Session,
             ViewKind::Inputs,
+            ViewKind::Items,
             ViewKind::Timeline,
             ViewKind::Patches,
         ]
@@ -1181,6 +1245,7 @@ impl App {
                         Command::EffectApprove {
                             space: row.space,
                             proposal: row.proposal,
+                            expires_at: None,
                             note: None,
                         },
                     )]
@@ -1337,6 +1402,7 @@ impl App {
                 self.focus = Focus::Approvals;
                 Vec::new()
             }
+            "admit" => self.admit(arg),
             "board" => {
                 self.focus = Focus::Board;
                 Vec::new()

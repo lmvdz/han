@@ -85,7 +85,17 @@ space: string,
 /**
  * Seconds the ticket lives (default a day, at most 7 days).
  */
-ttl_secs?: number, } | { "type": "member_set", 
+ttl_secs?: number, 
+/**
+ * The time the ticket ends, instead of `ttl_secs` (at most 7 days ahead); giving both is `invalid`.
+ */
+expires_at?: string, 
+/**
+ * Admit whoever joins with it as a member while it is valid, if the node can tell they are a person
+ * or an agent whose operator confirmed it; anyone else waits for an owner. Only while this node
+ * runs.
+ */
+auto_admit: boolean, } | { "type": "member_set", 
 /**
  * The space.
  */
@@ -161,7 +171,23 @@ task: string,
 /**
  * `accepted`, `progress`, `done`, `failed` or `declined`.
  */
-state: string, } | { "type": "task_cancel", 
+state: string, } | { "type": "blob_fetch", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * `sha256` of the bytes, lowercase hex.
+ */
+hash: string, 
+/**
+ * The size the reference names.
+ */
+size: number, 
+/**
+ * The media type the reference names.
+ */
+media_type: string, } | { "type": "task_cancel", 
 /**
  * The space.
  */
@@ -246,6 +272,10 @@ space: string,
  * The proposal's entry id.
  */
 proposal: string, 
+/**
+ * The approval lapses at this time (a future HAN Time).
+ */
+expires_at?: string, 
 /**
  * A note.
  */
@@ -407,7 +437,19 @@ node_id: string,
 /**
  * Short check both screens show, derived from the code.
  */
-check: string, } | { "type": "status", 
+check: string, } | { "type": "blob", 
+/**
+ * The hash.
+ */
+hash: string, 
+/**
+ * The media type the reference named.
+ */
+media_type: string, 
+/**
+ * The bytes, base64url.
+ */
+data: string, } | { "type": "status", 
 /**
  * The item's number on the session's stream.
  */
@@ -484,7 +526,15 @@ limit: number,
 /**
  * Rows after this key.
  */
-cursor?: string, };
+cursor?: string, 
+/**
+ * The window sits at the end: without a `cursor`, the last `limit` rows (a stream shows its latest).
+ */
+from_end: boolean, 
+/**
+ * Scrolling back: the last `limit` rows before this key. It wins over `cursor` and `from_end`.
+ */
+before?: string, };
 
 export type Group = "issue" | "person" | "state";
 
@@ -531,6 +581,10 @@ window: Window, } | { "type": "session",
  */
 id: string, 
 /**
+ * Which part.
+ */
+part: SessionPart, 
+/**
  * The window.
  */
 window: Window, } | { "type": "who_is_on", 
@@ -550,6 +604,10 @@ window: Window, } | { "type": "overlaps",
  * The space.
  */
 space: string, 
+/**
+ * The window.
+ */
+window: Window, } | { "type": "devices", 
 /**
  * The window.
  */
@@ -1002,7 +1060,15 @@ status?: StatusBody,
 /**
  * This node's steady clock (ms) when the last item arrived.
  */
-last_active_ms: number, };
+last_active_ms: number, 
+/**
+ * What this device's actor may see of it.
+ */
+rights: SessionRights, 
+/**
+ * The session is this device's own work: its actor, or the person behind it.
+ */
+is_mine: boolean, };
 
 export type WhoRow = { 
 /**
@@ -1196,7 +1262,16 @@ approvers: Array<string>,
 /**
  * Why the effect is gated: which rule or default required an approval.
  */
-why_gated: string, };
+why_gated: string, 
+/**
+ * What it takes to approve (Q-APR-8): the rule, and the guards that must also approve.
+ */
+needed: Needed, 
+/**
+ * Text the proposer and the approvers wrote, in full: a face shows it as quoted, never as the node's
+ * own words.
+ */
+agent_text: Array<AgentText>, };
 
 export type EffectRow = { 
 /**
@@ -1588,7 +1663,19 @@ roles: Array<RoleInfo>,
 /**
  * This node's steady clock (ms), the one `last_active_ms` counts on, as of the last tick.
  */
-now_ms: number, };
+now_ms: number, 
+/**
+ * Views open on this node, as of the last tick.
+ */
+subscriptions: number, 
+/**
+ * Views the node ended with a `Resync` because their reader fell behind, since it started.
+ */
+resyncs: number, 
+/**
+ * The codes of the last errors (calls and views), oldest first, at most [`RECENT_ERRORS`].
+ */
+recent_errors: Array<ErrorNote>, };
 
 export type TimelinePointRow = { 
 /**
@@ -1642,9 +1729,13 @@ added: number,
 /**
  * Lines removed.
  */
-removed: number, };
+removed: number, 
+/**
+ * The masked spans of `patch` (set by the node).
+ */
+masked: Array<[number, number]>, };
 
-export type Row = { "view": "board", "row": BoardRow } | { "view": "session", "row": SessionRow } | { "view": "who_is_on", "row": WhoRow } | { "view": "overlap", "row": OverlapRow } | { "view": "approval", "row": ApprovalRow } | { "view": "space_status", "row": SpaceStatusRow } | { "view": "cost", "row": CostRow } | { "view": "outbox", "row": OutboxRow } | { "view": "join_progress", "row": JoinProgressRow } | { "view": "node_status", "row": NodeStatusRow } | { "view": "timeline_point", "row": TimelinePointRow } | { "view": "file_patch", "row": FilePatchRow } | { "view": "effect", "row": EffectRow } | { "view": "guard", "row": GuardRow } | { "view": "input", "row": InputRow } | { "view": "task", "row": TaskRow };
+export type Row = { "view": "board", "row": BoardRow } | { "view": "session", "row": SessionRow } | { "view": "who_is_on", "row": WhoRow } | { "view": "overlap", "row": OverlapRow } | { "view": "approval", "row": ApprovalRow } | { "view": "space_status", "row": SpaceStatusRow } | { "view": "cost", "row": CostRow } | { "view": "outbox", "row": OutboxRow } | { "view": "join_progress", "row": JoinProgressRow } | { "view": "node_status", "row": NodeStatusRow } | { "view": "timeline_point", "row": TimelinePointRow } | { "view": "file_patch", "row": FilePatchRow } | { "view": "effect", "row": EffectRow } | { "view": "guard", "row": GuardRow } | { "view": "input", "row": InputRow } | { "view": "task", "row": TaskRow } | { "view": "item", "row": ItemRow } | { "view": "record", "row": RecordRow } | { "view": "admission", "row": AdmissionRow } | { "view": "device", "row": DeviceRow } | { "view": "change_summary", "row": ChangeSummaryRow };
 
 export type DiffOp = { "op": "insert", 
 /**
@@ -1840,3 +1931,405 @@ seq: number,
  * Why.
  */
 error: NodeError, };
+
+export type SessionPart = "facts" | "items" | "record";
+
+export type SessionRights = { 
+/**
+ * May watch the output: messages, tool calls, plans. Without it the `Items` and `Record` parts are
+ * `denied`.
+ */
+watch: boolean, 
+/**
+ * May read the full context: reasoning and the content of tool calls. Without it the items leave those
+ * out.
+ */
+read: boolean, };
+
+export type Needed = { 
+/**
+ * How many approvals the rule asks for (a rule is met by one approver).
+ */
+rule: number, 
+/**
+ * The guards of the proposing agent (P-15): each must approve too, unless it is the rule's approver.
+ */
+guards: Array<NeededGuard>, };
+
+export type NeededGuard = { 
+/**
+ * The guard: the agent's confirmed operator. Absent when the agent has none, so nobody can approve for it.
+ */
+guard?: string, 
+/**
+ * The agent it guards (the proposer).
+ */
+agent: string, 
+/**
+ * It has approved.
+ */
+approved: boolean, };
+
+export type AgentText = { 
+/**
+ * Who wrote it.
+ */
+author: string, 
+/**
+ * Where it is: a plan argument's name, or `note` for an approval's note.
+ */
+field: string, 
+/**
+ * The text, cut to [`AGENT_TEXT`] characters.
+ */
+text: string, };
+
+export type ErrorNote = { 
+/**
+ * The error's code (`denied`, `invalid`, ...).
+ */
+code: string, 
+/**
+ * What was asked: a command or a view.
+ */
+what: string, 
+/**
+ * This node's steady clock (ms) when it happened.
+ */
+at_ms: number, };
+
+export type MessageRole = "user" | "agent";
+
+export type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "other";
+
+export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export type ToolLocation = { 
+/**
+ * The path.
+ */
+path: string, 
+/**
+ * The line.
+ */
+line?: number, };
+
+export type ToolText = { 
+/**
+ * The text.
+ */
+text: string, 
+/**
+ * The masked spans of `text` (set by the node).
+ */
+masked: Array<[number, number]>, };
+
+export type TurnDriver = "task" | "input" | "effect" | "own";
+
+export type InputState = "recorded" | "seen";
+
+export type ItemBody = { "kind": "message", 
+/**
+ * Who wrote it.
+ */
+role: MessageRole, 
+/**
+ * The text so far.
+ */
+text: string, 
+/**
+ * Whether it is complete.
+ */
+done: boolean, 
+/**
+ * The masked spans of `text` (set by the node).
+ */
+masked: Array<[number, number]>, } | { "kind": "reasoning", 
+/**
+ * The text.
+ */
+text: string, 
+/**
+ * How long it took.
+ */
+duration_ms?: number, 
+/**
+ * The masked spans of `text` (set by the node).
+ */
+masked: Array<[number, number]>, } | { "kind": "plan", 
+/**
+ * Its steps.
+ */
+entries: Array<PlanItem>, } | { "kind": "tool_call", 
+/**
+ * ACP's id of the call.
+ */
+tool_call_id: string, 
+/**
+ * What it does.
+ */
+tool_kind: ToolKind, 
+/**
+ * A title.
+ */
+title?: string, 
+/**
+ * How far it is.
+ */
+status: ToolStatus, 
+/**
+ * What it works on.
+ */
+locations: Array<ToolLocation>, 
+/**
+ * What it produced (needs the read right).
+ */
+content: Array<ToolText>, 
+/**
+ * When it started.
+ */
+started_at?: string, 
+/**
+ * When it ended.
+ */
+ended_at?: string, } | { "kind": "file_change", 
+/**
+ * The tool call.
+ */
+tool_call_id?: string, 
+/**
+ * The path.
+ */
+path: string, 
+/**
+ * Lines added.
+ */
+added: number, 
+/**
+ * Lines removed.
+ */
+removed: number, } | { "kind": "decision", 
+/**
+ * The proposal's entry id.
+ */
+effect: string, 
+/**
+ * The action.
+ */
+action: string, } | { "kind": "input", 
+/**
+ * The `session.input` entry.
+ */
+entry?: string, 
+/**
+ * Who signed it.
+ */
+author: string, 
+/**
+ * The text (absent when redacted).
+ */
+text?: string, 
+/**
+ * How far it got.
+ */
+state: InputState, 
+/**
+ * The masked spans of `text` (set by the node).
+ */
+masked: Array<[number, number]>, } | { "kind": "turn_start", 
+/**
+ * The turn.
+ */
+turn: number, 
+/**
+ * What started it.
+ */
+driver: TurnDriver, 
+/**
+ * The entry that did (a task, an input or an outcome).
+ */
+driver_entry?: string, 
+/**
+ * The harness runs the turn in its stricter mode (a guarded agent).
+ */
+strict: boolean, } | { "kind": "turn_end", 
+/**
+ * The turn.
+ */
+turn: number, 
+/**
+ * How long it took.
+ */
+duration_ms?: number, 
+/**
+ * What it used.
+ */
+tokens?: Tokens, } | { "kind": "status", 
+/**
+ * The body.
+ */
+body: StatusBody, } | { "kind": "unknown", 
+/**
+ * Its `kind`.
+ */
+raw_kind: string, 
+/**
+ * The item as JSON text.
+ */
+raw: string, };
+
+export type ItemRow = { 
+/**
+ * Orders and identifies the row: the number in the session, zero-padded.
+ */
+key: string, 
+/**
+ * The session.
+ */
+session: string, 
+/**
+ * The item's stable id; a later item with the same id replaces its body.
+ */
+id: string, 
+/**
+ * The number the node gave the item when it first saw it.
+ */
+seq_in_session: number, 
+/**
+ * The turn it belongs to.
+ */
+turn?: number, 
+/**
+ * This node's steady clock (ms) when the item last changed.
+ */
+updated_ms: number, 
+/**
+ * What it is.
+ */
+item: ItemBody, };
+
+export type RecordRow = { 
+/**
+ * Orders and identifies the row: the seq, zero-padded.
+ */
+key: string, 
+/**
+ * The session.
+ */
+session: string, 
+/**
+ * The entry's position in the space's log.
+ */
+seq: number, 
+/**
+ * The entry's id.
+ */
+entry_id: string, 
+/**
+ * The entry's kind.
+ */
+kind: string, 
+/**
+ * Who signed it.
+ */
+author: string, 
+/**
+ * The receipt's time.
+ */
+at: string, 
+/**
+ * One line on what it did. Text an actor wrote is cut and marked by quotes.
+ */
+summary: string, 
+/**
+ * The node checked the receipt before it took the entry.
+ */
+verified: boolean, 
+/**
+ * The content was erased by a `redact`.
+ */
+redacted: boolean, 
+/**
+ * Why, when the redaction says.
+ */
+redact_reason?: string, 
+/**
+ * The effect it is about.
+ */
+effect?: string, };
+
+export type ActorKind = "human" | "agent" | "service" | "unknown";
+
+export type AdmissionRow = { 
+/**
+ * Orders and identifies the row: the space and the actor.
+ */
+key: string, 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The actor that asks.
+ */
+actor: string, 
+/**
+ * What it is, from its profile.
+ */
+kind: ActorKind, 
+/**
+ * Its operator, for an agent or a service.
+ */
+operator?: string, 
+/**
+ * The operator confirmed the agent in its profile space (P-03); only then may it be admitted.
+ */
+operator_confirmed: boolean, 
+/**
+ * This node's steady clock (ms) when the join arrived.
+ */
+at_ms: number, 
+/**
+ * The invite was this device's. The home's join signal does not say which ticket was used, so this is
+ * false until it does.
+ */
+via_my_ticket: boolean, };
+
+export type DeviceState = "active" | "revoked";
+
+export type DeviceRow = { 
+/**
+ * Orders and identifies the row: the key id.
+ */
+key: string, 
+/**
+ * The key id.
+ */
+key_id: string, 
+/**
+ * Active or revoked.
+ */
+state: DeviceState, 
+/**
+ * When the key was added to the profile (the receipt's time).
+ */
+added_at: string, 
+/**
+ * When it was revoked.
+ */
+revoked_at?: string, 
+/**
+ * This device holds the key.
+ */
+this_device: boolean, };
+
+export type ChangeSummaryRow = { 
+/**
+ * Always empty.
+ */
+key: string, 
+/**
+ * How many paths the host kept out of the change set (secrets, per the exclusion list). Their names are
+ * never sent.
+ */
+excluded: number, };

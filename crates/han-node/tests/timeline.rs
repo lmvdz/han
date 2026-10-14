@@ -205,6 +205,8 @@ async fn another_member_sees_the_live_timeline() {
         Command::Invite {
             space: space.clone(),
             ttl_secs: None,
+            expires_at: None,
+            auto_admit: false,
         },
     )
     .await
@@ -238,6 +240,7 @@ async fn another_member_sees_the_live_timeline() {
         &alice,
         Query::Session {
             id: session.clone(),
+            part: han_node::api::SessionPart::Facts,
             window: window(),
         },
     );
@@ -359,4 +362,76 @@ async fn another_member_sees_the_live_timeline() {
     assert_eq!(paths, vec!["auth/login.rs", "auth/token.rs"]);
     let _ = At::Timeline(w.session.clone());
     let _: &dyn NodeApi = &alice;
+}
+
+#[test]
+fn the_excluded_count_and_the_masked_spans_come_with_the_changes() {
+    use han_node::views::{Engine, Freshness};
+    let mut w = Writer::new("s1:a.localhost", BOB, 9);
+    w.create(
+        "src/conf.rs",
+        "const KEY: &str = \"[masked:aws_key]\";\n",
+        "toolu_1",
+    );
+    let t = std::sync::Arc::new(StreamTimelines::new());
+    let session = "e".repeat(64);
+    for (i, (x, s, f)) in w.out.iter().enumerate() {
+        let mut body = w.body(x, s, f);
+        // The host tells how many paths it kept out of the mirror.
+        if i == w.out.len() - 1 {
+            body["excluded"] = 2.into();
+        }
+        t.receive(&session, BOB, "2026-01-01T00:00:01Z", &hv(body));
+    }
+    assert_eq!(t.excluded(&session), 2);
+    assert_eq!(t.excluded("another session"), 0);
+    let point = t.points(&session, None).unwrap()[0].point.clone();
+    let mut engine = Engine::new(ALICE, Freshness::default());
+    engine.set_timeline(t);
+    let ViewEvent::Snapshot { rows, .. } = engine
+        .read(&Query::Patches {
+            session: session.clone(),
+            from: None,
+            to: point,
+            window: window(),
+        })
+        .unwrap()
+    else {
+        panic!("a snapshot")
+    };
+    // The count first (it sorts first), never a name; then the files, with the masked spans marked.
+    let Row::ChangeSummary(summary) = &rows[0] else {
+        panic!("a summary: {:?}", rows[0])
+    };
+    assert_eq!(summary.excluded, 2);
+    let Row::FilePatch(file) = &rows[1] else {
+        panic!("a file")
+    };
+    assert_eq!(file.path, "src/conf.rs");
+    assert_eq!(file.masked.len(), 1);
+    let units: Vec<u16> = file.patch.encode_utf16().collect();
+    let (start, end) = file.masked[0];
+    assert_eq!(
+        String::from_utf16(&units[start as usize..end as usize]).unwrap(),
+        "[masked:aws_key]"
+    );
+    // A session with nothing excluded sends no summary.
+    let t2 = std::sync::Arc::new(StreamTimelines::new());
+    for (x, s, f) in &w.out {
+        t2.receive(&session, BOB, "2026-01-01T00:00:01Z", &hv(w.body(x, s, f)));
+    }
+    let point = t2.points(&session, None).unwrap()[0].point.clone();
+    engine.set_timeline(t2);
+    let ViewEvent::Snapshot { rows, .. } = engine
+        .read(&Query::Patches {
+            session,
+            from: None,
+            to: point,
+            window: window(),
+        })
+        .unwrap()
+    else {
+        panic!("a snapshot")
+    };
+    assert!(rows.iter().all(|r| matches!(r, Row::FilePatch(_))));
 }

@@ -16,8 +16,89 @@ use han_seq::verify::check_chain;
 use tokio::sync::{mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::api::{BoxFuture, NodeError, SpaceLink, StatusBody};
-use crate::node::Inner;
+use han_core::policy::{Body, PolicyEntry, Role};
+
+use crate::api::{BoxFuture, Command, ItemBody, NodeError, SpaceLink, StatusBody};
+use crate::model::ProfileFacts;
+use crate::node::{Inner, Node};
+
+/// The profile name of the typed items a host puts on a session's stream (messages, tool calls, plans...).
+pub const ITEM_PROFILE: &str = "han.item/1";
+
+/// The kinds of item a host may put on the stream. `status`, `decision` and `input` are the node's own, made
+/// from the log; a host saying so would be passing off its words as someone else's.
+const HOST_KINDS: [&str; 7] = [
+    "message",
+    "reasoning",
+    "plan",
+    "tool_call",
+    "file_change",
+    "turn_start",
+    "turn_end",
+];
+
+/// An item body of `han.item/1`: `{id, turn?, kind, ...}`. A kind this version cannot read, or a host kind it
+/// may not send, is kept as `unknown`.
+fn parse_item(body: &Value) -> Option<(String, Option<u32>, ItemBody)> {
+    let id = body
+        .get("id")?
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 128)?
+        .to_owned();
+    let turn = body
+        .get("turn")
+        .and_then(Value::as_u64)
+        .and_then(|t| u32::try_from(t).ok());
+    let kind = body.get("kind")?.as_str()?;
+    let known = HOST_KINDS
+        .contains(&kind)
+        .then(|| json::from_value::<ItemBody>(body).ok())
+        .flatten();
+    let item = known.unwrap_or_else(|| ItemBody::Unknown {
+        raw_kind: kind.chars().take(64).collect(),
+        raw: json::canonicalize(body)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+            .unwrap_or_default(),
+    });
+    Some((id, turn, item))
+}
+
+/// What the records of a profile space say about its actor: its kind, its operator, and whether the operator
+/// confirmed it (P-03: the operator holds the owner role in the profile space).
+fn fold_profile(items: &[Value]) -> Option<ProfileFacts> {
+    let (mut kind, mut operator, mut confirmed) = (None, None::<String>, false);
+    for item in items {
+        if item["type"].as_str() != Some("record") {
+            continue;
+        }
+        let Ok(rec) = json::from_value::<LogRecord>(&item["record"]) else {
+            continue;
+        };
+        let Ok(entry) = PolicyEntry::from_entry(&rec.entry) else {
+            continue;
+        };
+        match entry.body {
+            Body::SpaceCreate(b) => {
+                if let Some(p) = b.profile {
+                    kind = Some(p.actor_kind);
+                    operator = p.operator;
+                }
+            }
+            Body::MemberSet(m)
+                if operator.as_deref() == Some(m.actor.as_str()) && entry.author == m.actor =>
+            {
+                confirmed = m.role.role() == Some(Role::Owner);
+            }
+            _ => {}
+        }
+    }
+    kind.map(|kind| ProfileFacts {
+        kind,
+        operator,
+        confirmed,
+    })
+}
 
 /// Where the keys that sign a home's receipts come from (`/.well-known/han`, section 4.3).
 pub trait ServerKeys: Send + Sync + 'static {
@@ -264,6 +345,20 @@ impl<T: Transport> Inner<T> {
         }
     }
 
+    /// A live `han.item/1` item of `session`: a message, tool call or other thing the host puts on the stream.
+    fn session_item(&self, space: &str, item: &Value) {
+        if item["type"].as_str() != Some("profile") || item["name"].as_str() != Some(ITEM_PROFILE) {
+            return;
+        }
+        let Some(session) = item["session"].as_str() else {
+            return;
+        };
+        let Some((id, turn, body)) = parse_item(&item["body"]) else {
+            return;
+        };
+        self.engine().apply_item(space, session, id, turn, body);
+    }
+
     /// A live `han.status/1` item of `session`.
     fn status_item(&self, space: &str, item: &Value) {
         if item["type"].as_str() != Some("profile") || item["name"].as_str() != Some("han.status/1")
@@ -277,6 +372,76 @@ impl<T: Transport> Inner<T> {
             && let Err(e) = self.db.put_status(space, &status)
         {
             tracing::warn!("node.db: {e}");
+        }
+    }
+}
+
+impl<T: Transport> Inner<T> {
+    /// A signal from the home: counts it, and for a `join` notes who asks to be admitted and asks the home
+    /// what that actor is.
+    pub(crate) fn on_signal(
+        self: &Arc<Self>,
+        client: &Arc<Client<T::Conn>>,
+        space: &str,
+        body: &Value,
+    ) {
+        self.engine().count_signal(space);
+        if body["type"].as_str() == Some("join")
+            && let Some(actor) = body["actor"].as_str()
+        {
+            self.engine().join_signal(space, actor);
+            self.read_wanted_profiles(client, space);
+        }
+    }
+
+    /// Reads the profiles the views asked for (who joins, who guards an agent) from the home, in the
+    /// background. What the home says is taken as it is: the profile space is public and not followed.
+    pub(crate) fn read_wanted_profiles(
+        self: &Arc<Self>,
+        client: &Arc<Client<T::Conn>>,
+        space: &str,
+    ) {
+        for actor in self.engine().take_wanted(space) {
+            let (inner, client, space) = (Arc::clone(self), Arc::clone(client), space.to_owned());
+            tokio::spawn(async move {
+                // A profile that cannot be read now is asked for again the next time it matters.
+                let Ok(items) = client.read(&format!("profile:{actor}"), 0).await else {
+                    return;
+                };
+                inner
+                    .engine()
+                    .set_profile(&space, &actor, fold_profile(&items));
+                inner.auto_admit(&space, &actor).await;
+            });
+        }
+    }
+
+    /// Admits `actor` as a member when an invite of this device asked for it and the actor is a person or an
+    /// agent its operator confirmed. Anyone else waits for an owner.
+    async fn auto_admit(self: &Arc<Self>, space: &str, actor: &str) {
+        let until = self
+            .auto_admit
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(space)
+            .copied();
+        if until.is_none_or(|u| u <= self.now_secs()) {
+            return;
+        }
+        let ok = {
+            let engine = self.engine();
+            engine.is_pending(space, actor)
+                && matches!(engine.profile_of(space, actor),
+                    Some(Some(f)) if f.kind == han_core::policy::ActorKind::Human || f.confirmed)
+        };
+        if ok {
+            let _ = Node::from_inner(Arc::clone(self))
+                .execute(Command::MemberSet {
+                    space: space.to_owned(),
+                    actor: actor.to_owned(),
+                    role: "member".into(),
+                })
+                .await;
         }
     }
 }
@@ -360,6 +525,9 @@ pub(crate) async fn run_link<T: Transport>(
                         () = client.connection().closed() => break,
                         _ = flush.tick() => {
                             tasks.spawn(flush_all(Arc::clone(&inner), home.server.clone()));
+                            for s in &started {
+                                inner.read_wanted_profiles(&client, s);
+                            }
                         }
                         cmd = cmds.recv() => match cmd {
                             None => return,
@@ -454,8 +622,11 @@ async fn follow_space<T: Transport>(
                                     .set_link(&space, SpaceLink::Rejected, Some(why));
                                 return;
                             }
+                            inner.read_wanted_profiles(&client, &space);
                         }
-                        Some("signal") => inner.engine().count_signal(&space),
+                        Some("signal") => {
+                            inner.on_signal(&client, &space, &item["body"]);
+                        }
                         _ => {}
                     }
                 }
@@ -502,5 +673,6 @@ async fn watch_session<T: Transport>(
     while let Some(Ok(item)) = stream.next().await {
         inner.status_item(&space, &item);
         inner.timeline_item(&space, &item);
+        inner.session_item(&space, &item);
     }
 }

@@ -215,6 +215,7 @@ async fn steering_a_guarded_agent_runs_strict_and_taints_it() {
                 &alice,
                 Query::Session {
                     id: session.clone(),
+                    part: han_node::api::SessionPart::Facts,
                     window: Window::default(),
                 },
             )

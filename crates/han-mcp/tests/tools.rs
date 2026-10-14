@@ -138,6 +138,11 @@ impl NodeApi for FakeNode {
                 state_reason: None,
                 status: Some(status("S1")),
                 last_active_ms: 1,
+                rights: han_node::api::SessionRights {
+                    watch: true,
+                    read: true,
+                },
+                is_mine: false,
             })],
             Query::Session { id, .. } if id == "SECRET" => {
                 return ViewStream::failed(NodeError::denied("no read right on this session"));

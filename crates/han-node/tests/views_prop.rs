@@ -8,8 +8,8 @@ use han_core::Value;
 use han_core::ids::sha256_hex;
 use han_core::types::{Durability, Entry, LogRecord, Receipt};
 use han_node::api::{
-    FileTouch, Filter, Group, Query, Row, Scope, SessionState, SpaceLink, StatusBody, Target,
-    Tokens, ViewEvent, ViewMirror, ViewStream, Window,
+    FileTouch, Filter, Group, Query, Row, Scope, SessionPart, SessionState, SpaceLink, StatusBody,
+    Target, Tokens, ViewEvent, ViewMirror, ViewStream, Window,
 };
 use han_node::views::{Engine, Freshness, OutboxItem};
 use proptest::prelude::*;
@@ -95,6 +95,7 @@ fn window(limit: u32, cursor: Option<&str>, filter: Filter) -> Window {
         filter,
         limit,
         cursor: cursor.map(str::to_owned),
+        ..Window::default()
     }
 }
 
@@ -281,6 +282,16 @@ impl Driver {
     }
 
     fn record(&mut self, actor: usize, kind: &str, body: Value) -> String {
+        self.record_with(actor, kind, body, None)
+    }
+
+    fn record_with(
+        &mut self,
+        actor: usize,
+        kind: &str,
+        body: Value,
+        content: Option<Value>,
+    ) -> String {
         self.seq += 1;
         let id = sha256_hex(format!("record {}", self.seq).as_bytes());
         let entry = Entry {
@@ -313,7 +324,7 @@ impl Driver {
             redacted: false,
             redacted_by: None,
             entry,
-            content: None,
+            content,
             receipt,
         };
         self.engine.apply_record(SPACE, &rec);
@@ -591,6 +602,7 @@ fn silence_turns_sessions_stale_then_failed() {
     let state = |d: &mut Driver| {
         let q = Query::Session {
             id: d.sessions[0].clone(),
+            part: SessionPart::Facts,
             window: Window::default(),
         };
         match d.engine.read(&q).unwrap() {
@@ -859,6 +871,7 @@ fn windows_are_bounded_per_view() {
     assert_eq!(
         Query::Session {
             id: "s".into(),
+            part: SessionPart::Facts,
             window: Window::default()
         }
         .max_limit(),
@@ -1245,6 +1258,7 @@ fn failed_and_blocked_rows_say_why() {
         .engine
         .read(&Query::Session {
             id: d.sessions[3].clone(),
+            part: SessionPart::Facts,
             window: Window::default(),
         })
         .unwrap();
@@ -1382,4 +1396,683 @@ fn board_rows_summarise_who_they_overlap_with() {
             han_node::api::OverlapKind::HunkRange
         ]
     );
+}
+
+// ---- session items, the record, admissions, rights, telemetry (PR C) ---------------------------------------
+
+use han_node::api::{
+    ActorKind, AdmissionRow, ApprovalRow, InputState, ItemBody, ItemRow, MessageRole,
+    NodeStatusRow, RecordRow, ToolKind, ToolStatus, ToolText, TurnDriver,
+};
+
+fn session_query(id: &str, part: SessionPart, window: Window) -> Query {
+    Query::Session {
+        id: id.into(),
+        part,
+        window,
+    }
+}
+
+fn read_rows(d: &mut Driver, q: &Query) -> (Vec<Row>, u32, u32, Option<String>) {
+    match d.engine.read(q).unwrap() {
+        ViewEvent::Snapshot {
+            rows,
+            total,
+            offset,
+            next_cursor,
+            ..
+        } => (rows, total, offset, next_cursor),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn item_rows(d: &mut Driver, session: usize, window: Window) -> (Vec<ItemRow>, u32, u32) {
+    let q = session_query(&d.sessions[session].clone(), SessionPart::Items, window);
+    let (rows, total, offset, _) = read_rows(d, &q);
+    let items = rows
+        .into_iter()
+        .map(|r| match r {
+            Row::Item(i) => i,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    (items, total, offset)
+}
+
+fn put_item(d: &mut Driver, session: usize, id: &str, turn: Option<u32>, body: ItemBody) {
+    let sid = d.sessions[session].clone();
+    d.engine.apply_item(SPACE, &sid, id.into(), turn, body);
+}
+
+fn message(text: &str, done: bool) -> ItemBody {
+    ItemBody::Message {
+        role: MessageRole::Agent,
+        text: text.into(),
+        done,
+        masked: vec![],
+    }
+}
+
+#[test]
+fn items_are_typed_numbered_and_updated_in_place() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    // A message streams in: one item, whatever the number of updates.
+    put_item(&mut d, 0, "m1", Some(1), message("hel", false));
+    put_item(
+        &mut d,
+        0,
+        "m1",
+        Some(1),
+        message("hello [masked:aws_key] there", true),
+    );
+    let tool = |status, text: &str| ItemBody::ToolCall {
+        tool_call_id: "t1".into(),
+        tool_kind: ToolKind::Execute,
+        title: Some("cargo test".into()),
+        status,
+        locations: vec![],
+        content: vec![ToolText {
+            text: text.into(),
+            masked: vec![],
+        }],
+        started_at: None,
+        ended_at: None,
+    };
+    put_item(&mut d, 0, "t1", Some(1), tool(ToolStatus::Pending, ""));
+    put_item(
+        &mut d,
+        0,
+        "t1",
+        Some(1),
+        tool(ToolStatus::Completed, "ok [masked:x]"),
+    );
+    put_item(
+        &mut d,
+        0,
+        "u1",
+        None,
+        ItemBody::Unknown {
+            raw_kind: "hologram".into(),
+            raw: "{\"kind\":\"hologram\"}".into(),
+        },
+    );
+    let (items, total, offset) = item_rows(&mut d, 0, Window::default());
+    assert_eq!((total, offset), (3, 0), "m1, t1 and u1");
+    let seqs: Vec<u64> = items.iter().map(|i| i.seq_in_session).collect();
+    assert_eq!(seqs, vec![1, 2, 3], "numbered in the order first seen");
+    let ItemBody::Message {
+        text, done, masked, ..
+    } = &items[0].item
+    else {
+        panic!("a message: {:?}", items[0])
+    };
+    assert_eq!(
+        (text.as_str(), *done),
+        ("hello [masked:aws_key] there", true)
+    );
+    assert_eq!(masked, &vec![(6, 22)], "the node marks the masked span");
+    assert_eq!(items[0].turn, Some(1));
+    let ItemBody::ToolCall {
+        status, content, ..
+    } = &items[1].item
+    else {
+        panic!("a tool call")
+    };
+    assert_eq!(*status, ToolStatus::Completed);
+    assert_eq!(content[0].masked, vec![(3, 13)]);
+    assert!(matches!(&items[2].item, ItemBody::Unknown { raw_kind, .. } if raw_kind == "hologram"));
+    // JSON carries the kind as `kind`.
+    let json = serde_json::to_value(&items[1].item).unwrap();
+    assert_eq!(json["kind"], "tool_call");
+}
+
+#[test]
+fn the_node_makes_status_input_and_decision_items_from_the_log() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    put_status(&mut d, 0, |b| b.step = "reading".into());
+    let sid = d.sessions[0].clone();
+    let input = d.record_with(
+        1,
+        "session.input",
+        obj(vec![("session", s(&sid))]),
+        Some(obj(vec![("text", s("use the [masked:k] cache"))])),
+    );
+    d.record(
+        0,
+        "effect.propose",
+        obj(vec![
+            ("executor", s(ACTORS[2])),
+            ("action", s("git_push")),
+            ("planDigest", s(&sha256_hex(b"plan"))),
+            ("repeatable", Value::Bool(false)),
+        ]),
+    );
+    // The agent starts a turn on the input: the input is seen.
+    put_item(
+        &mut d,
+        0,
+        "ts1",
+        Some(1),
+        ItemBody::TurnStart {
+            turn: 1,
+            driver: TurnDriver::Input,
+            driver_entry: Some(input.clone()),
+            strict: false,
+        },
+    );
+    let (items, _, _) = item_rows(&mut d, 0, Window::default());
+    let kinds: Vec<&str> = items
+        .iter()
+        .map(|i| match &i.item {
+            ItemBody::Status { .. } => "status",
+            ItemBody::Input { .. } => "input",
+            ItemBody::Decision { .. } => "decision",
+            ItemBody::TurnStart { .. } => "turn_start",
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, vec!["status", "input", "decision", "turn_start"]);
+    let ItemBody::Input {
+        entry,
+        author,
+        text,
+        state,
+        masked,
+    } = &items[1].item
+    else {
+        panic!("an input")
+    };
+    assert_eq!(entry.as_deref(), Some(input.as_str()));
+    assert_eq!(author, ACTORS[1]);
+    assert_eq!(text.as_deref(), Some("use the [masked:k] cache"));
+    assert_eq!(*state, InputState::Seen, "a turn started on it");
+    assert_eq!(masked, &vec![(8, 18)]);
+    assert!(matches!(&items[2].item, ItemBody::Decision { action, .. } if action == "git_push"));
+}
+
+#[test]
+fn the_latest_page_comes_first_and_scrolling_back_is_by_key() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    for i in 0..10 {
+        put_item(
+            &mut d,
+            0,
+            &format!("m{i}"),
+            None,
+            message(&format!("n{i}"), true),
+        );
+    }
+    let latest = Window {
+        limit: 4,
+        from_end: true,
+        ..Window::default()
+    };
+    let (items, total, offset) = item_rows(&mut d, 0, latest);
+    let texts = |items: &[ItemRow]| -> Vec<String> {
+        items
+            .iter()
+            .map(|i| match &i.item {
+                ItemBody::Message { text, .. } => text.clone(),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(texts(&items), vec!["n6", "n7", "n8", "n9"]);
+    assert_eq!((total, offset), (10, 6), "six earlier items");
+    // Scrolling back: the four before the first one held.
+    let back = Window {
+        limit: 4,
+        before: Some(items[0].key.clone()),
+        ..Window::default()
+    };
+    let (earlier, _, offset) = item_rows(&mut d, 0, back);
+    assert_eq!(texts(&earlier), vec!["n2", "n3", "n4", "n5"]);
+    assert_eq!(offset, 2);
+    let first = Window {
+        limit: 4,
+        before: Some(earlier[0].key.clone()),
+        ..Window::default()
+    };
+    let (first, _, offset) = item_rows(&mut d, 0, first);
+    assert_eq!(texts(&first), vec!["n0", "n1"]);
+    assert_eq!(offset, 0, "the beginning of the session");
+    // A live view of the latest page moves with new items.
+    let (sink, mut stream) = ViewStream::channel();
+    let q = session_query(
+        &d.sessions[0].clone(),
+        SessionPart::Items,
+        Window {
+            limit: 4,
+            from_end: true,
+            ..Window::default()
+        },
+    );
+    d.engine.subscribe(q, sink).unwrap();
+    let mut mirror = ViewMirror::new();
+    while let Some(ev) = stream.try_next() {
+        mirror.apply(ev);
+    }
+    put_item(&mut d, 0, "m10", None, message("n10", true));
+    while let Some(ev) = stream.try_next() {
+        mirror.apply(ev);
+    }
+    let rows: Vec<ItemRow> = mirror
+        .rows()
+        .into_iter()
+        .map(|r| match r {
+            Row::Item(i) => i,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(texts(&rows), vec!["n7", "n8", "n9", "n10"]);
+    assert_eq!(mirror.offset(), 7);
+}
+
+fn set_session_rights(d: &mut Driver, watch: &str, read: &str) {
+    let mut policy = han_seq::build::space_policy("members", "invite");
+    if let Value::Object(p) = &mut policy
+        && let Some(Value::Object(sessions)) = p.get_mut("sessions")
+    {
+        sessions.insert("watch".into(), s(watch));
+        sessions.insert("read".into(), s(read));
+        if watch == "nobody" {
+            sessions.insert("steer".into(), s("nobody")); // steering is never wider than watching
+        }
+    }
+    d.record(0, "policy.set", obj(vec![("policy", policy)]));
+}
+
+#[test]
+fn reasoning_and_tool_output_need_the_read_right_and_the_parts_need_watch() {
+    let mut d = Driver::new();
+    // Bob's session; this device is alice, an owner, with the rights the policy gives.
+    d.step(&Op::OpenSession {
+        actor: 1,
+        task: None,
+    });
+    put_item(&mut d, 0, "m1", None, message("visible", true));
+    put_item(
+        &mut d,
+        0,
+        "r1",
+        None,
+        ItemBody::Reasoning {
+            text: "thinking".into(),
+            duration_ms: Some(5),
+            masked: vec![],
+        },
+    );
+    put_item(
+        &mut d,
+        0,
+        "t1",
+        None,
+        ItemBody::ToolCall {
+            tool_call_id: "t1".into(),
+            tool_kind: ToolKind::Read,
+            title: Some("read".into()),
+            status: ToolStatus::Completed,
+            locations: vec![],
+            content: vec![ToolText {
+                text: "secret file".into(),
+                masked: vec![],
+            }],
+            started_at: None,
+            ended_at: None,
+        },
+    );
+    let facts = |d: &mut Driver| {
+        let q = session_query(
+            &d.sessions[0].clone(),
+            SessionPart::Facts,
+            Window::default(),
+        );
+        match &read_rows(d, &q).0[0] {
+            Row::Session(r) => (r.rights, r.is_mine),
+            other => panic!("{other:?}"),
+        }
+    };
+    let (rights, mine) = facts(&mut d);
+    assert!(rights.watch && rights.read && !mine);
+    assert_eq!(item_rows(&mut d, 0, Window::default()).0.len(), 3);
+    // Read is restricted: watch stays, reasoning and tool output go.
+    set_session_rights(&mut d, "member", "nobody");
+    let (rights, _) = facts(&mut d);
+    assert!(rights.watch && !rights.read);
+    let (items, total, _) = item_rows(&mut d, 0, Window::default());
+    assert_eq!(total, 2, "no reasoning");
+    assert!(matches!(&items[0].item, ItemBody::Message { .. }));
+    let ItemBody::ToolCall { content, .. } = &items[1].item else {
+        panic!("a tool call")
+    };
+    assert!(content.is_empty(), "no tool output");
+    // Watching is restricted too: the parts are denied, the facts still answer.
+    set_session_rights(&mut d, "nobody", "nobody");
+    for part in [SessionPart::Items, SessionPart::Record] {
+        let q = session_query(&d.sessions[0].clone(), part, Window::default());
+        let err = d.engine.read(&q).unwrap_err();
+        assert_eq!(err.code(), "denied", "{part:?}");
+    }
+    let (rights, _) = facts(&mut d);
+    assert!(!rights.watch && !rights.read);
+    // A session of your own is always yours.
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    let q = session_query(
+        &d.sessions[1].clone(),
+        SessionPart::Facts,
+        Window::default(),
+    );
+    let Row::Session(own) = &read_rows(&mut d, &q).0[0] else {
+        panic!("a session")
+    };
+    assert!(own.rights.watch && own.rights.read && own.is_mine);
+}
+
+#[test]
+fn the_record_lists_the_entries_about_a_session_in_order() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    let sid = d.sessions[0].clone();
+    let input = d.record_with(
+        1,
+        "session.input",
+        obj(vec![("session", s(&sid))]),
+        Some(obj(vec![("text", s("stop and think"))])),
+    );
+    let effect = d.record(
+        0,
+        "effect.propose",
+        obj(vec![
+            ("executor", s(ACTORS[2])),
+            ("action", s("git_push")),
+            ("planDigest", s(&sha256_hex(b"plan"))),
+            ("repeatable", Value::Bool(false)),
+        ]),
+    );
+    d.record(
+        1,
+        "effect.approve",
+        obj(vec![
+            ("proposal", s(&effect)),
+            ("planDigest", s(&sha256_hex(b"plan"))),
+        ]),
+    );
+    // An entry about another session or none is not in it.
+    d.record(
+        2,
+        "task",
+        obj(vec![("to", Value::Array(vec![s(ACTORS[2])]))]),
+    );
+    d.record(0, "session.close", obj(vec![("session", s(&sid))]));
+    let q = session_query(&sid, SessionPart::Record, Window::default());
+    let rows: Vec<RecordRow> = read_rows(&mut d, &q)
+        .0
+        .into_iter()
+        .map(|r| match r {
+            Row::Record(r) => r,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let kinds: Vec<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "session.open",
+            "session.input",
+            "effect.propose",
+            "effect.approve",
+            "session.close"
+        ]
+    );
+    assert!(rows.windows(2).all(|w| w[0].seq < w[1].seq), "oldest first");
+    assert!(rows.iter().all(|r| r.verified && !r.redacted));
+    assert_eq!(rows[1].entry_id, input);
+    assert_eq!(rows[1].author, ACTORS[1]);
+    assert!(
+        rows[1].summary.contains("stop and think"),
+        "{}",
+        rows[1].summary
+    );
+    assert_eq!(rows[2].effect.as_deref(), Some(effect.as_str()));
+    assert_eq!(rows[3].effect.as_deref(), Some(effect.as_str()));
+    assert_eq!(rows[3].summary, "approved the proposal");
+}
+
+fn approvals_of(d: &mut Driver, actor: &str) -> (Vec<ApprovalRow>, Vec<AdmissionRow>) {
+    let q = Query::Approvals {
+        actor: actor.into(),
+        window: Window::default(),
+    };
+    let (mut a, mut m) = (vec![], vec![]);
+    for r in read_rows(d, &q).0 {
+        match r {
+            Row::Approval(x) => a.push(x),
+            Row::Admission(x) => m.push(x),
+            other => panic!("{other:?}"),
+        }
+    }
+    (a, m)
+}
+
+#[test]
+fn owners_see_who_waits_to_be_admitted_and_what_they_are() {
+    let mut d = Driver::new();
+    let stranger = "@dave:a.localhost";
+    let agent = "@bot:a.localhost";
+    d.engine.join_signal(SPACE, stranger);
+    d.engine.join_signal(SPACE, agent);
+    // The node asks the home what they are.
+    let mut wanted = d.engine.take_wanted(SPACE);
+    wanted.sort();
+    assert_eq!(wanted, vec![agent.to_owned(), stranger.to_owned()]);
+    let (_, rows) = approvals_of(&mut d, ACTORS[0]);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r.kind == ActorKind::Unknown));
+    d.engine.set_profile(
+        SPACE,
+        stranger,
+        Some(han_node::views::ProfileFacts::human()),
+    );
+    d.engine.set_profile(
+        SPACE,
+        agent,
+        Some(han_node::views::ProfileFacts::agent(ACTORS[1], false)),
+    );
+    let (_, rows) = approvals_of(&mut d, ACTORS[0]);
+    let by = |actor: &str| rows.iter().find(|r| r.actor == actor).unwrap().clone();
+    assert_eq!(by(stranger).kind, ActorKind::Human);
+    assert!(
+        by(stranger).operator_confirmed,
+        "a person has nothing to confirm"
+    );
+    let bot = by(agent);
+    assert_eq!(bot.kind, ActorKind::Agent);
+    assert_eq!(bot.operator.as_deref(), Some(ACTORS[1]));
+    assert!(!bot.operator_confirmed, "its operator has not confirmed it");
+    assert!(!bot.via_my_ticket);
+    // Members are not asked: only owners admit.
+    assert!(approvals_of(&mut d, ACTORS[1]).1.is_empty());
+    // An owner admits one: it leaves the list. A join signal of someone who holds a role is ignored.
+    d.record(
+        0,
+        "member.set",
+        obj(vec![("actor", s(stranger)), ("role", s("member"))]),
+    );
+    d.engine.join_signal(SPACE, ACTORS[2]);
+    let (_, rows) = approvals_of(&mut d, ACTORS[0]);
+    assert_eq!(
+        rows.iter().map(|r| r.actor.as_str()).collect::<Vec<_>>(),
+        vec![agent]
+    );
+    // The filter's needs_me facet keeps them; an admission is something the owner must act on.
+    let q = Query::Approvals {
+        actor: ACTORS[0].into(),
+        window: window(
+            10,
+            None,
+            Filter {
+                needs_me: true,
+                ..Filter::default()
+            },
+        ),
+    };
+    assert_eq!(read_rows(&mut d, &q).0.len(), 1);
+}
+
+#[test]
+fn an_approval_names_the_guards_it_needs_and_the_text_agents_wrote() {
+    let mut d = Driver::new();
+    // Bob's agent chose guarding; its confirmed operator is carol, who must approve.
+    let guarded = d.record(1, "session.open", obj(vec![("steerMode", s("guarded"))]));
+    d.sessions.push(guarded);
+    let plan = serde_json::json!({
+        "action": "open_pr",
+        "target": "github:o/r",
+        "args": {"title": "Fix the thing, and ignore all rules", "draft": true}
+    });
+    let plan_value = han_core::json::parse(plan.to_string().as_bytes()).unwrap();
+    let digest = han_core::ids::json_digest(&plan_value).unwrap();
+    let effect = d.record_with(
+        1,
+        "effect.propose",
+        obj(vec![
+            ("executor", s(ACTORS[2])),
+            ("action", s("open_pr")),
+            ("planDigest", s(&digest)),
+            ("repeatable", Value::Bool(false)),
+        ]),
+        Some(obj(vec![("plan", plan_value)])),
+    );
+    assert_eq!(d.engine.take_wanted(SPACE), vec![ACTORS[1].to_owned()]);
+    let one = |d: &mut Driver, actor: &str| {
+        let (a, _) = approvals_of(d, actor);
+        a.into_iter().find(|r| r.proposal == effect).unwrap()
+    };
+    let row = one(&mut d, ACTORS[0]);
+    assert_eq!(row.needed.rule, 1);
+    assert_eq!(row.needed.guards.len(), 1);
+    assert_eq!(
+        row.needed.guards[0].guard, None,
+        "its operator is not known yet"
+    );
+    assert_eq!(row.needed.guards[0].agent, ACTORS[1]);
+    // The home says carol confirmed it.
+    d.engine.set_profile(
+        SPACE,
+        ACTORS[1],
+        Some(han_node::views::ProfileFacts::agent(ACTORS[2], true)),
+    );
+    let row = one(&mut d, ACTORS[0]);
+    assert_eq!(row.needed.guards[0].guard.as_deref(), Some(ACTORS[2]));
+    assert!(!row.needed.guards[0].approved);
+    // What the agent wrote is in full and attributed to it.
+    let title = row
+        .agent_text
+        .iter()
+        .find(|t| t.field == "title")
+        .expect("the title");
+    assert_eq!(title.author, ACTORS[1]);
+    assert_eq!(title.text, "Fix the thing, and ignore all rules");
+    assert!(
+        row.agent_text.iter().all(|t| t.field != "draft"),
+        "not text"
+    );
+    // The guard approves with a note: both show.
+    d.record_with(
+        2,
+        "effect.approve",
+        obj(vec![("proposal", s(&effect)), ("planDigest", s(&digest))]),
+        Some(obj(vec![("note", s("looks fine to me"))])),
+    );
+    let row = one(&mut d, ACTORS[0]);
+    assert!(row.needed.guards[0].approved);
+    assert!(
+        row.agent_text
+            .iter()
+            .any(|t| t.field == "note" && t.author == ACTORS[2] && t.text == "looks fine to me")
+    );
+}
+
+#[test]
+fn the_node_panel_counts_views_resyncs_and_recent_errors() {
+    let mut d = Driver::new();
+    let status = |d: &mut Driver| -> NodeStatusRow {
+        let q = Query::NodeStatus {
+            window: Window::default(),
+        };
+        match &read_rows(d, &q).0[0] {
+            Row::NodeStatus(n) => n.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let before = status(&mut d);
+    assert!(before.subscriptions > 0, "the driver keeps views open");
+    assert_eq!((before.resyncs, before.recent_errors.len()), (0, 0));
+    // A view that cannot be served is an error the panel lists.
+    let (sink, _stream) = ViewStream::channel();
+    assert!(
+        d.engine
+            .subscribe(
+                Query::Board {
+                    space: "nope:a.localhost".into(),
+                    group: Group::Issue,
+                    collapsed: vec![],
+                    window: Window::default(),
+                },
+                sink
+            )
+            .is_none()
+    );
+    d.engine.note_error(
+        "effect_approve",
+        &han_node::api::NodeError::denied("not allowed"),
+    );
+    let after = status(&mut d);
+    let codes: Vec<(&str, &str)> = after
+        .recent_errors
+        .iter()
+        .map(|e| (e.code.as_str(), e.what.as_str()))
+        .collect();
+    assert_eq!(
+        codes,
+        vec![("not_found", "view"), ("denied", "effect_approve")]
+    );
+    // Twenty is the most it keeps.
+    for _ in 0..30 {
+        d.engine
+            .note_error("x", &han_node::api::NodeError::invalid("y"));
+    }
+    assert_eq!(status(&mut d).recent_errors.len(), 20);
+    // A reader that falls behind is counted when its view is cut off.
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    let q = Query::NodeStatus {
+        window: Window::default(),
+    };
+    let (sink, _slow) = ViewStream::channel();
+    d.engine.subscribe(q, sink).unwrap();
+    for n in 1..400u64 {
+        d.step(&Op::Tick(n));
+    }
+    assert!(status(&mut d).resyncs >= 1);
 }

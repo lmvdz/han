@@ -4,21 +4,24 @@
 //! the views only need who has what open. Authority questions stay with Policy, reached through han-core's
 //! public API by the homes that decide and by the verifier (M4).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use han_core::grammar;
 use han_core::policy::{
-    Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel, Started, TaskState,
+    ActorKind as ProfileKind, Body, EffectResult, PolicyDoc, PolicyEntry, Role, SessionLevel,
+    Started, TaskState,
 };
 use han_core::{LogRecord, Value};
 use han_seq::time::format_time;
 
 use crate::api::{
-    ApprovalRow, BoardRow, ClaimKind, CostRow, Facets, Group, OverlapClaim, OverlapFile,
-    OverlapKind, OverlapParty, OverlapRow, OverlapSummary, SUMMARY_FIELDS, SUMMARY_TEXT,
-    SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody, WhoRow,
+    AGENT_TEXT, ActorKind, AdmissionRow, AgentText, ApprovalRow, BoardRow, ClaimKind, CostRow,
+    DeviceRow, DeviceState, Facets, Group, InputState, ItemBody, ItemRow, Needed, NeededGuard,
+    OverlapClaim, OverlapFile, OverlapKind, OverlapParty, OverlapRow, OverlapSummary, RecordRow,
+    Row, SUMMARY_FIELDS, SUMMARY_TEXT, SessionRights, SessionRow, SessionState, SpaceLink,
+    SpaceStatusRow, StatusBody, WhoRow, masked_spans,
 };
 
 /// The extension entry kind of an advisory path lease: body `{paths: [string], ttl: seconds, issue?: string}`.
@@ -65,6 +68,150 @@ pub(crate) struct SessionInfo {
     pub inputs: Vec<InputInfo>,
     /// This node's steady clock when the last item arrived (or the session was learnt of).
     pub last_item_ms: u64,
+    /// Its stream items.
+    pub items: ItemLog,
+    /// The entries of the log that are about it, oldest first.
+    pub record: Vec<RecordInfo>,
+}
+
+/// How long the node waits before it reads again the profile of an agent that is not confirmed yet.
+pub(crate) const PROFILE_RECHECK_MS: u64 = 30_000;
+
+/// The most items a node keeps of one session; the oldest go first.
+pub(crate) const MAX_ITEMS: usize = 10_000;
+
+/// The most entries a node keeps in one session's record view.
+pub(crate) const MAX_RECORD: usize = 10_000;
+
+#[derive(Clone, Debug)]
+pub(crate) struct ItemInfo {
+    pub id: String,
+    pub seq: u64,
+    pub turn: Option<u32>,
+    pub body: ItemBody,
+    pub updated_ms: u64,
+}
+
+/// The items of a session, numbered in the order the node first saw them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ItemLog {
+    pub items: BTreeMap<u64, ItemInfo>,
+    by_id: HashMap<String, u64>,
+    next: u64,
+}
+
+impl ItemLog {
+    /// Puts an item: new, or replacing the body of the one with this id. True if anything changed.
+    pub fn put(&mut self, id: String, turn: Option<u32>, body: ItemBody, now_ms: u64) -> bool {
+        if let Some(seq) = self.by_id.get(&id).copied()
+            && let Some(it) = self.items.get_mut(&seq)
+        {
+            if it.body == body && it.turn == turn {
+                return false;
+            }
+            it.body = body;
+            it.turn = turn;
+            it.updated_ms = now_ms;
+            return true;
+        }
+        self.next += 1;
+        let seq = self.next;
+        self.by_id.insert(id.clone(), seq);
+        self.items.insert(
+            seq,
+            ItemInfo {
+                id,
+                seq,
+                turn,
+                body,
+                updated_ms: now_ms,
+            },
+        );
+        while self.items.len() > MAX_ITEMS {
+            if let Some((_, old)) = self.items.pop_first() {
+                self.by_id.remove(&old.id);
+            }
+        }
+        true
+    }
+
+    /// An input a turn started on has been seen by the agent.
+    pub fn mark_seen(&mut self, entry: &str, now_ms: u64) -> bool {
+        let Some(seq) = self.by_id.get(&format!("input:{entry}")).copied() else {
+            return false;
+        };
+        match self.items.get_mut(&seq) {
+            Some(ItemInfo {
+                body: ItemBody::Input { state, .. },
+                updated_ms,
+                ..
+            }) if *state == InputState::Recorded => {
+                *state = InputState::Seen;
+                *updated_ms = now_ms;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// An entry of the log that is about a session.
+#[derive(Clone, Debug)]
+pub(crate) struct RecordInfo {
+    pub seq: u64,
+    pub entry_id: String,
+    pub kind: String,
+    pub author: String,
+    pub at: String,
+    pub summary: String,
+    pub redacted: bool,
+    pub redact_reason: Option<String>,
+    pub effect: Option<String>,
+}
+
+/// What an actor's profile says (read from its home).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileFacts {
+    /// A person, an agent or a service.
+    pub kind: ProfileKind,
+    /// The operator of an agent or a service.
+    pub operator: Option<String>,
+    /// The operator confirmed the actor in its profile space (P-03).
+    pub confirmed: bool,
+}
+
+impl ProfileFacts {
+    /// A person.
+    pub fn human() -> ProfileFacts {
+        ProfileFacts {
+            kind: ProfileKind::Human,
+            operator: None,
+            confirmed: false,
+        }
+    }
+
+    /// An agent run by `operator`, who has or has not confirmed it.
+    pub fn agent(operator: &str, confirmed: bool) -> ProfileFacts {
+        ProfileFacts {
+            kind: ProfileKind::Agent,
+            operator: Some(operator.to_owned()),
+            confirmed,
+        }
+    }
+}
+
+/// A key of this device's identity, from its profile space.
+#[derive(Clone, Debug)]
+pub(crate) struct DeviceInfo {
+    pub added_at: String,
+    pub revoked_at: Option<String>,
+}
+
+/// What an entry did to a session's record.
+struct Touch {
+    session: String,
+    summary: String,
+    effect: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,6 +267,10 @@ pub(crate) struct EffectInfo {
     pub last_claim: Option<String>,
     /// The node hashed the plan: `sha256(JCS(plan))` is the digest.
     pub plan_ok: bool,
+    /// The session of the proposer that was open when it proposed.
+    pub session: Option<String>,
+    /// Notes the approvers wrote, as `(author, text)`.
+    pub notes: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +305,18 @@ pub(crate) struct SpaceModel {
     pub rules: Vec<(String, Vec<String>)>,
     /// Who may steer sessions, by the policy.
     pub steer: Option<SessionLevel>,
+    /// Who may watch and who may read sessions, by the policy.
+    pub watch: Option<SessionLevel>,
+    pub read: Option<SessionLevel>,
+    /// Actors that asked to join and wait for an owner: the node's clock when the join arrived.
+    pub pending: BTreeMap<String, u64>,
+    /// What the home says about actors (`None`: it could not be read), and the actors still to ask about.
+    pub profiles: BTreeMap<String, Option<ProfileFacts>>,
+    pub wanted: BTreeSet<String>,
+    /// The node's steady clock (ms) when each profile was read.
+    pub profile_at: BTreeMap<String, u64>,
+    /// The keys of the identity, when this is its profile space.
+    pub devices: BTreeMap<String, DeviceInfo>,
     /// The policy's `launchWindow` in seconds.
     pub launch_window: u64,
     /// Actors that chose guarding (sticky until `agent.unguard`), and whether owners force non-humans.
@@ -211,6 +374,13 @@ impl SpaceModel {
             me: me.to_owned(),
             rules: Vec::new(),
             steer: None,
+            watch: None,
+            read: None,
+            pending: BTreeMap::new(),
+            profiles: BTreeMap::new(),
+            wanted: BTreeSet::new(),
+            profile_at: BTreeMap::new(),
+            devices: BTreeMap::new(),
             launch_window: 30,
             guarded: BTreeSet::new(),
             force_guarded: false,
@@ -233,6 +403,8 @@ impl SpaceModel {
             .map(|r| (r.action, r.approvers))
             .collect();
         self.steer = Some(policy.sessions.steer);
+        self.watch = Some(policy.sessions.watch);
+        self.read = Some(policy.sessions.read);
         self.launch_window = policy.launch_window;
         self.force_guarded = policy.sessions.force_guarded == Some(true);
     }
@@ -257,6 +429,137 @@ impl SpaceModel {
             Some(SessionLevel::Nobody) => false,
         };
         by_role || s.actor == self.me
+    }
+
+    /// Whether the device's actor holds a session right at `level`.
+    fn holds(&self, level: Option<SessionLevel>) -> bool {
+        match level {
+            Some(SessionLevel::Guest) => self.roles.get(&self.me).is_some_and(|r| r.reads()),
+            Some(SessionLevel::Member) => self.is_member(&self.me),
+            Some(SessionLevel::Owner) | None => self.is_owner(&self.me),
+            Some(SessionLevel::Nobody) => false,
+        }
+    }
+
+    /// What the device's actor may see of a session: the policy's `watch` and `read`, and always its own.
+    pub fn rights(&self, s: &SessionInfo) -> SessionRights {
+        let own = s.actor == self.me;
+        SessionRights {
+            watch: own || self.holds(self.watch),
+            read: own || self.holds(self.read),
+        }
+    }
+
+    /// The open session of `actor` that was opened last.
+    fn open_session_of(&self, actor: &str) -> Option<String> {
+        self.sessions
+            .values()
+            .filter(|s| s.actor == actor && !s.closed)
+            .max_by(|a, b| (&a.opened, &a.id).cmp(&(&b.opened, &b.id)))
+            .map(|s| s.id.clone())
+    }
+
+    /// The guarded agents an effect of `proposer` and `executor` involves (P-15), each once.
+    fn guarded_agents(&self, proposer: &str, executor: &str) -> Vec<String> {
+        let mut agents = self.guards_of(proposer);
+        for g in self.guards_of(executor) {
+            if !agents.contains(&g) {
+                agents.push(g);
+            }
+        }
+        agents
+    }
+
+    /// Asks for the profiles of the agents an effect involves, to say who must approve for them.
+    fn want_guard_profiles(&mut self, proposer: &str, executor: &str) {
+        for a in self.guarded_agents(proposer, executor) {
+            if !self.profiles.contains_key(&a) {
+                self.wanted.insert(a);
+            }
+        }
+    }
+
+    /// Who must approve for each guarded agent of an effect: its operator, if the home says it confirmed
+    /// the agent (`None`: nobody can approve for the agent).
+    fn effect_guards(&self, proposer: &str, executor: &str) -> Vec<(String, Option<String>)> {
+        self.guarded_agents(proposer, executor)
+            .into_iter()
+            .map(|a| {
+                let guard = self
+                    .profiles
+                    .get(&a)
+                    .and_then(Option::as_ref)
+                    .filter(|f| f.kind != ProfileKind::Human && f.confirmed)
+                    .and_then(|f| f.operator.clone());
+                (a, guard)
+            })
+            .collect()
+    }
+
+    /// Puts an item on a session's stream. True if it changed.
+    pub fn push_item(
+        &mut self,
+        session: &str,
+        id: String,
+        turn: Option<u32>,
+        body: ItemBody,
+        now_ms: u64,
+        activity: bool,
+    ) -> bool {
+        let Some(s) = self.sessions.get_mut(session) else {
+            return false;
+        };
+        if let ItemBody::TurnStart {
+            driver: crate::api::TurnDriver::Input,
+            driver_entry: Some(e),
+            ..
+        } = &body
+        {
+            s.items.mark_seen(e, now_ms);
+        }
+        if activity {
+            s.last_item_ms = now_ms;
+        }
+        let changed = s.items.put(id, turn, body, now_ms);
+        if changed || activity {
+            self.bump();
+        }
+        changed
+    }
+
+    /// An actor asked to join (the home's `join` signal). Nothing happens if it already holds a role.
+    pub fn join_signal(&mut self, actor: &str, now_ms: u64) {
+        if self.roles.contains_key(actor) {
+            return;
+        }
+        self.pending.entry(actor.to_owned()).or_insert(now_ms);
+        if !self.profiles.contains_key(actor) {
+            self.wanted.insert(actor.to_owned());
+        }
+        self.bump();
+    }
+
+    /// What the home says about an actor, read at `now_ms`.
+    pub fn set_profile(&mut self, actor: &str, facts: Option<ProfileFacts>, now_ms: u64) {
+        self.wanted.remove(actor);
+        self.profiles.insert(actor.to_owned(), facts);
+        self.profile_at.insert(actor.to_owned(), now_ms);
+        self.bump();
+    }
+
+    /// An agent that waits to be admitted may be confirmed by its operator any time: its profile is read
+    /// again now and then until it is.
+    pub fn recheck_profiles(&mut self, now_ms: u64) {
+        for actor in self.pending.keys() {
+            let unconfirmed = matches!(
+                self.profiles.get(actor),
+                Some(Some(f)) if f.kind != ProfileKind::Human && !f.confirmed
+            );
+            let age = now_ms.saturating_sub(self.profile_at.get(actor).copied().unwrap_or(0));
+            if unconfirmed && age >= PROFILE_RECHECK_MS {
+                self.wanted.insert(actor.clone());
+            }
+        }
     }
 
     /// Z2: an actor that can no longer read carries no task.
@@ -316,26 +619,50 @@ impl SpaceModel {
         };
         let id = rec.receipt.id.clone();
         let author = entry.author.clone();
+        let mut touch: Option<Touch> = None;
         match entry.body {
             Body::SpaceCreate(b) => {
                 if !self.space.starts_with("profile:") {
                     self.roles.insert(author, Role::Owner);
                 }
+                if let Some(p) = &b.profile {
+                    self.devices.insert(
+                        p.key.key_id.clone(),
+                        DeviceInfo {
+                            added_at: rec.receipt.time.clone(),
+                            revoked_at: None,
+                        },
+                    );
+                }
                 self.set_policy(b.policy);
             }
             Body::PolicySet(b) => self.set_policy(b.policy),
-            Body::MemberSet(b) => match b.role.role() {
-                Some(r) => {
-                    if !r.reads() {
-                        self.drop_carry(&b.actor);
+            Body::KeyAdd(k) => {
+                self.devices.entry(k.key_id).or_insert(DeviceInfo {
+                    added_at: rec.receipt.time.clone(),
+                    revoked_at: None,
+                });
+            }
+            Body::KeyRevoke(k) => {
+                if let Some(d) = self.devices.get_mut(&k.key_id) {
+                    d.revoked_at.get_or_insert_with(|| rec.receipt.time.clone());
+                }
+            }
+            Body::MemberSet(b) => {
+                self.pending.remove(&b.actor);
+                match b.role.role() {
+                    Some(r) => {
+                        if !r.reads() {
+                            self.drop_carry(&b.actor);
+                        }
+                        self.roles.insert(b.actor, r);
                     }
-                    self.roles.insert(b.actor, r);
+                    None => {
+                        self.drop_carry(&b.actor);
+                        self.roles.remove(&b.actor);
+                    }
                 }
-                None => {
-                    self.drop_carry(&b.actor);
-                    self.roles.remove(&b.actor);
-                }
-            },
+            }
             Body::Task(t) => {
                 // P-15: the parent's list, then the guards of the author; each once.
                 let mut guarded_for = t
@@ -400,6 +727,11 @@ impl SpaceModel {
                     self.guarded.insert(author.clone());
                 }
                 opened.push(id.clone());
+                touch = Some(Touch {
+                    session: id.clone(),
+                    summary: "opened the session".into(),
+                    effect: None,
+                });
                 self.sessions.insert(
                     id.clone(),
                     SessionInfo {
@@ -411,6 +743,8 @@ impl SpaceModel {
                         status: None,
                         inputs: Vec::new(),
                         last_item_ms: now.ms,
+                        items: ItemLog::default(),
+                        record: Vec::new(),
                     },
                 );
             }
@@ -418,6 +752,11 @@ impl SpaceModel {
                 if let Some(s) = self.sessions.get_mut(&c.session) {
                     s.closed = true;
                 }
+                touch = Some(Touch {
+                    session: c.session,
+                    summary: "closed the session".into(),
+                    effect: None,
+                });
             }
             Body::Propose(p) => {
                 let plan_json = rec.content.as_ref().and_then(|c| c.get("plan"));
@@ -428,6 +767,21 @@ impl SpaceModel {
                 let plan_ok = plan_json
                     .and_then(|v| han_core::ids::json_digest(v).ok())
                     .is_some_and(|d| d == p.plan_digest);
+                let session = self.open_session_of(&author);
+                if let Some(sid) = &session {
+                    let item = ItemBody::Decision {
+                        effect: id.clone(),
+                        action: p.action.clone(),
+                    };
+                    self.push_item(sid, format!("decision:{id}"), None, item, now.ms, false);
+                    touch = Some(Touch {
+                        session: sid.clone(),
+                        summary: format!("proposed {}", p.action),
+                        effect: Some(id.clone()),
+                    });
+                }
+                // The guards of the agents it involves are asked for, to say who must approve.
+                self.want_guard_profiles(&author, &p.executor);
                 self.effects.insert(
                     id.clone(),
                     EffectInfo {
@@ -447,29 +801,55 @@ impl SpaceModel {
                         task: p.task,
                         claims: 0,
                         last_claim: None,
+                        session,
+                        notes: Vec::new(),
                     },
                 );
             }
             Body::Approve(a) => {
-                if let Some(e) = self.effects.get_mut(&a.proposal)
-                    && !e.approvals.contains(&author)
-                {
-                    e.approvals.push(author);
+                if let Some(e) = self.effects.get_mut(&a.proposal) {
+                    touch = e.session.clone().map(|session| Touch {
+                        session,
+                        summary: "approved the proposal".into(),
+                        effect: Some(a.proposal.clone()),
+                    });
+                    if !e.approvals.contains(&author) {
+                        if let Some(note) = rec
+                            .content
+                            .as_ref()
+                            .and_then(|c| c.get("note"))
+                            .and_then(Value::as_str)
+                        {
+                            e.notes.push((author.clone(), note.to_owned()));
+                        }
+                        e.approvals.push(author);
+                    }
                 }
             }
             Body::EffectCancel(c) => {
-                if let Some(e) = self.effects.get_mut(&c.proposal)
-                    && e.phase == Phase::Open
-                {
-                    e.phase = Phase::Done;
+                if let Some(e) = self.effects.get_mut(&c.proposal) {
+                    if e.phase == Phase::Open {
+                        e.phase = Phase::Done;
+                    }
+                    touch = e.session.clone().map(|session| Touch {
+                        session,
+                        summary: "cancelled the proposal".into(),
+                        effect: Some(c.proposal.clone()),
+                    });
                 }
             }
             Body::Claim(c) => {
                 if let Some(e) = self.effects.get_mut(&c.proposal) {
                     e.phase = Phase::Claimed;
                     e.approvals.clear(); // a claim consumes the approvals it stands on
+                    e.notes.clear();
                     e.claims += 1;
                     e.last_claim = Some(id.clone());
+                    touch = e.session.clone().map(|session| Touch {
+                        session,
+                        summary: "claimed the proposal".into(),
+                        effect: Some(c.proposal.clone()),
+                    });
                     self.claims.insert(id, c.proposal);
                 }
             }
@@ -477,6 +857,11 @@ impl SpaceModel {
                 if let Some(p) = self.claims.get(&o.claim)
                     && let Some(e) = self.effects.get_mut(p)
                 {
+                    touch = e.session.clone().map(|session| Touch {
+                        session,
+                        summary: "reported an outcome".into(),
+                        effect: Some(p.clone()),
+                    });
                     e.phase = match (o.result, o.started) {
                         // P-09: not started returns the effect to open (cancelled if a cancel was
                         // asked for, which this fold does not track: it shows open until the next
@@ -491,17 +876,34 @@ impl SpaceModel {
                 }
             }
             Body::SessionInput(i) => {
+                let text = rec
+                    .content
+                    .as_ref()
+                    .and_then(|c| c.get("text"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 if let Some(s) = self.sessions.get_mut(&i.session) {
                     s.inputs.push(InputInfo {
                         id: id.clone(),
                         seq,
                         author: author.clone(),
-                        text: rec
-                            .content
-                            .as_ref()
-                            .and_then(|c| c.get("text"))
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
+                        text: text.clone(),
+                    });
+                    let item = ItemBody::Input {
+                        entry: Some(id.clone()),
+                        author: author.clone(),
+                        masked: text.as_deref().map(masked_spans).unwrap_or_default(),
+                        text: text.clone(),
+                        state: InputState::Recorded,
+                    };
+                    s.items.put(format!("input:{id}"), None, item, now.ms);
+                    touch = Some(Touch {
+                        session: i.session,
+                        summary: match &text {
+                            Some(t) => format!("steered: \"{}\"", cut(t, 80)),
+                            None => "steered (text redacted)".into(),
+                        },
+                        effect: None,
                     });
                 }
             }
@@ -511,6 +913,11 @@ impl SpaceModel {
             Body::Resolve(r) => {
                 if let Some(e) = self.effects.get_mut(&r.proposal) {
                     e.phase = Phase::Done;
+                    touch = e.session.clone().map(|session| Touch {
+                        session,
+                        summary: "resolved the proposal".into(),
+                        effect: Some(r.proposal.clone()),
+                    });
                 }
             }
             Body::Extension(v) if entry.kind == LEASE_KIND => {
@@ -541,6 +948,29 @@ impl SpaceModel {
             }
             _ => {}
         }
+        if let Some(t) = touch
+            && let Some(s) = self.sessions.get_mut(&t.session)
+        {
+            s.record.push(RecordInfo {
+                seq,
+                entry_id: rec.receipt.id.clone(),
+                kind: rec.entry.kind.clone(),
+                author: rec.entry.author.clone(),
+                at: rec.receipt.time.clone(),
+                summary: t.summary,
+                redacted: rec.redacted,
+                redact_reason: rec
+                    .redacted_by
+                    .as_ref()
+                    .and_then(|r| r.entry.body.get("reason"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                effect: t.effect,
+            });
+            if s.record.len() > MAX_RECORD {
+                s.record.remove(0);
+            }
+        }
         opened
     }
 
@@ -555,7 +985,13 @@ impl SpaceModel {
         }
         s.last_item_ms = now.ms;
         // The item with the highest `seq` wins; an older one only shows the host is alive.
-        if s.status.as_ref().is_none_or(|old| status.seq > old.seq) {
+        let current = s.status.as_ref().is_none_or(|old| status.seq > old.seq);
+        if current {
+            let item = ItemBody::Status {
+                body: Box::new(status.clone()),
+            };
+            s.items
+                .put(format!("status:{}", status.seq), None, item, now.ms);
             s.status = Some(status);
         }
         self.bump();
@@ -1137,6 +1573,8 @@ impl SpaceModel {
                 state_reason: self.state_reason(s, now),
                 status: s.status.clone(),
                 last_active_ms: s.last_item_ms,
+                rights: self.rights(s),
+                is_mine: s.actor == self.me || self.person_of(s) == self.me,
             }),
         )
     }
@@ -1280,6 +1718,24 @@ impl SpaceModel {
                     ),
                 };
                 let (target, summary) = plan_facts(e.plan.as_deref());
+                let mut guards: Vec<NeededGuard> = Vec::new();
+                for (agent, guard) in self.effect_guards(&e.proposer, &e.executor) {
+                    if guard.is_some() && guards.iter().any(|x| x.guard == guard) {
+                        continue; // one operator guards several agents: one approval covers them
+                    }
+                    let approved = guard.as_ref().is_some_and(|g| e.approvals.contains(g));
+                    guards.push(NeededGuard {
+                        guard,
+                        agent,
+                        approved,
+                    });
+                }
+                let mut agent_text = plan_texts(e.plan.as_deref(), &e.proposer);
+                agent_text.extend(e.notes.iter().map(|(author, text)| AgentText {
+                    author: author.clone(),
+                    field: "note".into(),
+                    text: text.chars().take(AGENT_TEXT).collect(),
+                }));
                 (
                     Facets {
                         state: None,
@@ -1316,6 +1772,8 @@ impl SpaceModel {
                         can_cancel: e.proposer == actor || self.is_owner(actor),
                         approvers,
                         why_gated,
+                        needed: Needed { rule: 1, guards },
+                        agent_text,
                     }),
                 )
             })
@@ -1407,6 +1865,142 @@ impl SpaceModel {
 }
 
 impl SpaceModel {
+    /// The typed items of a session, oldest first, as far as the device's actor may see them. `None` if the
+    /// session is unknown; `Err` text if the actor may not watch it.
+    pub fn item_rows(&self, session: &str) -> Option<Result<Vec<(Facets, Row)>, String>> {
+        let s = self.sessions.get(session)?;
+        let rights = self.rights(s);
+        if !rights.watch {
+            return Some(Err("this space does not let you watch that session".into()));
+        }
+        let rows = s
+            .items
+            .items
+            .values()
+            .filter_map(|it| {
+                let body = visible(&it.body, rights.read)?;
+                let text = item_text(&body);
+                Some((
+                    Facets {
+                        text,
+                        ..Facets::default()
+                    },
+                    Row::Item(ItemRow {
+                        key: format!("{:012}", it.seq),
+                        session: session.to_owned(),
+                        id: it.id.clone(),
+                        seq_in_session: it.seq,
+                        turn: it.turn,
+                        updated_ms: it.updated_ms,
+                        item: body,
+                    }),
+                ))
+            })
+            .collect();
+        Some(Ok(rows))
+    }
+
+    /// The entries of the log that are about a session, oldest first.
+    pub fn record_rows(&self, session: &str) -> Option<Result<Vec<(Facets, Row)>, String>> {
+        let s = self.sessions.get(session)?;
+        if !self.rights(s).watch {
+            return Some(Err("this space does not let you watch that session".into()));
+        }
+        let rows = s
+            .record
+            .iter()
+            .map(|r| {
+                (
+                    Facets {
+                        actors: vec![r.author.clone()],
+                        text: format!("{} {} {}", r.kind, r.author, r.summary),
+                        ..Facets::default()
+                    },
+                    Row::Record(RecordRow {
+                        key: format!("{:012}", r.seq),
+                        session: session.to_owned(),
+                        seq: r.seq,
+                        entry_id: r.entry_id.clone(),
+                        kind: r.kind.clone(),
+                        author: r.author.clone(),
+                        at: r.at.clone(),
+                        summary: r.summary.clone(),
+                        verified: true, // the node checked the receipt before it folded the record
+                        redacted: r.redacted,
+                        redact_reason: r.redact_reason.clone(),
+                        effect: r.effect.clone(),
+                    }),
+                )
+            })
+            .collect();
+        Some(Ok(rows))
+    }
+
+    /// The actors waiting to be admitted, for an owner.
+    pub fn admission_rows(&self, actor: &str) -> Vec<(Facets, Row)> {
+        if !self.is_owner(actor) {
+            return Vec::new();
+        }
+        self.pending
+            .iter()
+            .filter(|(a, _)| !self.roles.contains_key(*a))
+            .map(|(a, at_ms)| {
+                let facts = self.profiles.get(a).and_then(Option::as_ref);
+                let kind = facts.map_or(ActorKind::Unknown, |f| match f.kind {
+                    ProfileKind::Human => ActorKind::Human,
+                    ProfileKind::Agent => ActorKind::Agent,
+                    ProfileKind::Service => ActorKind::Service,
+                });
+                (
+                    Facets {
+                        needs_me: true,
+                        actors: vec![a.clone()],
+                        text: format!("join {a}"),
+                        ..Facets::default()
+                    },
+                    Row::Admission(AdmissionRow {
+                        key: format!("{}|adm|{a}", self.space),
+                        space: self.space.clone(),
+                        actor: a.clone(),
+                        kind,
+                        operator: facts.and_then(|f| f.operator.clone()),
+                        operator_confirmed: facts
+                            .is_some_and(|f| f.kind == ProfileKind::Human || f.confirmed),
+                        at_ms: *at_ms,
+                        via_my_ticket: false,
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// The keys of the identity, when this is its profile space.
+    pub fn device_rows(&self, device_key: &str) -> Vec<(Facets, Row)> {
+        self.devices
+            .iter()
+            .map(|(id, d)| {
+                (
+                    Facets {
+                        text: id.clone(),
+                        ..Facets::default()
+                    },
+                    Row::Device(DeviceRow {
+                        key: id.clone(),
+                        key_id: id.clone(),
+                        state: if d.revoked_at.is_some() {
+                            DeviceState::Revoked
+                        } else {
+                            DeviceState::Active
+                        },
+                        added_at: d.added_at.clone(),
+                        revoked_at: d.revoked_at.clone(),
+                        this_device: id == device_key,
+                    }),
+                )
+            })
+            .collect()
+    }
+
     /// The inputs of a session.
     pub fn input_rows(&self, session: &str) -> Option<Vec<(Facets, crate::api::Row)>> {
         let s = self.sessions.get(session)?;
@@ -1538,6 +2132,122 @@ impl SpaceModel {
             })
             .collect()
     }
+}
+
+/// `text` cut to `n` characters, with an ellipsis when it was longer.
+fn cut(text: &str, n: usize) -> String {
+    if text.chars().count() <= n {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(n).collect();
+    out.push('…');
+    out
+}
+
+/// An item as the device's actor may see it: the masked spans are the node's own reading of the text, and
+/// without the read right the reasoning and the content of tool calls are left out.
+fn visible(body: &ItemBody, read: bool) -> Option<ItemBody> {
+    Some(match body {
+        ItemBody::Reasoning { .. } if !read => return None,
+        ItemBody::Reasoning {
+            text, duration_ms, ..
+        } => ItemBody::Reasoning {
+            masked: masked_spans(text),
+            text: text.clone(),
+            duration_ms: *duration_ms,
+        },
+        ItemBody::Message {
+            role, text, done, ..
+        } => ItemBody::Message {
+            role: *role,
+            masked: masked_spans(text),
+            text: text.clone(),
+            done: *done,
+        },
+        ItemBody::Input {
+            entry,
+            author,
+            text,
+            state,
+            ..
+        } => ItemBody::Input {
+            entry: entry.clone(),
+            author: author.clone(),
+            masked: text.as_deref().map(masked_spans).unwrap_or_default(),
+            text: text.clone(),
+            state: *state,
+        },
+        ItemBody::ToolCall {
+            tool_call_id,
+            tool_kind,
+            title,
+            status,
+            locations,
+            content,
+            started_at,
+            ended_at,
+        } => ItemBody::ToolCall {
+            tool_call_id: tool_call_id.clone(),
+            tool_kind: *tool_kind,
+            title: title.clone(),
+            status: *status,
+            locations: locations.clone(),
+            content: if read {
+                content
+                    .iter()
+                    .map(|c| crate::api::ToolText {
+                        masked: masked_spans(&c.text),
+                        text: c.text.clone(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            started_at: started_at.clone(),
+            ended_at: ended_at.clone(),
+        },
+        other => other.clone(),
+    })
+}
+
+/// The searchable text of an item.
+fn item_text(body: &ItemBody) -> String {
+    match body {
+        ItemBody::Message { text, .. } | ItemBody::Reasoning { text, .. } => text.clone(),
+        ItemBody::Input { text, .. } => text.clone().unwrap_or_default(),
+        ItemBody::ToolCall { title, .. } => title.clone().unwrap_or_default(),
+        ItemBody::FileChange { path, .. } => path.clone(),
+        ItemBody::Decision { action, .. } => action.clone(),
+        ItemBody::Status { body } => body.step.clone(),
+        ItemBody::Plan { entries } => entries
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}
+
+/// The plain string arguments of a plan, in full: text an agent wrote and a face shows as quoted.
+fn plan_texts(plan: Option<&str>, author: &str) -> Vec<AgentText> {
+    let Some(serde_json::Value::Object(plan)) = plan.and_then(|p| serde_json::from_str(p).ok())
+    else {
+        return Vec::new();
+    };
+    plan.get("args")
+        .and_then(serde_json::Value::as_object)
+        .map(|args| {
+            args.iter()
+                .filter_map(|(k, v)| {
+                    Some(AgentText {
+                        author: author.to_owned(),
+                        field: k.clone(),
+                        text: v.as_str()?.chars().take(AGENT_TEXT).collect(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Whether an effect still waits for approval at `now`.

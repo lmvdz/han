@@ -1,7 +1,9 @@
 //! Drawing: the board, the session pane, the approvals pane, the status line and the overlays. Pure functions
 //! of the [`App`]; colour is never the only signal (every state has a glyph and a word).
 
-use han_node::api::{BoardRow, Fidelity, OverlapKind, PatchStatus, SandboxBackend, SessionState};
+use han_node::api::{
+    ActorKind, BoardRow, Fidelity, OverlapKind, PatchStatus, SandboxBackend, SessionState,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -636,6 +638,14 @@ fn draw_session(f: &mut Frame, app: &App, area: Rect) {
         }
         head.push(Line::styled(fit(&facts.join(" · "), w), quiet()));
     }
+    if let Some(row) = &p.row
+        && !row.rights.read
+    {
+        head.push(Line::styled(
+            fit("reasoning and tool output are withheld (no read right)", w),
+            quiet(),
+        ));
+    }
     let mut tabs: Vec<Span> = Vec::new();
     for (i, t) in [Tab::Stream, Tab::Timeline, Tab::Changes]
         .into_iter()
@@ -785,6 +795,13 @@ fn draw_stream(f: &mut Frame, p: &SessionPane, area: Rect) {
                 LogKind::Tests => ("T ", Style::new().fg(Color::Magenta)),
                 LogKind::Summary => ("Σ ", quiet()),
                 LogKind::Steer => ("» ", Style::new().fg(Color::Yellow)),
+                LogKind::Message => ("“ ", Style::new()),
+                LogKind::Reasoning => ("~ ", quiet()),
+                LogKind::Call => ("$ ", Style::new().fg(Color::Cyan)),
+                LogKind::File => ("± ", Style::new().fg(Color::Green)),
+                LogKind::Turn => ("— ", quiet()),
+                LogKind::Decision => ("⚑ ", Style::new().fg(Color::Yellow)),
+                LogKind::Unsupported => ("? ", quiet()),
             };
             Line::styled(fit(&format!("{mark}{}", clean(&l.text)), w), style)
         })
@@ -1007,6 +1024,38 @@ fn draw_approvals(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::styled(fit(&format!("  {you}"), w), quiet()));
         lines.push(Line::raw(""));
     }
+    if !a.admissions().is_empty() {
+        lines.push(Line::styled(
+            format!("Waiting to join ({})", a.admissions().len()),
+            Style::new().add_modifier(Modifier::BOLD),
+        ));
+        for m in a.admissions() {
+            let what = match m.kind {
+                ActorKind::Human => "person".to_owned(),
+                ActorKind::Agent | ActorKind::Service => {
+                    let kind = if m.kind == ActorKind::Agent {
+                        "agent"
+                    } else {
+                        "service"
+                    };
+                    match (&m.operator, m.operator_confirmed) {
+                        (Some(op), true) => format!("{kind} of {}", clean(op)),
+                        (Some(op), false) => {
+                            format!("{kind} of {}, unconfirmed", clean(op))
+                        }
+                        (None, _) => kind.to_owned(),
+                    }
+                }
+                ActorKind::Unknown => "not known yet".to_owned(),
+            };
+            lines.push(Line::raw(fit(&format!("  {}", clean(&m.actor)), w)));
+            lines.push(Line::styled(
+                fit(&format!("    {what} · {}", clean(&m.space)), w),
+                quiet(),
+            ));
+        }
+        lines.push(Line::styled("  admit with :admit <actor>", quiet()));
+    }
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -1033,10 +1082,30 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
     };
     wrapped("ACTION", &action, &mut lines);
     // The plan's values: some are text an agent wrote, so each is quoted and never taken for the card's own words.
-    for (i, (name, value)) in r.summary.iter().enumerate() {
+    // Text the node sends in full is shown below, as the author's.
+    let said = |name: &str| {
+        r.agent_text
+            .iter()
+            .any(|t| t.field == name && t.author == r.proposer)
+    };
+    let mut first = true;
+    for (name, value) in r.summary.iter().filter(|(n, _)| !said(n)) {
         wrapped(
-            if i == 0 { "CHANGES" } else { "" },
+            if first { "CHANGES" } else { "" },
             &format!("{}: \"{}\"", clean(name), clean(value)),
+            &mut lines,
+        );
+        first = false;
+    }
+    for (i, t) in r.agent_text.iter().enumerate() {
+        wrapped(
+            if i == 0 { "WRITTEN" } else { "" },
+            &format!(
+                "{} wrote {}: \"{}\"",
+                clean(&t.author),
+                clean(&t.field),
+                clean(&t.text)
+            ),
             &mut lines,
         );
     }
@@ -1100,6 +1169,25 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
             &format!("needed from: {}", r.approvers.join(" or ")),
             &mut lines,
         );
+    }
+    for (i, g) in r.needed.guards.iter().enumerate() {
+        let who = match &g.guard {
+            Some(guard) => format!(
+                "{} guards {}: {}",
+                clean(guard),
+                clean(&g.agent),
+                if g.approved {
+                    "approved"
+                } else {
+                    "has not approved"
+                }
+            ),
+            None => format!(
+                "{} has no confirmed operator: nobody can approve for it",
+                clean(&g.agent)
+            ),
+        };
+        wrapped(if i == 0 { "GUARDS" } else { "" }, &who, &mut lines);
     }
     let you = a.block_reason(app.me.as_deref());
     match &you {
@@ -1324,7 +1412,7 @@ const HELP: &[(&str, &str)] = &[
     ("Everywhere", ""),
     (
         ": or Ctrl-p",
-        "command palette (:group :filter :space :closed :approvals :quit)",
+        "command palette (:group :filter :space :closed :approvals :admit :quit)",
     ),
     ("Tab", "next pane"),
     ("?  q  Ctrl-c", "this help; quit (or close the pane); quit"),

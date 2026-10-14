@@ -25,6 +25,8 @@ pub enum ViewKind {
     Session,
     /// The steering inputs of the open session.
     Inputs,
+    /// The typed items of the open session's stream (messages, tool calls, plans).
+    Items,
     /// The work timeline of the open session.
     Timeline,
     /// The patches of the open session's latest point.
@@ -85,7 +87,7 @@ pub enum Action {
         /// The generation events must carry.
         epoch: u64,
         /// The query.
-        query: Query,
+        query: Box<Query>,
     },
     /// Closes the subscription of a view.
     Unsubscribe(ViewKind),

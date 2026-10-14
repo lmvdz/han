@@ -366,6 +366,7 @@ impl HanTools {
         let rows = match self
             .snapshot(Query::Session {
                 id: session.into(),
+                part: han_node::api::SessionPart::Facts,
                 window: Window::default(),
             })
             .await

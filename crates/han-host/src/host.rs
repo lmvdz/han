@@ -1144,6 +1144,7 @@ mod tests {
             Command::EffectApprove {
                 space: "s".into(),
                 proposal: "p".into(),
+                expires_at: None,
                 note: None,
             },
             Command::MemberSet {
@@ -1154,6 +1155,8 @@ mod tests {
             Command::Invite {
                 space: "s".into(),
                 ttl_secs: None,
+                expires_at: None,
+                auto_admit: false,
             },
             Command::SpaceJoin { ticket: "t".into() },
             Command::PolicySet {

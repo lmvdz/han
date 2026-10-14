@@ -17,7 +17,7 @@
 ┃                │a, then Enter   on the card: a opens the sign panel; Enter there signs                        │                ┃
 ┃                │c  Esc          cancel the effect (asks first); close                                         │                ┃
 ┃                │Everywhere                                                                                    │                ┃
-┃                │: or Ctrl-p     command palette (:group :filter :space :closed :approvals :quit)              │                ┃
+┃                │: or Ctrl-p     command palette (:group :filter :space :closed :approvals :admit :quit)       │                ┃
 ┃                │Tab             next pane                                                                     │                ┃
 ┃                │?  q  Ctrl-c    this help; quit (or close the pane); quit                                     │                ┃
 ┃                │                                                                                              │                ┃

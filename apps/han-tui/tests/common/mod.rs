@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use han_node::api::{
-    ApprovalRow, BoardRow, Group, OverlapKind, OverlapSummary, Query, Row, SessionState, SpaceLink,
-    SpaceStatusRow, Tests,
+    AdmissionRow, ApprovalRow, BoardRow, Group, ItemRow, OverlapKind, OverlapSummary, Query, Row,
+    SessionState, SpaceLink, SpaceStatusRow, Tests,
 };
 use han_tui::testing::{
     FakeApi, Harness, approval, board_row, node_status, page_of, session_row, snapshot,
@@ -22,7 +22,11 @@ const NOW: u64 = han_tui::testing::NOW_MS;
 pub struct Data {
     pub board: Vec<BoardRow>,
     pub approvals: Vec<ApprovalRow>,
+    pub admissions: Vec<AdmissionRow>,
+    pub items: Vec<ItemRow>,
     pub timeline: bool,
+    /// The session rights the node gives this device's actor: no read right.
+    pub no_read: bool,
 }
 
 pub type Shared = Arc<Mutex<Data>>;
@@ -205,13 +209,23 @@ pub fn node(data: &Shared) -> Arc<FakeApi> {
                 page_of(&rows, window)
             }
             Query::Approvals { .. } => {
-                let rows: Vec<Row> = d.approvals.iter().cloned().map(Row::Approval).collect();
+                let mut rows: Vec<Row> = d.approvals.iter().cloned().map(Row::Approval).collect();
+                rows.extend(d.admissions.iter().cloned().map(Row::Admission));
+                let n = rows.len() as u32;
+                snapshot(rows, n, 0, None)
+            }
+            Query::Session {
+                part: han_node::api::SessionPart::Items,
+                ..
+            } => {
+                let rows: Vec<Row> = d.items.iter().cloned().map(Row::Item).collect();
                 let n = rows.len() as u32;
                 snapshot(rows, n, 0, None)
             }
             Query::Session { id, .. } => {
                 let b = d.board.iter().find(|b| &b.session == id)?;
                 let mut row = session_row(id, &b.agent, b.state, &b.step);
+                row.rights.read = !d.no_read;
                 let st = row.status.as_mut().unwrap();
                 st.tool = b.tool.clone();
                 st.files = b.files.clone();
@@ -262,6 +276,7 @@ pub fn node(data: &Shared) -> Arc<FakeApi> {
                     .into(),
                     added: 1,
                     removed: 1,
+                    masked: vec![],
                 })],
                 1,
                 0,

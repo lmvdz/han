@@ -62,6 +62,15 @@ pub enum Command {
         #[serde(default)]
         #[ts(optional)]
         ttl_secs: Option<u64>,
+        /// The time the ticket ends, instead of `ttl_secs` (at most 7 days ahead); giving both is `invalid`.
+        #[serde(default)]
+        #[ts(optional)]
+        expires_at: Option<String>,
+        /// Admit whoever joins with it as a member while it is valid, if the node can tell they are a person
+        /// or an agent whose operator confirmed it; anyone else waits for an owner. Only while this node
+        /// runs.
+        #[serde(default)]
+        auto_admit: bool,
     },
     /// Gives an actor a role: `owner`, `member`, `guest`, `banned` or `none`.
     MemberSet {
@@ -124,6 +133,18 @@ pub enum Command {
         task: String,
         /// `accepted`, `progress`, `done`, `failed` or `declined`.
         state: String,
+    },
+    /// Fetches a blob a record of the space refers to (an effect's `argsBlob`), checks its hash and size, and
+    /// returns it. A face never gets bytes that do not hash to what was named.
+    BlobFetch {
+        /// The space.
+        space: String,
+        /// `sha256` of the bytes, lowercase hex.
+        hash: String,
+        /// The size the reference names.
+        size: u64,
+        /// The media type the reference names.
+        media_type: String,
     },
     /// Calls a task off.
     TaskCancel {
@@ -203,6 +224,10 @@ pub enum Command {
         space: String,
         /// The proposal's entry id.
         proposal: String,
+        /// The approval lapses at this time (a future HAN Time).
+        #[serde(default)]
+        #[ts(optional)]
+        expires_at: Option<String>,
         /// A note.
         #[serde(default)]
         #[ts(optional)]
@@ -319,6 +344,7 @@ impl Command {
             | Command::DeviceOffer
             | Command::DevicePair { .. }
             | Command::DeviceRevoke { .. }
+            | Command::BlobFetch { .. }
             | Command::EffectApprove { .. }
             | Command::EffectCancel { .. }
             | Command::PolicySet { .. } => CommandClass::Face,
@@ -392,6 +418,15 @@ pub enum CallResult {
         node_id: String,
         /// Short check both screens show, derived from the code.
         check: String,
+    },
+    /// A blob, checked against its hash and size.
+    Blob {
+        /// The hash.
+        hash: String,
+        /// The media type the reference named.
+        media_type: String,
+        /// The bytes, base64url.
+        data: String,
     },
     /// A status item was sent (`StatusPublish`).
     Status {

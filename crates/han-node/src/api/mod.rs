@@ -11,6 +11,7 @@
 mod bindings;
 mod command;
 mod error;
+mod items;
 mod query;
 mod rows;
 mod stream;
@@ -18,16 +19,22 @@ mod stream;
 pub use bindings::typescript;
 pub use command::{CallResult, Command, CommandClass, HomeRef};
 pub use error::NodeError;
+pub use items::{
+    ActorKind, AdmissionRow, ChangeSummaryRow, DeviceRow, DeviceState, InputState, ItemBody,
+    ItemRow, MessageRole, RecordRow, Span, ToolKind, ToolLocation, ToolStatus, ToolText,
+    TurnDriver, masked_spans,
+};
 pub use query::{
-    Facets, Filter, Group, MAX_LIMIT, MAX_SESSION_LIMIT, MAX_TIMELINE_LIMIT, Query, Scope, Target,
-    Window, glob_match,
+    Facets, Filter, Group, MAX_LIMIT, MAX_SESSION_LIMIT, MAX_TIMELINE_LIMIT, Query, Scope,
+    SessionPart, Target, Window, glob_match,
 };
 pub use rows::{
-    ApprovalRow, BoardRow, BoardTotals, ClaimKind, CostRow, DiffOp, EffectRow, Fidelity,
-    FilePatchRow, FileTouch, GroupTotal, GuardRow, InputRow, JoinProgressRow, JoinStage,
-    NodeStatusRow, OutboxRow, OverlapClaim, OverlapConflict, OverlapFile, OverlapKind,
-    OverlapParty, OverlapRow, OverlapSummary, PatchStatus, PlanItem, RoleInfo, Row, SUMMARY_FIELDS,
-    SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRow, SessionState, SpaceLink, SpaceStatusRow,
+    AGENT_TEXT, AgentText, ApprovalRow, BoardRow, BoardTotals, ClaimKind, CostRow, DiffOp,
+    EffectRow, ErrorNote, Fidelity, FilePatchRow, FileTouch, GroupTotal, GuardRow, InputRow,
+    JoinProgressRow, JoinStage, Needed, NeededGuard, NodeStatusRow, OutboxRow, OverlapClaim,
+    OverlapConflict, OverlapFile, OverlapKind, OverlapParty, OverlapRow, OverlapSummary,
+    PatchStatus, PlanItem, RECENT_ERRORS, RoleInfo, Row, SUMMARY_FIELDS, SUMMARY_TEXT, Sandbox,
+    SandboxBackend, SessionRights, SessionRow, SessionState, SpaceLink, SpaceStatusRow,
     StateCounts, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens, ViewEvent, ViewMirror,
     WhoRow,
 };
