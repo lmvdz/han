@@ -19,26 +19,41 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # A PR that only touches docs/, research/ or top-level Markdown skips the Rust steps. The job still reports, so
+      # the required check passes. Pushes to main always run everything.
+      - name: What changed
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          rust=true
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE"...HEAD | grep -qvE '^(docs|research)/|^[^/]+\.md$'; then
+            rust=false
+          fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "rust steps: $rust"
       - name: Rust toolchain (from rust-toolchain.toml)
+        if: steps.changes.outputs.rust == 'true'
         run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - if: steps.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Format
+        if: steps.changes.outputs.rust == 'true'
         run: cargo fmt --all --check
       - name: Clippy
+        if: steps.changes.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Also runs the timeline vectors, the han-net/han-seq wire vectors with the conformance feature (their self
+      # dev-dependency), and apps/han/tests/test_mode_gate.rs (the default binary has no test mode, R9). The release
+      # build of that check runs nightly in 'full'.
       - name: Rust tests
+        if: steps.changes.outputs.rust == 'true'
         run: cargo test --workspace --locked
-      - name: Test mode is compiled out of the release binary (R9)
-        run: |
-          cargo build --release -p han --locked
-          ! ./target/release/han seq --help | grep -e '--test-mode'
-          ! ./target/release/han --help | grep -e '^  conform '
-      - name: Conformance feature (clippy, test-mode wire vectors)
-        run: |
-          cargo clippy -p han --features conformance --all-targets --locked -- -D warnings
-          cargo test -p han-net -p han-seq --locked
-      - name: Timeline vectors (conformance/timeline-vectors through han-timeline, the profile's reference runner)
-        run: cargo test -p han-timeline --test vectors --locked
+      - name: Conformance feature (clippy)
+        if: steps.changes.outputs.rust == 'true'
+        run: cargo clippy -p han --features conformance --all-targets --locked -- -D warnings
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"

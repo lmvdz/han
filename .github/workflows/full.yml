@@ -74,6 +74,12 @@ jobs:
           tool: cargo-deny
       - run: cargo test --workspace --locked
       - run: cargo deny check bans licenses sources
+      - name: Test mode is compiled out of the release binary (R9)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release -p han --locked
+          ! ./target/release/han seq --help | grep -e '--test-mode'
+          ! ./target/release/han --help | grep -e '^  conform '
 
   # The Linux-only sandbox tests (bubblewrap; han-host's sandbox_probe). rust-matrix runs them too where the
   # runner allows user namespaces; this job installs bubblewrap and makes sure of that, so a skipped backend
