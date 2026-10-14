@@ -108,6 +108,7 @@ impl Egress {
         let mut pc = ProxyConfig::new(session.clone(), token.to_owned());
         let mut hosts = cfg.driver.allow_hosts();
         hosts.extend(cfg.sandbox.allow_hosts.iter().cloned());
+        hosts.extend(crate::toolchain::allow_hosts(&cfg.sandbox.toolchains));
         pc.allow = hosts.into_iter().map(AllowEntry::https).collect();
         if let CredentialMode::ApiKey {
             provider_base,
@@ -207,6 +208,23 @@ impl Egress {
         ro.extend(cfg.sandbox.ro.iter().cloned());
         let mut env = prepared.env.clone();
         let mut rw = vec![workspace.dir.clone(), agent_dir.to_path_buf(), temp.clone()];
+        // Toolchains: read-only roots, per-agent caches and the environment that points at them. A missing
+        // piece fails the session here, before anything runs.
+        let tools = crate::toolchain::plan(
+            &cfg.sandbox.toolchains,
+            agent_dir.parent().unwrap_or(agent_dir),
+            &workspace.dir,
+        )
+        .map_err(|e| format!("toolchain: {e}"))?;
+        ro.extend(tools.ro.iter().cloned());
+        rw.extend(tools.rw.iter().cloned());
+        crate::toolchain::apply(&tools, &mut env);
+        // An MXC container cannot unpack the packages a build downloads; the host fetches them first.
+        let mut tool_gaps = tools.gaps.clone();
+        if backend == Preference::Mxc {
+            tool_gaps
+                .extend(crate::toolchain::prewarm(&tools, self.proxy.addr(), &self.token).await);
+        }
         bind_login(login, &mut env, &mut rw);
         let spec = SandboxSpec {
             session: self.session.clone(),
@@ -240,6 +258,7 @@ impl Egress {
         });
         let mut gaps = child.info.gaps.clone();
         gaps.extend(cfg.driver.isolation.gaps.iter().cloned());
+        gaps.extend(tool_gaps);
         if !child.info.dns_blocked && child.info.fidelity == Fidelity::Enforced {
             gaps.push("DNS lookups reach the host resolver (SR-27)".into());
         }

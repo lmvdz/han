@@ -80,6 +80,8 @@ han tui <space>
 
 The harness is `pi` (with an API key the egress proxy injects; the agent only holds a dummy) or `claude` (the official Claude Code client through `claude-agent-acp`, on a Claude subscription). The session runs in a sandbox (MXC on Windows, bubblewrap on Linux) whose only way out is the egress proxy, and its only way to act on the outside world is `propose`.
 
+**Build and test inside the sandbox.** An agent has no Rust toolchain unless the node gives it one. In `agents.json` in the node's data directory (`%LOCALAPPDATA%\han` on Windows) add `{"toolchains": ["rust"]}`: the agent then gets your `%USERPROFILE%\.rustup` and `.cargoin` read-only (on Windows also the MSVC linker and Windows SDK it finds), a cache of its own for downloaded crates, and `crates.io` on its proxy allow-list; `"toolchainPaths": {"rust": {"rustupHome": "...", "cargoBin": "..."}}` points elsewhere. Install the toolchains your repository pins (`rust-toolchain.toml`) first; the sandbox never downloads one. Setup for a Linux runner is in [runner.md](runner.md) section 7.2.
+
 `han tui` shows the live board, the session pane (Enter) and the approvals inbox. `han tui <space> --print 120x30` prints one screen as text and exits, which is handy over SSH and in scripts. `han board` prints the board as plain text.
 
 `han agent stop <agent>` stops its sessions.

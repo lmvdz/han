@@ -372,6 +372,42 @@ sudo -u han-agent1 han agent login @coder:<server> --dir /var/lib/han-agents/han
 
 `--check` prints only whether a login exists, never its contents.
 
+### 7.2 A Rust toolchain inside the agent sandboxes (admin, once)
+
+Without it an agent cannot run `cargo`, and proposes code it never built. The sandbox gets the toolchain
+**read-only**, a writable `CARGO_HOME` of its own (`<state>/cargo-home`, kept between that agent's sessions),
+and `crates.io`, `static.crates.io` and `index.crates.io` on its proxy allow-list, and nothing else. Nothing is
+downloaded into the toolchain inside the sandbox: install everything a repository pins first.
+
+The agent runs as `han-agent1` under `ProtectHome=yes`, so it cannot read `/home/han/.rustup` (mode 750, owned by
+`han`). Share one root-owned toolchain instead; bubblewrap already binds `/opt` read-only:
+
+```sh
+sudo mkdir -p /opt/rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo   sh -s -- -y --no-modify-path --profile minimal -c clippy -c rustfmt
+# every toolchain a repository's rust-toolchain.toml names, for example:
+sudo RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo /opt/rust/cargo/bin/rustup toolchain install 1.97.1 --profile minimal -c clippy -c rustfmt
+sudo chmod -R a+rX /opt/rust                    # readable by han-agent1, writable by root only
+```
+
+Then in `agents.json` (read at every start):
+
+```json
+{
+  "sandbox": "bwrap",
+  "toolchains": ["rust"],
+  "toolchainPaths": { "rust": { "rustupHome": "/opt/rust/rustup", "cargoBin": "/opt/rust/cargo/bin" } },
+  "agents": { "@coder:<server>": { "osUser": "han-agent1" } }
+}
+```
+
+`"toolchains"` at the top is every agent's; an agent's own `"toolchains": []` turns it off for that agent. To
+reuse `han`'s own `~/.rustup` instead: `sudo chmod 711 /home/han`, `sudo chmod -R a+rX /home/han/.rustup
+/home/han/.cargo/bin`, change `ProtectHome=yes` to `ProtectHome=read-only` in `han-agent@.service`, and point
+`toolchainPaths` at those directories. A session whose repository pins a toolchain that is not installed
+refuses to start and names it. Check from the agent's side: `sudo -u han-agent1 /opt/rust/cargo/bin/cargo --version`
+works, and `cargo build` in a session reaches crates.io through the proxy only.
+
 ## 8. Check it
 
 On the runner, the well-known document must list the home's node id:

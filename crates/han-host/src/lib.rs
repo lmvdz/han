@@ -12,6 +12,8 @@
 //! * [`shim`]: the in-sandbox side: a loopback listener that forwards to the session's pipe or socket, and the
 //!   MCP stub that tunnels stdio to han-mcp outside the sandbox.
 //! * [`items`]: the agent's messages, thoughts and tool calls as `han.item/1` stream items.
+//! * [`toolchain`]: language toolchains (Rust) inside the sandbox: read-only roots, per-agent caches, and the
+//!   registry hosts the proxy then allows.
 //! * [`status`], [`mask`], [`mirror`], [`r24`], [`host`]: status derivation, secret masking, worktree
 //!   mirroring into han-timeline, the R-24 duties, and the session runner that ties them together.
 
@@ -28,3 +30,4 @@ pub mod sandbox;
 pub mod shim;
 pub mod status;
 pub mod stderr_log;
+pub mod toolchain;

@@ -117,6 +117,7 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
             ro: Vec::new(),
             login_dir: Some(login),
             allow_hosts: Vec::new(),
+            toolchains: Default::default(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),
         },

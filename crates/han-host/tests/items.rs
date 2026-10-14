@@ -99,6 +99,7 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
             ro: vec![script.clone()],
             login_dir: None,
             allow_hosts: Vec::new(),
+            toolchains: Default::default(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),
         },

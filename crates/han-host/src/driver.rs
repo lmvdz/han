@@ -210,19 +210,13 @@ pub fn builtin(name: &str) -> Option<DriverConfig> {
     }
 }
 
-/// The registries and docs every harness may reach without credentials (SR-38 default allow-list).
+/// The registries and docs every harness may reach without credentials (SR-38 default allow-list). The crates.io
+/// hosts are not here: they come with the Rust toolchain ([`crate::toolchain`]), only when it is enabled.
 pub fn default_connect_hosts() -> Vec<String> {
-    [
-        "registry.npmjs.org",
-        "crates.io",
-        "static.crates.io",
-        "index.crates.io",
-        "pypi.org",
-        "files.pythonhosted.org",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+    ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 fn pi() -> DriverConfig {
@@ -652,6 +646,23 @@ pub fn pi_session_error(dir: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_shipped_driver_allows_a_registry_a_toolchain_owns() {
+        // crates.io comes only with the Rust toolchain (SR-105).
+        for name in ["pi", "claude"] {
+            let hosts = builtin(name).unwrap().allow_hosts();
+            assert!(
+                !hosts.iter().any(|h| h.contains("crates.io")),
+                "{name}: {hosts:?}"
+            );
+        }
+        assert!(
+            !default_connect_hosts()
+                .iter()
+                .any(|h| h.contains("crates.io"))
+        );
+    }
 
     fn ctx(dir: &Path) -> PrepareCtx {
         PrepareCtx {
