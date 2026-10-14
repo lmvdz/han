@@ -65,6 +65,10 @@ enum AgentCmd {
         /// node's `harness/` directory.
         #[arg(long)]
         harness: Option<String>,
+        /// API-key mode: a file holding the model key (readable only by you). The host's proxy keeps the key;
+        /// the agent never sees it.
+        #[arg(long)]
+        model_key_file: Option<PathBuf>,
         /// Make the agent a member of this space.
         #[arg(long)]
         space: Option<String>,
@@ -172,6 +176,10 @@ enum AgentCmd {
         /// The harness `han agent start` uses by default.
         #[arg(long)]
         harness: Option<String>,
+        /// API-key mode: a file holding the model key (readable only by you). The host's proxy keeps the
+        /// key; the agent never sees it.
+        #[arg(long)]
+        model_key_file: Option<PathBuf>,
     },
     /// Stops an agent's sessions, or one `host-<agent>#<issue>`.
     Stop {
@@ -204,8 +212,10 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             allow_advisory,
             toolchains,
             harness,
+            model_key_file,
         } => {
             let edit = AgentEdit {
+                model_key_file: model_key_file.clone(),
                 os_user: os_user.clone(),
                 sandbox: sandbox.clone(),
                 allow_advisory: *allow_advisory,
@@ -247,11 +257,13 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             sandbox,
             allow_advisory,
             harness,
+            model_key_file,
             space,
             home_data,
             home,
         } => {
             let opts = Add {
+                model_key_file,
                 allow_advisory,
                 name,
                 operator,
@@ -403,6 +415,7 @@ struct Add {
     sandbox: Option<String>,
     allow_advisory: bool,
     harness: Option<String>,
+    model_key_file: Option<PathBuf>,
     space: Option<String>,
     home_data: Option<PathBuf>,
     home: Option<HomeRef>,
@@ -428,6 +441,7 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
             allow_advisory: a.allow_advisory.then_some(true),
             harness: a.harness.clone(),
             toolchains: None,
+            model_key_file: a.model_key_file.clone(),
         },
     )?;
     if changed {

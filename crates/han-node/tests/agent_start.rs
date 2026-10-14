@@ -250,3 +250,50 @@ async fn an_agent_mapped_to_an_os_user_runs_as_it() {
         assert!(matches!(r, Err(NodeError::Unavailable { .. })), "{r:?}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_spaces_budget_and_the_nodes_prices_reach_the_host() {
+    let s = setup().await;
+    follow_profile(&s).await;
+    // no budget in the space: none in the spec
+    start_when_known(&s, "/etc/han/driver.toml").await.unwrap();
+    assert_eq!(s.sup.0.lock().unwrap().last().unwrap().spec.budget, None);
+
+    let mut policy = han_seq::build::space_policy("members", "invite");
+    if let han_core::Value::Object(m) = &mut policy {
+        m.insert(
+            "budget".into(),
+            han_core::json::parse(br#"{"unit":"USD-cent","amount":500}"#).unwrap(),
+        );
+    }
+    call(
+        &s.bob,
+        Command::PolicySet {
+            space: s.space.clone(),
+            policy: String::from_utf8(han_core::json::canonicalize(&policy).unwrap()).unwrap(),
+        },
+    )
+    .await;
+    // the prices are the node's own file, not the space's
+    std::fs::write(
+        s.data.join("prices.json"),
+        r#"{"USD-cent":{"claude-sonnet":{"input":300,"output":1500}}}"#,
+    )
+    .unwrap();
+    // the node folds its own policy change; start once it has
+    let mut budget = None;
+    for _ in 0..500 {
+        s.bob
+            .call(start(&s.space, "/etc/han/driver.toml"))
+            .await
+            .ok();
+        budget = s.sup.0.lock().unwrap().last().unwrap().spec.budget.clone();
+        if budget.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let budget = budget.expect("the space's budget reaches the host");
+    assert_eq!((budget.unit.as_str(), budget.limit), ("USD-cent", 500));
+    assert_eq!(budget.prices["claude-sonnet"].output, 1500);
+}

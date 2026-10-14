@@ -6,7 +6,9 @@
 //! from HAN tool calls, and the sandbox. Free text is length-bounded (SR-59) and masked before it is published
 //! (SR-52, by the caller's [`crate::mask`]).
 
-use han_node::api::{FileTouch, PlanItem, Sandbox, SessionState, StatusBody, Tests, Tokens};
+use han_node::api::{
+    BudgetStatus, FileTouch, PlanItem, Sandbox, SessionState, StatusBody, Tests, Tokens,
+};
 
 /// Bounds on free-text fields (SR-59).
 pub const MAX_STEP: usize = 200;
@@ -84,6 +86,8 @@ pub enum Signal {
     Summary(String),
     /// Token totals (replace, not add).
     Tokens(Tokens),
+    /// The session's budget and whether the proxy enforces it.
+    Budget(BudgetStatus),
     /// A proposal waits for approval.
     WaitingApproval,
     /// A proposal is signed but the home has not accepted it yet (it sits in the node's outbox); nobody can
@@ -176,6 +180,7 @@ impl StatusDeriver {
                 tokens: None,
                 summary: None,
                 sandbox: Some(sandbox),
+                budget: None,
                 publish_errors: 0,
                 seq: 0,
                 at: String::new(),
@@ -263,6 +268,7 @@ impl StatusDeriver {
             }
             Signal::Summary(s) => b.summary = Some(bound(&s, MAX_SUMMARY)),
             Signal::Tokens(t) => b.tokens = Some(t),
+            Signal::Budget(x) => b.budget = Some(x),
             Signal::WaitingApproval => self.proposal = Proposal::Waiting,
             Signal::ProposalQueued => self.proposal = Proposal::Queued,
             Signal::ProposalRefused(why) => self.proposal = Proposal::Refused(why),

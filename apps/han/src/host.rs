@@ -129,6 +129,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         node: spec.harness.node.clone().unwrap_or_else(|| "node".into()),
         adapter_dir: spec.harness.adapter_dir.clone().unwrap_or_default(),
         model_key,
+        budget: spec.budget.clone(),
         turn_timeout: Duration::from_secs(30 * 60),
         exclusion: Vec::new(),
     };

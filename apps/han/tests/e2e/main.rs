@@ -8,6 +8,7 @@
 //! `cargo test -p han --test e2e -- --ignored --test-threads=1`. They need
 //! `han-fake-agent` and `han-github` built next to `han` (`cargo build --workspace --bins`).
 
+mod model;
 mod os_user;
 mod stack;
 
@@ -543,4 +544,85 @@ async fn the_board_and_the_session_resume_after_the_node_and_the_home_restart() 
         s.agent_events().iter().filter(|e| *e == "prompt").count() >= 2
     })
     .await;
+}
+
+/// Bug: a space budget was never enforced in a live session (nothing created the ledger), and the status did
+/// not carry spend. The fake agent runs in API-key mode against a priced fake model over TLS (one unit per
+/// token; each call reports 40 tokens in and 60 out) in a space with a budget of 100: the first call spends all of it, the
+/// second is refused with a 429, and the board says why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn a_spent_budget_refuses_the_next_model_call_and_the_board_says_why() {
+    let work = std::env::temp_dir().join(format!("han-e2e-model-{}", std::process::id()));
+    let model = model::FakeModel::start(&work, 40, 60).await;
+    let ca = model.ca_file.to_string_lossy().into_owned();
+    let s = Stack::up(
+        "model-calls",
+        &[
+            "--budget",
+            "USD-cent=100",
+            "--model-url",
+            &model.url,
+            "--model-ca",
+            &ca,
+        ],
+    );
+    let c = s.client().await;
+    s.start_agent();
+    let row = s
+        .board_until(&c, "the budget to refuse a call", 120, |b| {
+            b.budget.as_ref().is_some_and(|x| x.refused.is_some())
+        })
+        .await;
+    let budget = row.budget.expect("the board carries the budget");
+    assert_eq!(
+        (budget.unit.as_str(), budget.limit, budget.spent),
+        ("USD-cent", 100, 100)
+    );
+    assert_eq!(budget.not_enforced, None);
+    assert_eq!(budget.refused.as_deref(), Some("budget-spent"));
+    assert_eq!(
+        budget.text(),
+        "budget: a model call was refused (budget-spent), 100 of 100 USD-cent"
+    );
+    // the cost and the counts come from the proxy
+    let tokens = row.tokens.expect("tokens in the status");
+    assert_eq!((tokens.input, tokens.out, tokens.cost), (40, 60, 100));
+    // the agent was paid once and refused once, in that order
+    let log = s.agent_log();
+    assert_eq!(
+        model.calls(),
+        1,
+        "the refused call never reached the provider"
+    );
+    let ok = log.find("model call: 200").expect(&log);
+    let refused = log.find("model call: 429 (budget-spent)").expect(&log);
+    assert!(ok < refused, "{log}");
+    // `han board` says it too
+    let board = han(&[
+        "board",
+        &s.space(),
+        "--data",
+        &s.person_data().to_string_lossy(),
+    ]);
+    assert!(
+        board.contains("budget: a model call was refused"),
+        "{board}"
+    );
+}
+
+/// Bug: a budget that cannot be enforced was invisible. With no price table for the space's unit nothing is
+/// reserved, and the status says so instead of staying silent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn a_budget_without_a_price_table_says_it_is_not_enforced() {
+    let s = Stack::up("simple", &["--budget", "USD-cent=100"]);
+    let c = s.client().await;
+    s.start_agent();
+    let row = s
+        .board_until(&c, "the budget in the status", 120, |b| b.budget.is_some())
+        .await;
+    let budget = row.budget.unwrap();
+    assert_eq!(budget.text(), "budget: not enforced (no price table)");
+    assert_eq!((budget.limit, budget.spent), (100, 0));
 }

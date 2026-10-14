@@ -66,6 +66,10 @@ pub enum CredentialMode {
         /// Models to list in the harness's model config.
         #[serde(default)]
         models: Vec<String>,
+        /// A PEM file of the certificate authority the provider's certificate chains to, for a provider with
+        /// a private one (a gateway, a test provider). It replaces the system roots for this route.
+        #[serde(default)]
+        ca_file: Option<std::path::PathBuf>,
     },
     /// The harness keeps its own subscription login; the proxy is CONNECT-only to these hosts and counts
     /// nothing (accounting comes from ACP `_meta.quota` and `usage_update`).
@@ -245,6 +249,7 @@ fn pi() -> DriverConfig {
             provider_id: Some("anthropic".into()),
             api: Some("anthropic-messages".into()),
             models: vec!["claude-sonnet-5-5".into()],
+            ca_file: None,
         },
         connect_hosts: default_connect_hosts(),
         tested_version: "0.0.34".into(),

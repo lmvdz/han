@@ -120,6 +120,41 @@ pub struct ProxySpec {
     pub model_key_file: Option<PathBuf>,
 }
 
+/// What a model costs, in the budget's unit per million tokens (a provider's list prices are per million).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriceSpec {
+    /// Per million input tokens.
+    #[serde(default)]
+    pub input: u64,
+    /// Per million output tokens.
+    #[serde(default)]
+    pub output: u64,
+    /// Per million input tokens read from the prompt cache.
+    #[serde(default)]
+    pub cache_read: u64,
+    /// Per million input tokens written to the prompt cache.
+    #[serde(default)]
+    pub cache_creation: u64,
+}
+
+/// The budget of one session: what the space (or the task the session works) allows, and what a model call
+/// costs. The prices are the node's own configuration (`prices.json` in its data directory), not the space's:
+/// they depend on the provider contract of whoever pays, which a shared space does not know.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BudgetSpec {
+    /// The budget's unit, as the space policy names it (`USD-cent`).
+    pub unit: String,
+    /// The most the session may spend, in the unit: the space's budget, narrowed by the task's when the
+    /// session works a budgeted task.
+    pub limit: u64,
+    /// Prices by model name (a request's model matches the longest key that is a prefix of it). Empty when
+    /// the node has no price table for this unit: the budget is then not enforced, and the status says so.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub prices: std::collections::BTreeMap<String, PriceSpec>,
+}
+
 /// Where the agent's files are.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -174,6 +209,10 @@ pub struct HostSpec {
     /// given the face endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_endpoint: Option<String>,
+    /// The session's budget, when the space has one. The host enforces it at its proxy (SR-41) in API-key mode
+    /// and shows in its status when it cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetSpec>,
 }
 
 impl HostSpec {
@@ -262,6 +301,20 @@ mod tests {
             },
             relay: "none".into(),
             node_endpoint: Some("/run/han/node.sock-host".into()),
+            budget: Some(BudgetSpec {
+                unit: "USD-cent".into(),
+                limit: 300,
+                prices: [(
+                    "claude-sonnet-5-5".to_owned(),
+                    PriceSpec {
+                        input: 300,
+                        output: 1500,
+                        cache_read: 30,
+                        cache_creation: 375,
+                    },
+                )]
+                .into(),
+            }),
         }
     }
 
@@ -302,6 +355,7 @@ mod tests {
         assert_eq!(spec.sandbox.backend, "auto");
         assert!(spec.toolchains.is_empty());
         assert_eq!(spec.relay, "n0");
+        assert_eq!(spec.budget, None);
         // and what it prints reads back the same
         let again: HostSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
         assert_eq!(again, spec);

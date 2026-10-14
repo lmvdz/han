@@ -808,6 +808,38 @@ out: number,
  */
 cost: number, };
 
+export type BudgetStatus = { 
+/**
+ * The budget's unit, as the space policy names it.
+ */
+unit: string, 
+/**
+ * What the session may spend, in the unit.
+ */
+limit: number, 
+/**
+ * What it has spent, in the unit (rounded up).
+ */
+spent: number, 
+/**
+ * Why the budget is not enforced for this session (`no price table`), or `None` when it is.
+ */
+not_enforced?: string, 
+/**
+ * Why the proxy last refused a model call: `budget-spent` or `budget-would-exceed`.
+ */
+refused?: string, };
+
+export type TaskBudget = { 
+/**
+ * The unit, the space's.
+ */
+unit: string, 
+/**
+ * The amount.
+ */
+amount: number, };
+
 export type StatusBody = { 
 /**
  * The `session.open` entry id.
@@ -874,6 +906,10 @@ summary?: string,
  * ignored, so it can ride along): a node-side extension the board shows (SR-99).
  */
 sandbox?: Sandbox, 
+/**
+ * The session's budget and whether it is enforced. A node-side extension like `sandbox`.
+ */
+budget?: BudgetStatus, 
 /**
  * How many status or stream publishes of this session the node refused or failed, so far. A node-side
  * extension like `sandbox` (unknown members are ignored); `0` for a host that does not send it.
@@ -1012,6 +1048,10 @@ summary?: string,
  * The sandbox, when the host reports one.
  */
 sandbox?: Sandbox, 
+/**
+ * The session's budget, when the host reports one.
+ */
+budget?: BudgetStatus, 
 /**
  * Publishes of the session that failed (see `StatusBody::publish_errors`).
  */
@@ -1479,7 +1519,11 @@ guarded_for: Array<string>,
 /**
  * The assignees that accepted it.
  */
-accepted: Array<string>, };
+accepted: Array<string>, 
+/**
+ * The task's budget (P-05), if it has one.
+ */
+budget?: TaskBudget, };
 
 export type SpaceLink = "connecting" | "live" | "offline" | "rejected" | "misconfigured";
 

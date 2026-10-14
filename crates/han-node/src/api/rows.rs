@@ -88,6 +88,52 @@ pub struct Tokens {
     pub cost: u64,
 }
 
+/// A session's budget as its host reports it. A node-side extension like `sandbox` (unknown members of
+/// `han.status/1` are ignored): the host enforces the budget at its proxy, and says here whether it can.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct BudgetStatus {
+    /// The budget's unit, as the space policy names it.
+    pub unit: String,
+    /// What the session may spend, in the unit.
+    pub limit: u64,
+    /// What it has spent, in the unit (rounded up).
+    pub spent: u64,
+    /// Why the budget is not enforced for this session (`no price table`), or `None` when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub not_enforced: Option<String>,
+    /// Why the proxy last refused a model call: `budget-spent` or `budget-would-exceed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+}
+
+impl BudgetStatus {
+    /// Whether the budget is spent: further model calls are refused.
+    pub fn is_spent(&self) -> bool {
+        self.not_enforced.is_none() && self.spent >= self.limit
+    }
+
+    /// The line a face shows.
+    pub fn text(&self) -> String {
+        match &self.not_enforced {
+            Some(why) => format!("budget: not enforced ({why})"),
+            None if self.refused.is_some() => format!(
+                "budget: a model call was refused ({}), {} of {} {}",
+                self.refused.as_deref().unwrap_or_default(),
+                self.spent,
+                self.limit,
+                self.unit
+            ),
+            None if self.is_spent() => format!(
+                "budget: spent, {} of {} {}; model calls are refused",
+                self.spent, self.limit, self.unit
+            ),
+            None => format!("budget: {} of {} {}", self.spent, self.limit, self.unit),
+        }
+    }
+}
+
 /// Which sandbox confines a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -176,6 +222,10 @@ pub struct StatusBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox: Option<Sandbox>,
+    /// The session's budget and whether it is enforced. A node-side extension like `sandbox`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub budget: Option<BudgetStatus>,
     /// How many status or stream publishes of this session the node refused or failed, so far. A node-side
     /// extension like `sandbox` (unknown members are ignored); `0` for a host that does not send it.
     #[serde(default)]
@@ -309,6 +359,10 @@ pub struct BoardRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox: Option<Sandbox>,
+    /// The session's budget, when the host reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub budget: Option<BudgetStatus>,
     /// Publishes of the session that failed (see `StatusBody::publish_errors`).
     #[serde(default)]
     pub publish_errors: u32,
@@ -633,6 +687,19 @@ pub struct TaskRow {
     /// The assignees that accepted it.
     #[serde(default)]
     pub accepted: Vec<String>,
+    /// The task's budget (P-05), if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub budget: Option<TaskBudget>,
+}
+
+/// A task's budget: its unit and the amount reserved for it when it was created.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct TaskBudget {
+    /// The unit, the space's.
+    pub unit: String,
+    /// The amount.
+    pub amount: u64,
 }
 
 /// Whether an actor is guarded (`Guard` view).

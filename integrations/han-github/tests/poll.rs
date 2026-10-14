@@ -128,6 +128,7 @@ fn task_row(external: &str) -> TaskRow {
         open: false,
         guarded_for: vec![],
         accepted: vec![],
+        budget: None,
     }
 }
 
@@ -477,6 +478,7 @@ fn open_task(task: &str, external: &str, author: &str, accepted: &[&str]) -> Tas
         author: author.into(),
         open: true,
         accepted: accepted.iter().map(|a| (*a).to_owned()).collect(),
+        budget: None,
         ..task_row(external)
     }
 }

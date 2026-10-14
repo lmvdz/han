@@ -253,6 +253,26 @@ struct Shared {
     last: Mutex<Option<LastRequest>>,
 }
 
+/// A read-only view of a running proxy for the host's status: the token totals and the decisions. It does not
+/// keep the listener alive.
+#[derive(Clone)]
+pub struct ProxyObserver {
+    shared: Arc<Shared>,
+    usage: watch::Receiver<Usage>,
+}
+
+impl ProxyObserver {
+    /// The token totals so far.
+    pub fn usage(&self) -> Usage {
+        *self.usage.borrow()
+    }
+
+    /// The most recent decisions, oldest first.
+    pub fn decisions(&self) -> Vec<Decision> {
+        lock(&self.shared.log).iter().cloned().collect()
+    }
+}
+
 /// A running proxy. Dropping it stops the listener; open tunnels end with their sockets.
 pub struct ProxyHandle {
     addr: SocketAddr,
@@ -280,6 +300,14 @@ impl ProxyHandle {
     /// The most recent decisions, oldest first.
     pub fn decisions(&self) -> Vec<Decision> {
         lock(&self.shared.log).iter().cloned().collect()
+    }
+
+    /// A view for the status watcher, which outlives no one: it does not keep the proxy running.
+    pub fn observer(&self) -> ProxyObserver {
+        ProxyObserver {
+            shared: Arc::clone(&self.shared),
+            usage: self.usage.clone(),
+        }
     }
 
     /// The last model request.

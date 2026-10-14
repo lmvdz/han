@@ -1,11 +1,17 @@
 //! From a request to start an agent to the [`HostSpec`] that runs it: the one place that reads `agents.json`
 //! and the harness records. The node asks; it never looks at either file.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{AgentsFile, HarnessInstall};
 use crate::home::HomeRef;
-use crate::spec::{Dirs, HarnessSpec, HostSpec, ProxySpec, SandboxPolicy, WorkSpec};
+use crate::spec::{
+    BudgetSpec, Dirs, HarnessSpec, HostSpec, PriceSpec, ProxySpec, SandboxPolicy, WorkSpec,
+};
+
+/// The file of model prices in a node's data directory.
+pub const PRICES_FILE: &str = "prices.json";
 
 /// What a node knows when it starts an agent.
 #[derive(Clone, Debug)]
@@ -26,6 +32,8 @@ pub struct Launch {
     pub home: HomeRef,
     /// The executor of approved effects.
     pub executor: String,
+    /// The space's budget (unit and amount), if its policy has one.
+    pub budget: Option<(String, u64)>,
 }
 
 /// Another OS user to run the host as. The node never needs root for it: the runner's admin installs the
@@ -111,6 +119,22 @@ impl Registry {
         Ok(HarnessInstall::load(&self.data_dir, record_name(name))?.is_some())
     }
 
+    /// The model prices this node uses for budgets in `unit`, from `prices.json` in the data directory:
+    /// `{"<unit>": {"<model>": {"input": …, "output": …, "cacheRead": …, "cacheCreation": …}}}`, in the unit
+    /// per million tokens. A unit with no entry (or no file) has none, which is not an error: the budget then
+    /// shows as not enforced.
+    pub fn prices(&self, unit: &str) -> Result<BTreeMap<String, PriceSpec>, String> {
+        let path = self.data_dir.join(PRICES_FILE);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let mut all: BTreeMap<String, BTreeMap<String, PriceSpec>> =
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(all.remove(unit).unwrap_or_default())
+    }
+
     /// Makes the [`HostSpec`] for `launch` from the files of the registry.
     pub fn resolve(&self, launch: &Launch) -> Result<Resolved, LaunchError> {
         let file = self.agents().map_err(LaunchError::Invalid)?;
@@ -156,6 +180,7 @@ impl Registry {
                 adapter_dir: None,
             },
         };
+        let model_key_file = settings.model_key_file.clone();
         let run_as = match settings.os_user {
             Some(os_user) => {
                 if !cfg!(target_os = "linux") {
@@ -168,6 +193,14 @@ impl Registry {
                     state_dir: state.clone(),
                 })
             }
+            None => None,
+        };
+        let budget = match &launch.budget {
+            Some((unit, limit)) => Some(BudgetSpec {
+                unit: unit.clone(),
+                limit: *limit,
+                prices: self.prices(unit).map_err(LaunchError::Invalid)?,
+            }),
             None => None,
         };
         let spec = HostSpec {
@@ -188,7 +221,10 @@ impl Registry {
                 allow_advisory: settings.allow_advisory,
             },
             toolchains: file.toolchain_spec(dir, agent),
-            proxy: ProxySpec::default(),
+            proxy: ProxySpec {
+                model_key_file,
+                ..ProxySpec::default()
+            },
             dirs: Dirs {
                 keys: file.keys_dir(dir, agent),
                 login: file.login_dir(dir, agent),
@@ -196,6 +232,7 @@ impl Registry {
             },
             relay: std::env::var("HAN_RELAY").unwrap_or_else(|_| "n0".into()),
             node_endpoint: None,
+            budget,
         };
         Ok(Resolved { spec, run_as })
     }
@@ -222,7 +259,47 @@ mod tests {
             issue: Some("github:o/r#1".into()),
             home: HomeRef::Server("a.localhost".into()),
             executor: "@exec:a.localhost".into(),
+            budget: None,
         }
+    }
+
+    #[test]
+    fn the_space_budget_and_the_nodes_prices_end_up_in_the_spec() {
+        let d = dir("budget");
+        let r = Registry::open(&d);
+        let mut l = launch("/etc/han/driver.toml");
+        // no budget: none in the spec
+        assert_eq!(r.resolve(&l).unwrap().spec.budget, None);
+        // a budget and no price file: carried with no prices (shown as not enforced)
+        l.budget = Some(("USD-cent".into(), 500));
+        let b = r.resolve(&l).unwrap().spec.budget.unwrap();
+        assert_eq!(
+            (b.unit.as_str(), b.limit, b.prices.len()),
+            ("USD-cent", 500, 0)
+        );
+        // prices are per unit: another unit's table does not apply
+        std::fs::write(
+            d.join(PRICES_FILE),
+            r#"{"USD-cent":{"claude-sonnet":{"input":300,"output":1500}},"EUR-cent":{"x":{"input":1}}}"#,
+        )
+        .unwrap();
+        let b = r.resolve(&l).unwrap().spec.budget.unwrap();
+        assert_eq!(b.prices.len(), 1);
+        assert_eq!(b.prices["claude-sonnet"].output, 1500);
+        l.budget = Some(("GBP".into(), 5));
+        assert!(
+            r.resolve(&l)
+                .unwrap()
+                .spec
+                .budget
+                .unwrap()
+                .prices
+                .is_empty()
+        );
+        // a malformed table is an error, not a silent no-budget
+        std::fs::write(d.join(PRICES_FILE), "{").unwrap();
+        assert!(matches!(r.resolve(&l), Err(LaunchError::Invalid(_))));
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]

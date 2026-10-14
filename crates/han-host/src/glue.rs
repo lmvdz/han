@@ -15,7 +15,8 @@ use crate::driver::{
 use crate::host::{HostConfig, ProxyHook};
 use crate::mask::Masker;
 use crate::proxy::{
-    AllowEntry, KeySource, KeyStyle, ModelRoute, Proxy, ProxyConfig, ProxyHandle, Roots,
+    AllowEntry, Budget, KeySource, KeyStyle, Ledger, ModelRoute, Price, Proxy, ProxyConfig,
+    ProxyHandle, Roots,
 };
 use crate::sandbox::{self, Limits, Preference, ProxyTarget, SandboxSpec, Sandboxed};
 use crate::stderr_log::{self, StderrLog};
@@ -25,6 +26,64 @@ pub struct Egress {
     proxy: ProxyHandle,
     token: String,
     session: String,
+    budget: Option<SessionBudget>,
+}
+
+/// How many ledger units make one unit of the budget. Prices are per million tokens, so the ledger (which
+/// prices a token in whole units) counts in millionths of the budget's unit and nothing rounds to zero.
+pub const LEDGER_SCALE: u64 = 1_000_000;
+
+/// The budget of a session as the host holds it.
+#[derive(Clone)]
+pub struct SessionBudget {
+    /// The budget's unit.
+    pub unit: String,
+    /// The limit, in the unit.
+    pub limit: u64,
+    /// The ledger the proxy asks before each model call; `None` when the budget cannot be enforced.
+    pub ledger: Option<Arc<Ledger>>,
+    /// Why it cannot be enforced (`no price table`).
+    pub not_enforced: Option<&'static str>,
+}
+
+impl SessionBudget {
+    /// The budget of `spec`. It is enforced only on the model route (API-key mode) and with prices to
+    /// reserve at: a subscription session has no per-call price, so nothing is reserved and the status says
+    /// so.
+    pub fn new(spec: &han_registry::BudgetSpec, model_route: bool) -> SessionBudget {
+        let enforced = model_route && !spec.prices.is_empty();
+        let ledger = enforced.then(|| {
+            let prices = spec
+                .prices
+                .iter()
+                .map(|(model, p)| {
+                    (
+                        model.clone(),
+                        Price {
+                            input: p.input,
+                            output: p.output,
+                            cache_read: p.cache_read,
+                            cache_creation: p.cache_creation,
+                        },
+                    )
+                })
+                .collect();
+            Arc::new(Ledger::new(spec.limit.saturating_mul(LEDGER_SCALE), prices))
+        });
+        SessionBudget {
+            unit: spec.unit.clone(),
+            limit: spec.limit,
+            not_enforced: ledger.is_none().then_some("no price table"),
+            ledger,
+        }
+    }
+
+    /// What has been spent, in the unit (rounded up, so a started unit counts).
+    pub fn spent(&self) -> u64 {
+        self.ledger
+            .as_ref()
+            .map_or(0, |l| l.spent().div_ceil(LEDGER_SCALE))
+    }
 }
 
 /// A launched agent.
@@ -115,9 +174,17 @@ impl Egress {
             provider_base,
             header,
             paths,
+            ca_file,
             ..
         } = &cfg.driver.credentials
         {
+            let roots =
+                match ca_file {
+                    Some(f) => Roots::Only(vec![std::fs::read(f).map_err(|e| {
+                        format!("the model provider's CA file {}: {e}", f.display())
+                    })?]),
+                    None => Roots::System,
+                };
             let key = cfg
                 .model_key
                 .clone()
@@ -131,7 +198,7 @@ impl Egress {
                     KeyHeader::Bearer => KeyStyle::Bearer,
                 },
                 key: KeySource::new(key),
-                roots: Roots::System,
+                roots,
             });
         }
         let b = Arc::clone(bridge);
@@ -143,6 +210,13 @@ impl Egress {
                 }
             });
         }));
+        let budget = cfg
+            .budget
+            .as_ref()
+            .map(|b| SessionBudget::new(b, pc.model.is_some()));
+        if let Some(ledger) = budget.as_ref().and_then(|b| b.ledger.clone()) {
+            pc.budget = Some(ledger as Arc<dyn Budget>);
+        }
         if let Some(hook) = hook {
             hook(&mut pc);
         }
@@ -151,7 +225,13 @@ impl Egress {
             proxy,
             token: token.to_owned(),
             session,
+            budget,
         })
+    }
+
+    /// The session's budget, when the space has one.
+    pub fn budget(&self) -> Option<&SessionBudget> {
+        self.budget.as_ref()
     }
 
     /// The proxy, for usage and decisions.
@@ -409,8 +489,71 @@ pub fn start_mirror(
 
 #[cfg(test)]
 mod tests {
-    use super::adapter_read_root;
+    use super::{LEDGER_SCALE, SessionBudget, adapter_read_root};
+    use crate::proxy::{Budget, CallBound, Usage};
+    use han_registry::{BudgetSpec, PriceSpec};
     use std::path::Path;
+
+    fn spec(prices: &[(&str, PriceSpec)]) -> BudgetSpec {
+        BudgetSpec {
+            unit: "USD-cent".into(),
+            limit: 100,
+            prices: prices.iter().map(|(m, p)| ((*m).to_owned(), *p)).collect(),
+        }
+    }
+
+    const SONNET: PriceSpec = PriceSpec {
+        input: 300,
+        output: 1500,
+        cache_read: 0,
+        cache_creation: 0,
+    };
+
+    #[test]
+    fn a_budget_is_enforced_only_on_the_model_route_with_prices() {
+        let priced = spec(&[("claude-sonnet", SONNET)]);
+        assert!(SessionBudget::new(&priced, true).ledger.is_some());
+        // subscription mode: no model route, nothing to reserve, and it says so
+        let sub = SessionBudget::new(&priced, false);
+        assert!(sub.ledger.is_none());
+        assert_eq!(sub.not_enforced, Some("no price table"));
+        // no table for the unit
+        let none = SessionBudget::new(&spec(&[]), true);
+        assert!(none.ledger.is_none());
+        assert_eq!(none.not_enforced, Some("no price table"));
+    }
+
+    #[test]
+    fn spend_is_in_the_unit_and_a_spent_budget_refuses() {
+        let b = SessionBudget::new(&spec(&[("claude-sonnet", SONNET)]), true);
+        let ledger = b.ledger.clone().unwrap();
+        let call = CallBound {
+            model: Some("claude-sonnet-5-5".into()),
+            input_tokens: 1_000,
+            max_output: Some(1_000),
+        };
+        // worst case 1000 in at 300 + 1000 out at 1500 per million = 1.8 cents: it fits
+        let hold = ledger.reserve(&call).unwrap();
+        assert_eq!(hold.amount, 1_000 * 300 + 1_000 * 1_500);
+        // it used 100 in and 100 out: 0.18 cents, rounded up to one
+        ledger.settle(
+            hold,
+            &Usage {
+                input: 100,
+                output: 100,
+                requests: 1,
+                ..Usage::default()
+            },
+        );
+        assert_eq!(b.spent(), 1);
+        assert_eq!(ledger.spent(), 100 * 300 + 100 * 1_500);
+        // a call that cannot fit what is left is refused
+        let big = CallBound {
+            max_output: Some(100 * LEDGER_SCALE / 1_500 * 2),
+            ..call
+        };
+        assert!(ledger.reserve(&big).is_err());
+    }
 
     #[test]
     fn the_adapter_reads_the_whole_node_modules_it_was_installed_into() {

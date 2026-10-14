@@ -227,6 +227,8 @@ pub(crate) struct TaskInfo {
     pub guarded_for: Vec<String>,
     /// The assignees that accepted and did not finish (Z2).
     pub accepted: Vec<String>,
+    /// Its budget (P-05): unit and amount.
+    pub budget: Option<(String, u64)>,
 }
 
 /// A `session.input` as its session's host reads it.
@@ -295,6 +297,8 @@ pub(crate) struct SpaceModel {
     pub effects: BTreeMap<String, EffectInfo>,
     pub leases: BTreeMap<String, LeaseInfo>,
     pub unit: Option<String>,
+    /// The policy's budget: unit and amount.
+    pub budget: Option<(String, u64)>,
     pub outbox_pending: u32,
     pub signals: u64,
     pub outbox: Vec<crate::views::OutboxItem>,
@@ -377,6 +381,7 @@ impl SpaceModel {
             effects: BTreeMap::new(),
             leases: BTreeMap::new(),
             unit: None,
+            budget: None,
             outbox_pending: 0,
             signals: 0,
             outbox: Vec::new(),
@@ -407,7 +412,8 @@ impl SpaceModel {
     }
 
     fn set_policy(&mut self, policy: PolicyDoc) {
-        self.unit = policy.budget.map(|b| b.unit);
+        self.unit = policy.budget.as_ref().map(|b| b.unit.clone());
+        self.budget = policy.budget.map(|b| (b.unit, b.amount));
         self.rules = policy
             .approvals
             .into_iter()
@@ -418,6 +424,14 @@ impl SpaceModel {
         self.read = Some(policy.sessions.read);
         self.launch_window = policy.launch_window;
         self.force_guarded = policy.sessions.force_guarded == Some(true);
+    }
+
+    /// The budget a session may spend: the budget of the task it works when that task has one (P-05), else
+    /// the space's (P-06: a human's work is charged to the space). The unit is the space's either way.
+    pub fn session_budget(&self, task: Option<&str>) -> Option<(String, u64)> {
+        task.and_then(|t| self.tasks.get(t))
+            .and_then(|t| t.budget.clone())
+            .or_else(|| self.budget.clone())
     }
 
     fn is_owner(&self, actor: &str) -> bool {
@@ -704,6 +718,7 @@ impl SpaceModel {
                         open: true,
                         guarded_for,
                         accepted,
+                        budget: t.budget.map(|b| (b.unit, b.amount)),
                         seq,
                         ask: rec
                             .content
@@ -1534,6 +1549,7 @@ impl SpaceModel {
                     tokens: st.and_then(|x| x.tokens),
                     summary: st.and_then(|x| x.summary.clone()),
                     sandbox: st.and_then(|x| x.sandbox),
+                    budget: st.and_then(|x| x.budget.clone()),
                     publish_errors: st.map_or(0, |x| x.publish_errors),
                     last_active_ms: s.last_item_ms,
                     closed: s.closed,
@@ -2066,6 +2082,13 @@ impl SpaceModel {
                         open: t.open,
                         guarded_for: t.guarded_for.clone(),
                         accepted: t.accepted.clone(),
+                        budget: t
+                            .budget
+                            .as_ref()
+                            .map(|(unit, amount)| crate::api::TaskBudget {
+                                unit: unit.clone(),
+                                amount: *amount,
+                            }),
                     }),
                 )
             })

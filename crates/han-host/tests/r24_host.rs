@@ -111,6 +111,7 @@ async fn steering_a_guarded_agent_runs_strict_and_taints_it() {
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
+        budget: None,
         turn_timeout: Duration::from_secs(60),
         exclusion: Vec::new(),
     };

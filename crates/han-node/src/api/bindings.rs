@@ -4,16 +4,16 @@
 use ts_rs::{Config, TS};
 
 use super::{
-    ActorKind, AdmissionRow, AgentText, ApprovalRow, BoardRow, BoardTotals, CallResult,
-    ChangeSummaryRow, ClaimKind, Command, CostRow, DeviceRow, DeviceState, DiffOp, EffectRow,
-    ErrorNote, Fidelity, FilePatchRow, FileTouch, Filter, Group, GroupTotal, GuardRow, HomeRef,
-    InputRow, InputState, ItemBody, ItemRow, JoinProgressRow, JoinStage, MessageRole, Needed,
-    NeededGuard, NodeError, NodeStatusRow, OutboxRow, OverlapClaim, OverlapConflict, OverlapFile,
-    OverlapKind, OverlapParty, OverlapRow, OverlapSummary, PatchStatus, PlanItem, Query, RecordRow,
-    RoleInfo, Row, Sandbox, SandboxBackend, Scope, SessionPart, SessionRights, SessionRow,
-    SessionState, SpaceLink, SpaceStatusRow, StateCounts, StatusBody, Target, TaskRow, Tests,
-    TimelinePointRow, Tokens, ToolKind, ToolLocation, ToolStatus, ToolText, TurnDriver, ViewEvent,
-    WhoRow, Window,
+    ActorKind, AdmissionRow, AgentText, ApprovalRow, BoardRow, BoardTotals, BudgetStatus,
+    CallResult, ChangeSummaryRow, ClaimKind, Command, CostRow, DeviceRow, DeviceState, DiffOp,
+    EffectRow, ErrorNote, Fidelity, FilePatchRow, FileTouch, Filter, Group, GroupTotal, GuardRow,
+    HomeRef, InputRow, InputState, ItemBody, ItemRow, JoinProgressRow, JoinStage, MessageRole,
+    Needed, NeededGuard, NodeError, NodeStatusRow, OutboxRow, OverlapClaim, OverlapConflict,
+    OverlapFile, OverlapKind, OverlapParty, OverlapRow, OverlapSummary, PatchStatus, PlanItem,
+    Query, RecordRow, RoleInfo, Row, Sandbox, SandboxBackend, Scope, SessionPart, SessionRights,
+    SessionRow, SessionState, SpaceLink, SpaceStatusRow, StateCounts, StatusBody, Target,
+    TaskBudget, TaskRow, Tests, TimelinePointRow, Tokens, ToolKind, ToolLocation, ToolStatus,
+    ToolText, TurnDriver, ViewEvent, WhoRow, Window,
 };
 
 const HEADER: &str = "// Generated from crates/han-node by `cargo test -p han-node --test parts` (set HAN_UPDATE_GEN=1 to rewrite).\n// Do not edit by hand. These are the node API types: call(Command) and view(Query).\n\n";
@@ -48,6 +48,8 @@ pub fn typescript() -> String {
         FileTouch,
         Tests,
         Tokens,
+        BudgetStatus,
+        TaskBudget,
         StatusBody,
         OverlapKind,
         OverlapParty,

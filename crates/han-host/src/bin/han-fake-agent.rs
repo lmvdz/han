@@ -14,7 +14,10 @@
 //! `plan {entries: [{content, status}]}`, `usage {used, size, cost?}`, `request_permission {id, title, kind?,
 //! rawInput?, locations?, on_allow?: [steps], on_reject?: [steps]}`, `mcp_call {id, server, tool, args}`
 //! (calls the tool on the stdio MCP server of that name from `session/new.mcpServers`), `sleep {ms}`,
-//! `raw {line}` (writes a raw line to stdout), `exit {code}`, `end {stopReason?, meta?}`.
+//! `raw {line}` (writes a raw line to stdout), `exit {code}`, `end {stopReason?, meta?}`,
+//! `model_call {model, max_tokens?}` (one `POST /v1/messages` to the proxy at `HAN_MODEL_URL` with the session
+//! token `HAN_MODEL_TOKEN`, as an API-key harness would; says the answer as a message, `model call: 200` or
+//! `model call: 429 (budget-spent)`).
 //!
 //! With `--log` (or `HAN_FAKE_AGENT_LOG`) every request the agent receives is appended as one JSON line, so
 //! tests can assert what the client sent (prompts, mcpServers, modes, permission outcomes).
@@ -86,6 +89,11 @@ enum Step {
     },
     Thought {
         text: String,
+    },
+    ModelCall {
+        model: String,
+        #[serde(default)]
+        max_tokens: Option<u64>,
     },
     ToolCall {
         id: String,
@@ -227,6 +235,64 @@ fn locs(ls: &[String]) -> Value {
     json!(ls.iter().map(|l| json!({"path": l})).collect::<Vec<_>>())
 }
 
+/// One model call through the session proxy, answered in a line: `model call: <status>` and, for a refusal,
+/// the proxy's reason.
+async fn model_call(model: &str, max_tokens: Option<u64>) -> String {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("HAN_MODEL_URL"),
+        std::env::var("HAN_MODEL_TOKEN"),
+    ) else {
+        return "model call: no proxy in the environment".into();
+    };
+    let body = json!({
+        "model": model,
+        "max_tokens": max_tokens.unwrap_or(20),
+        "messages": [{"role": "user", "content": "hi"}],
+    });
+    // Plain HTTP/1.1 over a socket: the proxy is on loopback and the agent has no TLS to do for it.
+    let Some(addr) = url.strip_prefix("http://").map(|a| a.trim_end_matches('/')) else {
+        return format!("model call: not an http url: {url}");
+    };
+    let text = body.to_string();
+    let head = [
+        "POST /v1/messages HTTP/1.1".to_owned(),
+        format!("host: {addr}"),
+        format!("x-han-session: {token}"),
+        "content-type: application/json".to_owned(),
+        format!("content-length: {}", text.len()),
+        "connection: close".to_owned(),
+    ]
+    .join("\r\n");
+    let request = format!("{head}\r\n\r\n{text}");
+    let answer = async {
+        use tokio::io::AsyncReadExt as _;
+        let mut conn = tokio::net::TcpStream::connect(addr).await?;
+        conn.write_all(request.as_bytes()).await?;
+        let mut raw = Vec::new();
+        conn.read_to_end(&mut raw).await?;
+        Ok::<_, std::io::Error>(String::from_utf8_lossy(&raw).into_owned())
+    }
+    .await;
+    match answer {
+        Ok(raw) => {
+            let status = raw
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .unwrap_or("?");
+            match raw
+                .lines()
+                .take_while(|l| !l.is_empty())
+                .find_map(|l| l.strip_prefix("x-han-refusal: "))
+            {
+                Some(why) => format!("model call: {status} ({why})"),
+                None => format!("model call: {status}"),
+            }
+        }
+        Err(e) => format!("model call: {e}"),
+    }
+}
+
 /// Runs steps; returns `Some((stop_reason, meta))` when an `end` step (or a cancel) ends the turn.
 fn run_steps<'a>(
     st: &'a Arc<State>,
@@ -244,6 +310,14 @@ fn run_steps<'a>(
                     cx,
                     json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}),
                 ),
+                Step::ModelCall { model, max_tokens } => {
+                    let said = model_call(model, *max_tokens).await;
+                    st.log(json!({"event": "model_call", "model": model, "said": said}));
+                    update(
+                        cx,
+                        json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}}),
+                    );
+                }
                 Step::Thought { text } => update(
                     cx,
                     json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": text}}),
