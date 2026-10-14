@@ -195,6 +195,7 @@ impl Registry {
                 state,
             },
             relay: std::env::var("HAN_RELAY").unwrap_or_else(|_| "n0".into()),
+            node_endpoint: None,
         };
         Ok(Resolved { spec, run_as })
     }

@@ -121,6 +121,8 @@ pub struct ProcessSpawner {
     /// The arguments before the spec file: `host --spec`.
     prefix: Vec<String>,
     systemctl: PathBuf,
+    /// The host-class endpoint of the node, given to every host this spawner starts as the node's own user.
+    host_endpoint: Option<String>,
     children: Mutex<HashMap<String, Child>>,
     /// Hosts running as another OS user, by name: their unit.
     units: Mutex<HashMap<String, String>>,
@@ -133,6 +135,7 @@ impl ProcessSpawner {
             program: program.into(),
             prefix: vec!["host".into(), "--spec".into()],
             systemctl: PathBuf::from("systemctl"),
+            host_endpoint: None,
             children: Mutex::new(HashMap::new()),
             units: Mutex::new(HashMap::new()),
         }
@@ -148,6 +151,14 @@ impl ProcessSpawner {
     /// Uses this `systemctl` to start and stop the units of hosts that run as another OS user.
     pub fn with_systemctl(mut self, systemctl: impl Into<PathBuf>) -> Self {
         self.systemctl = systemctl.into();
+        self
+    }
+
+    /// Gives the hosts it starts as the node's own user this host-class endpoint (see
+    /// `rpc::role_endpoint`) as `node_endpoint`, and no other: a host never learns the face endpoint, and a
+    /// spec cannot bring its own.
+    pub fn with_host_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.host_endpoint = Some(endpoint.into());
         self
     }
 
@@ -171,7 +182,9 @@ impl ProcessSpawner {
 
     /// Starts a host as another OS user: its spec goes to the user's spec file and the unit
     /// `han-agent@<user>` is started. One host per OS user at a time.
-    fn start_as(&self, spec: RoleSpec, run_as: &RunAs) -> Result<(), SupervisorError> {
+    fn start_as(&self, mut spec: RoleSpec, run_as: &RunAs) -> Result<(), SupervisorError> {
+        // The unit's user cannot reach the node's owner-only endpoints.
+        spec.spec.node_endpoint = None;
         if !han_registry::valid_os_user(&run_as.os_user) {
             return Err(SupervisorError::Spawn(format!(
                 "{:?} is not an OS user name",
@@ -219,7 +232,7 @@ impl ProcessSpawner {
 }
 
 impl Supervisor for ProcessSpawner {
-    fn start(&self, spec: RoleSpec) -> Result<(), SupervisorError> {
+    fn start(&self, mut spec: RoleSpec) -> Result<(), SupervisorError> {
         if let Some(run_as) = spec.run_as.clone() {
             return self.start_as(spec, &run_as);
         }
@@ -230,6 +243,7 @@ impl Supervisor for ProcessSpawner {
                 return Err(SupervisorError::Running(spec.name));
             }
         }
+        spec.spec.node_endpoint = self.host_endpoint.clone();
         let file = spec_file(&spec.spec.dirs.state, &spec.name);
         spec.spec
             .write(&file)

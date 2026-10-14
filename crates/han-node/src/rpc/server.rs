@@ -73,6 +73,47 @@ pub fn serve_as(
     })
 }
 
+/// The three endpoints of a node: one per [`ConnectionClass`], each its own owner-only pipe or socket with
+/// its own name ([`super::role_endpoint`]). Faces get the face endpoint; a spawned host is given the host one
+/// and an executor the executor one, and neither is told the others (SR-107).
+pub struct NodeServers {
+    face: RpcServer,
+    host: RpcServer,
+    executor: RpcServer,
+}
+
+impl NodeServers {
+    /// The face endpoint.
+    pub fn endpoint(&self) -> &str {
+        self.face.endpoint()
+    }
+
+    /// The endpoint of `class`.
+    pub fn endpoint_of(&self, class: ConnectionClass) -> &str {
+        match class {
+            ConnectionClass::Face => self.face.endpoint(),
+            ConnectionClass::Host => self.host.endpoint(),
+            ConnectionClass::Executor => self.executor.endpoint(),
+        }
+    }
+}
+
+/// Serves `api` on the face endpoint `endpoint` and on a host and an executor endpoint beside it.
+pub fn serve_roles(api: Arc<dyn NodeApi>, endpoint: &str) -> io::Result<NodeServers> {
+    let on = |class| {
+        serve_as(
+            Arc::clone(&api),
+            &super::role_endpoint(endpoint, class),
+            class,
+        )
+    };
+    Ok(NodeServers {
+        face: on(ConnectionClass::Face)?,
+        host: on(ConnectionClass::Host)?,
+        executor: on(ConnectionClass::Executor)?,
+    })
+}
+
 /// A listener on `endpoint` that only the current user can reach (same restriction as [`serve`]), for local
 /// tools with their own protocol, such as a home's admin socket.
 pub fn listen_local(endpoint: &str) -> io::Result<interprocess::local_socket::tokio::Listener> {
