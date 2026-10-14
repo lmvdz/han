@@ -82,6 +82,31 @@ pub async fn run(opts: Options) -> io::Result<()> {
     result
 }
 
+/// Renders the screen once as text, `size` columns by rows, after giving the node `wait` to answer: for scripts,
+/// logs and checks without an interactive terminal. Nothing is saved to `tui.json`.
+pub async fn print(opts: Options, size: (u16, u16), wait: Duration) -> io::Result<String> {
+    let endpoint = opts
+        .endpoint
+        .unwrap_or_else(|| default_endpoint(&opts.data));
+    let config = Config::load(&opts.data.join("tui.json"));
+    let connector = Arc::new(RpcConnector { endpoint });
+    let mut h = crate::testing::Harness::build(
+        None,
+        Some(connector),
+        opts.space.as_deref(),
+        size,
+        config,
+        None,
+    );
+    let until = Instant::now() + wait;
+    while Instant::now() < until {
+        h.settle().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    h.settle().await;
+    Ok(h.screen())
+}
+
 /// Reads terminal events on a thread of its own and forwards them. Key releases are dropped (Windows reports
 /// both presses and releases).
 fn spawn_reader(

@@ -991,13 +991,21 @@ impl<T: Transport> Node<T> {
                 if let Some(i) = issue {
                     a.extend(["--issue".into(), i]);
                 }
+                // A home joined by ticket has no well-known: the host's own node pins the same ticket.
+                let env = inner
+                    .pins
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .get(&home.server)
+                    .map(|t| vec![("HAN_HOME_TICKET".to_owned(), t.to_text())])
+                    .unwrap_or_default();
                 inner
                     .supervisor
                     .start(RoleSpec {
                         role: Role::Host,
                         name,
                         args: a,
-                        env: Vec::new(),
+                        env,
                     })
                     .map_err(|e| match e {
                         SupervisorError::Running(_) => NodeError::conflict(e.to_string()),
