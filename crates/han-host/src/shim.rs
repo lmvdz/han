@@ -8,12 +8,15 @@
 //!   proxy's MCP tunnel (`CONNECT han-mcp.invalid:1` with the session token) and copies stdin to the tunnel
 //!   and the tunnel to stdout, so han-mcp itself runs outside the sandbox (SR-29).
 //!
-//! Usage (the `han-agent-shim` binary and `han shim` call [`main`]):
+//! Usage (the `han-agent-shim` binary, `han shim` and `han` itself call [`main`]):
 //!
 //! ```text
 //! han-agent-shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args…
 //! han-agent-shim mcp-stub --proxy 127.0.0.1:P --token T
 //! ```
+//!
+//! The sandboxes run whatever program the host names as its shim with these verbs first, so a program
+//! offered as the shim must take them as its first argument: `han host` offers `han` itself, which does.
 
 use std::io;
 use std::net::SocketAddr;

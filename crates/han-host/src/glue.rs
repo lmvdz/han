@@ -13,10 +13,12 @@ use crate::driver::{
     CredentialMode, KeyHeader, PrepareCtx, bind_login, login_binding, prepare_session_dir,
 };
 use crate::host::HostConfig;
+use crate::mask::Masker;
 use crate::proxy::{
     AllowEntry, KeySource, KeyStyle, ModelRoute, Proxy, ProxyConfig, ProxyHandle, Roots,
 };
 use crate::sandbox::{self, Limits, Preference, ProxyTarget, SandboxSpec, Sandboxed};
+use crate::stderr_log::{self, StderrLog};
 
 /// The session's egress: its proxy and the token the agent presents.
 pub struct Egress {
@@ -41,6 +43,8 @@ pub struct Launched {
     pub session_meta: Option<serde_json::Value>,
     /// The confined tree.
     pub child: Sandboxed,
+    /// The agent's stderr, masked, in the session directory (never published).
+    pub stderr: Option<StderrLog>,
 }
 
 impl Launched {
@@ -58,6 +62,19 @@ fn preference(name: &str) -> Result<Preference, String> {
         "none" => Preference::None,
         other => return Err(format!("unknown sandbox {other}: auto, mxc, bwrap or none")),
     })
+}
+
+/// What the sandbox must let an installed adapter read: the outermost `node_modules` above its package
+/// directory, where npm put its dependencies (and, for Claude Code, the `claude` executable the Agent SDK
+/// starts). Node resolves a package's imports through every `node_modules` above it, so the package directory
+/// alone is not enough. An adapter outside any `node_modules` gets its own directory.
+pub fn adapter_read_root(adapter_dir: &Path) -> PathBuf {
+    adapter_dir
+        .ancestors()
+        .filter(|a| a.file_name().is_some_and(|n| n == "node_modules"))
+        .last()
+        .unwrap_or(adapter_dir)
+        .to_path_buf()
 }
 
 /// The backend `Auto` resolves to on this machine.
@@ -143,12 +160,14 @@ impl Egress {
     }
 
     /// Prepares the driver's session directory and launches the agent confined (SR-23: an unavailable
-    /// sandbox fails the session unless the space allows advisory mode).
+    /// sandbox fails the session unless the space allows advisory mode). The agent's stderr goes, masked, to
+    /// [`stderr_log::LOG_NAME`] in `cfg.session_dir`, which the sandbox cannot write.
     pub async fn launch(
         &self,
         cfg: &HostConfig,
         agent_dir: &Path,
         workspace: &Workspace,
+        masker: Arc<Masker>,
     ) -> Result<Launched, String> {
         let backend = resolve(preference(&cfg.sandbox.backend)?);
         // Inside a sandbox the agent reaches the proxy through the shim's loopback port; without one, the
@@ -180,7 +199,7 @@ impl Egress {
             ro.push(cfg.node.clone());
         }
         if !cfg.adapter_dir.as_os_str().is_empty() {
-            ro.push(cfg.adapter_dir.clone());
+            ro.push(adapter_read_root(&cfg.adapter_dir));
         }
         if let Some(store) = &workspace.shared_store {
             ro.push(store.clone());
@@ -215,13 +234,10 @@ impl Egress {
         let mut child = sandbox::launch(spec).await.map_err(|e| e.to_string())?;
         let stdin = child.stdin.take().ok_or("the agent has no stdin")?;
         let stdout = child.stdout.take().ok_or("the agent has no stdout")?;
-        if let Some(mut err) = child.stderr.take() {
-            // Drain the agent's stderr so it never blocks; never published (it can hold anything).
-            tokio::spawn(async move {
-                let mut sink = tokio::io::sink();
-                let _ = tokio::io::copy(&mut err, &mut sink).await;
-            });
-        }
+        // Drained so it never blocks; kept for diagnosis, never published (it can hold anything).
+        let stderr = child.stderr.take().map(|err| {
+            stderr_log::capture(err, cfg.session_dir.join(stderr_log::LOG_NAME), masker)
+        });
         let mut gaps = child.info.gaps.clone();
         gaps.extend(cfg.driver.isolation.gaps.iter().cloned());
         if !child.info.dns_blocked && child.info.fidelity == Fidelity::Enforced {
@@ -240,6 +256,7 @@ impl Egress {
             mcp_servers: prepared.mcp_servers.clone(),
             session_meta: prepared.session_meta.clone(),
             child,
+            stderr,
         })
     }
 }
@@ -372,4 +389,27 @@ pub fn start_mirror(
     });
     mirror.watch().map_err(|e| e.to_string())?;
     Ok(Arc::new(MirrorHandle { mirror }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adapter_read_root;
+    use std::path::Path;
+
+    #[test]
+    fn the_adapter_reads_the_whole_node_modules_it_was_installed_into() {
+        // `han agent setup-harness claude`: the adapter's dependencies (`@agentclientprotocol/sdk`, the Agent
+        // SDK and its `claude` executable) are its siblings, not inside its package directory.
+        let install = Path::new("/data/harness/claude");
+        let adapter = install.join("node_modules/@agentclientprotocol/claude-agent-acp");
+        assert_eq!(adapter_read_root(&adapter), install.join("node_modules"));
+        let pi = install.join("node_modules/pi-acp");
+        assert_eq!(adapter_read_root(&pi), install.join("node_modules"));
+        // A nested install still resolves through the outer tree.
+        let nested = install.join("node_modules/a/node_modules/b");
+        assert_eq!(adapter_read_root(&nested), install.join("node_modules"));
+        // An adapter checked out somewhere else keeps its own directory.
+        let dev = Path::new("/src/my-adapter");
+        assert_eq!(adapter_read_root(dev), dev);
+    }
 }

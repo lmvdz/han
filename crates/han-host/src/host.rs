@@ -730,8 +730,9 @@ async fn run_opened(
         mcp_servers,
         session_meta,
         child,
+        mut stderr,
     } = env
-        .launch(cfg, &agent_dir, &workspace)
+        .launch(cfg, &agent_dir, &workspace, masker.clone())
         .await
         .map_err(HostError::Sandbox)?;
     {
@@ -782,21 +783,38 @@ async fn run_opened(
     let policy = Arc::new(crate::acp::SandboxPolicy {
         worktree: workspace.dir.clone(),
     });
-    let mut agent = AcpDriver::connect(stdin, stdout, policy)
-        .await
-        .map_err(|e| HostError::Agent(e.to_string()))?
-        .with_turn_timeout(cfg.turn_timeout);
-    let started = agent
-        .start(SessionConfig {
-            cwd: workspace.dir.clone(),
-            mcp_servers: mcp_servers.clone(),
-            model: None,
-            meta: session_meta.clone(),
-            strict_mode: cfg.driver.strict_mode.clone(),
-            auto_mode: cfg.driver.auto_mode.clone(),
-        })
-        .await
-        .map_err(|e| HostError::Agent(e.to_string()))?;
+    let started = async {
+        let mut agent = AcpDriver::connect(stdin, stdout, policy)
+            .await?
+            .with_turn_timeout(cfg.turn_timeout);
+        let started = agent
+            .start(SessionConfig {
+                cwd: workspace.dir.clone(),
+                mcp_servers: mcp_servers.clone(),
+                model: None,
+                meta: session_meta.clone(),
+                strict_mode: cfg.driver.strict_mode.clone(),
+                auto_mode: cfg.driver.auto_mode.clone(),
+            })
+            .await?;
+        Ok::<_, crate::acp::AcpError>((agent, started))
+    }
+    .await;
+    let (mut agent, started) = match started {
+        Ok(s) => s,
+        Err(e) => {
+            // The agent died or would not talk: say what it printed (masked), which is the only clue.
+            let why = match stderr.as_mut() {
+                Some(log) => {
+                    let lines = log.finish(Duration::from_secs(3)).await;
+                    crate::stderr_log::StderrLog::describe(&lines, log.path(), 5)
+                }
+                None => "the agent's stderr was not captured".into(),
+            };
+            child.kill();
+            return Err(HostError::Agent(format!("{e}; {why}")));
+        }
+    };
     if let crate::driver::VersionCheck::Untested { warning } =
         crate::driver::check_version(&cfg.driver, started.agent_version.as_deref())
     {

@@ -25,3 +25,4 @@ pub mod r24;
 pub mod sandbox;
 pub mod shim;
 pub mod status;
+pub mod stderr_log;

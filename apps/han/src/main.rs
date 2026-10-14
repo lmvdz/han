@@ -111,7 +111,21 @@ fn argv() -> Vec<std::ffi::OsString> {
     argv
 }
 
+/// The shim's own verbs. `han host` hands its own executable to the sandbox as the shim, and the sandbox runs
+/// it the way it runs `han-agent-shim`: `<shim> listen …` and `<shim> mcp-stub …`, with no `shim` in front.
+const SHIM_VERBS: [&str; 2] = ["listen", "mcp-stub"];
+
 fn main() {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|v| v.to_str().is_some_and(|v| SHIM_VERBS.contains(&v)))
+    {
+        let args = std::env::args_os()
+            .skip(1)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        std::process::exit(han_host::shim::main(args));
+    }
     let cli = Cli::parse_from(argv());
     // The shim runs inside the sandbox with its own small runtime, before anything else starts.
     if let Cmd::Shim { args } = cli.command {
