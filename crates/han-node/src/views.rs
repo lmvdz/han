@@ -181,12 +181,13 @@ fn diff(old: &BTreeMap<String, Row>, new: &BTreeMap<String, Row>) -> Vec<DiffOp>
     ops
 }
 
-fn snapshot(p: &Page) -> ViewEvent {
+fn snapshot(p: &Page, now_ms: u64) -> ViewEvent {
     ViewEvent::Snapshot {
         rows: p.rows.values().cloned().collect(),
         total: p.total,
         offset: p.offset,
         next_cursor: p.next.clone(),
+        now_ms,
     }
 }
 
@@ -381,7 +382,11 @@ impl Engine {
             secs: wall_secs,
         };
         let now = self.now;
-        let mut moved = false;
+        // The node's own row carries the clock, so a view of it moves with every tick.
+        let mut moved = self
+            .subs
+            .iter()
+            .any(|s| matches!(s.query, Query::NodeStatus { .. }));
         for m in self.spaces.values_mut() {
             moved |= m.tick(&now);
         }
@@ -441,6 +446,7 @@ impl Engine {
                 spaces_live: u32::try_from(live).unwrap_or(u32::MAX),
                 outbox_pending: pending,
                 roles: self.info.roles.clone(),
+                now_ms: self.now.ms,
             }),
         )
     }
@@ -543,6 +549,7 @@ impl Engine {
                 .values()
                 .flat_map(|m| m.approval_rows(actor, &now))
                 .collect()),
+            Query::Spaces { .. } => Ok(self.spaces.values().map(SpaceModel::status_row).collect()),
             Query::SpaceStatus { space, .. } => self
                 .spaces
                 .get(space)
@@ -630,13 +637,16 @@ impl Engine {
     /// A fresh read of a window: its rows ordered by key, and the snapshot event that carries them.
     pub fn read(&mut self, q: &Query) -> Result<ViewEvent, NodeError> {
         let rows = self.gather(q)?;
-        Ok(snapshot(&page(rows, q.window())))
+        Ok(snapshot(&page(rows, q.window()), self.now.ms))
     }
 
     /// The revisions a query's rows are computed from.
     fn signature(&self, q: &Query) -> u64 {
         let mut h = DefaultHasher::new();
         self.misc_rev.hash(&mut h);
+        if matches!(q, Query::NodeStatus { .. }) {
+            self.now.ms.hash(&mut h);
+        }
         let one = |sp: &str, h: &mut DefaultHasher| {
             sp.hash(h);
             self.spaces.get(sp).map(|m| m.rev).hash(h);
@@ -678,7 +688,7 @@ impl Engine {
                 return None;
             }
         };
-        sink.send(snapshot(&last));
+        sink.send(snapshot(&last, self.now.ms));
         let id = self.next_sub;
         self.next_sub += 1;
         let sig = self.signature(&query);
@@ -728,18 +738,21 @@ impl Engine {
                 return true;
             }
             let ops = diff(&sub.last.rows, &new.rows);
+            let now_ms = self.now.ms;
             let event = if ops.len() >= RESNAPSHOT_OPS && ops.len() * 2 >= new.rows.len() {
-                match snapshot(&new) {
+                match snapshot(&new, now_ms) {
                     ViewEvent::Snapshot {
                         rows,
                         total,
                         offset,
                         next_cursor,
+                        now_ms,
                     } => ViewEvent::Resnapshot {
                         rows,
                         total,
                         offset,
                         next_cursor,
+                        now_ms,
                     },
                     other => other,
                 }
@@ -749,6 +762,7 @@ impl Engine {
                     total: new.total,
                     offset: new.offset,
                     next_cursor: new.next.clone(),
+                    now_ms,
                 }
             };
             sub.last = new;

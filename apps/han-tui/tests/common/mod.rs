@@ -15,7 +15,7 @@ use han_tui::testing::{
 
 pub const ME: &str = "@lars";
 /// The node's steady clock, in ms, as the freshest row saw it.
-const NOW: u64 = 100_000_000;
+const NOW: u64 = han_tui::testing::NOW_MS;
 
 /// What the fake node serves; tests change it and push diffs.
 #[derive(Default)]
@@ -123,6 +123,28 @@ pub fn node(data: &Shared) -> Arc<FakeApi> {
         let d = d.lock().unwrap();
         Some(match q {
             Query::NodeStatus { .. } => snapshot(vec![node_status(ME)], 1, 0, None),
+            Query::Spaces { .. } => snapshot(
+                ["team", "ops"]
+                    .into_iter()
+                    .map(|s| {
+                        Row::SpaceStatus(SpaceStatusRow {
+                            key: s.into(),
+                            space: s.into(),
+                            home: "h".into(),
+                            link: SpaceLink::Live,
+                            head: 1,
+                            sessions: 0,
+                            members: 1,
+                            outbox_pending: 0,
+                            signals: 0,
+                            error: None,
+                        })
+                    })
+                    .collect(),
+                2,
+                0,
+                None,
+            ),
             Query::SpaceStatus { space, .. } => snapshot(
                 vec![Row::SpaceStatus(SpaceStatusRow {
                     key: "s".into(),

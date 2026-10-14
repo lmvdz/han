@@ -494,6 +494,7 @@ impl Driver {
                 total,
                 offset,
                 next_cursor,
+                ..
             } = self.engine.read(q).unwrap()
             else {
                 panic!("a read is a snapshot");

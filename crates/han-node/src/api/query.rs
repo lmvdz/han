@@ -31,6 +31,10 @@ pub struct Filter {
     /// Include closed sessions (a board shows live work by default).
     #[serde(default)]
     pub include_closed: bool,
+    /// Only rows that wait on this device's actor (`needs_me`): a blocked or approval-waiting session of its
+    /// own work, an effect it may approve.
+    #[serde(default)]
+    pub needs_me: bool,
 }
 
 /// The facets of a row that a [`Filter`] reads.
@@ -44,6 +48,8 @@ pub struct Facets {
     pub issue: Option<String>,
     /// Whether the row is about a closed session.
     pub closed: bool,
+    /// Whether the row waits on this device's actor.
+    pub needs_me: bool,
     /// Searchable text.
     pub text: String,
 }
@@ -55,6 +61,9 @@ impl Filter {
             return false;
         }
         if !self.states.is_empty() && !f.state.is_some_and(|s| self.states.contains(&s)) {
+            return false;
+        }
+        if self.needs_me && !f.needs_me {
             return false;
         }
         if let Some(a) = &self.actor
@@ -206,6 +215,12 @@ pub enum Query {
         #[serde(default)]
         window: Window,
     },
+    /// The spaces this device follows, one status row each: what `:space` offers to switch to.
+    Spaces {
+        /// The window.
+        #[serde(default)]
+        window: Window,
+    },
     /// How a space is doing on this device: link, head, outbox.
     SpaceStatus {
         /// The space.
@@ -344,6 +359,7 @@ impl Query {
             | Query::WhoIsOn { window, .. }
             | Query::Overlaps { window, .. }
             | Query::Approvals { window, .. }
+            | Query::Spaces { window }
             | Query::SpaceStatus { window, .. }
             | Query::Cost { window, .. }
             | Query::Outbox { window, .. }

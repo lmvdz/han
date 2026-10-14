@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use interprocess::local_socket::tokio::{Stream, prelude::*};
@@ -25,6 +25,9 @@ pub struct RpcClient {
     next_id: AtomicU64,
     pending: Pending,
     subs: Subs,
+    /// Set when the connection has ended: later calls and views fail at once instead of waiting for an
+    /// answer that cannot come.
+    gone: Arc<AtomicBool>,
 }
 
 impl RpcClient {
@@ -45,7 +48,12 @@ impl RpcClient {
                 }
             }
         });
-        let (p, s) = (Arc::clone(&pending), Arc::clone(&subs));
+        let gone_flag = Arc::new(AtomicBool::new(false));
+        let (p, s, g) = (
+            Arc::clone(&pending),
+            Arc::clone(&subs),
+            Arc::clone(&gone_flag),
+        );
         tokio::spawn(async move {
             let mut reader = BufReader::new(recv);
             let mut buf = Vec::new();
@@ -55,7 +63,9 @@ impl RpcClient {
                 };
                 dispatch(msg, &p, &s);
             }
-            // The daemon is gone: every call fails and every view ends.
+            // The daemon is gone: every call fails and every view ends. The flag goes first, so a call that
+            // registers after the drain sees it.
+            g.store(true, Ordering::SeqCst);
             let gone = || NodeError::unavailable("the node closed the connection");
             for (_, tx) in p.lock().unwrap_or_else(|e| e.into_inner()).drain() {
                 let _ = tx.send(Err(gone()));
@@ -69,6 +79,7 @@ impl RpcClient {
             next_id: AtomicU64::new(1),
             pending,
             subs,
+            gone: gone_flag,
         })
     }
 
@@ -85,7 +96,7 @@ impl RpcClient {
     async fn request(&self, method: &str, params: Value) -> Result<Value, NodeError> {
         let (id, rx) = self.register();
         let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        if self.writer.send(line.to_string()).is_err() {
+        if self.gone.load(Ordering::SeqCst) || self.writer.send(line.to_string()).is_err() {
             self.pending
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -166,7 +177,7 @@ impl NodeApi for RpcClient {
             .insert(id, sink.clone());
         let params = serde_json::to_value(&query).unwrap_or(Value::Null);
         let line = json!({"jsonrpc": "2.0", "id": id, "method": "view", "params": params});
-        if self.writer.send(line.to_string()).is_err() {
+        if self.gone.load(Ordering::SeqCst) || self.writer.send(line.to_string()).is_err() {
             sink.send(ViewEvent::Failed {
                 error: NodeError::unavailable("the node closed the connection"),
             });

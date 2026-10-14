@@ -1012,9 +1012,35 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
         }
     };
     wrapped("WHY GATED", &r.why_gated, &mut lines);
-    lines.push(Line::raw(""));
-    wrapped("ACTION", &r.action, &mut lines);
-    wrapped("DIGEST", &digest_groups(&r.plan_digest), &mut lines);
+    let action = match &r.target {
+        Some(target) => format!("{} on {}", r.action, target),
+        None => r.action.clone(),
+    };
+    wrapped("ACTION", &action, &mut lines);
+    // The plan's values: some are text an agent wrote, so each is quoted and never taken for the card's own words.
+    for (i, (name, value)) in r.summary.iter().enumerate() {
+        wrapped(
+            if i == 0 { "CHANGES" } else { "" },
+            &format!("{}: \"{}\"", clean(name), clean(value)),
+            &mut lines,
+        );
+    }
+    let checked = if r.digest_verified {
+        "  (plan matches digest)"
+    } else {
+        ""
+    };
+    wrapped(
+        "DIGEST",
+        &format!("{}{checked}", digest_groups(&r.plan_digest)),
+        &mut lines,
+    );
+    if !r.digest_verified {
+        lines.push(Line::from(vec![
+            label(""),
+            Span::styled("plan NOT verified against its digest", tone(Tone::Bad)),
+        ]));
+    }
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
         label("WHO"),
@@ -1081,7 +1107,11 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
                 "(signing unavailable)"
             };
             lines.push(Line::styled(
-                format!("{sign}    [c] Cancel effect    [Esc] Close"),
+                if r.can_cancel {
+                    format!("{sign}    [c] Cancel effect    [Esc] Close")
+                } else {
+                    format!("{sign}    [Esc] Close")
+                },
                 Style::new().add_modifier(Modifier::BOLD),
             ));
         }

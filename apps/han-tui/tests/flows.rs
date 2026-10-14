@@ -40,6 +40,7 @@ fn diff(ops: Vec<DiffOp>, total: u32) -> ViewEvent {
         total,
         offset: 0,
         next_cursor: None,
+        now_ms: han_tui::testing::NOW_MS,
     }
 }
 
@@ -738,4 +739,73 @@ async fn a_call_in_flight_when_the_daemon_dies_is_reported_not_lost() {
     // With no connection the input is refused at once, in words.
     let s = h.screen();
     assert!(s.contains("not sent"), "{s}");
+}
+
+// ---- what the node now says ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ages_come_from_the_nodes_clock_not_from_a_guess() {
+    let (h, _api, _data) = started((130, 26)).await;
+    let now = std::time::Instant::now();
+    let row =
+        h.rt.app
+            .board
+            .rows()
+            .iter()
+            .find(|r| r.last_active_ms < han_tui::testing::NOW_MS)
+            .cloned()
+            .expect("a quiet row");
+    // The newest row is at the node's now, so the old guess would have called this row's age the difference
+    // to the newest; the clock the node sends gives the same here and keeps counting without any row moving.
+    let age = h.rt.app.board.age_ms(&row, now);
+    let exact = han_tui::testing::NOW_MS - row.last_active_ms;
+    assert!((exact..exact + 5_000).contains(&age), "{age} vs {exact}");
+}
+
+#[tokio::test]
+async fn an_unverified_plan_cannot_be_signed_and_only_a_cancellable_effect_offers_cancel() {
+    let (mut h, api, data) = started((130, 26)).await;
+    let mut a = pending_approval(&data);
+    a.digest_verified = false;
+    a.can_cancel = false;
+    data.lock().unwrap().approvals = vec![a];
+    h.keys("r").await;
+    h.keys("a<enter>").await;
+    let s = h.screen();
+    assert!(s.contains("plan NOT verified"), "{s}");
+    assert!(!s.contains("Cancel effect"), "{s}");
+    h.keys("ac").await;
+    let s = h.screen();
+    assert!(!s.contains("You are signing"), "{s}");
+    assert!(
+        s.contains("Only the proposer or an owner can cancel"),
+        "{s}"
+    );
+    assert!(api.calls().is_empty());
+}
+
+#[tokio::test]
+async fn the_card_shows_the_target_and_the_quoted_changes() {
+    let (mut h, _api, data) = started((130, 26)).await;
+    pending_approval(&data);
+    h.keys("r").await;
+    h.keys("a<enter>").await;
+    let s = h.screen();
+    assert!(s.contains("git.push on han"), "{s}");
+    assert!(s.contains("branch: \"han/auth\""), "{s}");
+    assert!(s.contains("plan matches digest"), "{s}");
+}
+
+#[tokio::test]
+async fn space_lists_the_followed_spaces_and_a_part_of_one_switches_to_it() {
+    let (mut h, api, _data) = started((130, 26)).await;
+    h.keys(":space<enter>").await;
+    let s = h.screen();
+    assert!(s.contains("Followed: team, ops"), "{s}");
+    h.keys(":space op<enter>").await;
+    assert!(
+        api.opened()
+            .iter()
+            .any(|q| matches!(q, Query::Board { space, .. } if space == "ops"))
+    );
 }

@@ -433,7 +433,12 @@ issue?: string,
 /**
  * Include closed sessions (a board shows live work by default).
  */
-include_closed: boolean, };
+include_closed: boolean, 
+/**
+ * Only rows that wait on this device's actor (`needs_me`): a blocked or approval-waiting session of its
+ * own work, an effect it may approve.
+ */
+needs_me: boolean, };
 
 export type Window = { 
 /**
@@ -521,6 +526,10 @@ window: Window, } | { "type": "approvals",
  * The approving actor.
  */
 actor: string, 
+/**
+ * The window.
+ */
+window: Window, } | { "type": "spaces", 
 /**
  * The window.
  */
@@ -1006,9 +1015,28 @@ executor: string,
  */
 action: string, 
 /**
+ * What the action works on, from the plan (`plan.target`): a repository, a path, an address.
+ */
+target?: string, 
+/**
+ * The plan's top-level arguments that are plain values, as `(name, text)`, at most [`SUMMARY_FIELDS`]
+ * and each text cut to [`SUMMARY_TEXT`] characters. Text an agent wrote (a title, a message) is among
+ * them: a face shows it as quoted, not as its own words.
+ */
+summary: Array<[string, string]>, 
+/**
+ * The plan as JSON text, from the proposal's content (absent when redacted or not delivered).
+ */
+plan?: string, 
+/**
  * The digest of the plan.
  */
 plan_digest: string, 
+/**
+ * The node hashed the plan itself and `sha256(JCS(plan))` equals `plan_digest` (DAT-11). False when the
+ * plan is absent or does not hash to the digest: a face must not offer to sign it.
+ */
+digest_verified: boolean, 
 /**
  * Authors of approvals so far.
  */
@@ -1030,6 +1058,10 @@ seq: number,
  * approved); Policy has the last word when it is appended.
  */
 can_approve: boolean, 
+/**
+ * The asking actor may cancel the effect: its proposer, or an owner.
+ */
+can_cancel: boolean, 
 /**
  * Who must approve: the actors and roles of the approval rule that applies, or the owners by default.
  */
@@ -1139,6 +1171,11 @@ guarded: boolean,
  */
 forced: boolean, 
 /**
+ * P-15, Z1: the agents whose guard the actor answers to: itself if it chose guarding or is forced, then
+ * the `guardedFor` of the open tasks it accepted, each once. `guarded` is true when this is not empty.
+ */
+guards: Array<string>, 
+/**
  * The head the answer is at.
  */
 head: number, };
@@ -1209,7 +1246,16 @@ ask?: string,
 /**
  * Whether it is still open.
  */
-open: boolean, };
+open: boolean, 
+/**
+ * P-15: the agents whose guarding the task carries, fixed when it was created: its parent's list, then
+ * the guards of its author. An assignee that accepts the task answers to their guards.
+ */
+guarded_for: Array<string>, 
+/**
+ * The assignees that accepted it.
+ */
+accepted: Array<string>, };
 
 export type SpaceLink = "connecting" | "live" | "offline" | "rejected";
 
@@ -1411,7 +1457,11 @@ outbox_pending: number,
 /**
  * Supervised roles.
  */
-roles: Array<RoleInfo>, };
+roles: Array<RoleInfo>, 
+/**
+ * This node's steady clock (ms), the one `last_active_ms` counts on, as of the last tick.
+ */
+now_ms: number, };
 
 export type TimelinePointRow = { 
 /**
@@ -1511,7 +1561,12 @@ offset: number,
 /**
  * The key to put in `cursor` for the next page, when rows follow this window.
  */
-next_cursor?: string, } | { "type": "diff", 
+next_cursor?: string, 
+/**
+ * The node's steady clock (ms) when the window was computed: the clock `last_active_ms` counts on,
+ * so a face computes ages as `now_ms - last_active_ms` without a clock of its own.
+ */
+now_ms: number, } | { "type": "diff", 
 /**
  * The changes.
  */
@@ -1527,7 +1582,11 @@ offset: number,
 /**
  * The new cursor of the page after this window.
  */
-next_cursor?: string, } | { "type": "resnapshot", 
+next_cursor?: string, 
+/**
+ * The node's steady clock (ms) as of this diff.
+ */
+now_ms: number, } | { "type": "resnapshot", 
 /**
  * The rows.
  */
@@ -1543,7 +1602,11 @@ offset: number,
 /**
  * The key for the next page.
  */
-next_cursor?: string, } | { "type": "failed", 
+next_cursor?: string, 
+/**
+ * The node's steady clock (ms) as of this window.
+ */
+now_ms: number, } | { "type": "failed", 
 /**
  * Why.
  */
