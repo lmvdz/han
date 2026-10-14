@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Waker};
 
 use futures_core::Stream;
 
-use super::{CallResult, Command, NodeError, Query, ViewEvent};
+use super::{CallResult, Command, ConnectionClass, NodeError, Query, ViewEvent};
 
 /// A boxed future, so [`NodeApi`] can be used as a trait object.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -21,6 +21,50 @@ pub trait NodeApi: Send + Sync + 'static {
 
     /// Watches something: a snapshot of the window, then diffs, until the stream is dropped.
     fn view(&self, query: Query) -> ViewStream;
+}
+
+/// A role process's own node, as the role may use it: a host or an executor that runs its own node in process
+/// (as its own actor) holds this and never the node itself, so the class bounds what it can send however it
+/// asks (SR-06, SR-106). The same bound the role endpoints put on a connection, plus the one Face-class
+/// command a role needs in process: a host uploads its `git_push` changeset (`BlobPut`), an executor fetches
+/// it (`BlobFetch`). Views are not bounded.
+pub struct ClassApi {
+    inner: Arc<dyn NodeApi>,
+    class: ConnectionClass,
+}
+
+impl ClassApi {
+    /// `inner` as a connection of `class` sees it.
+    pub fn new(inner: Arc<dyn NodeApi>, class: ConnectionClass) -> Self {
+        Self { inner, class }
+    }
+
+    fn permits(&self, cmd: &Command) -> bool {
+        self.class.permits(cmd.class())
+            || matches!(
+                (self.class, cmd),
+                (ConnectionClass::Host, Command::BlobPut { .. })
+                    | (ConnectionClass::Executor, Command::BlobFetch { .. })
+            )
+    }
+}
+
+impl NodeApi for ClassApi {
+    fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
+        if !self.permits(&cmd) {
+            let e = NodeError::denied(format!(
+                "a {:?} connection may not send a {:?} command",
+                self.class,
+                cmd.class()
+            ));
+            return Box::pin(async move { Err(e) });
+        }
+        self.inner.call(cmd)
+    }
+
+    fn view(&self, query: Query) -> ViewStream {
+        self.inner.view(query)
+    }
 }
 
 /// A view's backlog may hold this many events. A reader further behind than this is not served the backlog:

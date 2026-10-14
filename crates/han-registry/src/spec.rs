@@ -206,7 +206,9 @@ pub struct HostSpec {
     /// The host endpoint of the node that started this host: the one connection class a host may use to talk
     /// to that node (agent commands only, SR-107). The spawner fills it; it is absent when the host was
     /// started by hand or runs as another OS user, who cannot reach the owner-only pipe. A host is never
-    /// given the face endpoint.
+    /// given the face endpoint. Not used yet: the person's node signs as one actor, so a host cannot do its
+    /// work as its agent through it until a connection can be bound to an actor (spec round 33). Until then
+    /// `han host` runs its own node as the agent, held to the host class (`ClassApi`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_endpoint: Option<String>,
     /// The session's budget, when the space has one. The host enforces it at its proxy (SR-41) in API-key mode

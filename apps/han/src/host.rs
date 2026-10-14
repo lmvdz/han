@@ -11,6 +11,7 @@ use han_host::driver::{DriverConfig, builtin};
 use han_host::host::{HostConfig, HostDeps, RepoConfig, SandboxChoice, run_session};
 use han_host::sandbox::ShimCommand;
 use han_host::toolchain;
+use han_node::api::ConnectionClass;
 use han_registry::{HarnessSpec, HostSpec};
 use han_vcs::GitVcs;
 
@@ -77,6 +78,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         &spec.relay,
         &spec.home,
         &spec.space,
+        ConnectionClass::Host,
     )
     .await?;
     // API-key mode: the real key stays in the proxy (SR-33, SR-39); the agent sees a dummy.
@@ -146,7 +148,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         &["https"]
     };
     let deps = HostDeps {
-        api: Arc::new(role.node.clone()),
+        api: role.api.clone(),
         vcs: Arc::new(
             GitVcs::new(spec.dirs.state.join("objects")).with_protocols(protocols.iter().copied()),
         ),

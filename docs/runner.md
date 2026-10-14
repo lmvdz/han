@@ -285,6 +285,15 @@ SR §10 asks for isolation between sessions, and between sessions and the runner
   `isolation.gaps`: the agent has its own **per-agent login directory** (`<state>/claude-config`, the agent's
   `CLAUDE_CONFIG_DIR`), bound read-write into that agent's sandbox and nothing else of any home directory is.
   The login is inside the agent's trust boundary, so use an account you would let that agent use.
+- **A host or an executor cannot approve or govern** (SR-06, SR-106): `han host` and `han exec` each run
+  their own node as their own actor (the agent's key, the executor's key), and work through it held to their
+  class. A host sends agent commands only (sessions, tasks, status, leases, proposals, and its changeset upload);
+  an executor adds claims and outcomes. Approvals, policy, membership, invites and devices are refused before
+  they reach the node, whatever the process asks. This holds the same for an agent that runs as another OS
+  user. The `-host` and `-exec` pipes of `han node` exist, but roles do not use them yet: the person's node
+  signs as the person, so a role cannot work as its agent through it until a connection can be bound to an
+  actor. `han role-probe host|exec` (hidden) shows the refusals.
+
 - **Clean-up** (SR-87): after a session ends, its worktree, temp directory, proxy and credentials are removed;
   shared package caches are mounted read-only into sandboxes.
 - **Egress**: the sandbox reaches only its local proxy; with a tailnet exit node, follow the Tailscale recipe

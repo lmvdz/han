@@ -38,7 +38,7 @@ pub use rows::{
     SpaceStatusRow, StateCounts, StatusBody, TaskBudget, TaskRow, Tests, TimelinePointRow, Tokens,
     ViewEvent, ViewMirror, WhoRow,
 };
-pub use stream::{BoxFuture, MAX_BACKLOG, NodeApi, ViewSink, ViewStream};
+pub use stream::{BoxFuture, ClassApi, MAX_BACKLOG, NodeApi, ViewSink, ViewStream};
 
 /// The default size of a window.
 pub const DEFAULT_LIMIT: u32 = 200;
