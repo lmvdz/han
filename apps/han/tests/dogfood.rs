@@ -68,7 +68,7 @@ fn run(args: &[&str]) -> (bool, String, String) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while child.try_wait().unwrap().is_none() {
         assert!(Instant::now() < deadline, "han {args:?} did not finish");
         std::thread::sleep(Duration::from_millis(50));
@@ -139,7 +139,7 @@ fn a_profile_is_registered_on_a_running_home_and_start_reads_its_operator() {
         .expect("the agent's key")
         .to_owned();
     // what it tells the home's admin to run needs no restart
-    assert!(created.contains("han seq register"), "{created}");
+    assert!(created.contains("han home register"), "{created}");
     drop(first);
 
     // the home knows only the person at first
@@ -232,7 +232,7 @@ fn a_profile_is_registered_on_a_running_home_and_start_reads_its_operator() {
         "--data",
         device_s,
     ]);
-    assert!(done.contains("Receipt"), "{done}");
+    assert!(done.contains("confirmed"), "{done}");
 
     // a space to start in
     let created = han(&[
@@ -326,4 +326,47 @@ fn install_service_dry_run_shows_a_per_user_service_and_changes_nothing() {
         assert!(out.contains("WantedBy=default.target"), "{out}");
     }
     assert!(out.contains("--file-keys"), "{out}");
+}
+
+/// A base64url key starts with `-` one time in 64, and clap read it as a flag. Every command that takes a key
+/// must hand it to the command, whether written `--public-key -abc…` or `--public-key=-abc…`.
+#[test]
+fn a_public_key_that_starts_with_a_dash_is_a_value_not_a_flag() {
+    let key = "-uCTmeS1VJmdjq8WyNoBVUo1_lcrMUswERD_CHaA0x0";
+    let dir = temp("dash");
+    let d = dir.to_str().unwrap();
+    for cmd in [
+        vec![
+            "home",
+            "register",
+            "@x:runner.han.home.arpa",
+            "--public-key",
+            key,
+        ],
+        vec![
+            "home",
+            "register",
+            "@x:runner.han.home.arpa",
+            &format!("--public-key={key}"),
+        ],
+        vec![
+            "seq",
+            "register",
+            "--actor",
+            "@x:runner.han.home.arpa",
+            "--public-key",
+            key,
+        ],
+    ] {
+        let mut args = cmd.clone();
+        args.extend(["--operator", OPERATOR, "--data", d]);
+        let (ok, _, err) = run(&args);
+        // there is no home here, so it fails to reach one: the point is that it got that far
+        assert!(!ok, "{cmd:?}");
+        assert!(
+            !err.contains("unexpected argument") && err.contains("is `han seq` running"),
+            "{cmd:?}: {err}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

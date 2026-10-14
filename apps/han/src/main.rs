@@ -2,19 +2,24 @@
 //! plain-text board over the node's pipe); M5 adds `tui` (the live terminal face); M2 has `seq` (run a home), `dial` (a small client) and `conform`
 //! (the wire vectors over QUIC).
 
+mod actor;
 mod agent;
 mod board;
 mod conform;
 mod device;
 mod dial;
+mod enroll;
 mod exec;
+mod executor;
 mod harness;
 mod home;
+mod homecmd;
 mod host;
 mod keys;
 mod node;
 mod outbox;
 mod rolenode;
+mod runner;
 mod seq;
 mod seqadmin;
 mod service;
@@ -60,6 +65,14 @@ enum Cmd {
     Ticket(seq::TicketArgs),
     /// Dial a home and make calls.
     Dial(dial::DialArgs),
+    /// Make a home, and register profiles on a running one.
+    Home(homecmd::HomeArgs),
+    /// Confirm an agent or an executor as its operator.
+    Actor(actor::ActorArgs),
+    /// Set an executor up.
+    Executor(executor::ExecutorArgs),
+    /// Linux runners: the root-level setup (users, units, polkit rule).
+    Runner(runner::RunnerArgs),
     /// Run conformance vectors against a home.
     Conform(conform::ConformArgs),
     /// Create, confirm, start and stop agents through the running node.
@@ -164,6 +177,10 @@ async fn run(cli: Cli) {
         Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,
         Cmd::Conform(a) => conform::run(a).await,
+        Cmd::Home(a) => homecmd::run(a).await,
+        Cmd::Actor(a) => actor::run(a).await,
+        Cmd::Executor(a) => executor::run(a).await,
+        Cmd::Runner(a) => runner::run(a).await,
         Cmd::Agent(a) => agent::run(a).await,
         Cmd::Exec(a) => exec::run(a).await,
         Cmd::Host(a) => host::run(*a).await,

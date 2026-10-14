@@ -77,7 +77,7 @@ pub struct HostArgs {
     #[arg(long)]
     adapter_dir: Option<PathBuf>,
     /// Relays: `n0`, `none`, or URLs.
-    #[arg(long, default_value = "n0")]
+    #[arg(long, env = "HAN_RELAY", default_value = "n0")]
     relay: String,
     /// The agent's own login directory (the harness's config directory), bound read-write into this agent's
     /// sandbox only. Default `<data>/claude-config`; `han agent login` makes the login in it.
@@ -128,9 +128,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .unwrap_or_else(|| args.data.join(han_node::agents::LOGIN_DIR));
     han_host::driver::login_binding(&driver, Some(&login_dir))?;
-    let a = args.agent.trim_start_matches('@');
-    let (name, server) = a.split_once(':').unwrap_or((a, ""));
-    let key_name = format!("agent-{name}-{server}");
+    let key_name = rolenode::key_name(&args.agent);
     let role = rolenode::start(
         &args.agent,
         &args.key_id,

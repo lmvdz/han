@@ -5,7 +5,7 @@ from M4 on, runs agent sessions for members (PLAN §3, §6.4 Shared runners, §6
 SR-83 to SR-88). It was first done on a boat.dev sandbox, so the boat.dev notes come first; every other step
 works on any Ubuntu 24.04 VM where you have root.
 
-Nothing in this guide is specific to one machine. Replace the placeholders:
+Everything that needs root is one command, `sudo han runner setup`; the rest is `han home`, `han agent add` and `han executor add`, which are safe to run again and print what they changed. Nothing in this guide is specific to one machine. Replace the placeholders:
 
 | Placeholder | Meaning |
 |---|---|
@@ -57,6 +57,8 @@ Two OS accounts, and later one per agent session:
 | `user` (or your admin account) | the administrator; sudo | SSH, key only |
 | `han` | owns and runs `han seq` and `han node`; owns `/var/lib/han`; no sudo, no password | none |
 | one per agent session (M4) | runs one sandboxed agent | none |
+
+`sudo han runner setup` (§7.1) makes the `han`, `han-exec` and `han-agentN` users with the modes below, and is safe to run again. These are the commands it runs for `han`:
 
 ```sh
 sudo useradd --create-home --shell /bin/bash --comment "HAN runner" han
@@ -171,27 +173,31 @@ the public fallback off (`--relay <url>` alone does that).
 daemon, acting as the runner actor (a `service` actor with an owner as operator, PLAN §6.4 Shared runners). It
 follows the runner's spaces and, from M4, supervises agent sessions.
 
-**Keys.** Create the runner's keys as `han`, and print the node ids:
+**The home.** Make the home as `han`. `han home init` creates its data folder, keys and `home.json` (the server name, ports and relays) and prints the ticket file:
 
 ```sh
-sudo -u han install -d -m 700 /var/lib/han/seq /var/lib/han/node /var/lib/han/node/keys
-sudo -u han han key /var/lib/han/seq/node.key          # the home's node id
-sudo -u han han key /var/lib/han/node/keys/device.key  # the runner actor's device key
+sudo -u han han home init --server <server> --data /var/lib/han/seq --bind 0.0.0.0:<udp-port> --http 127.0.0.1:8787 --relay n0
+sudo -u han install -d -m 700 /var/lib/han/node /var/lib/han/node/keys
+sudo -u han han key /var/lib/han/node/keys/device.key   # the runner actor's device key (prints its public key)
 ```
 
-**Configuration.** `/etc/han/seq.env` (root-owned, mode 644; it holds names and public keys, no secrets):
+Run it again and it changes nothing. `han seq --data /var/lib/han/seq` then needs no other flag.
+
+**Profiles.** The first profiles are registered on the running home over its admin socket (reachable by user `han` only; no restart). The same command registers every later profile:
 
 ```sh
-HAN_SERVER=<server>
-HAN_UDP_PORT=7841
+sudo -u han han home register <you> --kind human --key-id d1 --public-key=<pubkey> --data /var/lib/han/seq
+sudo -u han han home register @runner:<server> --kind service --key-id d1 --public-key=<runner-pubkey> --operator <you> --data /var/lib/han/seq
+```
+
+(`han seq register` is the old name. Write `--public-key=<key>`: a key may begin with `-`.) If the home was upgraded but not restarted, it still runs the old binary and has no admin socket: the command says so and names the pid; restart the unit.
+
+**Configuration.** `/etc/han/seq.env` (root-owned, mode 644; it holds names, no secrets) and `/etc/han/node.env`:
+
+```sh
+# seq.env
 HAN_RELAY=n0
-# profiles the home serves: actor:kind:keyId:publicKey[:operator], one --register each.
-HAN_REGISTER=--register <you>:<server>:human:d1:<pubkey> --register @runner:<server>:service:d1:<runner-pubkey>:<you>:<server>
-```
-
-Registering is idempotent: an existing profile is left as it is. `HAN_REGISTER` is for the first profiles; after that, a new profile (an agent, the executor) is registered on the running home with `sudo -u han han seq register --data /var/lib/han/seq --actor <actor> --kind agent --public-key <key> --operator <operator>` (an admin socket in the data directory, reachable by user `han` only; no restart). `/etc/han/node.env`:
-
-```sh
+# node.env
 HAN_ACTOR=@runner:<server>
 HAN_RELAY=n0
 ```
@@ -208,7 +214,7 @@ Wants=network-online.target
 User=han
 Group=han
 EnvironmentFile=/etc/han/seq.env
-ExecStart=/usr/local/bin/han seq --server ${HAN_SERVER} --data /var/lib/han/seq --bind 0.0.0.0:${HAN_UDP_PORT} --http 127.0.0.1:8787 --relay ${HAN_RELAY} $HAN_REGISTER
+ExecStart=/usr/local/bin/han seq --data /var/lib/han/seq
 KillSignal=SIGINT
 Restart=always
 RestartSec=5
@@ -285,83 +291,26 @@ SR §10 asks for isolation between sessions, and between sessions and the runner
   in PLAN §6.4 and SR-88 (tag `tag:han-runner`, only `autogroup:internet` through the exit node, no route to
   members' devices).
 
-### 7.1 Running a host as another OS user (admin, once)
+### 7.1 The root-level setup, once: `sudo han runner setup`
 
-The node never needs root at run time. It starts a host as another user through a **systemd template unit**
-that you install once, and a polkit rule that lets the node's user start and stop exactly those units. For
-each agent the node writes the host's arguments to `<state>/spawn/host.json` and starts
-`han-agent@<user>.service`; the unit runs `han host --args-file` as `<user>`.
+The node never needs root at run time. It starts a host as another user through a **systemd template unit** and a polkit rule that lets the node's user start and stop exactly those units. Everything that needs root is one command, and it is the only `han` command that does:
 
 ```sh
-# the agent's user, its own group, its state directory (setgid: the node's user shares only this group)
-sudo useradd --system --create-home --home-dir /var/lib/han-agents/han-agent1 --shell /usr/sbin/nologin han-agent1
-sudo passwd -l han-agent1
-sudo usermod -aG han-agent1 han          # the node (user han) shares the agent's group, nobody else's
-sudo chmod 2770 /var/lib/han-agents/han-agent1
-sudo chmod 755 /var/lib/han-agents       # so units can reach their own subdirectory, no listing needed
+sudo han runner setup --agents 2            # add --dry-run to see the plan and change nothing
 ```
 
-`/etc/systemd/system/han-agent@.service`:
+It makes the OS users (`han`, `han-exec`, `han-agent1` … `han-agent<N>`, each with a locked password), the agents directory `/var/lib/han-agents` (mode 755) with one state directory per agent (`2770`, setgid, in the agent's own group; the node's user joins that group and no other agent's), and installs `han-agent@.service`, `han-exec.service` (installed, **left disabled**), `/etc/polkit-1/rules.d/50-han-agent.rules` (the node's user may start and stop `han-agent@han-agent<N>` and nothing else) and the node's drop-in `/etc/systemd/system/han-node.service.d/10-agents.conf` (`UMask=0007`, `ReadWritePaths=/var/lib/han/node /var/lib/han-agents`), then reloads systemd. Each step says `changed:` or `unchanged:`, so a second run reports no change. The unit files are in `integrations/runner/`; `install-agent-user.sh` and `install-executor.sh` there are thin wrappers around the command.
 
-```ini
-[Unit]
-Description=HAN agent host as %i (han host)
-After=network-online.target
+It also looks at the running services. If `han-seq` or `han-node` runs a binary that has since been replaced on disk (after you installed a new `han`), or the node has not yet picked up its new group, it says which and how to restart it, or restarts it with `--restart-stale`. A home that kept running the old binary has no admin socket, and everything that registers profiles fails against it; this is how you find out before that.
 
-[Service]
-User=%i
-Group=%i
-Environment=HOME=/var/lib/han-agents/%i
-WorkingDirectory=/var/lib/han-agents/%i
-ExecStart=/usr/local/bin/han host --args-file /var/lib/han-agents/%i/spawn/host.json
-KillSignal=SIGINT
-Restart=no
-UMask=0077
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/han-agents/%i
-PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-# no RestrictNamespaces: bubblewrap inside needs user namespaces
+Per agent, as the node's user (no root):
+
+```sh
+sudo -u han han agent add coder --operator <you> --os-user han-agent1 --sandbox bwrap --harness claude \
+    --space <space> --home <ticket> --home-data /var/lib/han/seq --data /var/lib/han/node
 ```
 
-`/etc/polkit-1/rules.d/50-han-agent.rules` (the node's user may start and stop `han-agent@han-agent<N>` and
-nothing else):
-
-```js
-polkit.addRule(function(action, subject) {
-  if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "han" &&
-      /^han-agent@han-agent[0-9]+\.service$/.test(action.lookup("unit")) &&
-      (action.lookup("verb") == "start" || action.lookup("verb") == "stop")) {
-    return polkit.Result.YES;
-  }
-});
-```
-
-The node unit changes: `UMask=0007` (so the agent's key, which the node creates in the agent's state
-directory, is shared with the agent's group), `ReadWritePaths=/var/lib/han/node /var/lib/han-agents` and
-`RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK` as before (`systemctl` needs the system bus
-socket).
-
-Tell the node which agent runs as whom, in `/var/lib/han/node/agents.json` (read at every start, no restart):
-
-```json
-{
-  "sandbox": "bwrap",
-  "agents": {
-    "@coder:<server>": { "osUser": "han-agent1" }
-  }
-}
-```
-
-`stateDir` defaults to `/var/lib/han-agents/<osUser>`; the agent's key, sessions, taint store and login live
-there. Install the harness where the agent user can read it:
-`sudo -u han han agent setup-harness claude --data /var/lib/han/node --dir /opt/han/claude` (then
-`chmod -R a+rX /opt/han`). One session per OS user runs at a time (the unit is the user's); a second
-`han agent start` for the same user answers `conflict`.
+`--os-user` records the agent in `agents.json` (the node reads it at every start; no restart) and puts the agent's key in `/var/lib/han-agents/han-agent1/keys`, where only that user and the group can read it. `han agent add` then registers the profile (`--home-data` is this machine's home), has the operator confirm it (only if this node acts as the operator; otherwise it prints `han actor confirm …` for the operator's device) and makes the agent a member of the space. `stateDir` defaults to `/var/lib/han-agents/<osUser>`; the agent's key, sessions, taint store and login live there. `--harness claude` installs the pinned adapter into the node's data folder; for an OS-user agent install it where the agent can read it: `sudo -u han han agent setup-harness claude --data /var/lib/han/node --dir /opt/han/claude` (then `chmod -R a+rX /opt/han`). One session per OS user runs at a time (the unit is the user's); a second `han agent start` for the same user answers `conflict`.
 
 Log the agent in once, as its own user (this runs `claude` interactively, outside any sandbox):
 
@@ -442,33 +391,19 @@ Also check, on the runner:
 
 ## 9. The executor
 
-Agents never hold credentials. An agent proposes an effect (`git_push`, `open_pr`, `http_request`), an owner
-approves it, and the **executor** runs it. The executor is its own process and actor, `@exec:<server>`, a
-`service` actor with an owner as operator. It runs on the runner as its own OS user, `han-exec`, because it
-is the one process that holds the **write** GitHub App's private key. `han-github` uses a different, read-only App with its own key (section 10).
+Agents never hold credentials. An agent proposes an effect (`git_push`, `open_pr`, `http_request`), an owner approves it, and the **executor** runs it. The executor is its own process and actor, `@exec:<server>`, a `service` actor with an owner as operator. It runs on the runner as its own OS user, `han-exec`, because it is the one process that holds the **write** GitHub App's private key. `han-github` uses a different, read-only App with its own key (section 10). Register it **before** agents propose: a proposal that names an executor with no profile cannot be delivered.
 
-**Accounts, keys, profile.**
+`sudo han runner setup` (§7.1) made the user and `/var/lib/han-exec` and installed the unit, disabled. The rest needs no root:
 
 ```sh
-sudo useradd --system --create-home --home-dir /var/lib/han-exec --shell /usr/sbin/nologin han-exec
-sudo install -d -o han-exec -g han-exec -m 700 /var/lib/han-exec/keys /var/lib/han-exec/state
-sudo -u han-exec han key /var/lib/han-exec/keys/keys/agent-exec-<server>.key   # prints its public key
+sudo -u han-exec han executor add exec --operator <you> --os-user han-exec --space <space> \
+    --home <ticket> --home-data /var/lib/han/seq \
+    --repo github:<owner>/<repo>=https://github.com/<owner>/<repo>.git
 ```
 
-`han exec` finds its key as `<keys>/keys/agent-<name>-<server>.key` (the same naming as an agent's). Register
-the profile on the running home (admin, no restart; the operator confirms it like an agent's):
+With `--os-user` the directory is `/var/lib/han-exec`, where the unit reads everything: `keys/` (the executor's key, at `keys/agent-exec-<server>.key`: the one place `han exec --keys /var/lib/han-exec` looks), `state/`, `exec.json` and `exec.env`. `han executor add` then registers the profile (here, if `--home-data` names this machine's home; otherwise it prints `han home register …` for the home's admin), has the operator confirm it, and makes it a member of the space. Where the operator is somebody else it prints the exact `han actor confirm @exec:<server> --operator <you> --home <ticket>` to run on their device. Run it again afterwards: it resumes and ends with `ready:`.
 
-```sh
-sudo -u han han seq register --data /var/lib/han/seq --actor @exec:<server> --kind service \
-  --key-id k1 --public-key <exec-public-key> --operator <you>:<server>
-han agent confirm @exec:<server> --operator <you>:<server> --home <ticket>   # on your device
-```
-
-Add `@exec:<server>` to the space as `member` (`han space member <space> @exec:<server> member`), so the
-effects it is the executor of reach it.
-
-**Configuration**, `/etc/han/exec.json` (root-owned, mode 644: it names repositories and the App's key path,
-never a key):
+`exec.json` (it names repositories and the App's key path, never a key) is what `--repo <name>=<remote>` edits. For a GitHub App add the `github` block by hand (§10):
 
 ```json
 {
@@ -480,22 +415,21 @@ never a key):
 }
 ```
 
-Put the App's PEM there as `han-exec` with mode 600 (`sudo -u han-exec install -m 600 /dev/stdin
-/var/lib/han-exec/github-app.pem < key.pem`); nothing else on the runner can read it.
+Put the App's PEM there as `han-exec` with mode 600 (`sudo -u han-exec install -m 600 /dev/stdin /var/lib/han-exec/github-app.pem < key.pem`); nothing else on the runner can read it.
 
-`/etc/systemd/system/han-exec.service`:
+`exec.env` holds `HAN_SERVER`, `HAN_SPACE`, `HAN_RELAY` and `HAN_HOME_TICKET` (a ticket holds public keys and addresses, no secret). The unit is `integrations/runner/han-exec.service`:
 
 ```ini
 [Unit]
-Description=HAN executor (han exec) as @exec:<server>
+Description=HAN executor (han exec)
 After=network-online.target han-seq.service
 Wants=network-online.target
 
 [Service]
 User=han-exec
 Group=han-exec
-EnvironmentFile=/etc/han/exec.env
-ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home-ticket ${HAN_HOME_TICKET} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /etc/han/exec.json --relay ${HAN_RELAY}
+EnvironmentFile=/var/lib/han-exec/exec.env
+ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home-ticket ${HAN_HOME_TICKET} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /var/lib/han-exec/exec.json --relay ${HAN_RELAY}
 KillSignal=SIGINT
 Restart=always
 RestartSec=5
@@ -510,7 +444,7 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 LockPersonality=yes
 SystemCallArchitectures=native
@@ -521,11 +455,7 @@ SystemCallFilter=~@privileged @resources
 WantedBy=multi-user.target
 ```
 
-`/etc/han/exec.env` holds `HAN_SERVER`, `HAN_SPACE`, `HAN_RELAY=n0` and `HAN_HOME_TICKET=<ticket>` (a ticket
-holds public keys and addresses, no secret). `integrations/runner/install-executor.sh` does the account,
-directories and unit in one go; run it as root, then fill in the env file and the PEM. On a device with a
-desktop the same command runs by hand: `han exec --actor @exec:<server> --space <space> --home <ticket> --keys
-<dir> --data <dir> --config exec.json`.
+`AF_NETLINK` is what the QUIC endpoint needs to watch the network, the same as `han-seq` and `han-node`. When the key, profile, config and env are ready, an admin enables it: `sudo systemctl enable --now han-exec`. On a device with a desktop the same executor runs by hand: `han exec --actor @exec:<server> --space <space> --home-ticket <ticket> --keys <dir> --data <dir>/state --config <dir>/exec.json`.
 
 ## 10. GitHub App permissions for writes
 

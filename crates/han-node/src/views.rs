@@ -351,6 +351,23 @@ impl Engine {
             .is_some_and(|m| m.roles.contains_key(actor))
     }
 
+    /// Whether `actor` holds exactly `role` (`owner`, `member`, `guest`, `banned`; `none` means no role) in
+    /// `space`, as this device has read it.
+    pub fn role_is(&self, space: &str, actor: &str, role: &str) -> bool {
+        use han_core::policy::Role;
+        let Some(m) = self.spaces.get(space) else {
+            return false;
+        };
+        matches!(
+            (m.roles.get(actor), role),
+            (None, "none")
+                | (Some(Role::Owner), "owner")
+                | (Some(Role::Member), "member")
+                | (Some(Role::Guest), "guest")
+                | (Some(Role::Banned), "banned")
+        )
+    }
+
     /// Takes an item a host put on a session's stream. True if it changed what a face sees.
     pub fn apply_item(
         &mut self,

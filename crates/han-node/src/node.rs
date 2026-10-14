@@ -1082,6 +1082,10 @@ impl<T: Transport> Node<T> {
                 if !["owner", "member", "guest", "banned", "none"].contains(&role.as_str()) {
                     return Err(NodeError::invalid("unknown role"));
                 }
+                // Already so: nothing to append (a command that sets what is set changes nothing).
+                if self.inner.engine().role_is(&space, &actor, &role) {
+                    return Ok(CallResult::Done);
+                }
                 self.append(
                     &space,
                     "member.set",
@@ -1178,8 +1182,6 @@ impl<T: Transport> Node<T> {
                     space,
                     "--agent".into(),
                     agent.clone(),
-                    "--harness".into(),
-                    harness.clone(),
                     "--operator".into(),
                     operator,
                     "--home-server".into(),
@@ -1194,6 +1196,7 @@ impl<T: Transport> Node<T> {
                     a.extend(["--home-relay".into(), relay.clone()]);
                 }
                 let mut run_as = None;
+                let mut harness_arg = harness.clone();
                 if let Some(dir) = &inner.cfg.data_dir {
                     let file = AgentsFile::load(dir).map_err(NodeError::invalid)?;
                     let state = file.state_dir(dir, &agent);
@@ -1205,6 +1208,9 @@ impl<T: Transport> Node<T> {
                         "--sandbox".into(),
                         file.sandbox_of(&agent),
                     ]);
+                    if file.agent(&agent).allow_advisory {
+                        a.push("--allow-advisory".into());
+                    }
                     let tools = file.toolchain_spec(dir, &agent);
                     if !tools.is_empty() {
                         a.extend([
@@ -1218,13 +1224,27 @@ impl<T: Transport> Node<T> {
                         "claude-code" => "claude",
                         other => other,
                     };
-                    match HarnessInstall::load(dir, key).map_err(NodeError::invalid)? {
-                        Some(h) => a.extend([
-                            "--node".into(),
-                            h.node.to_string_lossy().into_owned(),
-                            "--adapter-dir".into(),
-                            h.adapter_dir.to_string_lossy().into_owned(),
-                        ]),
+                    // A driver file given as the harness is a path, not a record's name.
+                    let named = key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+                    let install = if named {
+                        HarnessInstall::load(dir, key).map_err(NodeError::invalid)?
+                    } else {
+                        None
+                    };
+                    match install {
+                        Some(h) => {
+                            a.extend([
+                                "--node".into(),
+                                h.node.to_string_lossy().into_owned(),
+                                "--adapter-dir".into(),
+                                h.adapter_dir.to_string_lossy().into_owned(),
+                            ]);
+                            if let Some(driver) = h.driver {
+                                harness_arg = driver.to_string_lossy().into_owned();
+                            }
+                        }
                         None if matches!(key, "claude" | "pi") => {
                             return Err(NodeError::unavailable(format!(
                                 "the {key} harness is not set up on this node: run `han agent setup-harness {key}`"
@@ -1244,6 +1264,7 @@ impl<T: Transport> Node<T> {
                         });
                     }
                 }
+                a.extend(["--harness".into(), harness_arg]);
                 if let Some(r) = repo {
                     a.extend(["--repo".into(), r]);
                 }

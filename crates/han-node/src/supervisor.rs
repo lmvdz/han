@@ -68,16 +68,6 @@ pub fn spawn_file(state_dir: &std::path::Path) -> PathBuf {
     state_dir.join("spawn").join("host.json")
 }
 
-/// Whether `user` can be the instance of a unit: a plain portable user name.
-fn valid_os_user(user: &str) -> bool {
-    let mut chars = user.chars();
-    user.len() <= 32
-        && chars
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
-}
-
 /// The variables a child role inherits from the node (SR-08): what processes need to run on each OS, logging
 /// settings, and nothing else. Everything else a role needs comes in [`RoleSpec::env`] or its arguments.
 pub const ENV_ALLOW: &[&str] = &[
@@ -107,6 +97,7 @@ pub const ENV_ALLOW: &[&str] = &[
     "LANG",
     "LC_ALL",
     "RUST_LOG",
+    "HAN_RELAY",
     "RUST_BACKTRACE",
     "NUMBER_OF_PROCESSORS",
 ];
@@ -217,7 +208,7 @@ impl ProcessSpawner {
         if spec.role != Role::Host {
             return Err(SupervisorError::Unavailable(spec.role.subcommand()));
         }
-        if !valid_os_user(&run_as.os_user) {
+        if !crate::agents::valid_os_user(&run_as.os_user) {
             return Err(SupervisorError::Spawn(format!(
                 "{:?} is not an OS user name",
                 run_as.os_user

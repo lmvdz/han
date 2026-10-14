@@ -139,6 +139,7 @@ async fn start_names_the_profiles_operator_and_passes_the_install() {
         package: "@agentclientprotocol/claude-agent-acp".into(),
         version: "0.89.1".into(),
         integrity: String::new(),
+        driver: None,
     }
     .save(&s.data)
     .unwrap();
