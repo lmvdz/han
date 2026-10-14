@@ -127,6 +127,8 @@ pub struct SandboxChoice {
     pub login_dir: Option<PathBuf>,
     /// Upstream allow-list additions.
     pub allow_hosts: Vec<String>,
+    /// Toolchains the agent gets inside the sandbox (read-only roots, per-agent caches, registry hosts).
+    pub toolchains: crate::toolchain::ToolchainConfig,
     /// Test only: let the proxy connect to loopback upstreams (a mock provider).
     pub test_loopback_upstream: bool,
     /// Test only: extra TLS roots for the model route.

@@ -1096,6 +1096,14 @@ impl<T: Transport> Node<T> {
                         "--sandbox".into(),
                         file.sandbox_of(&agent),
                     ]);
+                    let tools = file.toolchain_spec(dir, &agent);
+                    if !tools.is_empty() {
+                        a.extend([
+                            "--toolchains".into(),
+                            serde_json::to_string(&tools)
+                                .map_err(|e| NodeError::invalid(e.to_string()))?,
+                        ]);
+                    }
                     // The harness as `han agent setup-harness` installed it: node and adapter.
                     let key = match harness.as_str() {
                         "claude-code" => "claude",

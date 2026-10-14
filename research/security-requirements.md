@@ -228,6 +228,8 @@ Owner: `apps/han-tui`, `apps/han-gui`, `crates/han-node` tracing (PLAN §3, §6.
 | SR-101 | Tracing MUST pass span and log attributes through an allow-list layer (ids, counts, durations, verdict codes, states); session content (prompts, outputs, diffs, paths, issue text, summaries) is added only when the space's setting allows it, and secrets never (SR-51). | han-node tracing, §6.8 | unit: an attribute outside the allow-list is dropped; integ: with the setting off, a full session exports no content (canary scan of the test collector). |
 | SR-102 | OTLP export MUST be off until a collector is configured, MUST go only to that collector over TLS, and MUST never default to a project endpoint. | han-node, §6.8 | unit: default config exports nothing; integ: no outbound connection without a collector. |
 | SR-103 | Local log files MUST be owner-only, rotated, and pass the same redaction as spans. | han-node | integ: mode/ACL check; canary scan. |
+| SR-104 | A language toolchain in a sandbox (PLAN §6.4 Toolchains) MUST be opt-in per node or agent. Its roots MUST be granted read-only, its caches (`CARGO_HOME`) MUST be per agent and writable, and nothing MUST be installed or downloaded into the toolchain inside the sandbox. | han-host `toolchain`, §6.4 | integ: under MXC and bubblewrap, `cargo build` and `cargo test` of a tiny crate work; with the toolchain off `cargo` is absent and its roots are unreadable; a repo pin that is not installed fails the session start naming the toolchain. |
+| SR-105 | The egress allow-list MUST gain a toolchain's registry hosts only while the toolchain is enabled for that agent (Rust: `crates.io`, `static.crates.io`, `index.crates.io`, port 443), with SNI checks (SR-36) and the private-address refusal (SR-37) unchanged; every other host stays denied, including hosts a repository's own cargo config names. Host-side prefetches for a toolchain MUST go through the session's proxy. | han-host proxy, `toolchain` | unit: the allow-list with the toolchain off has no registry host; integ: a dependency resolves through the proxy, a second registry on another host gets `403 not-on-allow-list`. |
 
 ---
 
@@ -237,8 +239,8 @@ All of these must pass before the user plus 1–3 people use HAN for real work (
 
 - **han-node:** SR-01, SR-02, SR-04, SR-05, SR-06, SR-08, SR-09, SR-10.
 - **Network:** SR-11, SR-12, SR-13, SR-14, SR-15, SR-16, SR-17, SR-19.
-- **Sandbox:** SR-23, SR-24, SR-25, SR-26 (the MUST half: no writes to git metadata outside the worktree), SR-27, SR-28, SR-29, SR-30, SR-31, SR-33, SR-34.
-- **Proxy:** SR-35, SR-36, SR-37, SR-39, SR-41, SR-44, SR-45; SR-43 if any runner uses a tailnet, with the §12 manual check done.
+- **Sandbox:** SR-104 (toolchains), SR-23, SR-24, SR-25, SR-26 (the MUST half: no writes to git metadata outside the worktree), SR-27, SR-28, SR-29, SR-30, SR-31, SR-33, SR-34.
+- **Proxy:** SR-35, SR-36, SR-37, SR-38 (the crates.io hosts are not in the default list; SR-105 adds them with the Rust toolchain), SR-39, SR-41, SR-44, SR-45; SR-43 if any runner uses a tailnet, with the §12 manual check done.
 - **Credentials:** SR-46, SR-47, SR-49, SR-50, SR-51, SR-52, SR-53.
 - **Untrusted text:** SR-54, SR-55, SR-56 (the MUST half), SR-57, SR-59, SR-60.
 - **Summary fork:** SR-61, SR-62, SR-63, SR-64, SR-66 (or the fork stays off for M6).

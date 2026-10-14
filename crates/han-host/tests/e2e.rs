@@ -212,6 +212,7 @@ async fn story(backend: &str) {
             ro: vec![script.clone()],
             login_dir: None,
             allow_hosts: Vec::new(),
+            toolchains: Default::default(),
             test_loopback_upstream: false,
             test_roots: Vec::new(),
         },

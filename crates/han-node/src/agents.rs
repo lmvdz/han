@@ -74,6 +74,40 @@ impl HarnessInstall {
     }
 }
 
+/// The toolchains one agent's sandbox gets (PLAN 6.4 Toolchains): the one typed value that travels from the
+/// node to the host, whatever carries it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolchainSpec {
+    /// Names: `rust`.
+    #[serde(default)]
+    pub enabled: Vec<String>,
+    /// Location overrides, keyed `<toolchain>.<name>`: `rust.rustupHome`, `rust.cargoBin`, `rust.msvcDir`,
+    /// `rust.sdkLibDir`.
+    #[serde(default)]
+    pub paths: BTreeMap<String, PathBuf>,
+    /// The per-agent `CARGO_HOME` (default: in the session directory).
+    #[serde(default)]
+    pub cargo_home: Option<PathBuf>,
+}
+
+impl ToolchainSpec {
+    /// Whether no toolchain is on.
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_empty()
+    }
+
+    /// Whether `name` is on.
+    pub fn on(&self, name: &str) -> bool {
+        self.enabled.iter().any(|n| n == name)
+    }
+
+    /// An override.
+    pub fn path(&self, key: &str) -> Option<PathBuf> {
+        self.paths.get(key).cloned()
+    }
+}
+
 /// How one agent is launched.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -89,6 +123,9 @@ pub struct AgentSettings {
     /// The sandbox for this agent, over the file's.
     #[serde(default)]
     pub sandbox: Option<String>,
+    /// The toolchains this agent gets inside its sandbox, over the file's (`["rust"]`; `[]` for none).
+    #[serde(default)]
+    pub toolchains: Option<Vec<String>>,
 }
 
 /// `agents.json`.
@@ -98,6 +135,14 @@ pub struct AgentsFile {
     /// The sandbox for every agent: `auto` (default), `mxc`, `bwrap` or `none`.
     #[serde(default)]
     pub sandbox: Option<String>,
+    /// Toolchains every agent gets inside its sandbox: `["rust"]`. Each is read-only, with a per-agent
+    /// writable cache; Rust also lets the egress proxy reach crates.io. Default none.
+    #[serde(default)]
+    pub toolchains: Vec<String>,
+    /// Where the toolchains live, when not in the node user's home: `{"rust": {"rustupHome": "/opt/rust/rustup",
+    /// "cargoBin": "/opt/rust/cargo/bin"}}` (Windows MSVC also takes `msvcDir` and `sdkLibDir`).
+    #[serde(default)]
+    pub toolchain_paths: BTreeMap<String, BTreeMap<String, PathBuf>>,
     /// Per-agent settings, by actor (`@coder:han.example`).
     #[serde(default)]
     pub agents: BTreeMap<String, AgentSettings>,
@@ -128,6 +173,30 @@ impl AgentsFile {
             .unwrap_or_else(|| "auto".into())
     }
 
+    /// The toolchains `actor` gets: its own list, else the file's.
+    pub fn toolchains_of(&self, actor: &str) -> Vec<String> {
+        self.agents
+            .get(actor)
+            .and_then(|a| a.toolchains.clone())
+            .unwrap_or_else(|| self.toolchains.clone())
+    }
+
+    /// The toolchains `actor` gets, with the file's location overrides and a `CARGO_HOME` in its state.
+    pub fn toolchain_spec(&self, data_dir: &Path, actor: &str) -> ToolchainSpec {
+        ToolchainSpec {
+            enabled: self.toolchains_of(actor),
+            paths: self
+                .toolchain_paths
+                .iter()
+                .flat_map(|(tool, m)| {
+                    m.iter()
+                        .map(move |(k, v)| (format!("{tool}.{k}"), v.clone()))
+                })
+                .collect(),
+            cargo_home: Some(self.state_dir(data_dir, actor).join("cargo-home")),
+        }
+    }
+
     /// The agent's state directory: its sessions, taint store, node data and login directory.
     pub fn state_dir(&self, data_dir: &Path, actor: &str) -> PathBuf {
         let s = self.agent(actor);
@@ -151,5 +220,37 @@ impl AgentsFile {
     /// The agent's login directory.
     pub fn login_dir(&self, data_dir: &Path, actor: &str) -> PathBuf {
         self.state_dir(data_dir, actor).join(LOGIN_DIR)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toolchains_are_the_files_unless_the_agent_sets_its_own() {
+        let file: AgentsFile = serde_json::from_str(
+            r#"{
+              "toolchains": ["rust"],
+              "toolchainPaths": {"rust": {"rustupHome": "/opt/rust/rustup", "cargoBin": "/opt/rust/cargo/bin"}},
+              "agents": {
+                "@a:x": {"osUser": "han-agent1"},
+                "@b:x": {"toolchains": []}
+              }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(file.toolchains_of("@a:x"), ["rust"]);
+        assert!(file.toolchains_of("@b:x").is_empty());
+        assert_eq!(file.toolchains_of("@nobody:x"), ["rust"]);
+        let spec = file.toolchain_spec(Path::new("/d"), "@a:x");
+        assert_eq!(
+            spec.path("rust.rustupHome"),
+            Some("/opt/rust/rustup".into())
+        );
+        assert!(spec.cargo_home.unwrap().ends_with("cargo-home"));
+        // The default is none, and an unknown key is still refused.
+        assert!(AgentsFile::default().toolchains_of("@a:x").is_empty());
+        assert!(serde_json::from_str::<AgentsFile>(r#"{"toolchain": []}"#).is_err());
     }
 }
