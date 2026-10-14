@@ -62,6 +62,8 @@ pub struct Issue {
     pub number: u64,
     /// The title.
     pub title: String,
+    /// The body (the issue author's text; empty when GitHub sent none). Not published in items.
+    pub body: String,
     /// `open` or `closed`.
     pub state: String,
     /// Label names.
@@ -94,6 +96,11 @@ impl Issue {
         Some(Issue {
             number: v.get("number")?.as_u64()?,
             title: v.get("title")?.as_str()?.to_owned(),
+            body: v
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             state: v.get("state")?.as_str()?.to_owned(),
             labels: strings("labels", "name"),
             assignees: strings("assignees", "login"),

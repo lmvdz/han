@@ -1,0 +1,20 @@
+{
+  "agent": {"name": "pi-acp", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "thought", "text": "The issue wants a check; "},
+      {"type": "thought", "text": "I should look at the config first."},
+      {"type": "message", "text": "Looking at the config. "},
+      {"type": "message", "text": "The key AKIAIOSFODNN7EXAMPLE is in it."},
+      {"type": "tool_call", "id": "toolu_r1", "title": "read config.toml", "kind": "read", "status": "in_progress", "locations": ["config.toml"], "rawInput": {"path": "config.toml"}},
+      {"type": "tool_update", "id": "toolu_r1", "status": "completed", "output": "key = AKIAIOSFODNN7EXAMPLE\nmode = fast"},
+      {"type": "message", "text": "Which branch should I target?\nI can use main or the release branch."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "message", "text": "Using main."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

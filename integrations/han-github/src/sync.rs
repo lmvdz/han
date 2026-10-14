@@ -30,6 +30,10 @@ const MAX_TITLE: usize = 256;
 const MAX_LABEL: usize = 64;
 const MAX_LABELS: usize = 20;
 
+/// Longest issue body carried in a task's ask, in bytes (the ask may be 32 KiB; the body is untrusted text and
+/// the agent needs the gist, not a novel).
+pub const MAX_BODY_BYTES: usize = 4096;
+
 /// How long to wait for a view's first snapshot.
 const VIEW_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -243,7 +247,7 @@ impl<S: Source> Syncer<S> {
         if existing.contains(reference) || self.requested.contains(reference) {
             return Ok(None);
         }
-        let id = self.create_task(reference, title).await?;
+        let id = self.create_task(reference, title, None).await?;
         self.asked.insert(reference.to_owned());
         Ok(Some(id))
     }
@@ -322,15 +326,22 @@ impl<S: Source> Syncer<S> {
             if existing.contains(&reference) || self.requested.contains(&reference) {
                 continue;
             }
-            self.create_task(&reference, &issue.title).await?;
+            self.create_task(&reference, &issue.title, Some(&issue.body))
+                .await?;
             made.push(reference);
         }
         Ok(made)
     }
 
-    async fn create_task(&mut self, reference: &str, title: &str) -> Result<String, SyncError> {
-        // The title is an issue author's text: it travels in `ask` as data, like any task text (SR-54).
-        let ask = format!("Work on {reference}: {}", clean(title, 200));
+    async fn create_task(
+        &mut self,
+        reference: &str,
+        title: &str,
+        body: Option<&str>,
+    ) -> Result<String, SyncError> {
+        // The title and body are an issue author's text: they travel in `ask` as data, like any task text
+        // (SR-54). The ask is fixed when the task is made; a later edit of the issue does not change it.
+        let ask = task_ask(reference, title, body);
         let res = self
             .api
             .call(Command::TaskCreate {
@@ -454,4 +465,42 @@ fn item_body(repo: &str, issues: &[Issue], seq: u64, trigger: &str) -> Value {
 /// Text without control characters, at most `max` characters.
 fn clean(s: &str, max: usize) -> String {
     s.chars().filter(|c| !c.is_control()).take(max).collect()
+}
+
+/// The ask of a task made for an issue: the title line, then the body (if any) between fixed delimiters.
+/// Control characters (but newlines and tabs in the body) are dropped, the body is cut at [`MAX_BODY_BYTES`]
+/// on a character boundary, and the delimiters' words are defused inside it so a body cannot close the block
+/// early.
+pub fn task_ask(reference: &str, title: &str, body: Option<&str>) -> String {
+    const BEGIN: &str = "----- BEGIN ISSUE TEXT (untrusted, from the issue's author) -----";
+    const END: &str = "----- END ISSUE TEXT -----";
+    let mut ask = format!("Work on {reference}: {}", clean(title, 200));
+    let text = body.map(clean_body).unwrap_or_default();
+    let text = text.trim();
+    if !text.is_empty() {
+        ask.push_str(&format!("\n\n{BEGIN}\n{text}\n{END}"));
+    }
+    ask
+}
+
+/// An issue body without control characters (newlines and tabs stay; a carriage return goes), without
+/// anything that looks like the delimiters, cut at [`MAX_BODY_BYTES`] bytes (with a marker when cut).
+fn clean_body(s: &str) -> String {
+    let s = s.replace("ISSUE TEXT", "ISSUE_TEXT");
+    let mut out = String::new();
+    let mut cut = false;
+    for c in s
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+    {
+        if out.len() + c.len_utf8() > MAX_BODY_BYTES {
+            cut = true;
+            break;
+        }
+        out.push(c);
+    }
+    if cut {
+        out.push_str("\n[truncated]");
+    }
+    out
 }

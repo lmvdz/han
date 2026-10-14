@@ -11,6 +11,7 @@
 //!   secrets.
 //! * [`shim`]: the in-sandbox side: a loopback listener that forwards to the session's pipe or socket, and the
 //!   MCP stub that tunnels stdio to han-mcp outside the sandbox.
+//! * [`items`]: the agent's messages, thoughts and tool calls as `han.item/1` stream items.
 //! * [`status`], [`mask`], [`mirror`], [`r24`], [`host`]: status derivation, secret masking, worktree
 //!   mirroring into han-timeline, the R-24 duties, and the session runner that ties them together.
 
@@ -18,6 +19,7 @@ pub mod acp;
 pub mod driver;
 pub mod glue;
 pub mod host;
+pub mod items;
 pub mod mask;
 pub mod mirror;
 pub mod proxy;
