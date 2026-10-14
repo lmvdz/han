@@ -18,9 +18,10 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use han_core::policy::{Body, PolicyEntry, Role};
 
-use crate::api::{BoxFuture, Command, ItemBody, NodeError, SpaceLink, StatusBody};
+use crate::api::{BoxFuture, Command, ItemBody, SpaceLink, StatusBody};
 use crate::model::ProfileFacts;
 use crate::node::{Inner, Node};
+use crate::retry::{Disposition, Via, disposition};
 
 /// The profile name of the typed items a host puts on a session's stream (messages, tool calls, plans...).
 pub const ITEM_PROFILE: &str = "han.item/1";
@@ -175,35 +176,6 @@ pub(crate) struct LinkHandle<T: Transport> {
     pub cmds: mpsc::UnboundedSender<LinkCmd>,
     pub client: watch::Receiver<Option<Arc<Client<T::Conn>>>>,
     pub task: JoinHandle<()>,
-}
-
-/// Maps what went wrong on the wire to the node's closed set of errors.
-pub(crate) fn map_net_error(e: &NetError) -> NodeError {
-    use han_seq::Code;
-    match e {
-        NetError::Remote(w) => match w.code {
-            Code::Denied => NodeError::denied(&w.message),
-            Code::Invalid => NodeError::invalid(&w.message),
-            Code::NotFound => NodeError::not_found(&w.message),
-            Code::Limit | Code::Unavailable => NodeError::Unavailable {
-                message: w.message.clone(),
-                retry_after_ms: w.retry_after_ms,
-            },
-            Code::Moved => NodeError::unavailable(format!(
-                "the space moved to {}",
-                w.moved_to.as_deref().unwrap_or("another home")
-            )),
-        },
-        other => NodeError::unavailable(other.to_string()),
-    }
-}
-
-/// Whether a wire error is a final answer (never retry) rather than a reason to try again later.
-pub(crate) fn is_final(e: &NodeError) -> bool {
-    matches!(
-        e,
-        NodeError::Denied { .. } | NodeError::Invalid { .. } | NodeError::NotFound { .. }
-    )
 }
 
 impl<T: Transport> Inner<T> {
@@ -450,19 +422,16 @@ async fn connect<T: Transport>(
     inner: &Inner<T>,
     home: &crate::api::HomeRef,
     trusted: &[String],
-) -> Result<Client<T::Conn>, String> {
+) -> Result<Client<T::Conn>, NetError> {
     let addr = NodeAddr {
         node: home.node.clone(),
         addrs: home.addrs.clone(),
         relays: home.relays.clone(),
     };
-    let client = Client::connect(&inner.transport, &addr, &home.server, trusted)
-        .await
-        .map_err(|e| e.to_string())?;
+    let client = Client::connect(&inner.transport, &addr, &home.server, trusted).await?;
     client
         .hello(&inner.cfg.actor, &inner.cfg.key_id, &inner.key)
-        .await
-        .map_err(|e| format!("hello: {e}"))?;
+        .await?;
     Ok(client)
 }
 
@@ -477,21 +446,50 @@ pub(crate) async fn run_link<T: Transport>(
 ) {
     let base = inner.cfg.retry;
     let mut backoff = base;
+    let mut last_fault: Option<String> = None;
     loop {
         let spaces = inner.spaces_on(&home.server);
         for s in &spaces {
             inner.engine().set_link(s, SpaceLink::Connecting, None);
         }
         match connect(&inner, &home, &trusted).await {
-            Err(why) => {
+            Err(e) => {
+                // The wire code is kept: a home that does not know this actor, or a key that does not match
+                // the pin, is a setup fault to show, not an outage to wait out.
+                let why = match &e {
+                    NetError::Remote(w) => {
+                        format!("{} says {}: {}", home.server, w.code.as_str(), w.message)
+                    }
+                    other => other.to_string(),
+                };
+                let (link, text) = match disposition(Via::Connect, &e) {
+                    Disposition::Misconfigured => (
+                        SpaceLink::Misconfigured,
+                        format!(
+                            "{why} (this device's setup does not fit the home; fix it, the link retries slowly)"
+                        ),
+                    ),
+                    Disposition::Moved { to } => (
+                        SpaceLink::Misconfigured,
+                        format!("{} has moved to {to}", home.server),
+                    ),
+                    _ => (SpaceLink::Offline, why),
+                };
+                if link == SpaceLink::Misconfigured && last_fault.as_deref() != Some(text.as_str())
+                {
+                    tracing::warn!("link to {}: {text}", home.server);
+                    last_fault = Some(text.clone());
+                }
                 for s in &spaces {
-                    inner
-                        .engine()
-                        .set_link(s, SpaceLink::Offline, Some(why.clone()));
+                    inner.engine().set_link(s, link, Some(text.clone()));
+                }
+                if link == SpaceLink::Misconfigured {
+                    backoff = backoff.max(Duration::from_secs(30));
                 }
             }
             Ok(client) => {
                 backoff = base;
+                last_fault = None;
                 let client = Arc::new(client);
                 client_tx.send_replace(Some(Arc::clone(&client)));
                 let mut tasks: JoinSet<()> = JoinSet::new();
@@ -568,7 +566,11 @@ pub(crate) async fn run_link<T: Transport>(
             }
         }
         tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(Duration::from_secs(30));
+        backoff = (backoff * 2).min(Duration::from_secs(if last_fault.is_some() {
+            60
+        } else {
+            30
+        }));
         // Commands that came while down are only hints: the next connection starts from the stored state.
         while cmds.try_recv().is_ok() {}
     }
@@ -631,9 +633,13 @@ async fn follow_space<T: Transport>(
                     }
                 }
             }
-            Err(NetError::Remote(w))
-                if matches!(w.code, han_seq::Code::Denied | han_seq::Code::NotFound) =>
+            Err(e)
+                if matches!(
+                    (&e, disposition(Via::Follow, &e)),
+                    (NetError::Remote(_), Disposition::Retry { .. })
+                ) =>
             {
+                let NetError::Remote(w) = &e else { return };
                 // Not admitted yet, or not created yet: try again later.
                 inner.engine().set_link(
                     &space,

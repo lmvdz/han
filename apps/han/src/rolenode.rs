@@ -162,5 +162,52 @@ pub async fn start(
         Ok(_) | Err(NodeError::Conflict { .. }) => {}
         Err(e) => return Err(e.into()),
     }
+    wait_live(&node, space).await?;
     Ok(RoleNode { node, transport })
+}
+
+/// How long a role waits for its first Live link before it fails.
+const LIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Waits until the link to `space`'s home is Live, so a role does not report that it started while it cannot
+/// reach its home. Fails at once on a setup fault (the home does not know this actor, a key does not match
+/// the pin) and after [`LIVE_WAIT`] otherwise, naming the reason the link gave.
+async fn wait_live(
+    node: &Node<IrohTransport>,
+    space: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use han_node::api::{Query, Row, SpaceLink, ViewEvent, Window};
+    let deadline = tokio::time::Instant::now() + LIVE_WAIT;
+    let mut why = String::from("no link yet");
+    loop {
+        let mut view = node.view(Query::SpaceStatus {
+            space: space.to_owned(),
+            window: Window::default(),
+        });
+        if let Some(ViewEvent::Snapshot { rows, .. }) = view.next().await {
+            for row in rows {
+                if let Row::SpaceStatus(s) = row {
+                    match s.link {
+                        SpaceLink::Live => return Ok(()),
+                        SpaceLink::Misconfigured | SpaceLink::Rejected => {
+                            return Err(format!(
+                                "the link to the home of {space} cannot come up: {}",
+                                s.error.unwrap_or_else(|| "no reason given".into())
+                            )
+                            .into());
+                        }
+                        _ => why = s.error.unwrap_or_else(|| "connecting".into()),
+                    }
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "the link to the home of {space} did not come up in {}s: {why}",
+                LIVE_WAIT.as_secs()
+            )
+            .into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }

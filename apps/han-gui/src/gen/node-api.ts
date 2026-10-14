@@ -1463,7 +1463,7 @@ guarded_for: Array<string>,
  */
 accepted: Array<string>, };
 
-export type SpaceLink = "connecting" | "live" | "offline" | "rejected";
+export type SpaceLink = "connecting" | "live" | "offline" | "rejected" | "misconfigured";
 
 export type SpaceStatusRow = { 
 /**
@@ -1591,9 +1591,14 @@ seq?: number,
 /**
  * Why it was refused, or the last reason a try failed.
  */
-error?: string, };
+error?: string, 
+/**
+ * This entry is the first one waiting in its space and its last try failed: it holds back every entry
+ * behind it (R-07: finish what is stored before appending anything new).
+ */
+blocking: boolean, };
 
-export type JoinStage = "connecting" | "waiting_for_admission" | "syncing" | "ready" | "rejected";
+export type JoinStage = "connecting" | "waiting_for_admission" | "syncing" | "ready" | "rejected" | "misconfigured";
 
 export type JoinProgressRow = { 
 /**
@@ -1679,7 +1684,12 @@ resyncs: number,
 /**
  * The codes of the last errors (calls and views), oldest first, at most [`RECENT_ERRORS`].
  */
-recent_errors: Array<ErrorNote>, };
+recent_errors: Array<ErrorNote>, 
+/**
+ * What is stuck right now, as sentences: a link whose setup does not fit its home, a space whose outbox
+ * is held by an entry the home will not take ("space X blocked by outbox entry N: reason").
+ */
+problems: Array<string>, };
 
 export type TimelinePointRow = { 
 /**

@@ -356,6 +356,14 @@ fn ranges_intersect(a: (u32, u32), b: (u32, u32)) -> bool {
 }
 
 impl SpaceModel {
+    /// The outbox entry that holds the space: the first one still pending, if its last try failed.
+    pub fn blocking_entry(&self) -> Option<&crate::views::OutboxItem> {
+        self.outbox
+            .iter()
+            .find(|i| i.state == "pending")
+            .filter(|i| i.error.is_some())
+    }
+
     pub fn new(space: &str, home: &str, fresh: Freshness, me: &str) -> SpaceModel {
         SpaceModel {
             space: space.to_owned(),

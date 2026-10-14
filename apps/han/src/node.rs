@@ -152,6 +152,9 @@ async fn status(
                         n.outbox_pending,
                         n.roles.len()
                     );
+                    for p in &n.problems {
+                        println!("problem: {p}");
+                    }
                 }
             }
             Ok(())

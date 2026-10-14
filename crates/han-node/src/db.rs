@@ -14,7 +14,7 @@ use rusqlite_migration::{M, Migrations};
 use crate::api::{HomeRef, StatusBody};
 
 /// The storage format version this crate writes. A file with a higher one is refused.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Why storage failed.
 #[derive(Debug, thiserror::Error)]
@@ -78,8 +78,12 @@ CREATE TABLE outbox (
 CREATE INDEX outbox_pending ON outbox (space, id) WHERE state = 'pending';
 INSERT INTO meta (key, value) VALUES ('format', '1');";
 
+/// V2: a refused outbox row keeps the code the home answered with, not only its text.
+const V2: &str = "ALTER TABLE outbox ADD COLUMN code TEXT;
+UPDATE meta SET value = '2' WHERE key = 'format';";
+
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(V1)])
+    Migrations::new(vec![M::up(V1), M::up(V2)])
 }
 
 /// A followed space, as stored.
@@ -398,15 +402,25 @@ impl NodeDb {
         Ok(())
     }
 
-    /// The home refused the entry for good.
-    pub fn outbox_rejected(&self, id: u64, error: &str) -> Result<()> {
+    /// The home refused the entry for good, answering `code` (`invalid`, `denied`, `not_found`).
+    pub fn outbox_rejected(&self, id: u64, code: &str, error: &str) -> Result<()> {
         self.lock().execute(
-            "UPDATE outbox SET state = ?2, error = ?3 WHERE id = ?1",
+            "UPDATE outbox SET state = ?2, error = ?3, code = ?4 WHERE id = ?1",
             params![
                 i64::try_from(id).unwrap_or(0),
                 OutboxState::Rejected.name(),
-                error
+                error,
+                code
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Records why a pending row is not going out, without counting a try (the space moved, say).
+    pub fn outbox_note(&self, id: u64, error: &str) -> Result<()> {
+        self.lock().execute(
+            "UPDATE outbox SET error = ?2 WHERE id = ?1",
+            params![i64::try_from(id).unwrap_or(0), error],
         )?;
         Ok(())
     }
@@ -461,6 +475,8 @@ pub struct OutboxInfo {
     pub receipt: Option<String>,
     /// The last error.
     pub error: Option<String>,
+    /// The code the home refused it with, once rejected.
+    pub code: Option<String>,
 }
 
 impl NodeDb {
@@ -469,7 +485,7 @@ impl NodeDb {
         Ok(self
             .lock()
             .query_row(
-                "SELECT state, receipt, error, space, entry_id FROM outbox WHERE id = ?1",
+                "SELECT state, receipt, error, space, entry_id, code FROM outbox WHERE id = ?1",
                 [i64::try_from(id).unwrap_or(0)],
                 |r| {
                     Ok(OutboxInfo {
@@ -478,6 +494,7 @@ impl NodeDb {
                         error: r.get(2)?,
                         space: r.get(3)?,
                         entry_id: r.get(4)?,
+                        code: r.get(5)?,
                     })
                 },
             )
