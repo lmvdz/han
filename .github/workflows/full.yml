@@ -97,6 +97,38 @@ jobs:
       - name: Sandbox tests
         run: cargo test -p han-host --locked --test sandbox_probe -- --nocapture
 
+  # The dogfood loop end to end, on the real binaries (apps/han/tests/e2e): `han dev up` builds a home, a node, a
+  # space, an agent (the fake ACP agent in the real sandbox with the production shim), an executor, a fake GitHub
+  # and a local remote, and the tests drive it. Slow (a few minutes), so nightly only, not in `quick`. On Linux
+  # a missing sandbox is a failure (HAN_E2E_REQUIRE_SANDBOX); Windows runners may not allow MXC, so the agent
+  # falls back to advisory there.
+  e2e:
+    if: github.event.schedule != '43 5 * * *'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install bubblewrap and allow unprivileged user namespaces (Ubuntu 24.04 restricts them by default)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --unshare-user --unshare-net --ro-bind / / true
+          echo "HAN_E2E_REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
+      - name: Build every binary the stack runs (han, han-github, han-fake-agent)
+        run: cargo build --workspace --bins --locked
+      - name: End-to-end tests
+        run: cargo test -p han --test e2e --locked -- --ignored --test-threads=1 --nocapture
+
   # Known-vulnerable and unmaintained dependencies. A new advisory can appear without any change of ours, which is
   # why this runs on a schedule. Failing here is a signal to look, not a merge blocker.
   advisories:

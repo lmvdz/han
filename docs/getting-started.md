@@ -4,6 +4,21 @@ This page runs HAN on one machine: a home (the sequencer of your spaces), a node
 
 Every setup command here is safe to run again: it looks at what is already there, changes only what differs, and prints what it changed (`changed:`) and what it left (`unchanged:`). Where a step belongs to somebody else (the home's admin, the agent's operator on another device) it prints `to do:` and the exact command that person runs. None of them needs root; the one root-level command is `han runner setup` on a Linux runner ([shared runner](runner.md)).
 
+## 0. Try it first: `han dev up`
+
+```sh
+cargo build --workspace --bins        # han, han-github and the test agent han-fake-agent
+target/debug/han dev up --dir han-dev --start
+```
+
+`han dev up` makes a complete HAN on loopback with the commands below, then prints how to use it: a home with a placeholder name (`dev.han.home.arpa`) and a ticket, a node for `@you`, a space with a policy that gates every push, an agent `@coder`, an executor `@exec`, a fake GitHub with one `agent-ready` issue, and a local bare git remote. The agent is `han-fake-agent`, driven over the real ACP path, the real sandbox shim and the real OS sandbox (MXC on Windows, bubblewrap on Linux); on a machine with no sandbox add `--advisory`. `--harness claude` uses the real Claude Code adapter instead (it needs `han agent login`; it is for people, never for CI). `--script propose` makes the fake agent propose a `git_push`. When you are done:
+
+```sh
+han dev down --dir han-dev            # stops everything and removes the folder
+```
+
+The rest of this page is what `han dev up` does, step by step.
+
 ## 1. Build
 
 HAN is one Rust binary, `han`, plus the GitHub integration, `han-github`. The toolchain is pinned by `rust-toolchain.toml`.

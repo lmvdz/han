@@ -686,11 +686,45 @@ pub struct HostDeps {
 /// A task being worked: its id, its author, the issue it came from and its ask.
 type TaskInfo = (String, String, Option<String>, Option<String>);
 
+/// Waits (up to `limit`) until the host's node has caught up with the space, so the tasks it reads are the
+/// space's and not an empty start. A host that looked too early found no task for its issue and made a
+/// second one of its own, with a bare ask, so the issue text never reached the agent.
+async fn wait_synced(cfg: &HostConfig, api: &dyn NodeApi, limit: Duration) {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        let rows = snapshot(
+            api,
+            Query::JoinProgress {
+                space: cfg.space.clone(),
+                window: Window::default(),
+            },
+        )
+        .await;
+        match rows {
+            // a node that cannot say is taken at its word
+            Err(_) => return,
+            Ok(rows) => {
+                let ready = rows.iter().any(|r| {
+                    matches!(r, Row::JoinProgress(j) if j.stage == han_node::api::JoinStage::Ready)
+                });
+                if ready || rows.is_empty() {
+                    return;
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Finds the open task for the issue assigned to the agent, or claims the issue with a self-assigned task.
 async fn find_or_claim_task(
     cfg: &HostConfig,
     api: &dyn NodeApi,
 ) -> Result<Option<TaskInfo>, HostError> {
+    wait_synced(cfg, api, Duration::from_secs(30)).await;
     if let Some(t) = &cfg.task {
         let rows = snapshot(
             api,
