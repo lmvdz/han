@@ -494,6 +494,7 @@ impl Driver {
                 total,
                 offset,
                 next_cursor,
+                totals,
                 ..
             } = self.engine.read(q).unwrap()
             else {
@@ -501,6 +502,13 @@ impl Driver {
             };
             let got: Vec<Row> = mirror.rows();
             assert_eq!(got, rows, "rows of {q:?}");
+            assert!(!mirror.needs_resync(), "a gap in the seq of {q:?}");
+            assert_eq!(mirror.totals().cloned(), totals, "totals of {q:?}");
+            assert_eq!(
+                totals.is_some(),
+                matches!(q, Query::Board { .. }),
+                "only a board has totals"
+            );
             assert_eq!(
                 (mirror.total(), mirror.offset()),
                 (total, offset),
@@ -580,4 +588,305 @@ fn silence_turns_sessions_stale_then_failed() {
     });
     assert_eq!(state(&mut d), SessionState::Working);
     d.check();
+}
+
+fn open_board(d: &mut Driver, filter: Filter, collapsed: Vec<String>) -> (ViewStream, u64) {
+    let (sink, stream) = ViewStream::channel();
+    let id = d
+        .engine
+        .subscribe(
+            Query::Board {
+                space: SPACE.into(),
+                group: Group::Issue,
+                collapsed,
+                window: window(200, None, filter),
+            },
+            sink,
+        )
+        .expect("a board");
+    (stream, id)
+}
+
+fn status(d: &mut Driver, session: usize, state: usize, seq: u64, issue: usize) {
+    d.step(&Op::Status {
+        session,
+        state,
+        seq,
+        path: 0,
+        start: 1,
+        len: 1,
+        issue: Some(issue),
+    });
+}
+
+fn totals_of(ev: ViewEvent) -> han_node::api::BoardTotals {
+    match ev {
+        ViewEvent::Snapshot { totals, .. } => totals.expect("a board has totals"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn board_totals_count_every_state_with_and_without_the_filter() {
+    let mut d = Driver::new();
+    for actor in [0, 1, 2, 0] {
+        d.step(&Op::OpenSession { actor, task: None });
+    }
+    // alice (me): waiting; bob: working; carol: working; alice: idle on another issue.
+    status(&mut d, 0, 1, 1, 0);
+    status(&mut d, 1, 0, 1, 0);
+    status(&mut d, 2, 0, 1, 1);
+    status(&mut d, 3, 3, 1, 1);
+    let filter = Filter {
+        states: vec![SessionState::Working],
+        ..Filter::default()
+    };
+    let t = totals_of(
+        d.engine
+            .read(&Query::Board {
+                space: SPACE.into(),
+                group: Group::Issue,
+                collapsed: vec![],
+                window: window(200, None, filter),
+            })
+            .unwrap(),
+    );
+    assert_eq!(
+        (t.all.working, t.all.waiting_approval, t.all.idle),
+        (2, 1, 1)
+    );
+    assert_eq!(t.all.sum(), 4);
+    assert_eq!((t.filtered.working, t.filtered.waiting_approval), (2, 0));
+    assert_eq!(t.filtered.sum(), 2);
+    assert_eq!(
+        t.needs_me_total, 1,
+        "the filter does not hide what needs me"
+    );
+    let groups: Vec<(&str, u32, u32)> = t
+        .groups
+        .iter()
+        .map(|g| (g.group.as_str(), g.count, g.needs_me))
+        .collect();
+    assert_eq!(groups, vec![(ISSUES[0], 1, 0), (ISSUES[1], 1, 0)]);
+}
+
+#[test]
+fn a_collapsed_group_keeps_its_totals_while_its_rows_leave_the_window() {
+    let mut d = Driver::new();
+    for actor in [0, 1] {
+        d.step(&Op::OpenSession { actor, task: None });
+    }
+    status(&mut d, 0, 2, 1, 0);
+    status(&mut d, 1, 0, 1, 1);
+    let ev = d
+        .engine
+        .read(&Query::Board {
+            space: SPACE.into(),
+            group: Group::Issue,
+            collapsed: vec![ISSUES[0].into()],
+            window: window(200, None, Filter::default()),
+        })
+        .unwrap();
+    let ViewEvent::Snapshot {
+        rows,
+        total,
+        totals,
+        ..
+    } = ev
+    else {
+        panic!("a snapshot")
+    };
+    assert_eq!(
+        (rows.len(), total),
+        (1, 1),
+        "the collapsed row is out of the window"
+    );
+    let t = totals.unwrap();
+    assert_eq!(t.filtered.sum(), 2, "the state strip still counts it");
+    let g = t.groups.iter().find(|g| g.group == ISSUES[0]).unwrap();
+    assert_eq!((g.count, g.needs_me), (1, 1), "and so does its header");
+}
+
+#[test]
+fn totals_travel_with_the_diffs_of_a_board() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    status(&mut d, 0, 0, 1, 0);
+    let (mut stream, _id) = open_board(&mut d, Filter::default(), vec![]);
+    let mut mirror = ViewMirror::new();
+    while let Some(ev) = stream.try_next() {
+        mirror.apply(ev);
+    }
+    assert_eq!(mirror.totals().unwrap().all.working, 1);
+    status(&mut d, 0, 2, 2, 0);
+    while let Some(ev) = stream.try_next() {
+        assert!(matches!(
+            ev,
+            ViewEvent::Diff {
+                totals: Some(_),
+                ..
+            }
+        ));
+        mirror.apply(ev);
+    }
+    let t = mirror.totals().unwrap();
+    assert_eq!((t.all.working, t.all.blocked, t.needs_me_total), (0, 1, 1));
+}
+
+#[test]
+fn every_event_of_a_view_is_numbered_and_a_gap_asks_for_a_new_snapshot() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    let (mut stream, _id) = open_board(&mut d, Filter::default(), vec![]);
+    for n in 1..=3 {
+        status(&mut d, 0, n % 2, u64::try_from(n).unwrap(), 0);
+    }
+    let mut events = vec![];
+    while let Some(ev) = stream.try_next() {
+        events.push(ev);
+    }
+    let seqs: Vec<u64> = events.iter().map(ViewEvent::seq).collect();
+    assert_eq!(
+        seqs,
+        vec![1, 2, 3, 4],
+        "the snapshot, then one number per diff"
+    );
+    // A face that misses the second event does not apply the third.
+    let mut mirror = ViewMirror::new();
+    mirror.apply(events[0].clone());
+    mirror.apply(events[1].clone());
+    let before = mirror.rows();
+    mirror.apply(events[3].clone());
+    assert!(mirror.needs_resync());
+    assert_eq!(mirror.rows(), before, "a diff out of order is not applied");
+    assert_eq!(mirror.seq(), 2);
+    // A new snapshot clears it.
+    mirror.apply(events[0].clone());
+    assert!(!mirror.needs_resync());
+}
+
+#[test]
+fn a_face_that_falls_behind_is_told_to_resync_and_the_view_ends() {
+    let mut d = Driver::new();
+    d.step(&Op::OpenSession {
+        actor: 0,
+        task: None,
+    });
+    status(&mut d, 0, 0, 1, 0);
+    let (mut stream, _id) = open_board(&mut d, Filter::default(), vec![]);
+    let open = d.engine.open_views();
+    // The face reads nothing while the session changes more often than the backlog holds.
+    for n in 2..400u64 {
+        status(&mut d, 0, 0, n, 0);
+    }
+    assert!(
+        d.engine.open_views() < open,
+        "the slow views are dropped by the engine"
+    );
+    let mut events = vec![];
+    while let Some(ev) = stream.try_next() {
+        events.push(ev);
+    }
+    assert_eq!(events.len(), 1, "the backlog is dropped: {events:?}");
+    assert!(matches!(events[0], ViewEvent::Resync { .. }));
+    let mut m = ViewMirror::new();
+    m.apply(events[0].clone());
+    assert!(m.needs_resync());
+}
+
+#[test]
+fn a_node_that_stops_ends_its_views_without_an_error() {
+    let mut d = Driver::new();
+    let (mut stream, _id) = open_board(&mut d, Filter::default(), vec![]);
+    d.engine.end_all();
+    assert!(matches!(
+        stream.try_next(),
+        Some(ViewEvent::Snapshot { seq: 1, .. })
+    ));
+    assert!(matches!(stream.try_next(), Some(ViewEvent::End { seq: 2 })));
+    assert!(stream.try_next().is_none());
+    assert_eq!(d.engine.open_views(), 0);
+    let mut m = ViewMirror::new();
+    m.apply(ViewEvent::End { seq: 2 });
+    assert!(m.ended() && m.failed().is_none());
+}
+
+#[test]
+fn windows_are_bounded_per_view() {
+    let timeline = Query::Timeline {
+        session: "s".into(),
+        at: None,
+        window: Window::default(),
+    };
+    assert_eq!(timeline.max_limit(), 2_000);
+    assert_eq!(
+        Query::Session {
+            id: "s".into(),
+            window: Window::default()
+        }
+        .max_limit(),
+        200
+    );
+    assert_eq!(
+        Query::NodeStatus {
+            window: Window::default()
+        }
+        .max_limit(),
+        10_000
+    );
+    // A limit of 0 still shows one row, and says where the next one is.
+    let mut d = Driver::new();
+    for actor in [0, 1] {
+        d.step(&Op::OpenSession { actor, task: None });
+    }
+    let ev = d
+        .engine
+        .read(&Query::Board {
+            space: SPACE.into(),
+            group: Group::Issue,
+            collapsed: vec![],
+            window: window(0, None, Filter::default()),
+        })
+        .unwrap();
+    let ViewEvent::Snapshot {
+        rows, next_cursor, ..
+    } = ev
+    else {
+        panic!("a snapshot")
+    };
+    assert_eq!(rows.len(), 1);
+    assert!(next_cursor.is_some());
+}
+
+#[test]
+fn the_new_events_cross_the_pipe_and_old_ones_still_decode() {
+    for ev in [
+        ViewEvent::Resync { seq: 9 },
+        ViewEvent::End { seq: 4 },
+        ViewEvent::Failed {
+            seq: 2,
+            error: han_node::api::NodeError::unavailable("gone"),
+        },
+    ] {
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["seq"], ev.seq());
+        assert_eq!(serde_json::from_value::<ViewEvent>(json).unwrap(), ev);
+    }
+    // An event from a node that does not number them reads as number 0 with no totals.
+    let old = serde_json::json!({"type": "snapshot", "rows": [], "total": 0, "offset": 0});
+    let ev: ViewEvent = serde_json::from_value(old).unwrap();
+    assert!(matches!(
+        ev,
+        ViewEvent::Snapshot {
+            seq: 0,
+            totals: None,
+            ..
+        }
+    ));
 }

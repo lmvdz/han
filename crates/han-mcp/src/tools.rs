@@ -402,7 +402,7 @@ impl HanTools {
             Ok(Some(ViewEvent::Snapshot { rows, .. } | ViewEvent::Resnapshot { rows, .. })) => {
                 Ok(rows)
             }
-            Ok(Some(ViewEvent::Failed { error })) => Err(error),
+            Ok(Some(ViewEvent::Failed { error, .. })) => Err(error),
             Ok(Some(_)) => Err(NodeError::unavailable(
                 "the view did not start with a snapshot",
             )),

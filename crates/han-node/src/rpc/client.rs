@@ -71,7 +71,10 @@ impl RpcClient {
                 let _ = tx.send(Err(gone()));
             }
             for (_, sink) in s.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-                sink.send(ViewEvent::Failed { error: gone() });
+                sink.send(ViewEvent::Failed {
+                    seq: 0,
+                    error: gone(),
+                });
             }
         });
         Ok(RpcClient {
@@ -179,12 +182,13 @@ impl NodeApi for RpcClient {
         let line = json!({"jsonrpc": "2.0", "id": id, "method": "view", "params": params});
         if self.gone.load(Ordering::SeqCst) || self.writer.send(line.to_string()).is_err() {
             sink.send(ViewEvent::Failed {
+                seq: 0,
                 error: NodeError::unavailable("the node closed the connection"),
             });
         }
         tokio::spawn(async move {
             if let Ok(Err(error)) = rx.await {
-                sink.send(ViewEvent::Failed { error });
+                sink.send(ViewEvent::Failed { seq: 0, error });
             }
         });
         stream.guarded(Unsubscribe {

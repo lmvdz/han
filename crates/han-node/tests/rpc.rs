@@ -59,11 +59,13 @@ async fn a_face_drives_the_node_over_the_pipe() {
     // The node view shows the new space as a diff; mirror it and compare with a fresh read.
     let mut mirror = ViewMirror::new();
     mirror.apply(ViewEvent::Snapshot {
+        seq: 1,
         rows,
         total,
         offset: 0,
         next_cursor: None,
         now_ms: 0,
+        totals: None,
     });
     until("the node status shows the space", || {
         while let Some(ev) = node_view.try_next() {
@@ -110,7 +112,8 @@ async fn a_face_drives_the_node_over_the_pipe() {
     assert!(matches!(
         bad.next().await,
         Some(ViewEvent::Failed {
-            error: NodeError::NotFound { .. }
+            error: NodeError::NotFound { .. },
+            ..
         })
     ));
     node.shutdown();

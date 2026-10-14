@@ -18,15 +18,19 @@ mod stream;
 pub use bindings::typescript;
 pub use command::{CallResult, Command, CommandClass, HomeRef};
 pub use error::NodeError;
-pub use query::{Facets, Filter, Group, Query, Scope, Target, Window};
-pub use rows::{
-    ApprovalRow, BoardRow, CostRow, DiffOp, EffectRow, Fidelity, FilePatchRow, FileTouch, GuardRow,
-    InputRow, JoinProgressRow, JoinStage, NodeStatusRow, OutboxRow, OverlapKind, OverlapParty,
-    OverlapRow, PatchStatus, PlanItem, RoleInfo, Row, SUMMARY_FIELDS, SUMMARY_TEXT, Sandbox,
-    SandboxBackend, SessionRow, SessionState, SpaceLink, SpaceStatusRow, StatusBody, TaskRow,
-    Tests, TimelinePointRow, Tokens, ViewEvent, ViewMirror, WhoRow,
+pub use query::{
+    Facets, Filter, Group, MAX_LIMIT, MAX_SESSION_LIMIT, MAX_TIMELINE_LIMIT, Query, Scope, Target,
+    Window,
 };
-pub use stream::{BoxFuture, NodeApi, ViewSink, ViewStream};
+pub use rows::{
+    ApprovalRow, BoardRow, BoardTotals, CostRow, DiffOp, EffectRow, Fidelity, FilePatchRow,
+    FileTouch, GroupTotal, GuardRow, InputRow, JoinProgressRow, JoinStage, NodeStatusRow,
+    OutboxRow, OverlapKind, OverlapParty, OverlapRow, PatchStatus, PlanItem, RoleInfo, Row,
+    SUMMARY_FIELDS, SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRow, SessionState, SpaceLink,
+    SpaceStatusRow, StateCounts, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens, ViewEvent,
+    ViewMirror, WhoRow,
+};
+pub use stream::{BoxFuture, MAX_BACKLOG, NodeApi, ViewSink, ViewStream};
 
 /// The default size of a window.
 pub const DEFAULT_LIMIT: u32 = 200;

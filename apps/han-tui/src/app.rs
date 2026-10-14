@@ -113,6 +113,8 @@ pub struct App {
     spaces_mirror: han_node::api::ViewMirror,
     pending_g: bool,
     epochs: HashMap<ViewKind, u64>,
+    /// The `seq` of the last event of each open view: a gap means a missed event.
+    seqs: HashMap<ViewKind, u64>,
     next_epoch: u64,
     next_call: u64,
     calls: HashMap<u64, CallKind>,
@@ -151,6 +153,7 @@ impl App {
             spaces_mirror: han_node::api::ViewMirror::new(),
             pending_g: false,
             epochs: HashMap::new(),
+            seqs: HashMap::new(),
             next_epoch: 1,
             next_call: 1,
             calls: HashMap::new(),
@@ -163,6 +166,7 @@ impl App {
         let epoch = self.next_epoch;
         self.next_epoch += 1;
         self.epochs.insert(view, epoch);
+        self.seqs.remove(&view);
         Action::Subscribe { view, epoch, query }
     }
 
@@ -230,6 +234,7 @@ impl App {
     /// Every view the screen needs, opened afresh (at start, and after a reconnect).
     fn resubscribe_all(&mut self) -> Vec<Action> {
         self.epochs.clear();
+        self.seqs.clear();
         let mut out = vec![
             self.sub(
                 ViewKind::Node,
@@ -318,6 +323,21 @@ impl App {
                 if self.epochs.get(&view) != Some(&epoch) {
                     return Vec::new();
                 }
+                // Each event is numbered; a number that does not follow the last one, or the node saying it
+                // dropped events, means the face missed something: take new snapshots.
+                match &event {
+                    ViewEvent::Resync { .. } => return self.resubscribe_all(),
+                    ViewEvent::End { .. } | ViewEvent::Failed { .. } => {}
+                    ViewEvent::Snapshot { seq, .. } => {
+                        self.seqs.insert(view, *seq);
+                    }
+                    ViewEvent::Diff { seq, .. } | ViewEvent::Resnapshot { seq, .. } => {
+                        if self.seqs.get(&view).is_none_or(|last| *seq != last + 1) {
+                            return self.resubscribe_all();
+                        }
+                        self.seqs.insert(view, *seq);
+                    }
+                }
                 self.on_view(view, event)
             }
             Msg::ViewEnded { view, epoch } => {
@@ -375,7 +395,7 @@ impl App {
     fn on_view(&mut self, view: ViewKind, event: ViewEvent) -> Vec<Action> {
         match view {
             ViewKind::Node => {
-                if let ViewEvent::Failed { error } = &event {
+                if let ViewEvent::Failed { error, .. } = &event {
                     return if matches!(error, NodeError::Unavailable { .. }) {
                         self.lost()
                     } else {

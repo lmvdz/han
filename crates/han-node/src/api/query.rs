@@ -6,6 +6,15 @@ use ts_rs::TS;
 use super::DEFAULT_LIMIT;
 use super::rows::SessionState;
 
+/// The largest window of most views.
+pub const MAX_LIMIT: u32 = 10_000;
+
+/// The largest window of a `Timeline` view (points).
+pub const MAX_TIMELINE_LIMIT: u32 = 2_000;
+
+/// The largest window of a `Session` view (items).
+pub const MAX_SESSION_LIMIT: u32 = 200;
+
 fn default_limit() -> u32 {
     DEFAULT_LIMIT
 }
@@ -351,6 +360,16 @@ pub enum Query {
 }
 
 impl Query {
+    /// The most rows a window of this query may ask for. A larger `limit` is cut to it (Q-DAT-7): pages of
+    /// up to 2,000 timeline points, 200 session items and 10,000 rows of any other view.
+    pub fn max_limit(&self) -> u32 {
+        match self {
+            Query::Timeline { .. } => MAX_TIMELINE_LIMIT,
+            Query::Session { .. } => MAX_SESSION_LIMIT,
+            _ => MAX_LIMIT,
+        }
+    }
+
     /// The window of the query.
     pub fn window(&self) -> &Window {
         match self {

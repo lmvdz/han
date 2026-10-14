@@ -158,7 +158,7 @@ impl Executor {
             Some(ViewEvent::Snapshot { rows, .. } | ViewEvent::Resnapshot { rows, .. }) => {
                 Ok(effect_rows(rows))
             }
-            Some(ViewEvent::Failed { error }) => Err(error),
+            Some(ViewEvent::Failed { error, .. }) => Err(error),
             _ => Err(NodeError::unavailable("the effects view ended")),
         }
     }

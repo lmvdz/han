@@ -281,11 +281,13 @@ impl NodeApi for FakeNode {
             .collect();
         let (sink, stream) = ViewStream::channel();
         sink.send(ViewEvent::Snapshot {
+            seq: 1,
             total: rows.len() as u32,
             rows,
             offset: 0,
             next_cursor: None,
             now_ms: 0,
+            totals: None,
         });
         stream
     }

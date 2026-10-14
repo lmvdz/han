@@ -210,7 +210,7 @@ impl SessionPane {
 
     /// Applies an event of the `Session` view.
     pub fn apply_session(&mut self, event: ViewEvent) {
-        if let ViewEvent::Failed { error } = event {
+        if let ViewEvent::Failed { error, .. } = event {
             self.error = Some(error);
             return;
         }
@@ -312,7 +312,7 @@ impl SessionPane {
     /// Applies an event of the `Timeline` view. Returns the latest point, once there is one, so the changes can
     /// be asked for.
     pub fn apply_timeline(&mut self, event: ViewEvent) -> Option<String> {
-        if let ViewEvent::Failed { error } = &event {
+        if let ViewEvent::Failed { error, .. } = &event {
             self.timeline = Panel::from_error(error);
             return None;
         }
@@ -333,7 +333,7 @@ impl SessionPane {
 
     /// Applies an event of the `Patches` view.
     pub fn apply_patches(&mut self, event: ViewEvent) {
-        if let ViewEvent::Failed { error } = &event {
+        if let ViewEvent::Failed { error, .. } = &event {
             self.patches = Panel::from_error(error);
             return;
         }

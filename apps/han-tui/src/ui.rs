@@ -234,8 +234,14 @@ fn draw_board(f: &mut Frame, app: &App, area: Rect) {
         let last = b.offset() + b.rows().len() as u32;
         let more_up = if b.offset() > 0 { "▲ " } else { "" };
         let more_down = if last < b.total() { " ▼" } else { "" };
+        // With a filter on, the node's unfiltered count says how much the filter hides.
+        let hidden = b
+            .totals()
+            .filter(|t| t.all.sum() > t.filtered.sum())
+            .map(|t| format!(" · {} in the space", t.all.sum()))
+            .unwrap_or_default();
         block = block.title_bottom(format!(
-            " {more_up}{first}-{last} of {}{more_down} ",
+            " {more_up}{first}-{last} of {}{hidden}{more_down} ",
             b.total()
         ));
     }

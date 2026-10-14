@@ -84,11 +84,13 @@ impl NodeApi for Node {
             .map(Row::Task)
             .collect();
         sink.send(ViewEvent::Snapshot {
+            seq: 1,
             rows,
             total: 0,
             offset: 0,
             next_cursor: None,
             now_ms: 0,
+            totals: None,
         });
         stream
     }

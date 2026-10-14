@@ -4,12 +4,12 @@
 use ts_rs::{Config, TS};
 
 use super::{
-    ApprovalRow, BoardRow, CallResult, Command, CostRow, DiffOp, EffectRow, Fidelity, FilePatchRow,
-    FileTouch, Filter, Group, GuardRow, HomeRef, InputRow, JoinProgressRow, JoinStage, NodeError,
-    NodeStatusRow, OutboxRow, OverlapKind, OverlapParty, OverlapRow, PatchStatus, PlanItem, Query,
-    RoleInfo, Row, Sandbox, SandboxBackend, Scope, SessionRow, SessionState, SpaceLink,
-    SpaceStatusRow, StatusBody, Target, TaskRow, Tests, TimelinePointRow, Tokens, ViewEvent,
-    WhoRow, Window,
+    ApprovalRow, BoardRow, BoardTotals, CallResult, Command, CostRow, DiffOp, EffectRow, Fidelity,
+    FilePatchRow, FileTouch, Filter, Group, GroupTotal, GuardRow, HomeRef, InputRow,
+    JoinProgressRow, JoinStage, NodeError, NodeStatusRow, OutboxRow, OverlapKind, OverlapParty,
+    OverlapRow, PatchStatus, PlanItem, Query, RoleInfo, Row, Sandbox, SandboxBackend, Scope,
+    SessionRow, SessionState, SpaceLink, SpaceStatusRow, StateCounts, StatusBody, Target, TaskRow,
+    Tests, TimelinePointRow, Tokens, ViewEvent, WhoRow, Window,
 };
 
 const HEADER: &str = "// Generated from crates/han-node by `cargo test -p han-node --test parts` (set HAN_UPDATE_GEN=1 to rewrite).\n// Do not edit by hand. These are the node API types: call(Command) and view(Query).\n\n";
@@ -72,6 +72,9 @@ pub fn typescript() -> String {
         FilePatchRow,
         Row,
         DiffOp,
+        StateCounts,
+        GroupTotal,
+        BoardTotals,
         ViewEvent,
     );
     out.truncate(out.trim_end().len());

@@ -60,7 +60,7 @@ The GUI embeds han-node in its Tauri process. `call` is a Tauri command, and `vi
   - `Snapshot{seq, …}`;
   - `Diff{seq, ops}`, where `ops` use PR #35's DiffOp vocabulary (insert, update, remove, move, and resnapshot; §5.3).
 
-  The bridge adds two events of its own: `Resync` (DAT-9), and a final `End{error?}` when the node's stream ends. PR #35 has no **per-view `seq`** on snapshots and diffs yet (Q-DAT-8). Until it does, the bridge numbers the events it forwards, and gap detection (DAT-15) covers only what the bridge itself drops.
+  The node numbers its events (`seq`, §12.1) and has `Resync` and `End` events of its own (Q-DAT-8). The bridge adds nothing to them: it forwards the node's `seq`, `Resync`, `End` and `Failed`, and sends its own `Resync` (DAT-9) when the webview falls behind.
 - **DAT-8.** `han_unsubscribe(sub)` ends a subscription by calling the node's `unsubscribe` (PR #35). The bridge also ends a webview's subscriptions when its window closes.
 - **DAT-9.** The bridge does **not** reorder, merge or drop events, with one exception. When the webview falls behind (the channel's buffer passes a bound of 256 events or 1 MiB, whichever comes first), it drops the subscription's queued events and sends `Resync`, so a slow webview takes a new snapshot instead of growing without bound.
 - **DAT-10.** Tauri capabilities grant the webview only these commands: `han_call`, `han_view` and `han_unsubscribe`, plus two bridge-only commands for the Node failed screen (shell.md §8.2):
@@ -86,8 +86,7 @@ The snapshot carries:
 - `total` (entries after the filter);
 - `offset`;
 - `entries` (in order);
-- `counts`: per display state, both with and without the filter **[needs node, Q-DAT-10]**;
-- `needsMeTotal`.
+- `totals` (the node's name for `counts` and `needsMeTotal`): per display state with and without the filter, `needs_me_total`, and a count per group, for headers (§12.1, Q-DAT-10).
 
 Each entry is a group header or a row:
 - **Group header:** `key`; `label`; `issueTitle?`; `count`; `needsMeCount`; `maxOverlapTier?`.
@@ -106,7 +105,7 @@ Each entry is a group header or a row:
   - `issueTitle?`;
   - `labels?` **[needs node, Q-BRD-3]**.
 
-Diff ops are PR #35's DiffOp vocabulary, keyed by entry key: insert, update, remove, move, and **resnapshot**, which replaces the whole window in one step. A change in `total`, `counts` or `needsMeTotal` arrives as a resnapshot until the vocabulary has a way to carry it (Q-DAT-10).
+Diff ops are PR #35's DiffOp vocabulary, keyed by entry key: insert, update, remove, move, and **resnapshot**, which replaces the whole window in one step. `totals` travels whole on every snapshot, diff and resnapshot of a Board view (Q-DAT-10).
 
 ### 4.2 `Session{id, window}` (session.md)
 
@@ -509,13 +508,25 @@ PR #35 also provides:
 - `JoinProgress` (Q-SHL-4);
 - the Timeline, Patches and ChangeSet query seams (Q-SES-2; Q-SES-1 and Q-DIF-1 in part).
 
+- **Q-DAT-8.** Every `ViewEvent` carries the view's `seq`: the snapshot's is 1, and each later event (diff, resnapshot, `Resync`, `End`, `Failed`) is the last plus 1. A face applies a diff or resnapshot only when `seq = last + 1`; any other number is a gap and it subscribes again (DAT-15). An event from a node that sends no numbers reads as `seq: 0`. Two events are new:
+  - `Resync{seq}`: the face fell behind the node (its backlog passed 256 events; the bound counts events, not bytes). The node drops the backlog, sends `Resync` and ends the view. The face subscribes again for a new snapshot.
+  - `End{seq}`: the node finished the view without an error (it is shutting down). The face keeps what it holds, with a `closed` flag (DAT-17).
+
+  `Failed{seq, error}` stays the error end. A `Failed` made by a client for a lost connection has `seq: 0`.
+- **Q-DAT-10.** Board snapshots, diffs and resnapshots carry `totals`, which replaces the face's copy each time (a diff carries it whole; it is not a resnapshot trigger). `totals` is
+  - `all`: sessions per display state with every facet of the filter ignored, but for `include_closed` (the state strip);
+  - `filtered`: the same for sessions that match the filter, collapsed groups included, so collapsing a group does not move the strip;
+  - `needs_me_total`: sessions that need this device's actor, filter ignored (the badge);
+  - `groups`: one `{group, count, needs_me, max_overlap_tier}` per group with a session that matches the filter, in board order, collapsed groups included. This is what a group header shows; the window may hold only part of a group.
+
+  `total` stays what it was: matching rows with collapsed groups left out.
+- **Q-DAT-7.** A window's `limit` is cut to the view's bound, and to at least 1: 2,000 for `Timeline` points, 200 for `Session` items, 10,000 for every other view (`Query::max_limit`). The default stays 200. A larger limit is not an error; `next_cursor` says whether more follows.
+
 ### 12.2 Still open
 
 Each item is a request to the node API's design, not a decision made here. Until an item lands, it is a provisional type (DAT-3).
 
 - **Q-DAT-3.** The Session view's parts (stream items, facts, decisions and the Record): one view or several? This spec uses `part: "record"` as a second subscription.
-- **Q-DAT-7.** Bounds on the Session window and on the Timeline points list. This spec assumes pages of 200 items and of 2,000 points.
-- **Q-DAT-8.** A per-view `seq` on snapshots and diffs, and node-level `Resync` and `End` events (for example `End{error}` when a view fails). Until these land, the bridge numbers events and synthesises `End` (DAT-7).
 - **Q-DAT-9.** The typed Session item vocabulary (§4.2), which also covers the watch and read rights. It has these kinds:
   - messages, reasoning and plans;
   - tool calls, in ACP's shapes;
@@ -523,7 +534,6 @@ Each item is a request to the node API's design, not a decision made here. Until
   - inputs, with their delivery state;
   - turn starts that name their driver, and turn ends;
   - status, and an explicit unknown.
-- **Q-DAT-10.** Board totals per display state, with and without the filter, and `needsMeTotal`, plus how they travel in diffs.
 - **Q-DAT-11.** The node-side filter grammar: the accepted keys, the glob semantics for `path`, the case rules for free text, and the error for an unknown key.
 - **Q-DAT-12.** `receivedAt` (the node's receive time for each row, used for ages) and `stateReason` (for failed and blocked rows).
 - **Q-DAT-13.** Admissions (pending joins, shown to owners) in the Approvals view.

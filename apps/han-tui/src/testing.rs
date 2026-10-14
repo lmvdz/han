@@ -27,7 +27,7 @@ type Provider = Box<dyn Fn(&Query) -> Option<ViewEvent> + Send>;
 type Replier = Box<dyn Fn(&Command) -> Result<CallResult, NodeError> + Send>;
 
 struct FakeState {
-    views: Vec<(Query, ViewSink)>,
+    views: Vec<(Query, ViewSink, u64)>,
     opened: Vec<Query>,
     calls: Vec<Command>,
     dead: bool,
@@ -83,8 +83,20 @@ impl FakeApi {
     /// Sends an event to every open view whose query matches.
     pub fn push(&self, matches: impl Fn(&Query) -> bool, event: ViewEvent) {
         let mut st = self.lock();
-        st.views.retain(|(_, sink)| !sink.is_closed());
-        for (q, sink) in &st.views {
+        st.views.retain(|(_, sink, _)| !sink.is_closed());
+        for (q, sink, seq) in &mut st.views {
+            if matches(q) {
+                *seq += 1;
+                sink.send(event.clone().with_seq(*seq));
+            }
+        }
+    }
+
+    /// Sends an event to every open view whose query matches, with the number it already has.
+    pub fn push_raw(&self, matches: impl Fn(&Query) -> bool, event: ViewEvent) {
+        let mut st = self.lock();
+        st.views.retain(|(_, sink, _)| !sink.is_closed());
+        for (q, sink, _) in &st.views {
             if matches(q) {
                 sink.send(event.clone());
             }
@@ -95,8 +107,11 @@ impl FakeApi {
     pub fn kill(&self) {
         let mut st = self.lock();
         st.dead = true;
-        for (_, sink) in st.views.drain(..) {
-            sink.send(ViewEvent::Failed { error: gone() });
+        for (_, sink, _) in st.views.drain(..) {
+            sink.send(ViewEvent::Failed {
+                seq: 1,
+                error: gone(),
+            });
         }
     }
 }
@@ -128,10 +143,11 @@ impl NodeApi for FakeApi {
         match (st.provider)(&query) {
             Some(event) => {
                 sink.send(event);
-                st.views.push((query, sink));
+                st.views.push((query, sink, 1));
             }
             None => {
                 sink.send(ViewEvent::Failed {
+                    seq: 1,
                     error: NodeError::unavailable(
                         "work timelines are not available on this node yet",
                     ),
@@ -194,11 +210,13 @@ pub const NOW_MS: u64 = 100_000_000;
 /// A snapshot event.
 pub fn snapshot(rows: Vec<Row>, total: u32, offset: u32, next_cursor: Option<String>) -> ViewEvent {
     ViewEvent::Snapshot {
+        seq: 1,
         rows,
         total,
         offset,
         next_cursor,
         now_ms: NOW_MS,
+        totals: None,
     }
 }
 

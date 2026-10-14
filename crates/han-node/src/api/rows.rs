@@ -849,13 +849,107 @@ pub enum DiffOp {
     },
 }
 
+/// How many sessions are in each display state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub struct StateCounts {
+    /// Doing work.
+    pub working: u32,
+    /// Waiting for an approval.
+    pub waiting_approval: u32,
+    /// Stuck.
+    pub blocked: u32,
+    /// Nothing to do.
+    pub idle: u32,
+    /// Finished.
+    pub done: u32,
+    /// Silent for a while.
+    pub stale: u32,
+    /// Failed.
+    pub failed: u32,
+}
+
+impl StateCounts {
+    /// Counts one more session in `state`.
+    pub fn add(&mut self, state: SessionState) {
+        let slot = match state {
+            SessionState::Working => &mut self.working,
+            SessionState::WaitingApproval => &mut self.waiting_approval,
+            SessionState::Blocked => &mut self.blocked,
+            SessionState::Idle => &mut self.idle,
+            SessionState::Done => &mut self.done,
+            SessionState::Stale => &mut self.stale,
+            SessionState::Failed => &mut self.failed,
+        };
+        *slot += 1;
+    }
+
+    /// All sessions counted.
+    pub fn sum(&self) -> u32 {
+        self.working
+            + self.waiting_approval
+            + self.blocked
+            + self.idle
+            + self.done
+            + self.stale
+            + self.failed
+    }
+
+    /// The count of one state.
+    pub fn of(&self, state: SessionState) -> u32 {
+        match state {
+            SessionState::Working => self.working,
+            SessionState::WaitingApproval => self.waiting_approval,
+            SessionState::Blocked => self.blocked,
+            SessionState::Idle => self.idle,
+            SessionState::Done => self.done,
+            SessionState::Stale => self.stale,
+            SessionState::Failed => self.failed,
+        }
+    }
+}
+
+/// What a group header of the board shows, for a group the window may not hold all of (or none of, when it is
+/// collapsed).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct GroupTotal {
+    /// The group, as `BoardRow::group` names it.
+    pub group: String,
+    /// Sessions of the group that match the filter, collapsed or not.
+    pub count: u32,
+    /// How many of them need this device's actor.
+    pub needs_me: u32,
+    /// The highest overlap tier among them (0: none).
+    pub max_overlap_tier: u8,
+}
+
+/// The board's totals (Q-DAT-10). They travel with every snapshot, diff and resnapshot of a Board view, and
+/// always describe the whole space, not the window.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct BoardTotals {
+    /// Sessions per display state with the filter ignored (but for `include_closed`): the state strip.
+    pub all: StateCounts,
+    /// Sessions per display state that match the filter, collapsed groups included.
+    pub filtered: StateCounts,
+    /// Sessions that need this device's actor, with the filter ignored: the badge.
+    pub needs_me_total: u32,
+    /// One entry per group that has a session matching the filter, in board order.
+    pub groups: Vec<GroupTotal>,
+}
+
 /// What a view stream yields. The vocabulary is the same for every view: a snapshot, then diffs made of
 /// insert, update, remove (and a reserved move) by key, and a resnapshot when a diff is not worth sending.
+///
+/// Every event carries the view's `seq`: the snapshot's is 1 and each later event adds 1, so a face that sees
+/// any other number has missed an event and takes a new snapshot (DAT-15).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ViewEvent {
     /// The window as it is now, ordered by key. Always the first event.
     Snapshot {
+        /// The view's event number.
+        #[serde(default)]
+        seq: u64,
         /// The rows.
         rows: Vec<Row>,
         /// How many rows match the filter in all (collapsed groups left out).
@@ -870,9 +964,16 @@ pub enum ViewEvent {
         /// so a face computes ages as `now_ms - last_active_ms` without a clock of its own.
         #[serde(default)]
         now_ms: u64,
+        /// The board's totals (Board views only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        totals: Option<BoardTotals>,
     },
     /// What changed in the window since the last event.
     Diff {
+        /// The view's event number: the last one plus 1.
+        #[serde(default)]
+        seq: u64,
         /// The changes.
         ops: Vec<DiffOp>,
         /// The new total.
@@ -886,9 +987,16 @@ pub enum ViewEvent {
         /// The node's steady clock (ms) as of this diff.
         #[serde(default)]
         now_ms: u64,
+        /// The board's totals as of this diff (Board views only); they replace the face's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        totals: Option<BoardTotals>,
     },
     /// Too much changed for a diff to be worth it: the window as it is now, replacing what the face holds.
     Resnapshot {
+        /// The view's event number: the last one plus 1.
+        #[serde(default)]
+        seq: u64,
         /// The rows.
         rows: Vec<Row>,
         /// How many rows match the filter in all.
@@ -902,12 +1010,60 @@ pub enum ViewEvent {
         /// The node's steady clock (ms) as of this window.
         #[serde(default)]
         now_ms: u64,
+        /// The board's totals (Board views only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        totals: Option<BoardTotals>,
+    },
+    /// The face fell behind and events were dropped: the view ends here, and the face subscribes again for a
+    /// new snapshot.
+    Resync {
+        /// The number the dropped event would have had.
+        #[serde(default)]
+        seq: u64,
+    },
+    /// The node finished the view without an error (it is shutting down); the face keeps what it holds.
+    End {
+        /// The view's event number: the last one plus 1.
+        #[serde(default)]
+        seq: u64,
     },
     /// The view cannot be served; the stream ends.
     Failed {
+        /// The view's event number: the last one plus 1 (1 when no snapshot was sent).
+        #[serde(default)]
+        seq: u64,
         /// Why.
         error: NodeError,
     },
+}
+
+impl ViewEvent {
+    /// The view's event number.
+    pub fn seq(&self) -> u64 {
+        match self {
+            ViewEvent::Snapshot { seq, .. }
+            | ViewEvent::Diff { seq, .. }
+            | ViewEvent::Resnapshot { seq, .. }
+            | ViewEvent::Resync { seq }
+            | ViewEvent::End { seq }
+            | ViewEvent::Failed { seq, .. } => *seq,
+        }
+    }
+
+    /// The same event with another number (a fake node numbering the events a test sends).
+    #[must_use]
+    pub fn with_seq(mut self, number: u64) -> ViewEvent {
+        match &mut self {
+            ViewEvent::Snapshot { seq, .. }
+            | ViewEvent::Diff { seq, .. }
+            | ViewEvent::Resnapshot { seq, .. }
+            | ViewEvent::Resync { seq }
+            | ViewEvent::End { seq }
+            | ViewEvent::Failed { seq, .. } => *seq = number,
+        }
+        self
+    }
 }
 
 /// The rows a face holds for a view: apply every event in order, and `rows()` is what a fresh read gives.
@@ -918,6 +1074,10 @@ pub struct ViewMirror {
     offset: u32,
     next_cursor: Option<String>,
     now_ms: u64,
+    totals: Option<BoardTotals>,
+    seq: u64,
+    resync: bool,
+    ended: bool,
     failed: Option<NodeError>,
 }
 
@@ -927,36 +1087,54 @@ impl ViewMirror {
         Self::default()
     }
 
-    /// Applies one event.
+    /// Applies one event. A diff or resnapshot whose `seq` is not the last plus 1 is not applied: the mirror
+    /// asks for a new snapshot ([`ViewMirror::needs_resync`]), as it does for a [`ViewEvent::Resync`].
     pub fn apply(&mut self, event: ViewEvent) {
         match event {
             ViewEvent::Snapshot {
+                seq,
                 rows,
                 total,
                 offset,
                 next_cursor,
                 now_ms,
-            }
-            | ViewEvent::Resnapshot {
-                rows,
-                total,
-                offset,
-                next_cursor,
-                now_ms,
+                totals,
             } => {
-                self.now_ms = now_ms;
-                self.rows = rows;
-                self.total = total;
-                self.offset = offset;
-                self.next_cursor = next_cursor;
+                self.resync = false;
+                self.ended = false;
+                self.seq = seq;
+                self.set_window(rows, total, offset, next_cursor, now_ms, totals);
+            }
+            ViewEvent::Resnapshot {
+                seq,
+                rows,
+                total,
+                offset,
+                next_cursor,
+                now_ms,
+                totals,
+            } => {
+                if self.resync || seq != self.seq + 1 {
+                    self.resync = true;
+                    return;
+                }
+                self.seq = seq;
+                self.set_window(rows, total, offset, next_cursor, now_ms, totals);
             }
             ViewEvent::Diff {
+                seq,
                 ops,
                 total,
                 offset,
                 next_cursor,
                 now_ms,
+                totals,
             } => {
+                if self.resync || seq != self.seq + 1 {
+                    self.resync = true;
+                    return;
+                }
+                self.seq = seq;
                 self.now_ms = now_ms;
                 for op in ops {
                     match op {
@@ -983,9 +1161,29 @@ impl ViewMirror {
                 self.total = total;
                 self.offset = offset;
                 self.next_cursor = next_cursor;
+                self.totals = totals;
             }
-            ViewEvent::Failed { error } => self.failed = Some(error),
+            ViewEvent::Resync { .. } => self.resync = true,
+            ViewEvent::End { .. } => self.ended = true,
+            ViewEvent::Failed { error, .. } => self.failed = Some(error),
         }
+    }
+
+    fn set_window(
+        &mut self,
+        rows: Vec<Row>,
+        total: u32,
+        offset: u32,
+        next_cursor: Option<String>,
+        now_ms: u64,
+        totals: Option<BoardTotals>,
+    ) {
+        self.now_ms = now_ms;
+        self.rows = rows;
+        self.total = total;
+        self.offset = offset;
+        self.next_cursor = next_cursor;
+        self.totals = totals;
     }
 
     /// The rows, in order.
@@ -1006,6 +1204,27 @@ impl ViewMirror {
     /// The node's clock (ms) as of the last event.
     pub fn now_ms(&self) -> u64 {
         self.now_ms
+    }
+
+    /// The board's totals, for a Board view.
+    pub fn totals(&self) -> Option<&BoardTotals> {
+        self.totals.as_ref()
+    }
+
+    /// The number of the last event applied.
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// Whether an event was missed (a gap in `seq`, or a [`ViewEvent::Resync`]): the face should subscribe
+    /// again. The next snapshot clears it.
+    pub fn needs_resync(&self) -> bool {
+        self.resync
+    }
+
+    /// Whether the node finished the view without an error.
+    pub fn ended(&self) -> bool {
+        self.ended
     }
 
     /// The cursor of the next page.

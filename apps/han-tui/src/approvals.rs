@@ -132,7 +132,7 @@ impl ApprovalsState {
 
     /// Applies an event of the view. Returns a notice when the effect under an open card has left the list.
     pub fn apply(&mut self, event: ViewEvent) {
-        if let ViewEvent::Failed { error } = event {
+        if let ViewEvent::Failed { error, .. } = event {
             self.error = Some(error);
             return;
         }
