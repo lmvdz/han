@@ -6,6 +6,7 @@ mod actor;
 mod agent;
 mod board;
 mod conform;
+mod dev;
 mod device;
 mod dial;
 mod enroll;
@@ -73,6 +74,8 @@ enum Cmd {
     Executor(executor::ExecutorArgs),
     /// Linux runners: the root-level setup (users, units, polkit rule).
     Runner(runner::RunnerArgs),
+    /// A complete local HAN on loopback for trying things and for the end-to-end tests.
+    Dev(dev::DevArgs),
     /// Run conformance vectors against a home.
     Conform(conform::ConformArgs),
     /// Create, confirm, start and stop agents through the running node.
@@ -181,6 +184,7 @@ async fn run(cli: Cli) {
         Cmd::Actor(a) => actor::run(a).await,
         Cmd::Executor(a) => executor::run(a).await,
         Cmd::Runner(a) => runner::run(a).await,
+        Cmd::Dev(a) => dev::run(a).await,
         Cmd::Agent(a) => agent::run(a).await,
         Cmd::Exec(a) => exec::run(a).await,
         Cmd::Host(a) => host::run(*a).await,

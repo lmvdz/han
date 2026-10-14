@@ -196,9 +196,22 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         turn_timeout: Duration::from_secs(30 * 60),
         exclusion: Vec::new(),
     };
+    // The operator names the repository, never the agent: a local path (a dev stack, a test remote) may be
+    // cloned from disk; anything else may only be fetched over https.
+    let local = args
+        .repo
+        .as_deref()
+        .is_some_and(|r| !r.starts_with("github:") && !r.starts_with("https://"));
+    let protocols: &[&str] = if local {
+        &["https", "file"]
+    } else {
+        &["https"]
+    };
     let deps = HostDeps {
         api: Arc::new(role.node.clone()),
-        vcs: Arc::new(GitVcs::new(args.data.join("objects")).with_protocols(["https"])),
+        vcs: Arc::new(
+            GitVcs::new(args.data.join("objects")).with_protocols(protocols.iter().copied()),
+        ),
         signer: Some((args.agent.clone(), args.key_id.clone(), seed)),
     };
     let (stop, rx) = tokio::sync::watch::channel(false);
