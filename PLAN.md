@@ -385,6 +385,7 @@ Full findings: `research/`. No existing tool gives a self-hosted, live view of e
 | M5 | han-tui (board, session pane, inbox) + han-github | the full MVP story across two machines and a shared runner; pi plus a smoke test of 2–3 other ACP agents | **done**: han-tui (#60), han-github (#50, #61) |
 | M6 | Dogfood | the user plus 1–3 people, two weeks, building HAN with HAN | **in progress** (below) |
 | G | GUI (after M3, parallel to M4–M6) | the board, session pane and inbox in Tauri, built from clean-room UI specs | clean-room UI specs written (#42, #44); the build has not started |
+| F | Factory interop (§10.3, after M6) | factories' agents report into spaces, their gated steps wait on HAN approvals, the log exports to a store a third party verifies, and one command halts an agent everywhere | planned (`research/software-factories.md`) |
 
 **Parallel tracks:** R first; then S30, M1 and T0 in parallel; T1 alongside M2–M4. Timeline integration is on the MVP's critical path, with `git diff` hunks as the fallback.
 
@@ -422,6 +423,32 @@ Full findings: `research/`. No existing tool gives a self-hosted, live view of e
 | Per-agent login directories | each agent actor gets its own harness login directory. The host binds only that directory into the agent's sandbox, never the operator's home or login, so agents don't share a login with their operator or with each other. Being built for M6 |
 | Spec rounds paused | no spec round runs while the product is built; round 32 (76.5) is the current spec. Queued for the next round: semantic gates, risk tiers for landing work (§12), and the round-32 review items AA1–AA5 (the build already fixes AA2 with the hosting rule, #48, and AA3 with the hello binding, #47) |
 | Dogfood runner | the M6 home and the first shared runner run on a boat.dev VM, set up as in `docs/runner.md`. Public files name no address, id, ticket or space of it |
+| Software factories | HAN is not a factory. It is the shared visibility, coordination and safety layer that factories run beside: their agents report in, their high-impact steps wait on HAN approvals, and HAN's log is their audit trail. HAN does no deploy orchestration and runs no durable workflows (`research/software-factories.md` §5) |
+| Factory agents | an actor per agent profile (for example `@acme-coder`), each with a human operator who confirms it. Their keys live only in the team's bridge node (`han-factory`, an actor over the node API like han-github); factory runners authenticate per run with CI OIDC or a short-lived bridge token, never a HAN key (SR-113) |
+| External-runner fidelity | sessions reported by a factory are always advisory: the bridge sets `sandbox: "external:<factory>"` and no `gate`, so faces mark them under today's `han.status/1`. An explicit field goes to round 33 |
+| Factory SDK surface | one HTTP API on the bridge (`/v1`, OpenAPI); `han report` CLI, a Rust client, thin TS and Python wrappers generated from it, and `han mcp --bridge` for factory harnesses. Not wrappers over the node API, which stays a local implementation API |
+| Approval API | a factory step is an `effect.propose` whose executor is the factory actor; people approve in a HAN face after the presence check; the factory claims, and the claim receipt is the permit. Long-poll by default; optional callbacks, outbound from HAN and Ed25519-signed (SR-114). No API path approves (SR-115) |
+| Audit export | `han export` runs as a verifier and writes a self-verifying JSONL bundle (records, receipts, profile chains, server keys, checkpoints) or a streaming tail to a file, an object-lock bucket, syslog or OTLP logs; `han verify --bundle` checks it offline (SR-116, SR-117) |
+| Run correlation | a `correlation {factory?, runId, step?, traceparent?, tracestate?}` on session, task and proposal content, a `run` member in `han.status/1`, and W3C trace context on HAN's spans. Content schema changes go to round 33 |
+| Signals intake | `han-intake`, built like han-github: signed webhooks (or pull mode) through intake profiles become one pool task per fingerprint, with a fixed template and the payload only as enveloped, masked data (SR-110…SR-112) |
+| Agent profiles | `han.agent-profile/1`: the `HostSpec` and registry entry as one named, signed (DSSE, an owner's key), versioned document in the repo; the host refuses an unsigned or disallowed profile (SR-121). An OCI artifact later |
+| Land attestations | han-exec emits an in-toto statement (plus SLSA provenance) on every successful land: subject the commit and changeset digest; the agent, operator, profile, model, policy, risk tier, approvals and run id; signed with the executor instance key (SR-119) |
+| Kill switch | `han agent halt <agent> [--revoke]`: the operator withdraws confirmation (every `with-operator` space at once), owners ban and cancel in their spaces, hosts stop the agent's sessions within 10 s of the receipt, the bridge refuses and notifies, and `--revoke` retires its keys (SR-118) |
+| Registry proxy | per toolchain, packages can come only through the team's registry proxy or firewall; credentials it needs go on a registry route like the model route, never into the sandbox or a tunnel (SR-120) |
+
+### 10.3 Factory interop (roadmap)
+
+HAN works beside software factories (the agentbaseline.org reference architecture: human-, workflow- and agent-orchestrated) without becoming one. Design, the control mapping and the round-33 questions: `research/software-factories.md`. Planned controls: SR-110…SR-121. Everything after F0 waits for the M6 dogfood.
+
+| | Milestone | Done when | Status |
+|---|---|---|---|
+| F0 | Plan and spec questions | `research/software-factories.md` merged; its "Needs spec" list queued for round 33 | this PR |
+| F1 | Kill switch | `han agent halt` withdraws, bans, cancels and (with `--revoke`) revokes; a simulation with the agent's sessions on three nodes stops them all within 10 s of the receipt, and no claim for it passes afterwards (SR-118) | planned |
+| F2 | External runners | the `han-factory` bridge, `han report`, the Rust client and `han mcp --bridge`; a GitHub Actions job reports a run into the dogfood space as an advisory session, with overlaps, and no HAN key exists in CI (SR-113) | planned |
+| F3 | Approval API | a CI deploy step proposes, waits (long-poll and signed callback), gets a human-present approval, claims and runs exactly once; with no approval, an expired one or a bridge outage it never runs; nothing the bridge holds can approve (SR-114, SR-115) | planned |
+| F4 | Export and correlation | `han export --follow` writes a bundle that `han verify --bundle` (and a witness) checks offline from server keys alone, and a tampered record yields a fault proof; one factory run id finds its session, tasks, effects and spans (SR-116, SR-117; round 33 for the fields) | planned |
+| F5 | Signals intake | `han-intake` with Alertmanager, SARIF, eval and generic profiles; a canary instruction in an alert reaches agents only in an envelope; a flood of one fingerprint makes one task (SR-110…SR-112) | planned |
+| F6 | Profiles, attestations, registry route | a tampered or unsigned profile refuses to start; every land carries an attestation a third party verifies with the executor key from its profile space; cargo resolves only through the configured registry proxy (SR-119…SR-121) | planned |
 
 ## 11. Risks
 
