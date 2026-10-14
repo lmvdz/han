@@ -332,6 +332,31 @@ pub enum CommandClass {
     Executor,
 }
 
+/// What a connection to the node API is, which the node knows from the endpoint it came in on and not from
+/// anything the peer says. It bounds the commands the connection may send (SR-06, SR-106): only a
+/// [`ConnectionClass::Face`] may send a [`CommandClass::Face`] command, so an agent's host or an executor can
+/// never approve, however it asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionClass {
+    /// A face acting for the device's person: every command.
+    Face,
+    /// An agent's host and tools: [`CommandClass::Agent`] commands.
+    Host,
+    /// An executor: [`CommandClass::Agent`] and [`CommandClass::Executor`] commands.
+    Executor,
+}
+
+impl ConnectionClass {
+    /// Whether a connection of this class may send a command of class `c`.
+    pub fn permits(self, c: CommandClass) -> bool {
+        match self {
+            ConnectionClass::Face => true,
+            ConnectionClass::Host => c == CommandClass::Agent,
+            ConnectionClass::Executor => c != CommandClass::Face,
+        }
+    }
+}
+
 impl Command {
     /// The class of the command. The match is exhaustive with no wildcard arm, so a new variant must be
     /// classified before the crate builds (SR-06).

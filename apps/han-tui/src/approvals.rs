@@ -2,10 +2,13 @@
 //!
 //! Signing takes two deliberate steps, as in `spec/ui/approvals.md` (APR-5): the full card is opened, and only
 //! then does `a` open the sign panel, where Enter on the one button signs. Enter on the card itself never
-//! signs. The node says whether the actor may approve (`can_approve`) and why the effect is gated
+//! signs. That is an accident guard: the node then asks the person to confirm on the device (Windows Hello,
+//! Touch ID, polkit), and signs only if they do (PLAN section 6.2, SR-106). The node says whether the actor may approve (`can_approve`) and why the effect is gated
 //! (`why_gated`); this module does not decide either.
 
-use han_node::api::{AdmissionRow, ApprovalRow, NodeError, Row, ViewEvent, ViewMirror};
+use han_node::api::{
+    APPROVAL_NOT_SIGNED, AdmissionRow, ApprovalRow, NodeError, Row, ViewEvent, ViewMirror,
+};
 
 /// What the card is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,6 +284,10 @@ impl ApprovalsState {
     /// The message a failed approval shows, and whether trying again may work (APR section 4.4).
     pub fn describe_error(e: &NodeError) -> (String, bool) {
         match e {
+            // The node's presence check did not pass: nothing was signed, and the person may confirm again.
+            NodeError::Denied { message } if message.starts_with(APPROVAL_NOT_SIGNED) => {
+                (capitalize(message), true)
+            }
             NodeError::Denied { message } => (
                 format!("The space refused this approval: {message}."),
                 false,
@@ -301,5 +308,14 @@ impl ApprovalsState {
                 (format!("Couldn't sign right now ({message})."), true)
             }
         }
+    }
+}
+
+/// "approval not signed: presence check cancelled" as a sentence.
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str() + ".",
+        None => String::new(),
     }
 }

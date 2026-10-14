@@ -48,6 +48,19 @@ enum NodeCmd {
     },
     /// Removes the background service.
     UninstallService,
+    /// Shows or sets this device's human-presence check for approvals (stored in `node.db`, read at each
+    /// approval). While approvals require a person, changing it needs one to confirm.
+    Presence {
+        /// The data directory of the node.
+        #[arg(long, env = "HAN_DATA", default_value = "han-data")]
+        data: PathBuf,
+        /// `all`, or a comma-separated list of action kinds (`effect.approve`); the empty list requires nothing.
+        #[arg(long)]
+        require: Option<String>,
+        /// `auto`, `windows-hello`, `touch-id`, `polkit` or `none`.
+        #[arg(long)]
+        backend: Option<String>,
+    },
     /// Says whether the node is running, who it acts as, and how its links stand.
     Status {
         /// The data directory of the node (names its pipe).
@@ -124,6 +137,39 @@ impl NodeOpts {
 }
 
 /// `han node status`.
+/// `han node presence`: the settings, after a change if one is asked for.
+async fn presence(
+    data: &std::path::Path,
+    require: Option<String>,
+    backend: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use han_node::presence::{BackendChoice, Require, change, settings};
+    let require = require.map(|r| r.parse::<Require>()).transpose()?;
+    let backend = backend.map(|b| b.parse::<BackendChoice>()).transpose()?;
+    std::fs::create_dir_all(data)?;
+    let db = han_node::db::NodeDb::open(&data.join("node.db"))?;
+    let changing = require.is_some() || backend.is_some();
+    if changing {
+        println!("confirm on this device if asked…");
+    }
+    let (require, backend) = tokio::task::block_in_place(|| {
+        if changing {
+            change(
+                &db,
+                require,
+                backend,
+                None,
+                han_node::presence::DEFAULT_TIMEOUT,
+            )
+        } else {
+            settings(&db)
+        }
+    })?;
+    println!("presence.require {require}");
+    println!("presence.backend {backend}");
+    Ok(())
+}
+
 async fn status(
     data: &std::path::Path,
     endpoint: Option<String>,
@@ -167,6 +213,11 @@ async fn status(
 pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
     match args.cmd {
         None => serve_node(args.opts).await,
+        Some(NodeCmd::Presence {
+            data,
+            require,
+            backend,
+        }) => presence(&data, require, backend).await,
         Some(NodeCmd::Status { data, endpoint }) => status(&data, endpoint).await,
         Some(NodeCmd::UninstallService) => {
             println!("{}", service::uninstall()?);

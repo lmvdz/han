@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Install as /usr/share/polkit-1/actions/dev.han.approve.policy. `han-node` asks polkit for this action
+     before it signs an approval; polkit shows the message through the user's authentication agent. -->
+<policyconfig>
+  <vendor>HAN</vendor>
+  <vendor_url>https://github.com/lmvdz/han</vendor_url>
+  <action id="dev.han.approve">
+    <description>Approve an effect in HAN</description>
+    <message>Authenticate to sign a HAN approval</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

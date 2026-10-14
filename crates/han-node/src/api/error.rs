@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// The start of the message of a `denied` error when a person did not confirm an approval on the device (the
+/// presence check was cancelled, timed out, failed or does not exist). Faces show what follows it as is.
+pub const APPROVAL_NOT_SIGNED: &str = "approval not signed: ";
+
 /// Why a call or a view failed. The set is closed: new failures map onto one of these.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS, thiserror::Error)]
 #[serde(tag = "code", rename_all = "snake_case")]

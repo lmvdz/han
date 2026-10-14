@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::{ErrorObject, Message, code, local_name, read_line};
-use crate::api::{Command, NodeApi, NodeError, Query};
+use crate::api::{Command, ConnectionClass, NodeApi, NodeError, Query};
 
 /// A listening node API. Dropping it stops accepting, closes the connections that are open and ends their
 /// views.
@@ -34,9 +34,20 @@ impl Drop for RpcServer {
     }
 }
 
-/// Serves `api` at `endpoint` (see [`super::default_endpoint`]). On Windows the pipe's access list names the
-/// current user and nobody else; on Unix the socket file is mode 0600.
+/// Serves `api` at `endpoint` (see [`super::default_endpoint`]) to faces. On Windows the pipe's access list
+/// names the current user and nobody else; on Unix the socket file is mode 0600.
 pub fn serve(api: Arc<dyn NodeApi>, endpoint: &str) -> io::Result<RpcServer> {
+    serve_as(api, endpoint, ConnectionClass::Face)
+}
+
+/// Like [`serve`], for connections of `class`: a command above the class is refused as `denied` before it
+/// reaches the node. A host or an executor gets its own endpoint of the class it is, so it cannot send a
+/// face's command (an approval) even if it is compromised.
+pub fn serve_as(
+    api: Arc<dyn NodeApi>,
+    endpoint: &str,
+    class: ConnectionClass,
+) -> io::Result<RpcServer> {
     let options = ListenerOptions::new().name(local_name(endpoint)?);
     let options = restrict(options)?;
     let listener = options.create_tokio()?;
@@ -47,7 +58,7 @@ pub fn serve(api: Arc<dyn NodeApi>, endpoint: &str) -> io::Result<RpcServer> {
             match listener.accept().await {
                 Ok(conn) => {
                     while conns.try_join_next().is_some() {}
-                    conns.spawn(connection(conn, Arc::clone(&api)));
+                    conns.spawn(connection(conn, Arc::clone(&api), class));
                 }
                 Err(e) => {
                     tracing::warn!("rpc accept: {e}");
@@ -140,7 +151,7 @@ fn protocol_error(code: i64, message: &str) -> ErrorObject {
     }
 }
 
-async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
+async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass) {
     let (recv, mut send) = conn.split();
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
     // Every task of the connection is owned by it: when the connection is aborted (the server dropped) or
@@ -181,6 +192,13 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>) {
         let params = msg.params.unwrap_or(Value::Null);
         match msg.method.as_deref() {
             Some("call") => match serde_json::from_value::<Command>(params) {
+                Ok(cmd) if !class.permits(cmd.class()) => {
+                    let e = NodeError::denied(format!(
+                        "a {class:?} connection may not send a {:?} command",
+                        cmd.class()
+                    ));
+                    let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
+                }
                 Ok(cmd) => {
                     let (api, out) = (Arc::clone(&api), out.clone());
                     while calls.try_join_next().is_some() {}
