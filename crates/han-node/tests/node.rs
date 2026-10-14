@@ -292,3 +292,93 @@ async fn a_restart_rebuilds_the_views_from_node_db() {
     }
     again.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_actor_of_the_home_without_a_profile_is_refused_at_once() {
+    let world = World::new(&[(ALICE, 31)]);
+    let alice = world.node(ALICE, 31);
+    let space = space_of(&call(&alice, create(&world)).await);
+    let err = alice
+        .call(Command::MemberSet {
+            space,
+            actor: "@exec:a.localhost".into(),
+            role: "member".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, NodeError::Invalid { message } if message.contains("has no profile at this home")),
+        "{err:?}"
+    );
+    alice.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_entry_the_home_keeps_deferring_fails_and_can_be_retried() {
+    let world = World::new(&[(ALICE, 31), (BOB, 32)]);
+    let alice = world.node_with(ALICE, 31, |c| {
+        c.outbox_max_attempts = 3;
+        c.outbox_backoff = Duration::ZERO;
+        c.connect_wait = Duration::from_millis(500);
+    });
+    let mut outbox = Watched::open(
+        &alice,
+        Query::Outbox {
+            space: None,
+            window: window(),
+        },
+    );
+    let space = space_of(&call(&alice, create(&world)).await);
+    // A foreign actor whose profile this home can never fetch: the home answers `unavailable` for ever.
+    let stuck = match call(
+        &alice,
+        Command::MemberSet {
+            space: space.clone(),
+            actor: "@carol:far.example".into(),
+            role: "member".into(),
+        },
+    )
+    .await
+    {
+        CallResult::Queued { outbox_id, .. } => outbox_id,
+        other => panic!("expected Queued, got {other:?}"),
+    };
+    until("the entry fails with its last error", || {
+        outbox.rows().iter().any(|r| {
+            matches!(r, Row::Outbox(o) if o.outbox_id == stuck && o.state == "failed"
+                && o.error.as_deref().is_some_and(|e| e.contains("gave up after 3 tries")))
+        })
+    })
+    .await;
+    // It no longer holds the line: a later entry of the same space goes through.
+    let later = call(
+        &alice,
+        Command::MemberSet {
+            space: space.clone(),
+            actor: BOB.into(),
+            role: "member".into(),
+        },
+    )
+    .await;
+    assert!(matches!(later, CallResult::Receipt { .. }), "{later:?}");
+    // The failure is in the node's recent errors.
+    let mut status = Watched::open(&alice, Query::NodeStatus { window: window() });
+    until("the failure is among the recent errors", || {
+        status.rows().iter().any(|r| {
+            matches!(r, Row::NodeStatus(n) if n.recent_errors.iter().any(|e| e.what.contains("outbox")))
+        })
+    })
+    .await;
+    // On demand it is tried again (and, the home still deferring, fails again).
+    let again = call(&alice, Command::OutboxRetry { outbox_id: stuck }).await;
+    assert!(
+        matches!(again, CallResult::Queued { .. }) || matches!(again, CallResult::Receipt { .. }),
+        "{again:?}"
+    );
+    let err = alice
+        .call(Command::OutboxRetry { outbox_id: 9999 })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, NodeError::NotFound { .. }), "{err:?}");
+    alice.shutdown();
+}

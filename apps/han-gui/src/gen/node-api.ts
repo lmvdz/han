@@ -351,7 +351,11 @@ started: string,
 /**
  * What it cost, with `started: yes` only.
  */
-cost?: [string, number], } | { "type": "policy_set", 
+cost?: [string, number], } | { "type": "outbox_retry", 
+/**
+ * The outbox id (`Queued` and the `Outbox` view carry it).
+ */
+outbox_id: number, } | { "type": "policy_set", 
 /**
  * The space.
  */
@@ -1573,7 +1577,7 @@ entry_id: string,
  */
 kind: string, 
 /**
- * `pending`, `sent` or `rejected`.
+ * `pending`, `sent`, `rejected` or `failed` (gave up after too many tries; `OutboxRetry` queues it again).
  */
 state: string, 
 /**

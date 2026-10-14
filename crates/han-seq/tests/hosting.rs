@@ -251,3 +251,66 @@ fn a_fetch_for_a_known_authors_entry_is_allowed_but_a_strangers_own_is_not() {
         );
     }
 }
+
+#[test]
+fn a_local_actor_without_a_profile_is_refused_not_unavailable() {
+    let home = home(false);
+    create(&home, "x1:a.localhost", ALICE, "k1", &key(5)).unwrap();
+    // a member.set naming an actor of this server that has no profile here will never resolve by waiting
+    let body = Value::Object(
+        [
+            ("actor".to_owned(), Value::Str("@exec:a.localhost".into())),
+            ("role".to_owned(), Value::Str("member".into())),
+        ]
+        .into(),
+    );
+    let (e, c) = entry(
+        &home,
+        "x1:a.localhost",
+        "member.set",
+        ALICE,
+        "k1",
+        &key(5),
+        body,
+    );
+    let err = home.append(&e, c.as_ref()).unwrap_err();
+    assert_eq!(err.code, Code::Invalid);
+    assert_eq!(err.message, "@exec:a.localhost has no profile at this home");
+    // an author of this server with no profile is refused too
+    let (e, c) = entry(
+        &home,
+        "x1:a.localhost",
+        "member.set",
+        "@ghost:a.localhost",
+        "k1",
+        &key(1),
+        Value::Object(
+            [
+                ("actor".to_owned(), Value::Str(ALICE.into())),
+                ("role".to_owned(), Value::Str("member".into())),
+            ]
+            .into(),
+        ),
+    );
+    let err = home.append(&e, c.as_ref()).unwrap_err();
+    assert_eq!(err.code, Code::Denied);
+    // a foreign actor whose profile is still being fetched stays `unavailable`
+    let body = Value::Object(
+        [
+            ("actor".to_owned(), Value::Str("@bob:b.example".into())),
+            ("role".to_owned(), Value::Str("member".into())),
+        ]
+        .into(),
+    );
+    let (e, c) = entry(
+        &home,
+        "x1:a.localhost",
+        "member.set",
+        ALICE,
+        "k1",
+        &key(5),
+        body,
+    );
+    let err = home.append(&e, c.as_ref()).unwrap_err();
+    assert_eq!(err.code, Code::Unavailable);
+}

@@ -512,6 +512,12 @@ impl Home {
         }
     }
 
+    /// Whether `actor` is a person or agent of this home's own server (not the server actor), whose profile
+    /// is served here or nowhere.
+    fn is_local_actor(&self, actor: &str) -> bool {
+        !actor.starts_with("@:") && grammar::server_of(actor) == Some(self.server.as_str())
+    }
+
     /// The answer when the profile of `actor` cannot be had now. One of another server is being read in the
     /// background if the hosting rule lets this home fetch it (the carrier calls
     /// [`Home::may_fetch_profile`] before it does); a stranger gets `denied` and nothing is fetched.
@@ -691,14 +697,14 @@ impl Home {
 
     /// P-01: calls `relevantActors` with the views fetched so far, fetches what it names that was not tried,
     /// and calls again until it names nothing new (three calls at most). The last list is what the receipt
-    /// pins; `None` if a profile on it cannot be had now.
+    /// pins; `Err(actor)` (inside the `Ok`) names a profile on it that cannot be had now.
     fn pin(
         &self,
         g: &Inner,
         state: Option<&SpaceState>,
         pe: &PolicyEntry,
         now: &str,
-    ) -> Result<Option<BTreeMap<ActorId, PinView>>> {
+    ) -> Result<std::result::Result<BTreeMap<ActorId, PinView>, ActorId>> {
         let author = pe.author.as_str();
         let mut fetched: BTreeMap<ActorId, PinView> = BTreeMap::new();
         let mut tried: HashSet<ActorId> = HashSet::new();
@@ -727,10 +733,10 @@ impl Home {
                 Some(v) => {
                     pinned.insert(a, v);
                 }
-                None => return Ok(None),
+                None => return Ok(Err(a)),
             }
         }
-        Ok(Some(pinned))
+        Ok(Ok(pinned))
     }
 
     // ───────────────────────── routing ─────────────────────────
@@ -802,6 +808,12 @@ impl Home {
         let now_secs = self.now_secs();
         let now = format_time(now_secs); // read once: the pin loop, Policy's ctx.time and the receipt time
         let Some(author) = self.profile_view(g, &entry.author, &now) else {
+            if self.is_local_actor(&entry.author) {
+                return Err(WireError::denied(format!(
+                    "{} has no profile at this home",
+                    entry.author
+                )));
+            }
             return Err(self.profile_missing(g, &entry.author, None));
         };
         if !author.keys.contains_key(&entry.key_id) {
@@ -814,9 +826,19 @@ impl Home {
             .verify(&public)
             .map_err(|_| WireError::invalid("signature"))?;
         let state = g.spaces.get(&entry.space).map(|s| &*s.state);
-        let pinned = self
-            .pin(g, state, &pe, &now)?
-            .ok_or_else(|| WireError::unavailable("profile").retry_after(PROFILE_RETRY_MS))?;
+        let pinned = match self.pin(g, state, &pe, &now)? {
+            Ok(p) => p,
+            // an actor of this very server with no profile here will not get one by waiting: a definite
+            // refusal, as Policy gives for an actor without a pinned profile
+            Err(a) if self.is_local_actor(&a) => {
+                return Err(WireError::invalid(format!(
+                    "{a} has no profile at this home"
+                )));
+            }
+            Err(_) => {
+                return Err(WireError::unavailable("profile").retry_after(PROFILE_RETRY_MS));
+            }
+        };
         let ctx = Ctx::new(&now, policy_profiles(&pinned))?;
         // 5 Policy; an owner's early abandon counts as allowed here and is refused in step 7 (R-16)
         let wait_ms = self.abandon_wait_ms(g, state, &pe, &entry, &pinned, now_secs)?;

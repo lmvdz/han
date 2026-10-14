@@ -72,6 +72,12 @@ pub enum ProposeAnswer {
         /// Who must approve, as text.
         waiting_for: String,
     },
+    /// Signed, but the home has not accepted it yet (it waits in the node's outbox): nobody can approve it
+    /// until it does. If the home later refuses it, the session's status says why.
+    Queued {
+        /// The proposal's entry id.
+        id: String,
+    },
     /// Refused before proposing (unknown action, invalid arguments, no executor, over budget).
     Refused {
         /// Why.
