@@ -40,14 +40,17 @@ pub struct SeqArgs {
     register: Vec<String>,
     /// Who may create a space on this server: `known` (its own actors and holders of a role in a hosted
     /// space; the default), `open`, or `allow:<actor-or-server>,...` (known actors and the listed ones).
-    /// Test mode defaults to `open`.
+    /// Test mode (conformance builds) defaults to `open`.
     #[arg(long, value_parser = parse_hosting)]
     hosting: Option<HostingPolicy>,
     /// Test mode (G-11): the clock moves only by `test.clock`, the peer filter admits every node, and the
     /// actors of `--test-config` are provisioned. Never for production.
+    /// Only in builds with the `conformance` feature.
+    #[cfg(feature = "conformance")]
     #[arg(long)]
     test_mode: bool,
     /// `config.json` of the wire vectors, for `--test-mode`.
+    #[cfg(feature = "conformance")]
     #[arg(long, default_value = "conformance/wire-vectors/config.json")]
     test_config: PathBuf,
 }
@@ -121,6 +124,7 @@ pub fn open_home(
     data: &std::path::Path,
     server: &str,
     store: Arc<SqliteStore>,
+    hosting: HostingPolicy,
 ) -> Result<Arc<Home>, Box<dyn std::error::Error>> {
     let key = keys::signing_key(keys::load_or_create(&data.join("server.key"))?);
     Ok(Arc::new(Home::open(
@@ -129,6 +133,7 @@ pub fn open_home(
             key,
             key_id: "h1".into(),
             durability: Durability::Local,
+            hosting,
         },
         Arc::new(SystemClock::new()),
         store,
@@ -212,21 +217,34 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
     let relay = args.relay.clone().unwrap_or_else(|| "n0".into());
     std::fs::create_dir_all(&args.data)?;
     let store = Arc::new(SqliteStore::open(&args.data)?);
-    let home = if args.test_mode {
+    #[cfg(feature = "conformance")]
+    let test_mode = args.test_mode;
+    #[cfg(not(feature = "conformance"))]
+    let test_mode = false;
+    #[cfg(feature = "conformance")]
+    let test_home = if test_mode {
         let config = han_net::wirevec::TestConfig::load(&args.test_config)?;
-        config.home(store)?
+        Some(config.home(store.clone())?)
     } else {
-        open_home(
+        None
+    };
+    #[cfg(not(feature = "conformance"))]
+    let test_home: Option<Arc<Home>> = None;
+    let home = match test_home {
+        Some(home) => {
+            // the wire vectors' strangers create spaces, unless the flag says otherwise
+            home.set_hosting(args.hosting.clone().unwrap_or(HostingPolicy::Open));
+            home
+        }
+        None => open_home(
             &args.data,
             args.server
                 .as_deref()
                 .ok_or("han seq needs --server (or `han home init --server …` first)")?,
             store,
-        )?
+            args.hosting.clone().unwrap_or_default(),
+        )?,
     };
-    if let Some(hosting) = args.hosting.clone() {
-        home.set_hosting(hosting);
-    }
     for spec in &args.register {
         let p: Vec<&str> = spec.split(':').collect();
         let [
@@ -249,7 +267,7 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
     let seed = keys::load_or_create(&args.data.join("node.key"))?;
     let mut opts = IrohOptions::new(seed);
     opts.bind = args.bind;
-    opts.relay = if args.test_mode && relay == "n0" {
+    opts.relay = if test_mode && relay == "n0" {
         RelayChoice::Disabled
     } else {
         relay_choice(&relay)

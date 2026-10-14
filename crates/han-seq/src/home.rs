@@ -15,7 +15,9 @@ use han_core::policy::{
 use han_core::types::{ActorId, Durability};
 use han_core::{Entry, LogRecord, PublicKey, Receipt, SigningKey, grammar};
 
-use crate::clock::{Clock, TestClock};
+use crate::clock::Clock;
+#[cfg(feature = "conformance")]
+use crate::clock::TestClock;
 use crate::error::{Result, WireError};
 use crate::fanout::{Hooks, NoHooks, Subs};
 use crate::identity::{PinKey, PinView, ServerKey};
@@ -57,6 +59,9 @@ pub struct HomeConfig {
     pub key_id: String,
     /// The durability the store provides (R-03): `Local` for a single machine.
     pub durability: Durability,
+    /// Whose `space.create` for a space of this server the home accepts. `KnownActors` for a real home;
+    /// the conformance homes (G-11) say `Open` here, as the wire vectors' strangers create spaces.
+    pub hosting: HostingPolicy,
 }
 
 /// Where other servers' keys and nodes come from (`/.well-known/han`). The network layer fills it.
@@ -179,6 +184,7 @@ pub struct Home {
     key_id: String,
     pub(crate) durability: Durability,
     pub(crate) clock: Arc<dyn Clock>,
+    #[cfg(feature = "conformance")]
     pub(crate) test_clock: Option<Arc<TestClock>>,
     pub(crate) store: Arc<dyn Store>,
     pub(crate) inner: Mutex<Inner>,
@@ -250,11 +256,19 @@ impl Home {
         clock: Arc<dyn Clock>,
         store: Arc<dyn Store>,
     ) -> std::result::Result<Home, OpenError> {
-        Self::build(cfg, clock, None, store)
+        Self::build(
+            cfg,
+            clock,
+            #[cfg(feature = "conformance")]
+            None,
+            store,
+        )
     }
 
     /// Opens a home in test mode (G-11): a clock that moves only by `test.clock`, the peer filter admitting
-    /// every node, and the control calls `test.clock` and `test.limits`.
+    /// every node, and the control calls `test.clock` and `test.limits`. Only in builds with the
+    /// `conformance` feature; the hosting policy is the config's, not implied by the mode.
+    #[cfg(feature = "conformance")]
     pub fn open_test(
         cfg: HomeConfig,
         clock: Arc<TestClock>,
@@ -266,7 +280,7 @@ impl Home {
     fn build(
         cfg: HomeConfig,
         clock: Arc<dyn Clock>,
-        test_clock: Option<Arc<TestClock>>,
+        #[cfg(feature = "conformance")] test_clock: Option<Arc<TestClock>>,
         store: Arc<dyn Store>,
     ) -> std::result::Result<Home, OpenError> {
         let public_key = cfg.key.public_key().to_base64url();
@@ -300,13 +314,13 @@ impl Home {
             }
         }
         let run_start = clock.steady_ms();
-        let is_test = test_clock.is_some();
         let home = Home {
             server: cfg.server,
             key: cfg.key,
             key_id: cfg.key_id,
             durability: cfg.durability,
             clock,
+            #[cfg(feature = "conformance")]
             test_clock,
             store: store.clone(),
             changes: tokio::sync::watch::channel(0).0,
@@ -327,12 +341,7 @@ impl Home {
                 hooks: Arc::new(NoHooks),
                 directory: Arc::new(NoDirectory),
                 limiter: None,
-                // test mode (G-11) keeps the wire vectors' strangers able to create spaces
-                hosting: if is_test {
-                    HostingPolicy::Open
-                } else {
-                    HostingPolicy::KnownActors
-                },
+                hosting: cfg.hosting,
                 fetch_rate: (run_start, 0),
             }),
         };
@@ -458,7 +467,7 @@ impl Home {
         self.lock().hosting = policy;
     }
 
-    /// The hosting policy (default [`HostingPolicy::KnownActors`]; test-mode homes start `Open`).
+    /// The hosting policy (what the config gave at open, then [`Home::set_hosting`]).
     pub fn hosting(&self) -> HostingPolicy {
         self.lock().hosting.clone()
     }
@@ -585,6 +594,7 @@ impl Home {
     }
 
     /// Whether this home is in test mode (G-11).
+    #[cfg(feature = "conformance")]
     pub fn is_test_mode(&self) -> bool {
         self.test_clock.is_some()
     }

@@ -45,6 +45,18 @@ pub enum Command {
         /// The space.
         space: String,
     },
+    /// Waits until a followed space has its first records from the home, so that what depends on its state
+    /// (a profile's operator, a member change) can go on. The node waits, not the caller: at most
+    /// `timeout_ms` (default and cap: the node's `sync_wait`). `not_found` if the space is not followed;
+    /// `unavailable` with `pending: space` if the records have not arrived by then.
+    SpaceAwait {
+        /// The space.
+        space: String,
+        /// How long to wait, at most.
+        #[serde(default)]
+        #[ts(optional)]
+        timeout_ms: Option<u64>,
+    },
     /// Registers an invite at the space's home and returns the ticket.
     Invite {
         /// The space.
@@ -373,6 +385,7 @@ impl Command {
             Command::SpaceCreate { .. }
             | Command::SpaceJoin { .. }
             | Command::SpaceFollow { .. }
+            | Command::SpaceAwait { .. }
             | Command::HomePin { .. }
             | Command::Invite { .. }
             | Command::MemberSet { .. }

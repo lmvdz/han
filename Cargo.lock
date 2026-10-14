@@ -1980,6 +1980,7 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "han-core",
+ "han-net",
  "han-seq",
  "iroh",
  "minicbor",
@@ -2049,6 +2050,7 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "han-core",
+ "han-seq",
  "rusqlite",
  "rusqlite_migration",
  "serde",

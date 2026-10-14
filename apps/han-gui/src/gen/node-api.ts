@@ -21,11 +21,25 @@ message: string,
 /**
  * When waiting helps, how long.
  */
-retry_after_ms: number | null, } | { "code": "conflict", 
+retry_after_ms: number | null, 
+/**
+ * What the request waits for, when it is state that is on its way (a space still syncing).
+ */
+pending?: Pending, } | { "code": "conflict", 
 /**
  * Free text.
  */
 message: string, };
+
+export type Pending = { "what": "space", 
+/**
+ * The space.
+ */
+space: string, } | { "what": "profile", 
+/**
+ * The actor.
+ */
+actor: string, };
 
 export type HomeRef = { "ticket": string } | { "server": string };
 
@@ -61,7 +75,15 @@ home?: HomeRef,
 /**
  * The space.
  */
-space: string, } | { "type": "invite", 
+space: string, } | { "type": "space_await", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * How long to wait, at most.
+ */
+timeout_ms?: number, } | { "type": "invite", 
 /**
  * The space.
  */

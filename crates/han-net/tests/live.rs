@@ -312,6 +312,7 @@ async fn scenario() {
             key: SigningKey::from_seed([30; 32]),
             key_id: "h1".into(),
             durability: han_core::types::Durability::Local,
+            hosting: han_seq::HostingPolicy::KnownActors,
         },
         Arc::new(SystemClock::new()),
         Arc::new(SqliteStore::open(&dir).unwrap()),

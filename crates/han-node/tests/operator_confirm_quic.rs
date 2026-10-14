@@ -53,19 +53,17 @@ async fn agent_confirm(
             space: PROFILE.into(),
         })
         .await;
-    loop {
-        match face
-            .call(Command::MemberSet {
-                space: PROFILE.into(),
-                actor: operator.into(),
-                role: "owner".into(),
-            })
-            .await
-        {
-            Err(NodeError::NotFound { .. }) => tokio::time::sleep(Duration::from_millis(50)).await,
-            other => return other,
-        }
-    }
+    face.call(Command::SpaceAwait {
+        space: PROFILE.into(),
+        timeout_ms: Some(30_000),
+    })
+    .await?;
+    face.call(Command::MemberSet {
+        space: PROFILE.into(),
+        actor: operator.into(),
+        role: "owner".into(),
+    })
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -91,6 +89,7 @@ async fn scenario() {
                 key: key(30),
                 key_id: "h1".into(),
                 durability: han_core::types::Durability::Local,
+                hosting: han_seq::HostingPolicy::KnownActors,
             },
             Arc::new(SystemClock::new()),
             Arc::new(SqliteStore::open(&dir.join("home")).unwrap()),

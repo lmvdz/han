@@ -27,6 +27,7 @@ fn open(store: Arc<dyn Store>, clock: &Arc<TestClock>) -> Home {
             key: SigningKey::from_seed(Sha256::digest(seed.as_bytes()).into()),
             key_id: "h1".into(),
             durability: Durability::Local,
+            hosting: han_seq::HostingPolicy::Open,
         },
         Arc::clone(clock),
         store,

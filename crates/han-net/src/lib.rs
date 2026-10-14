@@ -26,6 +26,7 @@ pub mod ticket;
 pub mod transport;
 pub mod typed;
 pub mod wellknown;
+#[cfg(feature = "conformance")]
 pub mod wirevec;
 
 pub use addr::{NodeAddr, NodeId};

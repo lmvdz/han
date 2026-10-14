@@ -18,7 +18,7 @@ mod stream;
 
 pub use bindings::typescript;
 pub use command::{CallResult, Command, CommandClass, ConnectionClass, HomeRef};
-pub use error::{APPROVAL_NOT_SIGNED, NodeError};
+pub use error::{APPROVAL_NOT_SIGNED, NodeError, Pending};
 pub use items::{
     ActorKind, AdmissionRow, ChangeSummaryRow, DeviceRow, DeviceState, InputState, ItemBody,
     ItemRow, MessageRole, RecordRow, Span, ToolKind, ToolLocation, ToolStatus, ToolText,

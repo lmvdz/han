@@ -21,6 +21,7 @@ fn home() -> Arc<Home> {
                 key: key(30),
                 key_id: "h1".into(),
                 durability: han_core::types::Durability::Local,
+                hosting: han_seq::HostingPolicy::KnownActors,
             },
             Arc::new(SystemClock::new()),
             Arc::new(MemStore::new()),

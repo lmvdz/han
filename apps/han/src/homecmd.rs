@@ -216,7 +216,7 @@ pub async fn init(
         .filter(|f| !data.join(f).exists())
         .count();
     let store = Arc::new(SqliteStore::open(data)?);
-    let home = open_home(data, server_name, store)?;
+    let home = open_home(data, server_name, store, Default::default())?;
     let seed = crate::keys::load_or_create(&data.join("node.key"))?;
     let mut opts = IrohOptions::new(seed);
     opts.bind = want.bind;

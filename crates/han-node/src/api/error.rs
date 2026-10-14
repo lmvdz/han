@@ -38,12 +38,32 @@ pub enum NodeError {
         /// When waiting helps, how long.
         #[ts(type = "number | null")]
         retry_after_ms: Option<u64>,
+        /// What the request waits for, when it is state that is on its way (a space still syncing).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        pending: Option<Pending>,
     },
     /// The thing is in a state that rules the request out (a task already closed, a space already followed).
     #[error("conflict: {message}")]
     Conflict {
         /// Free text.
         message: String,
+    },
+}
+
+/// State a request needs that has not arrived yet: waiting, not retrying the request unchanged, is what helps.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum Pending {
+    /// The first records of a followed space have not arrived from its home.
+    Space {
+        /// The space.
+        space: String,
+    },
+    /// The profile of an actor (its operator, its keys) has not arrived from the actor's home.
+    Profile {
+        /// The actor.
+        actor: String,
     },
 }
 
@@ -74,6 +94,24 @@ impl NodeError {
         NodeError::Unavailable {
             message: message.into(),
             retry_after_ms: None,
+            pending: None,
+        }
+    }
+
+    /// `unavailable` because `what` has not arrived yet.
+    pub fn pending(message: impl Into<String>, what: Pending) -> Self {
+        NodeError::Unavailable {
+            message: message.into(),
+            retry_after_ms: None,
+            pending: Some(what),
+        }
+    }
+
+    /// What the request waits for, if this is `unavailable` for that reason.
+    pub fn waiting_for(&self) -> Option<&Pending> {
+        match self {
+            NodeError::Unavailable { pending, .. } => pending.as_ref(),
+            _ => None,
         }
     }
 

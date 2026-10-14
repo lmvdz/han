@@ -18,6 +18,7 @@ use crate::fanout::{Live, Next, SubId};
 use crate::home::Home;
 use crate::jv;
 use crate::services::parse_blobref;
+#[cfg(feature = "conformance")]
 use crate::time::{format_time, parse_time};
 
 /// A challenge is valid this long (G-08).
@@ -140,10 +141,15 @@ impl Home {
             ("versions", Value::Array(vec![jv::int(1)])),
             ("time", jv::s(&self.now_str())),
         ]));
+        // test mode (G-11) binds no node; a build without `conformance` always does
+        #[cfg(feature = "conformance")]
+        let bound = !self.is_test_mode();
+        #[cfg(not(feature = "conformance"))]
+        let bound = true;
         let conn = Conn {
             home: Arc::clone(self),
             peer: peer.to_owned(),
-            node: (!self.is_test_mode()).then(|| node.to_owned()),
+            node: bound.then(|| node.to_owned()),
             id: NEXT_CONN.fetch_add(1, Ordering::Relaxed),
             state: Mutex::new(State {
                 who: None,
@@ -170,12 +176,14 @@ impl Conn {
     /// at least every 300 s and closes the connection when it is false.
     pub fn still_vouched(&self) -> bool {
         let who = self.st().who.clone();
+        #[cfg(feature = "conformance")]
+        if self.home.is_test_mode() {
+            return true;
+        }
+        // a `hello` is only accepted bound to the peer's node (SR-13), so this is the whole check
         match who {
-            // a `hello` is only accepted bound to the peer's node (SR-13), so this is the whole check
-            Some(who) if !self.home.is_test_mode() => {
-                self.home.nodes_for(&who).contains(&self.peer)
-            }
-            _ => true,
+            Some(who) => self.home.nodes_for(&who).contains(&self.peer),
+            None => true,
         }
     }
 
@@ -202,7 +210,11 @@ impl Conn {
             close,
             feed: None,
         };
-        if let Some(rejected) = request_verdict(text, self.home.is_test_mode()) {
+        #[cfg(feature = "conformance")]
+        let test_mode = self.home.is_test_mode();
+        #[cfg(not(feature = "conformance"))]
+        let test_mode = false;
+        if let Some(rejected) = request_verdict(text, test_mode) {
             let e = WireError::invalid("not a request frame");
             return finish(vec![error_frame(rejected.id, &e)], rejected.close);
         }
@@ -408,7 +420,9 @@ impl Conn {
                     .map(|()| Done::Ok(Value::Null))
                     .map_err(|e| (e, true)) // the home closes the connection after a failed join
             }
+            #[cfg(feature = "conformance")]
             "test.clock" => self.test_clock(args).map(Done::Ok).map_err(plain),
+            #[cfg(feature = "conformance")]
             "test.limits" => self.test_limits(args).map(Done::Ok).map_err(plain),
             other => Err(plain(WireError::invalid(format!("unknown call {other}")))),
         }
@@ -424,6 +438,7 @@ impl Conn {
 
     /// N-02: the peer filter, after the frame checks and before the args.
     fn admit(&self, call: &str, args: &Value) -> Result<()> {
+        #[cfg(feature = "conformance")]
         if self.home.is_test_mode() {
             return Ok(()); // G-11: in test mode the peer filter admits every node
         }
@@ -566,6 +581,7 @@ impl Conn {
         Err(WireError::denied("this server does not take over spaces"))
     }
 
+    #[cfg(feature = "conformance")]
     fn test_clock(&self, args: &Value) -> Result<Value> {
         let Some(clock) = &self.home.test_clock else {
             return Err(WireError::invalid("unknown call test.clock"));
@@ -601,6 +617,7 @@ impl Conn {
         ]))
     }
 
+    #[cfg(feature = "conformance")]
     fn test_limits(&self, args: &Value) -> Result<Value> {
         if !self.home.is_test_mode() {
             return Err(WireError::invalid("unknown call test.limits"));
@@ -670,6 +687,7 @@ impl Home {
     }
 
     /// `test.limits`: sets (or only reads) the `maxFrameBytes` that `hello` reports and state pages are cut to.
+    #[cfg(feature = "conformance")]
     pub(crate) fn set_max_frame_bytes(&self, n: Option<usize>) -> u64 {
         let mut g = self.lock();
         if let Some(n) = n {

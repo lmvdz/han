@@ -310,27 +310,30 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             issue,
             home,
         } => {
-            let mut tries = 0;
-            loop {
-                let r = client
-                    .call(Command::AgentStart {
-                        space: space.clone(),
-                        agent: agent.clone(),
-                        harness: harness.clone(),
-                        repo: repo.clone(),
-                        issue: issue.clone(),
-                        home: home.clone(),
-                    })
-                    .await;
-                if tries < 600 && profile_pending(&r) {
-                    // The profile is still being fetched.
-                    tries += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    continue;
-                }
-                r?;
-                break;
-            }
+            // The agent's profile names its operator: have the node follow it and wait for it to sync.
+            let profile = format!("profile:{agent}");
+            let _ = client
+                .call(Command::SpaceFollow {
+                    home: home.clone(),
+                    space: profile.clone(),
+                })
+                .await;
+            client
+                .call(Command::SpaceAwait {
+                    space: profile,
+                    timeout_ms: Some(60_000),
+                })
+                .await?;
+            client
+                .call(Command::AgentStart {
+                    space,
+                    agent: agent.clone(),
+                    harness,
+                    repo,
+                    issue,
+                    home,
+                })
+                .await?;
             println!("started a session of {agent}");
         }
         AgentCmd::Login { .. } | AgentCmd::SetupHarness { .. } | AgentCmd::Set { .. } => {}
@@ -373,18 +376,6 @@ fn set(data: &Path, agent: &str, edit: &AgentEdit) -> Res<String> {
     })
 }
 
-/// Whether a failed start only waits for the agent's profile to arrive.
-fn profile_pending(r: &Result<CallResult, han_node::api::NodeError>) -> bool {
-    match r {
-        Err(e) => {
-            let m = e.to_string();
-            m.contains("profile of")
-                && (m.contains("has not arrived") || m.contains("is not followed"))
-        }
-        Ok(_) => false,
-    }
-}
-
 /// `han agent confirm` and `han actor confirm`.
 pub async fn confirm_cmd(
     client: &RpcClient,
@@ -392,7 +383,15 @@ pub async fn confirm_cmd(
     home: Option<&HomeRef>,
     operator: &str,
 ) -> Res<()> {
-    match crate::enroll::confirm(client, actor, home, operator, 600).await {
+    match crate::enroll::confirm(
+        client,
+        actor,
+        home,
+        operator,
+        std::time::Duration::from_secs(60),
+    )
+    .await
+    {
         Ok(true) => println!("changed: {operator} confirmed {actor}"),
         Ok(false) => println!("unchanged: {actor} is already confirmed by {operator}"),
         Err(crate::enroll::Pending::Profile) => {

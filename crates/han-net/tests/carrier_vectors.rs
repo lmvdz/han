@@ -203,6 +203,7 @@ async fn frame_vectors() {
         key: han_core::SigningKey::from_seed([1; 32]),
         key_id: "h1".into(),
         durability: han_core::types::Durability::Local,
+        hosting: han_seq::HostingPolicy::Open,
     };
     let test_home = Arc::new(
         han_seq::Home::open_test(

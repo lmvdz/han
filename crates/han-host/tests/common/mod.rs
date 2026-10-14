@@ -97,6 +97,7 @@ impl World {
                     key: SigningKey::from_seed(seed(200)),
                     key_id: "h1".into(),
                     durability: han_core::types::Durability::Local,
+                    hosting: han_seq::HostingPolicy::KnownActors,
                 },
                 clock.clone(),
                 Arc::new(MemStore::new()),
@@ -248,22 +249,24 @@ pub async fn confirm_operator(
             space: profile.clone(),
         })
         .await;
-    for _ in 0..500 {
-        match operator
-            .call(Command::MemberSet {
-                space: profile.clone(),
-                actor: operator_actor.into(),
-                role: "owner".into(),
-            })
-            .await
-        {
-            Ok(CallResult::Receipt { .. }) => break,
-            Err(han_node::api::NodeError::NotFound { .. }) => {
-                tokio::time::sleep(Duration::from_millis(20)).await; // not followed yet
-            }
-            other => panic!("the operator's confirmation over han/1: {other:?}"),
-        }
-    }
+    operator
+        .call(Command::SpaceAwait {
+            space: profile.clone(),
+            timeout_ms: Some(30_000),
+        })
+        .await
+        .expect("the profile space syncs");
+    let r = operator
+        .call(Command::MemberSet {
+            space: profile.clone(),
+            actor: operator_actor.into(),
+            role: "owner".into(),
+        })
+        .await;
+    assert!(
+        matches!(r, Ok(CallResult::Receipt { .. })),
+        "the operator's confirmation over han/1: {r:?}"
+    );
     let state = world.home.state_of(&profile).expect("the profile space");
     assert!(
         state.profile.as_ref().is_some_and(|p| p.operator_confirmed),
