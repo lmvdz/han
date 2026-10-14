@@ -176,6 +176,10 @@ enum AgentCmd {
         /// The harness `han agent start` uses by default.
         #[arg(long)]
         harness: Option<String>,
+        /// API-key mode: a file holding the model key (readable only by you). The host's proxy keeps the
+        /// key; the agent never sees it.
+        #[arg(long)]
+        model_key_file: Option<PathBuf>,
     },
     /// Stops an agent's sessions, or one `host-<agent>#<issue>`.
     Stop {
@@ -208,8 +212,10 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             allow_advisory,
             toolchains,
             harness,
+            model_key_file,
         } => {
             let edit = AgentEdit {
+                model_key_file: model_key_file.clone(),
                 os_user: os_user.clone(),
                 sandbox: sandbox.clone(),
                 allow_advisory: *allow_advisory,
