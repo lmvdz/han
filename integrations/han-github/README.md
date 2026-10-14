@@ -32,13 +32,19 @@ refused, so a token never goes elsewhere.
 
 ## Credentials and the single-minter rule
 
-PLAN §6.7: han-exec is the single minter for **write** actions (`open_pr`, `git_push`, comments), approved in the
-log. This process mints installation tokens itself, with han-exec's minter code (`han_exec::github::GithubMinter`),
-for **reads only**: each token is scoped to one repository and the single permission `issues: read`, is held in
+PLAN §6.7 and SR-49: han-exec is the single minter for **write** actions (`open_pr`, `git_push`, comments),
+approved in the log, and only han-exec holds write-capable key material. This process parses untrusted issue text,
+so it has **its own read-only App**: a separate GitHub App with only Issues and Metadata read, configured as the
+`[app]` below. The executor's write App is a *different* App whose key only han-exec holds; `[app]` must never point
+at it. han-github has no `han-exec` dependency (`crates/han-node/tests/layering.rs` checks that its dependency tree
+has no `han-exec` and no `rsa`), and mints with a small JWT and installation-token mint of its own (`src/mint.rs`,
+`ring`) for **reads only**: each token is scoped to one repository and the single permission `issues: read`, is held in
 memory for 45 minutes, and is used through octocrab. Nothing here can write to GitHub: there is no code path
 that sends anything but a `GET` (and the token request). The App's private key stays in a PEM file; the config
 holds only its path, and neither the path, the key nor a token appears in logs, errors or `Debug` output.
-GitHub App permissions should be `issues: read` (and `metadata: read`) for this App, or a separate read-only App.
+The App's permissions must be `issues: read` and `metadata: read` and nothing else. The user's App 5309257 is
+already read-only and is this App; the executor's write App is a second App, created later. Future work (PLAN 6.7): a
+read-token broker in the executor, so this process holds no key at all.
 
 ## Config (TOML)
 

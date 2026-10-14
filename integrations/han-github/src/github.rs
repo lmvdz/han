@@ -1,20 +1,20 @@
 //! Reading GitHub: installation tokens (read-only, one repository), conditional requests, pagination.
 //!
 //! **Reads only.** Every token asked for here has `issues: read` and nothing else. Writes (a comment, a label,
-//! a PR) are han-exec actions, approved in the log, minted by han-exec (SR-49); nothing in this process can
-//! write to GitHub, and nothing here logs a token or the key path.
+//! a PR) are han-exec actions, approved in the log, minted by han-exec with a different, write-capable App
+//! (SR-49). This process holds only the key of its own read-only App and has no han-exec code; nothing here
+//! can write to GitHub, and nothing here logs a token or the key path.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use han_exec::GithubApp;
-use han_exec::github::GithubMinter;
 use octocrab::Octocrab;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::App;
+use crate::mint::ReadMinter;
 
 /// Installation tokens last an hour; take a new one after this.
 const TOKEN_TTL: Duration = Duration::from_secs(45 * 60);
@@ -116,7 +116,7 @@ impl Issue {
 
 /// The read side of the App.
 pub struct Reader {
-    minter: GithubMinter,
+    minter: ReadMinter,
     api_base: String,
     tokens: Mutex<HashMap<String, (Octocrab, Instant)>>,
 }
@@ -124,17 +124,11 @@ pub struct Reader {
 impl Reader {
     /// A reader that signs with the App's key file.
     pub fn from_config(app: &App) -> Result<Reader, String> {
-        let exec_app = GithubApp {
-            app_id: app.app_id,
-            installation_id: app.installation_id,
-            api_base: app.api_base.clone(),
-            private_key: app.private_key.clone(),
-        };
-        Ok(Reader::new(GithubMinter::from_app(&exec_app)?))
+        Ok(Reader::new(ReadMinter::from_app(app)?))
     }
 
     /// A reader over a given minter (tests give it a fixed JWT).
-    pub fn new(minter: GithubMinter) -> Reader {
+    pub fn new(minter: ReadMinter) -> Reader {
         let api_base = minter.api_base().to_owned();
         Reader {
             minter,
@@ -153,15 +147,11 @@ impl Reader {
         {
             return Ok(c.clone());
         }
-        let token = self
-            .minter
-            .token(repo, &[("issues", "read")])
-            .await
-            .map_err(GhError::Token)?;
+        let token = self.minter.read_token(repo).await.map_err(GhError::Token)?;
         let client = Octocrab::builder()
             .base_uri(self.api_base.as_str())
             .map_err(|_| GhError::Transport("bad API base".into()))?
-            .personal_token(token.expose().to_owned())
+            .personal_token(token)
             .build()
             .map_err(|_| GhError::Transport("building the client".into()))?;
         self.tokens

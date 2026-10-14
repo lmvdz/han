@@ -11,7 +11,9 @@
 //! never mirrored or streamed at all ([`Masker::is_excluded`]).
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
+use han_node::api::{BoxFuture, CallResult, Command, NodeApi, NodeError, Query, ViewStream};
 use regex::Regex;
 use serde_json::Value;
 
@@ -274,5 +276,179 @@ impl Masker {
 impl Default for Masker {
     fn default() -> Self {
         Masker::new(Vec::new())
+    }
+}
+
+/// The stream profile whose body is signed content (timeline ops carry hashes and signatures). It is masked
+/// before it is hashed and signed (in the mirror), so the wrapper must not touch it afterwards.
+const SIGNED_PROFILE: &str = "han.timeline/1";
+
+/// The one masking point on the way out (SR-52): a [`NodeApi`] that masks **every string leaf** of what
+/// `StatusPublish` and `StreamPublish` send, whatever fields the body has now or gets later. Same pattern as
+/// `AgentApi`: wrap once, hand the wrapper out.
+///
+/// Masking that has to happen *earlier* stays where it is, because this point cannot do it: before bounding
+/// (a secret cut in half by a length limit no longer matches; `StatusDeriver` and `ItemFeed` bound their
+/// texts), and before hashing and signing (the mirror's file content, so the signed op holds masked text).
+/// Those are defence in depth under this wrapper, not alternatives to it.
+pub struct MaskedApi {
+    inner: Arc<dyn NodeApi>,
+    masker: Arc<Masker>,
+}
+
+impl MaskedApi {
+    /// `inner`, with its status and stream publishes masked by `masker`.
+    pub fn new(inner: Arc<dyn NodeApi>, masker: Arc<Masker>) -> Self {
+        MaskedApi { inner, masker }
+    }
+
+    fn masked(&self, cmd: Command) -> Result<Command, NodeError> {
+        match cmd {
+            Command::StatusPublish { space, status } => {
+                let mut v = serde_json::to_value(&*status)
+                    .map_err(|_| NodeError::denied("a status that cannot be masked is not sent"))?;
+                self.masker.mask_json(&mut v);
+                let status = serde_json::from_value(v)
+                    .map_err(|_| NodeError::denied("a status that cannot be masked is not sent"))?;
+                Ok(Command::StatusPublish { space, status })
+            }
+            Command::StreamPublish {
+                space,
+                session,
+                name,
+                body,
+            } if name != SIGNED_PROFILE => {
+                let body = match serde_json::from_str::<Value>(&body) {
+                    Ok(mut v) => {
+                        let before = v.clone();
+                        self.masker.mask_json(&mut v);
+                        // Untouched bodies go out byte for byte.
+                        if v == before { body } else { v.to_string() }
+                    }
+                    // Not JSON (the node refuses it anyway): mask it as text.
+                    Err(_) => self.masker.mask(&body).into_owned(),
+                };
+                Ok(Command::StreamPublish {
+                    space,
+                    session,
+                    name,
+                    body,
+                })
+            }
+            other => Ok(other),
+        }
+    }
+}
+
+impl NodeApi for MaskedApi {
+    fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
+        match self.masked(cmd) {
+            Ok(cmd) => self.inner.call(cmd),
+            Err(e) => Box::pin(async move { Err(e) }),
+        }
+    }
+
+    fn view(&self, query: Query) -> ViewStream {
+        self.inner.view(query)
+    }
+}
+
+#[cfg(test)]
+mod masked_api_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    const SECRET: &str = "hunter2-secret-value";
+
+    struct Sink(Mutex<Vec<Command>>);
+
+    impl NodeApi for Sink {
+        fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
+            self.0.lock().unwrap().push(cmd);
+            Box::pin(async { Ok(CallResult::Done) })
+        }
+        fn view(&self, _query: Query) -> ViewStream {
+            ViewStream::failed(NodeError::unavailable("no views"))
+        }
+    }
+
+    fn rig() -> (Arc<Sink>, MaskedApi) {
+        let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+        let api = MaskedApi::new(sink.clone(), Arc::new(Masker::new(vec![SECRET.to_owned()])));
+        (sink, api)
+    }
+
+    #[tokio::test]
+    async fn a_new_string_field_in_a_stream_body_is_masked_without_per_field_code() {
+        let (sink, api) = rig();
+        let body = serde_json::json!({
+            "id": "i1",
+            "a_field_added_next_year": format!("see {SECRET} here"),
+            "nested": {"deep": [{"x": format!("k={SECRET}")}]},
+            "n": 3,
+        });
+        api.call(Command::StreamPublish {
+            space: "s".into(),
+            session: "e".into(),
+            name: "han.item/1".into(),
+            body: body.to_string(),
+        })
+        .await
+        .unwrap();
+        let sent = sink.0.lock().unwrap().pop().unwrap();
+        let Command::StreamPublish { body, .. } = sent else {
+            panic!("a stream publish")
+        };
+        assert!(!body.contains(SECRET), "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["a_field_added_next_year"], "see [masked:known] here");
+        assert_eq!(v["nested"]["deep"][0]["x"], "k=[masked:known]");
+        assert_eq!(v["id"], "i1");
+        assert_eq!(v["n"], 3);
+    }
+
+    #[tokio::test]
+    async fn every_string_of_a_status_is_masked() {
+        let (sink, api) = rig();
+        let status: han_node::api::StatusBody = serde_json::from_value(serde_json::json!({
+            "session": "e1", "agent": "@a:h", "harness": "h", "state": "working",
+            "step": "s", "seq": 1, "at": "t",
+            // Fields the old per-site code never masked.
+            "issue": format!("github:o/r#1 {SECRET}"),
+            "repo": format!("r {SECRET}"),
+            "base": format!("b {SECRET}"),
+            "plan": [{"text": format!("p {SECRET}"), "done": false}],
+            "files": [{"path": format!("a/{SECRET}"), "hunks": [[1, 2]]}],
+        }))
+        .unwrap();
+        api.call(Command::StatusPublish {
+            space: "s".into(),
+            status: Box::new(status),
+        })
+        .await
+        .unwrap();
+        let sent = sink.0.lock().unwrap().pop().unwrap();
+        let dump = format!("{sent:?}");
+        assert!(!dump.contains(SECRET), "{dump}");
+        assert!(dump.contains("[masked:known]"), "{dump}");
+    }
+
+    #[tokio::test]
+    async fn signed_timeline_bodies_and_other_commands_pass_unchanged() {
+        let (sink, api) = rig();
+        let body = format!(r#"{{"sig":"{SECRET}"}}"#);
+        api.call(Command::StreamPublish {
+            space: "s".into(),
+            session: "e".into(),
+            name: SIGNED_PROFILE.into(),
+            body: body.clone(),
+        })
+        .await
+        .unwrap();
+        let Command::StreamPublish { body: sent, .. } = sink.0.lock().unwrap().pop().unwrap()
+        else {
+            panic!("a stream publish")
+        };
+        assert_eq!(sent, body);
     }
 }

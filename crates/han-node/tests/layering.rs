@@ -137,6 +137,15 @@ fn the_terminal_face_gets_only_the_api_types() {
 }
 
 #[test]
+fn han_github_holds_no_write_key_material() {
+    // PLAN 6.7, SR-49: only han-exec holds write-capable key material. han-github parses untrusted issue text and
+    // has its own read-only App, so it must not link the executor (or an RSA implementation to sign with).
+    let gh = tree(&["-p", "han-github"]);
+    assert_absent("han-github", &gh, &["han-exec", "rsa"]);
+    assert!(gh.iter().any(|d| d == "han-node"));
+}
+
+#[test]
 fn face_sources_use_only_the_api_and_the_rpc_client() {
     let mut faces = vec![
         root().join("apps/han/src/board.rs"),

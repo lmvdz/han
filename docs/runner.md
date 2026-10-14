@@ -445,7 +445,7 @@ Also check, on the runner:
 Agents never hold credentials. An agent proposes an effect (`git_push`, `open_pr`, `http_request`), an owner
 approves it, and the **executor** runs it. The executor is its own process and actor, `@exec:<server>`, a
 `service` actor with an owner as operator. It runs on the runner as its own OS user, `han-exec`, because it
-is the one process that holds the GitHub App's private key.
+is the one process that holds the **write** GitHub App's private key. `han-github` uses a different, read-only App with its own key (section 10).
 
 **Accounts, keys, profile.**
 
@@ -529,9 +529,16 @@ desktop the same command runs by hand: `han exec --actor @exec:<server> --space 
 
 ## 10. GitHub App permissions for writes
 
-The user's App (id 5309257) has **issues: read** today, which is all `han-github` needs. The executor mints a
-token per action with exactly the permission that action needs (SR-67), so writes need these **repository
-permissions** on the App, for the repositories it is installed on:
+There are two Apps, and the key of each is held by one process only (PLAN 6.7, SR-49).
+
+* **The read App** is what `han-github` uses, configured as its own `[app]` in `han-github.toml`, with
+  **Issues: read** and **Metadata: read** only. The user's current App (id 5309257) is exactly this and is already
+  used by `han-github`. `han-github` has no `han-exec` code and cannot mint a write token.
+* **The write App** is a *second* App, to be created later, whose key only `han-exec` holds (below). Do not
+  point `han-github` at it, and do not give the executor the read App.
+
+The executor mints a token per action with exactly the permission that action needs (SR-67), so writes need these **repository
+permissions** on the write App, for the repositories it is installed on:
 
 | Action | Permission | Level |
 |---|---|---|
