@@ -335,6 +335,38 @@ async fn a_spent_budget_refuses_model_calls() {
     assert!(p.decisions().iter().any(|d| d.reason == "budget-spent"));
 }
 
+/// Counts a call only after a delay, as a budget backed by a slow store would.
+struct SlowRecord(Mutex<u64>);
+
+impl Budget for SlowRecord {
+    fn exhausted(&self) -> bool {
+        *self.0.lock().unwrap() >= 1
+    }
+    fn record(&self, u: &Usage) {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        *self.0.lock().unwrap() += u.requests;
+    }
+}
+
+/// The spend of a call is recorded before the client sees the end of its response, so a
+/// client that reads to EOF and calls again is always refused (SR-41).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spend_is_recorded_before_the_response_ends() {
+    let mock = Mock::start().await;
+    let mut cfg = ProxyConfig::new("s1", TOKEN);
+    cfg.model = Some(mock.route(KeySource::new(REAL_KEY), KeyStyle::XApiKey));
+    cfg.budget = Some(Arc::new(SlowRecord(Mutex::new(0))));
+    let p = Proxy::start(cfg).await.unwrap();
+    assert!(
+        raw(p.addr(), &model_req("/v1/messages", TOKEN, "{}"))
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    let r = raw(p.addr(), &model_req("/v1/messages", TOKEN, "{}")).await;
+    assert!(r.starts_with("HTTP/1.1 429"), "{r}");
+    assert_eq!(mock.requests().len(), 1);
+}
+
 // ───────────────────────── tunnels ─────────────────────────
 
 /// An upstream that records what it receives and answers "ok".

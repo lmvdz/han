@@ -895,8 +895,10 @@ async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> 
             break;
         }
     }
-    let _ = s.shutdown().await;
     let used = scan.finish();
+    // Spend is recorded before the client sees the end of the response. Closing first lets
+    // a client that reads to EOF and immediately calls again pass the budget check before
+    // this call is counted (SR-41).
     if let Some(b) = &sh.budget {
         b.record(&used);
     }
@@ -906,6 +908,7 @@ async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> 
     d.bytes_down = down;
     d.status = Some(status.as_u16());
     sh.record(d);
+    let _ = s.shutdown().await;
     tracing::info!(
         target: "han_host::proxy",
         session = %sh.session,
