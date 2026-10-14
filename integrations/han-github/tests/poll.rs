@@ -3,9 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use han_exec::github::{GithubMinter, JwtSource};
-use han_exec::{GithubApp, Secret};
-use han_github::{Config, Reader, Syncer};
+use han_github::{Config, JwtSource, ReadMinter, Reader, Syncer};
 use han_node::api::{
     BoxFuture, CallResult, Command, NodeApi, NodeError, NodeStatusRow, Query, Row, TaskRow,
     ViewEvent, ViewStream,
@@ -20,8 +18,8 @@ const ME: &str = "@gh:h";
 struct StaticJwt;
 
 impl JwtSource for StaticJwt {
-    fn jwt(&self, _: u64, _: u64) -> Result<Secret, String> {
-        Ok(Secret::new("test-app-jwt"))
+    fn jwt(&self, _: u64, _: u64) -> Result<String, String> {
+        Ok("test-app-jwt".to_owned())
     }
 }
 
@@ -166,13 +164,7 @@ fn rig(server: &MockServer, tasks_to: &str, node: &Arc<Node>) -> Syncer<Reader> 
         server.uri()
     ))
     .unwrap();
-    let app = GithubApp {
-        app_id: 1,
-        installation_id: 7,
-        api_base: Some(server.uri()),
-        private_key: String::new(),
-    };
-    let reader = Reader::new(GithubMinter::new(&app, Box::new(StaticJwt)).unwrap());
+    let reader = Reader::new(ReadMinter::new(&cfg.app, Box::new(StaticJwt)).unwrap());
     Syncer::new(&cfg, node.clone(), reader)
 }
 

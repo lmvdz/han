@@ -12,9 +12,11 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
-han-exec = { path = "../../crates/han-exec", version = "0.1.0" }
+base64.workspace = true
 han-node = { path = "../../crates/han-node", version = "0.1.0" }
 octocrab = { version = "=0.54.4", default-features = false, features = ["default-client", "rustls", "rustls-ring", "tracing"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde.workspace = true
 serde_json.workspace = true

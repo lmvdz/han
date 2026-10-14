@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +30,7 @@ use tokio::sync::{mpsc, watch};
 use crate::acp::{AcpDriver, AgentDriver, AgentEvent, Mode, SessionConfig, TurnInput};
 use crate::driver::DriverConfig;
 use crate::items::ItemFeed;
-use crate::mask::Masker;
+use crate::mask::{MaskedApi, Masker};
 use crate::r24::{self, Driver, DriverKind, GuardFacts, TaintStore, TaskDuty};
 use crate::status::{Signal, StatusDeriver};
 
@@ -257,14 +258,84 @@ struct Shared {
     vcs: Arc<dyn Vcs>,
     masker: Arc<Masker>,
     status: Mutex<StatusDeriver>,
-    signals: mpsc::UnboundedSender<Signal>,
+    /// Closed (taken) at shutdown, so the publisher sees the end of the channel after the queued signals.
+    signals: Mutex<Option<mpsc::UnboundedSender<Signal>>>,
+    /// Publishes (status or item) the node refused or failed; shown in the status summary.
+    publish_errors: AtomicU64,
     read_others: Mutex<bool>,
     proposals: Mutex<Vec<String>>,
 }
 
 impl Shared {
+    /// Queues a signal for the publisher (masked first, see [`Shared::apply`]). After [`Shared::close_signals`]
+    /// it is dropped.
     fn signal(&self, s: Signal) {
-        let _ = self.signals.send(s);
+        if let Some(tx) = self
+            .signals
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            let _ = tx.send(self.masked_signal(s));
+        }
+    }
+
+    /// Whether nobody listens any more: the channel was closed at shutdown, or the publisher is gone.
+    fn signals_closed(&self) -> bool {
+        self.signals
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_none_or(|tx| tx.is_closed())
+    }
+
+    /// Ends the signal channel: the publisher drains what is queued, publishes the final state and returns.
+    fn close_signals(&self) {
+        self.signals
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+    }
+
+    /// Masks the free text of a signal. This is early on purpose: the deriver bounds texts (SR-59), and a
+    /// secret cut in half by the bound no longer matches. [`MaskedApi`] is the backstop at the node boundary.
+    fn masked_signal(&self, s: Signal) -> Signal {
+        let m = |t: String| self.masker.mask(&t).into_owned();
+        match s {
+            Signal::LastMessage(t) => Signal::LastMessage(m(t)),
+            Signal::Tool { title, kind } => Signal::Tool {
+                title: m(title),
+                kind,
+            },
+            Signal::Plan(items) => Signal::Plan(
+                items
+                    .into_iter()
+                    .map(|p| han_node::api::PlanItem {
+                        text: m(p.text),
+                        done: p.done,
+                    })
+                    .collect(),
+            ),
+            Signal::Summary(t) => Signal::Summary(m(t)),
+            Signal::Failed(t) => Signal::Failed(m(t)),
+            Signal::TurnStarted { step } => Signal::TurnStarted { step: m(step) },
+            other => other,
+        }
+    }
+
+    /// Folds a signal into the status (masked). Returns whether the status changed.
+    fn apply(&self, s: Signal) -> bool {
+        let s = self.masked_signal(s);
+        self.status
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .apply(s)
+    }
+
+    /// Counts and logs a failed publish. The error text is masked: it may quote what was sent.
+    fn publish_failed(&self, what: &str, e: &NodeError) {
+        self.publish_errors.fetch_add(1, Ordering::Relaxed);
+        tracing::warn!("{what} not published: {}", self.masker.mask(&e.to_string()));
     }
 
     /// Who must approve, as text.
@@ -401,7 +472,7 @@ async fn follow_outbox(sh: &Shared, outbox_id: u64, wait: Duration) -> Fate {
                 }
             }
         }
-        if sh.signals.is_closed() || start.elapsed() >= wait {
+        if sh.signals_closed() || start.elapsed() >= wait {
             return Fate::Pending;
         }
         tokio::time::sleep(OUTBOX_POLL).await;
@@ -519,8 +590,7 @@ impl HostBridge for Bridge {
         if tool.starts_with("team_read") || tool == "team.read" {
             *self.0.read_others.lock().unwrap_or_else(|p| p.into_inner()) = true;
         }
-        let masked = self.0.masker.mask(summary).into_owned();
-        self.0.signal(Signal::Summary(masked));
+        self.0.signal(Signal::Summary(summary.to_owned()));
     }
 
     fn summaries(&self, _session: &str) -> Vec<String> {
@@ -781,6 +851,9 @@ async fn run_opened(
     known.extend(cfg.model_key.iter().cloned());
     let masker = Arc::new(Masker::new(known));
 
+    // Everything status and stream goes through one masking point (SR-52). The mirror keeps the raw `api`: its
+    // batches are signed, so they were masked before they were hashed.
+    let masked_api: Arc<dyn NodeApi> = Arc::new(MaskedApi::new(api.clone(), masker.clone()));
     let (sig_tx, mut sig_rx) = mpsc::unbounded_channel();
     let (sandbox_info, gaps) = (
         Sandbox {
@@ -802,7 +875,7 @@ async fn run_opened(
         sandbox_info,
     );
     let shared = Arc::new(Shared {
-        api: api.clone(),
+        api: masked_api,
         cfg: cfg.clone(),
         session: session.to_owned(),
         task: task.as_ref().map(|t| t.0.clone()),
@@ -810,7 +883,8 @@ async fn run_opened(
         vcs: deps.vcs.clone(),
         masker: masker.clone(),
         status: Mutex::new(deriver),
-        signals: sig_tx,
+        signals: Mutex::new(Some(sig_tx)),
+        publish_errors: AtomicU64::new(0),
         read_others: Mutex::new(false),
         proposals: Mutex::new(Vec::new()),
     });
@@ -949,20 +1023,19 @@ async fn run_opened(
                                     while let Some(Some(ev)) = events.next().now_or_never() {
                                         feed.apply(&ev, &now_text());
                                         for s in signals_of(&shared, mirror.as_deref(), ev) {
-                                            dirty |= shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(s);
+                                            dirty |= shared.apply(s);
                                         }
                                     }
                                     feed.end_turn();
                                     if matches!(s, Signal::TurnEnded)
                                         && let Some(m) = feed.last_message()
                                     {
-                                        let m = shared.masker.mask(m).into_owned();
-                                        shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(Signal::LastMessage(m));
+                                        shared.apply(Signal::LastMessage(m.to_owned()));
                                     }
                                 }
                                 _ => {}
                             }
-                            dirty |= shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(s);
+                            dirty |= shared.apply(s);
                             publish_items(&shared, &mut feed).await;
                         }
                         None => break,
@@ -971,7 +1044,7 @@ async fn run_opened(
                         Some(ev) => {
                             feed.apply(&ev, &now_text());
                             for s in signals_of(&shared, mirror.as_deref(), ev) {
-                                dirty |= shared.status.lock().unwrap_or_else(|p| p.into_inner()).apply(s);
+                                dirty |= shared.apply(s);
                             }
                         }
                         None => {
@@ -1078,10 +1151,20 @@ async fn run_opened(
         Signal::Done
     });
     drop(mirror);
-    // Let the publisher drain, then stop it.
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    publisher.abort();
-    publish(&shared).await;
+    // Close the signal channel and wait for the publisher: it folds what is queued, sends the last items and
+    // the final status, then returns. Only when it overruns the bound is it stopped, and that is logged.
+    shared.close_signals();
+    let mut publisher = publisher;
+    match tokio::time::timeout(PUBLISHER_DRAIN, &mut publisher).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("the publisher task ended abnormally: {e}"),
+        Err(_) => {
+            tracing::warn!(
+                "the publisher did not drain within {PUBLISHER_DRAIN:?}; the last items may be missing"
+            );
+            publisher.abort();
+        }
+    }
     Ok(final_state)
 }
 
@@ -1141,34 +1224,42 @@ async fn turn(
                 let why = end
                     .provider_error
                     .unwrap_or_else(|| "the turn ended with no output and no tool calls".into());
-                shared.signal(Signal::Failed(shared.masker.mask(&why).into_owned()));
+                shared.signal(Signal::Failed(why));
                 return Ok(SessionState::Failed);
             }
-            refresh_files(shared);
+            refresh_files(shared).await;
             shared.signal(Signal::TurnEnded);
             Ok(SessionState::Idle)
         }
         Err(e) => {
-            shared.signal(Signal::Failed(
-                shared.masker.mask(&e.to_string()).into_owned(),
-            ));
+            shared.signal(Signal::Failed(e.to_string()));
             Ok(SessionState::Failed)
         }
     }
 }
 
-fn refresh_files(shared: &Shared) {
-    if let Ok(cs) = shared
-        .vcs
-        .changeset(&shared.workspace.dir, &shared.workspace.base)
-    {
+/// The workspace's changeset. It shells out to `git`, so it runs on the blocking pool, not on the async loop.
+async fn changeset_of(shared: &Shared) -> Option<ChangeSet> {
+    let vcs = shared.vcs.clone();
+    let (dir, base) = (shared.workspace.dir.clone(), shared.workspace.base.clone());
+    tokio::task::spawn_blocking(move || vcs.changeset(&dir, &base).ok())
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn refresh_files(shared: &Shared) {
+    if let Some(cs) = changeset_of(shared).await {
         shared.signal(Signal::Files(touches(&cs)));
     }
 }
 
+/// The most the end of a session waits for the publisher to send what is left (a slow node, a long backlog).
+const PUBLISHER_DRAIN: Duration = Duration::from_secs(30);
+
 /// Maps one agent event to status signals, and attributes worktree changes to the running tool call.
 fn signals_of(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     mirror: Option<&crate::glue::MirrorHandle>,
     ev: AgentEvent,
 ) -> Vec<Signal> {
@@ -1179,10 +1270,7 @@ fn signals_of(
             if let Some(m) = mirror {
                 m.set_step(Some(id));
             }
-            vec![Signal::Tool {
-                title: shared.masker.mask(&title).into_owned(),
-                kind,
-            }]
+            vec![Signal::Tool { title, kind }]
         }
         AgentEvent::ToolCallUpdate {
             status,
@@ -1193,7 +1281,7 @@ fn signals_of(
             let mut out = Vec::new();
             if let Some(t) = title {
                 out.push(Signal::Tool {
-                    title: shared.masker.mask(&t).into_owned(),
+                    title: t,
                     kind: None,
                 });
             }
@@ -1202,12 +1290,10 @@ fn signals_of(
                     m.set_step(None);
                 }
                 out.push(Signal::ToolDone { output });
-                if let Ok(cs) = shared
-                    .vcs
-                    .changeset(&shared.workspace.dir, &shared.workspace.base)
-                {
-                    out.push(Signal::Files(touches(&cs)));
-                }
+                // The diff shells out to `git`: off the async loop, and off the event order too (the files
+                // arrive as their own signal when the diff is done, so the next events are not held up).
+                let shared = shared.clone();
+                tokio::spawn(async move { refresh_files(&shared).await });
             }
             out
         }
@@ -1215,7 +1301,7 @@ fn signals_of(
             entries
                 .into_iter()
                 .map(|(text, status)| han_node::api::PlanItem {
-                    text: shared.masker.mask(&text).into_owned(),
+                    text,
                     done: status == "completed",
                 })
                 .collect(),
@@ -1238,7 +1324,7 @@ async fn publish_items(shared: &Shared, feed: &mut ItemFeed) {
             })
             .await;
         if let Err(e) = r {
-            tracing::warn!("item not published: {e}");
+            shared.publish_failed("item", &e);
         }
     }
 }
@@ -1249,24 +1335,26 @@ async fn publish(shared: &Shared) {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .snapshot(&now_text());
-    // SR-52: nothing leaves the device unmasked.
-    body.step = shared.masker.mask(&body.step).into_owned();
-    if let Some(s) = &body.summary {
-        body.summary = Some(shared.masker.mask(s).into_owned());
+    // Publish failures so far, in the summary (the status has no field for them). Text is masked by
+    // `shared.api` (SR-52): nothing here masks by hand.
+    let failed = shared.publish_errors.load(Ordering::Relaxed);
+    if failed > 0 {
+        let note = format!("{failed} publish error(s)");
+        body.summary = Some(match body.summary.take() {
+            Some(s) => crate::status::bound(&format!("{note}; {s}"), crate::status::MAX_SUMMARY),
+            None => note,
+        });
     }
-    if let Some(t) = &body.tool {
-        body.tool = Some(shared.masker.mask(t).into_owned());
-    }
-    for p in &mut body.plan {
-        p.text = shared.masker.mask(&p.text).into_owned();
-    }
-    let _ = shared
+    if let Err(e) = shared
         .api
         .call(Command::StatusPublish {
             space: shared.cfg.space.clone(),
             status: Box::new(body),
         })
-        .await;
+        .await
+    {
+        shared.publish_failed("status", &e);
+    }
 }
 
 /// The worktree path of a session directory.

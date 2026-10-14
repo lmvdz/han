@@ -302,7 +302,7 @@ This one schema feeds the board, overlap alerts, agent tools and GitHub sync. `s
 
 | Topic | Decision |
 |---|---|
-| GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens, minted only by han-exec (the single holder of the App's private key). MVP: han-github polls issues every 60 s with conditional requests (ETags). Later: a webhook relay run by the team, or a small hosted forwarder |
+| GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens, minted only by han-exec (the single holder of the **write** App's private key). han-github reads with a different, read-only App (Issues and Metadata read) whose key it holds itself, so a compromised poller cannot mint write tokens. Future work: a read-token broker in the executor, so han-github holds no GitHub key at all. MVP: han-github polls issues every 60 s with conditional requests (ETags). Later: a webhook relay run by the team, or a small hosted forwarder |
 | Finish flow | configurable per space and per repo: mark done; push the branch and propose a PR (default); or merge the timeline into main. Each step is gated or free as configured |
 | git | shell out to `git` for push (gix can't push yet); gix for reads; octocrab for the GitHub API |
 
