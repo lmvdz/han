@@ -156,9 +156,11 @@ fn a_device_joins_a_placeholder_home_by_ticket_and_confirms_an_agent() {
         "--register",
         &format!("{AGENT}:agent:k1:{agent_key}:{OPERATOR}"),
     ]);
-    let ticket = seq.value("ticket");
+    // `han seq` names the ticket's file and never prints the ticket (stdout may be a journal).
+    let file = seq.value("ticket-file");
+    assert!(file.ends_with("home.ticket"), "{file}");
+    let ticket = han(&["ticket", "--data", home_s]).trim().to_owned();
     assert!(ticket.starts_with("han1home."), "{ticket}");
-    assert_eq!(han(&["ticket", "--data", home_s]).trim(), ticket);
 
     // the device joins by the ticket; the operator confirms the agent
     let joined = node(&device, &["--home", &ticket]);

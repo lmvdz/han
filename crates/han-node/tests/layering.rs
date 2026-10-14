@@ -141,6 +141,7 @@ fn face_sources_use_only_the_api_and_the_rpc_client() {
     let mut faces = vec![
         root().join("apps/han/src/board.rs"),
         root().join("apps/han/src/agent.rs"),
+        root().join("apps/han/src/space.rs"),
         root().join("apps/han/src/tui.rs"),
     ];
     // The terminal face is a crate of its own: every source file of it is a face source.
