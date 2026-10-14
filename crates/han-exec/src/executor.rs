@@ -136,7 +136,42 @@ impl Executor {
             vcs: Arc::clone(&self.cfg.vcs),
             scratch,
             github: self.cfg.github.clone(),
+            args_blob: None,
         }
+    }
+
+    /// The bytes of the plan's `argsBlob` from the space (the node checks their hash and size). A blob the
+    /// home doesn't serve yet (the proposer's upload is still on its way) is a preflight failure, tried again
+    /// at the next head.
+    async fn fetch_args_blob(
+        &self,
+        space: &str,
+        plan: &Value,
+    ) -> Result<Option<Arc<Vec<u8>>>, PlanError> {
+        let Some(b) = crate::args_blob(plan)? else {
+            return Ok(None);
+        };
+        let r = self
+            .api
+            .call(Command::BlobFetch {
+                space: space.to_owned(),
+                hash: b.hash.clone(),
+                size: b.size,
+                media_type: b.media_type.clone(),
+            })
+            .await
+            .map_err(|e| PlanError::Preflight(format!("argsBlob: {e}")))?;
+        let CallResult::Blob { hash, data, .. } = r else {
+            return Err(PlanError::Preflight("argsBlob: unexpected answer".into()));
+        };
+        let bytes = han_core::base64url::decode(&data)
+            .map_err(|_| PlanError::Preflight("argsBlob: not base64url".into()))?;
+        if hash != b.hash || han_core::ids::sha256_hex(&bytes) != b.hash {
+            return Err(PlanError::Preflight(
+                "argsBlob: the bytes do not hash to the plan's".into(),
+            ));
+        }
+        Ok(Some(Arc::new(bytes)))
     }
 
     fn query(&self) -> Query {
@@ -433,7 +468,14 @@ impl Executor {
             proposal: row.proposal.clone(),
             attempt,
         };
-        let ctx = self.ctx(&key);
+        let mut ctx = self.ctx(&key);
+        match self.fetch_args_blob(&row.space, &plan).await {
+            Ok(b) => ctx.args_blob = b,
+            Err(e) => {
+                self.refuse(row, &e, out);
+                return Ok(());
+            }
+        }
         if let Err(e) = action.preflight(&plan, &ctx).await {
             self.refuse(row, &e, out);
             return Ok(());

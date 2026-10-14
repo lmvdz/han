@@ -84,6 +84,16 @@ pub trait TimelineSource: Send + Sync + 'static {
 /// The timeline source of a node with no timeline engine.
 pub struct NoTimeline;
 
+/// What a person confirms when they approve a proposal (see [`Engine::approval_subject`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ApprovalSubject {
+    pub digest: String,
+    pub open: bool,
+    pub action: String,
+    pub target: String,
+    pub requester: String,
+}
+
 impl NoTimeline {
     fn err<T>() -> Result<T, NodeError> {
         Err(NodeError::unavailable(
@@ -492,6 +502,25 @@ impl Engine {
             e.plan_digest.clone(),
             crate::model::effect_open(e, &self.now),
         ))
+    }
+
+    /// What an approver is asked to confirm about a proposal: the digest, whether it still waits, and the
+    /// action, target and proposer for the presence prompt.
+    pub(crate) fn approval_subject(&self, space: &str, proposal: &str) -> Option<ApprovalSubject> {
+        let e = self.spaces.get(space)?.effects.get(proposal)?;
+        let target = e
+            .plan
+            .as_deref()
+            .and_then(|p| han_core::json::parse(p.as_bytes()).ok())
+            .and_then(|p| p.get("target").and_then(|t| t.as_str()).map(str::to_owned))
+            .unwrap_or_else(|| "(unnamed)".to_owned());
+        Some(ApprovalSubject {
+            digest: e.plan_digest.clone(),
+            open: crate::model::effect_open(e, &self.now),
+            action: e.action.clone(),
+            target,
+            requester: e.proposer.clone(),
+        })
     }
 
     /// Whether a task is open; `None` if it is unknown.

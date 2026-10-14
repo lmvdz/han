@@ -152,6 +152,9 @@ impl World {
         let store = FileKeyStore::new(self.dir.join(format!("keys-{n}")));
         store.store(DEVICE_KEY, seed(n)).unwrap();
         let mut config = NodeConfig::new(actor);
+        // A person is not at this machine: the tests' approvals pass the presence check (tests/presence.rs
+        // covers the check itself).
+        config.set_presence(std::sync::Arc::new(han_presence::testing::AllowAll));
         config.retry = Duration::from_millis(50);
         config.flush_every = Duration::from_millis(100);
         config.connect_wait = Duration::from_secs(3);

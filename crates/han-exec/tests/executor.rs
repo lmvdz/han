@@ -360,3 +360,34 @@ fn plan_check_refuses_branches_outside_the_prefixes() {
         Err(han_exec::PlanError::OutOfScope(_))
     ));
 }
+
+/// R15: a push carries its commits as a bundle blob (`argsBlob`) or, for a same-user setup, a `source`
+/// path; never both, never neither, and the blob is a git bundle.
+#[test]
+fn plan_check_takes_a_bundle_blob_or_a_source() {
+    let rig = Rig::new(vec![]);
+    let blob = json!({"hash": "e".repeat(64), "size": 10, "type": han_vcs::BUNDLE_MEDIA_TYPE});
+    let args = json!({"branch": "han/ok", "base": "a".repeat(40), "from": null, "to": "b".repeat(40),
+        "changeset": "d".repeat(64)});
+    let bundled = json!({"action": "git_push", "target": "repo", "args": args, "argsBlob": blob});
+    GitPush.plan_check(&bundled, &rig.config).unwrap();
+    let mut both = bundled.clone();
+    both["args"]["source"] = json!("/ws");
+    assert!(GitPush.plan_check(&both, &rig.config).is_err());
+    let neither = json!({"action": "git_push", "target": "repo", "args": args});
+    assert!(GitPush.plan_check(&neither, &rig.config).is_err());
+    let mut text = bundled.clone();
+    text["argsBlob"]["type"] = json!("text/plain");
+    assert!(GitPush.plan_check(&text, &rig.config).is_err());
+    let mut bad_hash = bundled.clone();
+    bad_hash["argsBlob"]["hash"] = json!("xyz");
+    assert!(GitPush.plan_check(&bad_hash, &rig.config).is_err());
+    // other actions take no argsBlob
+    let pr = json!({"action": "open_pr", "target": "repo", "args": {"head": "han/ok", "base": "main",
+        "title": "t"}, "argsBlob": blob});
+    assert!(
+        han_exec::actions::OpenPr
+            .plan_check(&pr, &rig.config)
+            .is_err()
+    );
+}

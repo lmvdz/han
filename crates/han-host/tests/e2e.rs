@@ -102,7 +102,7 @@ async fn the_story_holds_inside_the_os_sandbox() {
         eprintln!("skipped: no OS sandbox here: {available:?}");
         return;
     };
-    eprintln!("running inside {:?}", b.backend);
+    eprintln!("running inside {b:?}");
     story("auto").await;
 }
 
@@ -264,10 +264,11 @@ async fn story(backend: &str) {
         assert!(
             i < 899,
             "timed out waiting for the board to show the session waiting for approval; agent log:
+{}
+adapter stderr:
 {}",
-            std::fs::read_to_string(&agent_log).unwrap_or_default()
-                + &std::fs::read_to_string(session_dir.join("adapter-stderr.log"))
-                    .unwrap_or_default()
+            std::fs::read_to_string(&agent_log).unwrap_or_default(),
+            std::fs::read_to_string(session_dir.join("adapter-stderr.log")).unwrap_or_default()
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

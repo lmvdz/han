@@ -126,6 +126,46 @@ pub struct ActionCtx {
     pub scratch: std::path::PathBuf,
     /// The GitHub token minter, when a GitHub App is configured.
     pub github: Option<Arc<github::GithubMinter>>,
+    /// The bytes of the plan's `argsBlob`, fetched from the space and checked against its hash and size
+    /// before the action sees them (`None` when the plan has none, or after a restart, where only `lookup`
+    /// runs).
+    pub args_blob: Option<Arc<Vec<u8>>>,
+}
+
+/// A plan's `argsBlob` (a `BlobRef`): the bytes an action needs beyond `args`, carried by the space.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArgsBlob {
+    /// `sha256` of the bytes, lowercase hex.
+    pub hash: String,
+    /// The size in bytes.
+    pub size: u64,
+    /// The media type.
+    #[serde(rename = "type")]
+    pub media_type: String,
+    /// A transport locator (ignored: the bytes come from the space's home).
+    #[serde(default)]
+    pub uri: Option<String>,
+}
+
+/// The plan's `argsBlob`, if it has one.
+pub fn args_blob(plan: &Value) -> Result<Option<ArgsBlob>, PlanError> {
+    match plan.get("argsBlob") {
+        None => Ok(None),
+        Some(v) => {
+            let b: ArgsBlob = serde_json::from_value(v.clone())
+                .map_err(|e| PlanError::Schema(format!("argsBlob: {e}")))?;
+            if b.hash.len() != 64
+                || !b
+                    .hash
+                    .bytes()
+                    .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                return Err(PlanError::Schema("argsBlob: hash is not a digest".into()));
+            }
+            Ok(Some(b))
+        }
+    }
 }
 
 /// The executor's configuration: which targets each action may reach, and how to get credentials for them.
@@ -214,11 +254,16 @@ pub trait Action: Send + Sync + 'static {
 
 /// The plan's `args` object, or a schema error.
 pub(crate) fn plan_args(plan: &Value, kind: &str) -> Result<Value, PlanError> {
+    plan_args_with(plan, kind, false)
+}
+
+/// Like [`plan_args`]; with `blob`, the plan may also carry an `argsBlob`.
+pub(crate) fn plan_args_with(plan: &Value, kind: &str, blob: bool) -> Result<Value, PlanError> {
     let obj = plan
         .as_object()
         .ok_or_else(|| PlanError::Schema("a plan is an object".into()))?;
     for k in obj.keys() {
-        if !["action", "target", "args"].contains(&k.as_str()) {
+        if !(["action", "target", "args"].contains(&k.as_str()) || (blob && k == "argsBlob")) {
             return Err(PlanError::Schema(format!("unknown plan member {k}")));
         }
     }

@@ -8,6 +8,7 @@
 //! `cargo test -p han --test e2e -- --ignored --test-threads=1`. They need
 //! `han-fake-agent` and `han-github` built next to `han` (`cargo build --workspace --bins`).
 
+mod os_user;
 mod stack;
 
 use std::time::Duration;
@@ -207,7 +208,32 @@ async fn an_approved_push_lands_exactly_once() {
         "nothing lands before the approval"
     );
     assert_eq!(effects().await[0].claims, 0, "no claim before the approval");
-    // step 2: approve
+    // step 2a: the node's presence check stands between the face and the signature. This device has no check
+    // (`none`) and requires one: the approval is refused with the typed message, and nothing lands.
+    s.presence("all", "none");
+    let refused = c
+        .call(Command::EffectApprove {
+            space: s.space(),
+            proposal: e.proposal.clone(),
+            expires_at: None,
+            note: None,
+        })
+        .await
+        .expect_err("no presence check, no approval");
+    assert!(
+        matches!(&refused, han_node::NodeError::Denied { message }
+            if message.starts_with(han_node::api::APPROVAL_NOT_SIGNED)
+            && message.contains("this device has no presence check")),
+        "{refused:?}"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        effects().await[0].claims,
+        0,
+        "a refused approval signs nothing"
+    );
+    // step 2b: approve, on a device where the person turned the requirement off
+    s.presence("", "auto");
     c.call(Command::EffectApprove {
         space: s.space(),
         proposal: e.proposal.clone(),

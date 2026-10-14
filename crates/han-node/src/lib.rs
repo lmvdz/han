@@ -28,6 +28,8 @@ mod model;
 #[cfg(feature = "runtime")]
 mod node;
 #[cfg(feature = "runtime")]
+pub mod presence;
+#[cfg(feature = "runtime")]
 mod retry;
 #[cfg(feature = "runtime")]
 pub mod supervisor;

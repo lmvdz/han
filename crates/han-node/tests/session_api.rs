@@ -562,6 +562,78 @@ async fn a_blob_is_fetched_through_the_node_and_checked() {
     assert!(matches!(e, NodeError::NotFound { .. }), "{e:?}");
 }
 
+/// R15: the agent's host uploads a `git_push`'s bundle through its node (`BlobPut`). The home supplies it to
+/// the space's readers because the proposal's author uploaded it, even when the upload comes after the
+/// proposal was ordered (the home was away: the proposal waited in the outbox, the upload was tried again).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blob_put_through_the_node_after_its_proposal_is_supplied() {
+    let world = World::new(&[(ALICE, 51), (BOB, 52)]);
+    let alice = world.node(ALICE, 51);
+    let bob = world.node(BOB, 52);
+    let space = space_with_members(&world, &alice, &[(BOB, &bob)]).await;
+    let data = b"# v2 git bundle
+
+not really a pack"
+        .to_vec();
+    let hash = ids::sha256_hex(&data);
+    let plan = format!(
+        r#"{{"action":"git_push","target":"repo","argsBlob":{{"hash":"{hash}","size":{},"type":"application/x-git-bundle"}}}}"#,
+        data.len()
+    );
+    call(
+        &alice,
+        Command::EffectPropose {
+            space: space.clone(),
+            executor: BOB.into(),
+            plan,
+            task: None,
+            cost: None,
+            repeatable: false,
+            expires_at: None,
+        },
+    )
+    .await;
+    let fetch = || Command::BlobFetch {
+        space: space.clone(),
+        hash: hash.clone(),
+        size: data.len() as u64,
+        media_type: "application/x-git-bundle".into(),
+    };
+    // nothing uploaded yet
+    let e = bob.call(fetch()).await.unwrap_err();
+    assert!(matches!(e, NodeError::NotFound { .. }), "{e:?}");
+    let put = alice
+        .call(Command::BlobPut {
+            space: space.clone(),
+            media_type: "application/x-git-bundle".into(),
+            data: base64url::encode(&data),
+        })
+        .await
+        .expect("the upload");
+    assert_eq!(
+        put,
+        CallResult::BlobRef {
+            hash: hash.clone(),
+            size: data.len() as u64,
+            media_type: "application/x-git-bundle".into(),
+        }
+    );
+    let CallResult::Blob { data: got, .. } = bob.call(fetch()).await.expect("the blob") else {
+        panic!("a blob")
+    };
+    assert_eq!(base64url::decode(&got).unwrap(), data);
+    // a media type is checked before anything is sent
+    let e = alice
+        .call(Command::BlobPut {
+            space: space.clone(),
+            media_type: "not a type".into(),
+            data: base64url::encode(&data),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(e, NodeError::Invalid { .. }), "{e:?}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invites_and_approvals_take_the_times_a_face_collects() {
     let world = World::new(&[(ALICE, 51), (BOB, 52)]);

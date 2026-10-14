@@ -172,7 +172,19 @@ size: number,
 /**
  * The media type the reference names.
  */
-media_type: string, } | { "type": "task_cancel", 
+media_type: string, } | { "type": "blob_put", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The media type of the bytes.
+ */
+media_type: string, 
+/**
+ * The bytes, base64url.
+ */
+data: string, } | { "type": "task_cancel", 
 /**
  * The space.
  */
@@ -438,7 +450,19 @@ media_type: string,
 /**
  * The bytes, base64url.
  */
-data: string, } | { "type": "status", 
+data: string, } | { "type": "blob_ref", 
+/**
+ * `sha256` of the bytes, lowercase hex.
+ */
+hash: string, 
+/**
+ * The size in bytes.
+ */
+size: number, 
+/**
+ * The media type.
+ */
+media_type: string, } | { "type": "status", 
 /**
  * The item's number on the session's stream.
  */

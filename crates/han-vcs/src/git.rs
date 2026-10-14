@@ -26,8 +26,8 @@ use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ChangeKind, ChangeSet, FileChange, LandOutcome, LandSpec, MergeSim, RemoteAuth, Result, Vcs,
-    VcsError, Workspace, WorkspaceSpec, changeset_digest,
+    BUNDLE_REF, ChangeKind, ChangeSet, FileChange, LandOutcome, LandSpec, MergeSim, RemoteAuth,
+    Result, Vcs, VcsError, Workspace, WorkspaceSpec, changeset_digest,
 };
 
 /// What the backend remembers about a file it hashed: size, modification time and mode, and the blob id.
@@ -74,6 +74,39 @@ fn hex(bytes: &[u8]) -> String {
 
 fn is_hex_id(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Checks a git bundle's header: version 2 or 3, one ref, [`BUNDLE_REF`] at `head`, and no prerequisite but
+/// `base`.
+fn check_bundle(bundle: &[u8], base: &str, head: &str) -> Result<()> {
+    let bad = |why: &str| VcsError::Invalid(format!("not the bundle of {base}..{head}: {why}"));
+    let end = bundle
+        .windows(2)
+        .take(1 << 16)
+        .position(|w| w == b"\n\n")
+        .ok_or_else(|| bad("no header"))?;
+    let header = std::str::from_utf8(&bundle[..end]).map_err(|_| bad("its header is not text"))?;
+    let mut lines = header.lines();
+    if !matches!(lines.next(), Some("# v2 git bundle" | "# v3 git bundle")) {
+        return Err(bad("not a v2 or v3 bundle"));
+    }
+    let mut refs = Vec::new();
+    for line in lines {
+        if line.starts_with('@') {
+            continue; // a v3 capability
+        }
+        if let Some(pre) = line.strip_prefix('-') {
+            if pre.split(' ').next() != Some(base) {
+                return Err(bad("it needs a commit other than the base"));
+            }
+            continue;
+        }
+        refs.push(line.split_once(' ').ok_or_else(|| bad("a malformed ref"))?);
+    }
+    if refs != [(head, BUNDLE_REF)] {
+        return Err(bad("its ref is not the head"));
+    }
+    Ok(())
 }
 
 /// A path as git config and alternates want it: forward slashes.
@@ -314,6 +347,14 @@ impl GitVcs {
     /// The protocols remotes may use.
     pub fn protocols(&self) -> &[String] {
         &self.protocols
+    }
+
+    /// The repository a bundle for `remote` is imported into: the executor's own, one per remote (R15).
+    pub fn landing_for(&self, remote: &str) -> PathBuf {
+        let key = normalise_source(remote);
+        let digest = hex(&Sha256::digest(key.as_bytes()));
+        self.store_root
+            .join(format!("landing-{}.git", &digest[..16]))
     }
 
     /// The shared store (a bare repository) for a source.
@@ -1193,6 +1234,134 @@ impl Vcs for GitVcs {
         } else {
             Ok(LandOutcome::Conflict { actual })
         }
+    }
+
+    fn bundle(&self, dir: &Path, base: &str, head: &str) -> Result<Vec<u8>> {
+        let base = self.commit_of(dir, base)?;
+        let head = self.commit_of(dir, head)?;
+        if base == head {
+            return Err(VcsError::Invalid("nothing to bundle: base is head".into()));
+        }
+        let file = self.tmp_dir().join(unique("bundle") + ".bundle");
+        // The bundle's one ref exists in the repository only while the bundle is written.
+        self.git(Some(dir))?
+            .args(["update-ref", "--no-deref", BUNDLE_REF, &head])
+            .run()?;
+        let made = self
+            .git(Some(dir))?
+            .args(["bundle", "create", "--quiet"])
+            .arg(&file)
+            .args([BUNDLE_REF, &format!("^{base}")])
+            .run();
+        let _ = self
+            .git(Some(dir))
+            .and_then(|g| g.args(["update-ref", "-d", BUNDLE_REF]).run());
+        let bytes = made.and_then(|_| Ok(std::fs::read(&file)?));
+        let _ = std::fs::remove_file(&file);
+        let bytes = bytes?;
+        check_bundle(&bytes, &base, &head)?;
+        Ok(bytes)
+    }
+
+    fn import_bundle(
+        &self,
+        remote: &str,
+        auth: Option<&RemoteAuth>,
+        bundle: &[u8],
+        base: &str,
+        head: &str,
+    ) -> Result<PathBuf> {
+        if !is_hex_id(base) || !is_hex_id(head) {
+            return Err(VcsError::Invalid(
+                "a bundle is imported by full commit ids".into(),
+            ));
+        }
+        // What git is handed is checked first: one ref, `head`, needing nothing but `base`.
+        check_bundle(bundle, base, head)?;
+        self.ensure_root()?;
+        let repo = self.landing_for(remote);
+        let _local = self.fetch_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let _lock = self.store_lock(&repo)?;
+        if !repo.join("HEAD").exists() {
+            remove_tree(&repo)?;
+            self.git(None)?
+                .args(["init", "--bare", "--quiet"])
+                .arg(format!("--template={}", slash(&self.template_dir())))
+                .arg(&repo)
+                .run()?;
+            for (k, v) in [
+                ("gc.auto", "0"),
+                ("gc.pruneExpire", "never"),
+                ("core.logAllRefUpdates", "false"),
+                ("fetch.fsckObjects", "true"),
+            ] {
+                self.git(Some(&repo))?.args(["config", k, v]).run()?;
+            }
+        }
+        let file = self.tmp_dir().join(unique("import") + ".bundle");
+        std::fs::write(&file, bundle)?;
+        let result = (|| -> Result<PathBuf> {
+            if self.commit_of(&repo, base).is_err() {
+                // The bundle needs `base`, which the remote the push goes to holds: by id first, then its
+                // branches.
+                let by_id = self
+                    .git_auth(Some(&repo), remote, auth)?
+                    .args([
+                        "fetch",
+                        "--quiet",
+                        "--no-tags",
+                        "--no-write-fetch-head",
+                        "--end-of-options",
+                        remote,
+                        &format!("{base}:refs/han/base/{base}"),
+                    ])
+                    .run();
+                if by_id.is_err() || self.commit_of(&repo, base).is_err() {
+                    self.git_auth(Some(&repo), remote, auth)?
+                        .args([
+                            "fetch",
+                            "--quiet",
+                            "--no-tags",
+                            "--no-write-fetch-head",
+                            "--end-of-options",
+                            remote,
+                            "+refs/heads/*:refs/han/remote/*",
+                        ])
+                        .run()?;
+                }
+                if self.commit_of(&repo, base).is_err() {
+                    return Err(VcsError::NotFound(format!(
+                        "the remote does not hold the base {base}"
+                    )));
+                }
+            }
+            let imported = format!("refs/han/import/{head}");
+            // A bundle is read through the file transport, whatever protocols the remotes may use.
+            self.git(Some(&repo))?
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "--no-write-fetch-head",
+                ])
+                .arg(&file)
+                .arg(format!("+{BUNDLE_REF}:{imported}"))
+                .run()?;
+            let got = self.commit_of(&repo, &imported)?;
+            if got != head {
+                let _ = self
+                    .git(Some(&repo))
+                    .and_then(|g| g.args(["update-ref", "-d", &imported]).run());
+                return Err(VcsError::Invalid(format!(
+                    "the bundle's head is {got}, not {head}"
+                )));
+            }
+            Ok(repo.clone())
+        })();
+        let _ = std::fs::remove_file(&file);
+        result
     }
 
     fn merge_simulate(&self, dir: &Path, ours: &str, theirs: &str) -> Result<MergeSim> {

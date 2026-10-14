@@ -25,6 +25,7 @@ use crate::api::{
 use crate::db::{NodeDb, OutboxRow};
 use crate::home::HomeAddr;
 use crate::keys::{DEVICE_KEY, FileKeyStore, KeyStore};
+use crate::presence::{self, PresenceSlot};
 use crate::retry::{Disposition, Via, disposition, node_error as map_net_error, stored_error};
 use crate::supervisor::{RoleSpec, RoleStatus, Supervisor, SupervisorError};
 use crate::sync::{LinkCmd, LinkHandle, ServerKeys, run_link};
@@ -58,6 +59,11 @@ pub struct NodeConfig {
     pub tick_every: Duration,
     /// Fetches `/.well-known/han`, to confirm a ticket's node before it is dialed (Z4).
     pub fetcher: han_net::wellknown::Fetcher,
+    /// The human-presence check approvals wait for. Absent, the node builds the backend `presence.backend`
+    /// names in `node.db` (the platform's own by default). Only tests and embedding apps set it.
+    pub presence: Option<PresenceSlot>,
+    /// How long a person has to answer the presence check.
+    pub presence_timeout: Duration,
 }
 
 impl NodeConfig {
@@ -76,7 +82,15 @@ impl NodeConfig {
             outbox_backoff: Duration::from_secs(5),
             tick_every: Duration::from_secs(5),
             fetcher: han_net::wellknown::Fetcher::new(),
+            presence: None,
+            presence_timeout: crate::presence::DEFAULT_TIMEOUT,
         }
+    }
+
+    /// Uses `presence` for the human-presence check, whatever `node.db` says about the backend. The
+    /// `presence.require` setting still decides which actions it is asked for.
+    pub fn set_presence(&mut self, presence: Arc<dyn han_presence::Presence>) {
+        self.presence = Some(PresenceSlot(presence));
     }
 }
 
@@ -119,9 +133,11 @@ pub(crate) struct Inner<T: Transport> {
     pub timelines: Arc<crate::timeline::StreamTimelines>,
     /// Spaces whose invite asked for `auto_admit`, and until when (wall seconds).
     pub auto_admit: Mutex<HashMap<String, i64>>,
+    /// One presence prompt at a time.
+    presence_gate: tokio::sync::Mutex<()>,
 }
 
-/// The most a face may fetch of a blob through the node.
+/// The most a face may fetch or put of a blob through the node.
 const MAX_FACE_BLOB: u64 = 4 * 1024 * 1024;
 
 /// The runtime of one device.
@@ -541,6 +557,7 @@ impl<T: Transport> Node<T> {
             outbox_retry_at: Mutex::new(HashMap::new()),
             ticker: Mutex::new(None),
             auto_admit: Mutex::new(HashMap::new()),
+            presence_gate: tokio::sync::Mutex::new(()),
         });
         let node = Node { inner };
         let pinned: Vec<HomeTicket> = node
@@ -1518,22 +1535,73 @@ impl<T: Transport> Node<T> {
                     data: base64url::encode(&data),
                 })
             }
+            Command::BlobPut {
+                space,
+                media_type,
+                data,
+            } => {
+                self.require_followed(&space)?;
+                if !grammar::is_media_type(&media_type) {
+                    return Err(NodeError::invalid("not a media type"));
+                }
+                let bytes = base64url::decode(&data)
+                    .map_err(|_| NodeError::invalid("data is not base64url"))?;
+                if bytes.is_empty() {
+                    return Err(NodeError::invalid("a blob has at least one byte"));
+                }
+                let size = bytes.len() as u64;
+                if size > MAX_FACE_BLOB {
+                    return Err(NodeError::invalid(format!(
+                        "a blob put through the node is at most {MAX_FACE_BLOB} bytes"
+                    )));
+                }
+                let hash = ids::sha256_hex(&bytes);
+                let (_, client) = self.client_of(&space).await?;
+                let r = obj([
+                    ("hash", s(&hash)),
+                    ("size", int(size)),
+                    ("type", s(&media_type)),
+                ]);
+                let mut offset = 0u64;
+                for part in bytes.chunks(786_432) {
+                    client
+                        .call(
+                            "blobPut",
+                            args([
+                                ("ref", r.clone()),
+                                ("offset", int(offset)),
+                                ("data", s(&base64url::encode(part))),
+                            ]),
+                        )
+                        .await
+                        .map_err(|e| map_net_error(&e))?;
+                    offset += part.len() as u64;
+                }
+                Ok(CallResult::BlobRef {
+                    hash,
+                    size,
+                    media_type,
+                })
+            }
             Command::EffectApprove {
                 space,
                 proposal,
                 expires_at,
                 note,
             } => {
-                let found = inner.engine().plan_digest(&space, &proposal);
-                let Some((digest, open)) = found else {
+                let found = inner.engine().approval_subject(&space, &proposal);
+                let Some(subject) = found else {
                     return Err(NodeError::not_found("no such proposal"));
                 };
-                if !open {
+                if !subject.open {
                     return Err(NodeError::conflict(
                         "the proposal no longer waits for approval",
                     ));
                 }
-                let mut body = vec![("proposal", s(&proposal)), ("planDigest", s(&digest))];
+                let mut body = vec![
+                    ("proposal", s(&proposal)),
+                    ("planDigest", s(&subject.digest)),
+                ];
                 if let Some(t) = &expires_at {
                     if !grammar::epoch_seconds(t).is_some_and(|at| at > inner.now_secs()) {
                         return Err(NodeError::invalid(
@@ -1541,6 +1609,24 @@ impl<T: Transport> Node<T> {
                         ));
                     }
                     body.push(("expiresAt", s(t)));
+                }
+                // A person confirms on this device, out of band, before anything is signed (SR-106).
+                presence::confirm(
+                    &inner.db,
+                    inner.cfg.presence.as_ref(),
+                    inner.cfg.presence_timeout,
+                    &inner.presence_gate,
+                    presence::EFFECT_APPROVE,
+                    &space,
+                    &subject,
+                )
+                .await?;
+                // The wait can be long: sign only the plan the person confirmed, and only if it still waits.
+                let still = inner.engine().approval_subject(&space, &proposal);
+                if !still.is_some_and(|n| n.open && n.digest == subject.digest) {
+                    return Err(NodeError::conflict(
+                        "the proposal changed while you were confirming; nothing was signed",
+                    ));
                 }
                 self.append(
                     &space,

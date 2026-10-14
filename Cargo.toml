@@ -5,6 +5,7 @@ members = [
     "crates/han-timeline",
     "crates/han-seq",
     "crates/han-net",
+    "crates/han-presence",
     "crates/han-node",
     "crates/han-registry",
     "crates/han-vcs",

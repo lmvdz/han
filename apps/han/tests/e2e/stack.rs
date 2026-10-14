@@ -109,11 +109,25 @@ impl Stack {
         let state: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("dev.json")).unwrap()).unwrap();
         let _ = std::fs::remove_file(&log_path);
-        Stack {
+        let stack = Stack {
             dir,
             state,
             _guard: guard,
-        }
+        };
+        // Nobody sits at the machine that runs the tests: the person's node does not ask for a presence check
+        // (it reads the setting at each approval). Tests of the check itself set it back with `presence`.
+        stack.presence("", "auto");
+        stack
+    }
+
+    /// Sets the person's node's presence check in its `node.db`, the way `han node presence` does, but without
+    /// the confirmation that command asks for (nobody is here to give it). `require` is `all` or a list.
+    pub fn presence(&self, require: &str, backend: &str) {
+        let db = han_node::db::NodeDb::open(&self.person_data().join("node.db")).unwrap();
+        db.set_config(han_node::presence::REQUIRE_KEY, require)
+            .unwrap();
+        db.set_config(han_node::presence::BACKEND_KEY, backend)
+            .unwrap();
     }
 
     pub fn get(&self, key: &str) -> String {
