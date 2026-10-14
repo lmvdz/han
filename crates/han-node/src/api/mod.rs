@@ -20,15 +20,16 @@ pub use command::{CallResult, Command, CommandClass, HomeRef};
 pub use error::NodeError;
 pub use query::{
     Facets, Filter, Group, MAX_LIMIT, MAX_SESSION_LIMIT, MAX_TIMELINE_LIMIT, Query, Scope, Target,
-    Window,
+    Window, glob_match,
 };
 pub use rows::{
-    ApprovalRow, BoardRow, BoardTotals, CostRow, DiffOp, EffectRow, Fidelity, FilePatchRow,
-    FileTouch, GroupTotal, GuardRow, InputRow, JoinProgressRow, JoinStage, NodeStatusRow,
-    OutboxRow, OverlapKind, OverlapParty, OverlapRow, PatchStatus, PlanItem, RoleInfo, Row,
-    SUMMARY_FIELDS, SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRow, SessionState, SpaceLink,
-    SpaceStatusRow, StateCounts, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens, ViewEvent,
-    ViewMirror, WhoRow,
+    ApprovalRow, BoardRow, BoardTotals, ClaimKind, CostRow, DiffOp, EffectRow, Fidelity,
+    FilePatchRow, FileTouch, GroupTotal, GuardRow, InputRow, JoinProgressRow, JoinStage,
+    NodeStatusRow, OutboxRow, OverlapClaim, OverlapConflict, OverlapFile, OverlapKind,
+    OverlapParty, OverlapRow, OverlapSummary, PatchStatus, PlanItem, RoleInfo, Row, SUMMARY_FIELDS,
+    SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRow, SessionState, SpaceLink, SpaceStatusRow,
+    StateCounts, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens, ViewEvent, ViewMirror,
+    WhoRow,
 };
 pub use stream::{BoxFuture, MAX_BACKLOG, NodeApi, ViewSink, ViewStream};
 

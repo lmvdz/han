@@ -522,6 +522,7 @@ impl Engine {
         let now = self.now;
         let not_found =
             |what: &str, id: &str| NodeError::not_found(format!("no such {what}: {id}"));
+        q.window().filter.validate()?;
         match q {
             Query::Board { space, group, .. } => self
                 .spaces

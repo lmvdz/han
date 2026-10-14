@@ -289,23 +289,35 @@ async fn t_cycles_the_grouping_and_the_choice_is_remembered() {
 #[tokio::test]
 async fn the_filter_box_is_parsed_and_sent_to_the_node() {
     let (mut h, api, _data) = started((130, 26)).await;
-    h.keys("/person:@ada state:working auth<enter>").await;
+    h.keys("/person:@ada state:working path:src/** auth<enter>")
+        .await;
     let (_, _, window) = last_board(&api);
-    assert_eq!(window.filter.actor.as_deref(), Some("@ada"));
+    // Each key goes to the node as its own member; nothing is folded into the free text.
+    assert_eq!(window.filter.person, vec!["@ada".to_owned()]);
     assert_eq!(window.filter.states, vec![SessionState::Working]);
+    assert_eq!(window.filter.path, vec!["src/**".to_owned()]);
     assert_eq!(window.filter.text.as_deref(), Some("auth"));
     assert!(
         h.screen()
-            .contains("filter: person:@ada state:working auth")
+            .contains("filter: person:@ada state:working path:src/** auth")
     );
 
-    // An unknown key is marked, and the rest of the filter still applies.
+    // An unknown key is an error: it is said, and the filter that was on stays.
     let before = boards(&api).len();
     h.keys("/<c-u>colour:red state:idle<enter>").await;
     let s = h.screen();
     assert!(s.contains("! Unknown filter key 'colour'"), "{s}");
-    let (_, _, window) = last_board(&api);
-    assert_eq!(window.filter.states, vec![SessionState::Idle]);
+    assert_eq!(boards(&api).len(), before, "nothing was sent");
+    assert_eq!(
+        last_board(&api).2.filter.states,
+        vec![SessionState::Working]
+    );
+    assert!(s.contains("filter: person:@ada"), "{s}");
+    h.keys("/<c-u>harness:pi repo:o/r mine:true<enter>").await;
+    let f = last_board(&api).2.filter;
+    assert_eq!(f.harness, vec!["pi".to_owned()]);
+    assert_eq!(f.repo, vec!["o/r".to_owned()]);
+    assert!(f.mine);
     assert!(boards(&api).len() > before);
 
     // x clears it; so does Esc.
@@ -915,4 +927,57 @@ async fn a_diff_that_skips_a_number_is_not_applied() {
         before + 1,
         "it asked for a new snapshot"
     );
+}
+
+// ---- reasons and overlaps -------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_failed_or_blocked_row_shows_the_nodes_reason() {
+    let (mut h, api, _data) = started((130, 26)).await;
+    let failed = changed(&h, "s2", |r| {
+        r.state = SessionState::Failed;
+        r.step = "editing".into();
+        r.state_reason = Some("no status for 30 minutes".into());
+    });
+    let blocked = changed(&h, "s1", |r| {
+        r.state = SessionState::Blocked;
+        r.step = "running tests".into();
+        r.state_reason = Some("needs a decision on the schema".into());
+    });
+    api.push(
+        is_board,
+        diff(
+            vec![
+                DiffOp::Update { row: failed },
+                DiffOp::Update { row: blocked },
+            ],
+            7,
+        ),
+    );
+    h.settle().await;
+    let s = h.screen();
+    assert!(s.contains("failed: no status for 30 minutes"), "{s}");
+    assert!(s.contains("blocked: needs a decision on the schema"), "{s}");
+    assert!(!s.contains("failed: editing"), "{s}");
+}
+
+#[tokio::test]
+async fn o_lists_who_a_session_overlaps_with() {
+    let (mut h, _api, _data) = started((130, 26)).await;
+    h.keys("jj").await; // ada-bot (s2)
+    h.keys("o").await;
+    let s = h.screen();
+    assert!(s.contains("Overlaps of ada-bot"), "{s}");
+    assert!(s.contains("tier 2 same lines"), "{s}");
+    assert!(s.contains("@lars (lars-coder) on #41"), "{s}");
+    assert!(s.contains("src/f0.rs"), "{s}");
+    assert!(s.contains("tier 1 same issue"), "{s}");
+    assert!(s.contains("@bo (bo-runner) on #41"), "{s}");
+    // Any key closes it.
+    h.keys("x").await;
+    assert!(!h.screen().contains("Overlaps of ada-bot"));
+    // A session with nothing to show says so.
+    h.keys("jjj").await; // lars-reviewer
+    h.keys("o").await;
+    assert!(h.screen().contains("no overlap on this session"));
 }

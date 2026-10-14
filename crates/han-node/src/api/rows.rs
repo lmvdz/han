@@ -216,6 +216,31 @@ pub struct OverlapParty {
     pub session: Option<String>,
 }
 
+/// What another piece of work is, as a board row shows its overlaps (Q-DAT-19): who it is, how high the tier
+/// goes and which files meet. One entry per other party, with the tiers of all its overlaps with the row folded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct OverlapSummary {
+    /// The other party's session, when it has one (a lease or a claim has only an actor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session: Option<String>,
+    /// The other party's actor.
+    pub agent: String,
+    /// The person behind it: its session's person, or the actor itself.
+    pub person: String,
+    /// The issue it is on, when it is on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub issue: Option<String>,
+    /// The highest tier of the overlaps with this party: 1 (claim or lease) or 2 (file or hunk).
+    pub tier: u8,
+    /// The kind of that overlap.
+    pub kind: OverlapKind,
+    /// The paths that meet, sorted (none for a claim on an issue).
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
 /// A row of the board: one session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct BoardRow {
@@ -255,6 +280,14 @@ pub struct BoardRow {
     pub files: Vec<FileTouch>,
     /// Kinds of overlap this session is part of (none: no badge).
     pub overlaps: Vec<OverlapKind>,
+    /// Who it overlaps with, strongest first (Q-DAT-19): what the badge counts and what `o` lists.
+    #[serde(default)]
+    pub overlap_with: Vec<OverlapSummary>,
+    /// Why the state is `failed` or `blocked`, in words: what the host said, or how long it has been silent.
+    /// It holds no time that moves, so a row only changes when the reason does (Q-DAT-12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub state_reason: Option<String>,
     /// Test counts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -307,6 +340,10 @@ pub struct SessionRow {
     pub closed: bool,
     /// The state, with silence applied.
     pub state: SessionState,
+    /// Why the state is `failed` or `blocked` (see [`BoardRow::state_reason`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub state_reason: Option<String>,
     /// The latest status item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -338,6 +375,54 @@ pub struct WhoRow {
     pub state: Option<SessionState>,
 }
 
+/// A file two sessions both changed, with the line ranges `[start, len]` each changed there. An empty list means
+/// the side changed the file as a whole.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct OverlapFile {
+    /// The path, relative to the repository.
+    pub path: String,
+    /// The ranges changed by the first party of the pair.
+    #[serde(default)]
+    pub ranges_a: Vec<(u32, u32)>,
+    /// The ranges changed by the second party of the pair.
+    #[serde(default)]
+    pub ranges_b: Vec<(u32, u32)>,
+}
+
+/// What a tier 1 overlap stands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimKind {
+    /// Two actors on one issue.
+    Issue,
+    /// Two live leases on overlapping paths.
+    Lease,
+}
+
+/// The claim or lease behind a tier 1 overlap.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct OverlapClaim {
+    /// Issue or lease.
+    pub kind: ClaimKind,
+    /// The issue, or the path the leases meet on.
+    #[serde(rename = "ref")]
+    #[ts(rename = "ref")]
+    pub reference: String,
+    /// When the overlap ends by itself: the earlier expiry of the two leases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub expires_at: Option<String>,
+}
+
+/// The outcome of simulating the merge of two pieces of work (tier 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct OverlapConflict {
+    /// Whether a merge was simulated. The node does not simulate merges yet, so it sends no `conflict`.
+    pub checked: bool,
+    /// How many conflicts the merge has.
+    pub conflicts: u32,
+}
+
 /// Two pieces of work meeting.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct OverlapRow {
@@ -355,6 +440,17 @@ pub struct OverlapRow {
     pub parties: Vec<OverlapParty>,
     /// What overlaps, in words.
     pub detail: String,
+    /// The files that meet (tier 2), with each side's changed ranges; `parties[0]` is side A.
+    #[serde(default)]
+    pub files: Vec<OverlapFile>,
+    /// The claim or lease behind a tier 1 overlap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub claim: Option<OverlapClaim>,
+    /// The merge simulation, once there is one (tier 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conflict: Option<OverlapConflict>,
 }
 
 /// An effect waiting for approval.

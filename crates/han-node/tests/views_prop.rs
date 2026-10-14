@@ -132,6 +132,37 @@ fn queries() -> Vec<Query> {
             },
         ),
     });
+    q.push(Query::Board {
+        space: SPACE.into(),
+        group: Group::Person,
+        collapsed: vec![],
+        window: window(
+            200,
+            None,
+            Filter {
+                path: vec!["src/**".into()],
+                overlap_min: Some(2),
+                harness: vec!["PI".into()],
+                ..Filter::default()
+            },
+        ),
+    });
+    q.push(Query::Board {
+        space: SPACE.into(),
+        group: Group::State,
+        collapsed: vec![],
+        window: window(
+            200,
+            None,
+            Filter {
+                mine: true,
+                person: vec![ACTORS[0].into(), "@bob".into()],
+                repo: vec!["r".into()],
+                include_closed: true,
+                ..Filter::default()
+            },
+        ),
+    });
     q.push(Query::Overlaps {
         space: SPACE.into(),
         window: window(200, None, Filter::default()),
@@ -889,4 +920,466 @@ fn the_new_events_cross_the_pipe_and_old_ones_still_decode() {
             ..
         }
     ));
+}
+
+// ---- the filter grammar, row reasons and overlap detail (PR B) -------------------------------------------
+
+fn put_status(d: &mut Driver, session: usize, f: impl FnOnce(&mut StatusBody)) {
+    let id = d.sessions[session].clone();
+    let n = d.status_seq.entry(id.clone()).or_default();
+    *n += 1;
+    let mut body = StatusBody {
+        session: id,
+        agent: ACTORS[0].into(),
+        delegate_of: None,
+        harness: "pi".into(),
+        issue: None,
+        repo: Some("github:o/r".into()),
+        base: None,
+        state: SessionState::Working,
+        step: "working".into(),
+        tool: None,
+        plan: vec![],
+        files: vec![],
+        tests: None,
+        tokens: None,
+        summary: None,
+        sandbox: None,
+        seq: *n,
+        at: "2026-01-01T00:00:00Z".into(),
+    };
+    f(&mut body);
+    assert!(d.engine.apply_status(SPACE, body));
+}
+
+fn touch(path: &str, hunks: &[(u32, u32)]) -> FileTouch {
+    FileTouch {
+        path: path.into(),
+        hunks: hunks.to_vec(),
+    }
+}
+
+fn board(d: &mut Driver, filter: Filter) -> Vec<han_node::api::BoardRow> {
+    let ev = d
+        .engine
+        .read(&Query::Board {
+            space: SPACE.into(),
+            group: Group::Issue,
+            collapsed: vec![],
+            window: window(200, None, filter),
+        })
+        .unwrap();
+    let ViewEvent::Snapshot { rows, .. } = ev else {
+        panic!("a snapshot")
+    };
+    rows.into_iter()
+        .map(|r| match r {
+            Row::Board(b) => b,
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+/// Four sessions: alice and a second one of hers meet in src/a.rs; bob shares alice's issue; carol is apart.
+fn filter_fixture() -> Driver {
+    let mut d = Driver::new();
+    for actor in [0, 1, 2, 0] {
+        d.step(&Op::OpenSession { actor, task: None });
+    }
+    put_status(&mut d, 0, |b| {
+        b.issue = Some(ISSUES[0].into());
+        b.files = vec![touch("src/a.rs", &[(1, 5)])];
+    });
+    put_status(&mut d, 1, |b| {
+        b.harness = "claude".into();
+        b.repo = Some("github:o/other".into());
+        b.issue = Some(ISSUES[0].into());
+        b.files = vec![touch("docs/guide.md", &[])];
+    });
+    put_status(&mut d, 2, |b| {
+        b.issue = Some(ISSUES[1].into());
+        b.files = vec![touch("src/deep/x.rs", &[(100, 5)])];
+    });
+    put_status(&mut d, 3, |b| {
+        b.files = vec![touch("src/a.rs", &[(2, 3)])];
+    });
+    d
+}
+
+fn which(d: &mut Driver, rows: Vec<han_node::api::BoardRow>) -> Vec<usize> {
+    let mut v: Vec<usize> = rows
+        .iter()
+        .map(|r| d.sessions.iter().position(|s| *s == r.session).unwrap())
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+#[test]
+fn every_filter_key_narrows_the_board() {
+    let mut d = filter_fixture();
+    let mut run = |f: Filter| {
+        let rows = board(&mut d, f);
+        which(&mut d, rows)
+    };
+    let all = vec![0, 1, 2, 3];
+    assert_eq!(run(Filter::default()), all);
+    // person and agent: the full id or its @local part, never a loose prefix.
+    let f = |text: &str| Filter::parse(text).unwrap();
+    assert_eq!(run(f("person:@bob")), vec![1]);
+    assert_eq!(run(f("person:@bob:a.localhost")), vec![1]);
+    assert_eq!(run(f("person:@bo")), Vec::<usize>::new());
+    assert_eq!(run(f("person:@bob person:@carol")), vec![1, 2]);
+    assert_eq!(run(f("agent:@carol")), vec![2]);
+    assert_eq!(run(f("actor:@alice")), vec![0, 3]);
+    // harness and repo: case-insensitive; a repository by its full name, `owner/name` or `name`.
+    assert_eq!(run(f("harness:CLAUDE")), vec![1]);
+    assert_eq!(run(f("repo:o/other")), vec![1]);
+    assert_eq!(run(f("repo:github:o/r")), vec![0, 2, 3]);
+    assert_eq!(run(f("repo:r")), vec![0, 2, 3]);
+    // labels: the node has no source of them yet, so a label matches nothing.
+    assert_eq!(run(f("label:bug")), Vec::<usize>::new());
+    // path globs.
+    assert_eq!(run(f("path:src/**")), vec![0, 2, 3]);
+    assert_eq!(run(f("path:src/*.rs")), vec![0, 3]);
+    assert_eq!(run(f("path:docs/")), vec![1]);
+    assert_eq!(run(f("path:**/x.rs")), vec![2]);
+    assert_eq!(run(f("path:*.rs")), Vec::<usize>::new());
+    assert_eq!(run(f("path:docs/ path:**/x.rs")), vec![1, 2]);
+    // overlap tiers: a shared issue is tier 1, a shared file tier 2.
+    assert_eq!(run(f("overlap:1")), vec![0, 1, 3]);
+    assert_eq!(run(f("overlapMin:2")), vec![0, 3]);
+    assert_eq!(run(f("overlap:3")), Vec::<usize>::new());
+    // mine: this device is alice.
+    assert_eq!(run(f("mine:true")), vec![0, 3]);
+    assert_eq!(run(f("is:mine harness:pi")), vec![0, 3]);
+    // Keys add up: all of them must hold.
+    assert_eq!(
+        run(f("person:@alice path:src/*.rs repo:r overlap:2")),
+        vec![0, 3]
+    );
+    assert_eq!(run(f("person:@alice person:@bob harness:claude")), vec![1]);
+}
+
+#[test]
+fn the_text_form_is_strict_about_keys_and_quotes() {
+    let f = Filter::parse(
+        r#"person:@ada state:working state:idle "two words" auth overlapMin:2 closed:true"#,
+    )
+    .unwrap();
+    assert_eq!(f.person, vec!["@ada".to_owned()]);
+    assert_eq!(f.states, vec![SessionState::Working, SessionState::Idle]);
+    assert_eq!(f.text.as_deref(), Some("two words auth"));
+    assert_eq!(f.overlap_min, Some(2));
+    assert!(f.include_closed);
+    // A quoted value keeps its spaces; a quoted word keeps its colon.
+    let f = Filter::parse(r#"path:"docs/my file.md" "a:b""#).unwrap();
+    assert_eq!(f.path, vec!["docs/my file.md".to_owned()]);
+    assert_eq!(f.text.as_deref(), Some("a:b"));
+    // Errors: an unknown key, a missing value, a bad tier or state, a quote left open.
+    for bad in [
+        "colour:red",
+        "person:",
+        "overlap:9",
+        "overlap:high",
+        "state:sleepy",
+        "mine:maybe",
+        "is:happy",
+        "path:\"open",
+        "http://x",
+    ] {
+        let e = Filter::parse(bad).unwrap_err();
+        assert_eq!(e.code(), "invalid", "{bad}: {e}");
+    }
+    assert!(
+        Filter::parse("colour:red")
+            .unwrap_err()
+            .to_string()
+            .contains("colour")
+    );
+    assert_eq!(Filter::parse("").unwrap(), Filter::default());
+}
+
+#[test]
+fn an_unknown_member_or_a_bad_value_in_a_filter_is_an_error_not_ignored() {
+    let json = serde_json::json!({"person": ["@ada"], "colour": "red"});
+    let e = serde_json::from_value::<Filter>(json).unwrap_err();
+    assert!(e.to_string().contains("colour"), "{e}");
+    // A bad value passes serde and is refused when the view opens.
+    let mut d = Driver::new();
+    for bad in [
+        Filter {
+            overlap_min: Some(0),
+            ..Filter::default()
+        },
+        Filter {
+            path: vec!["*".repeat(9)],
+            ..Filter::default()
+        },
+        Filter {
+            harness: vec![String::new()],
+            ..Filter::default()
+        },
+    ] {
+        let err = d
+            .engine
+            .read(&Query::Board {
+                space: SPACE.into(),
+                group: Group::Issue,
+                collapsed: vec![],
+                window: window(10, None, bad),
+            })
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid");
+    }
+    // A view that cannot open says why and opens nothing.
+    let (sink, mut stream) = ViewStream::channel();
+    let bad = Filter {
+        overlap_min: Some(7),
+        ..Filter::default()
+    };
+    assert!(
+        d.engine
+            .subscribe(
+                Query::Overlaps {
+                    space: SPACE.into(),
+                    window: window(10, None, bad),
+                },
+                sink
+            )
+            .is_none()
+    );
+    assert!(matches!(
+        stream.try_next(),
+        Some(ViewEvent::Failed {
+            error: han_node::api::NodeError::Invalid { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn globs_follow_the_documented_rules() {
+    use han_node::api::glob_match as g;
+    assert!(g("src/*.rs", "src/a.rs"));
+    assert!(!g("src/*.rs", "src/deep/a.rs"));
+    assert!(g("src/**/a.rs", "src/a.rs"));
+    assert!(g("src/**/a.rs", "src/x/y/a.rs"));
+    assert!(g("**", "any/thing/at/all"));
+    assert!(g("a?c", "abc"));
+    assert!(!g("a?c", "a/c"));
+    assert!(
+        g("src/", "src/a/b.rs"),
+        "a trailing slash covers what is under it"
+    );
+    assert!(!g("src/", "srcs/a.rs"));
+    assert!(g("src/a.rs", "src/a.rs"));
+    assert!(!g("src/a.rs", "SRC/a.rs"), "paths are case-sensitive");
+    assert!(g("ünï/*", "ünï/ä"));
+}
+
+#[test]
+fn failed_and_blocked_rows_say_why() {
+    let mut d = Driver::new();
+    for actor in [0, 1, 2, 0, 1] {
+        d.step(&Op::OpenSession { actor, task: None });
+    }
+    put_status(&mut d, 0, |b| {
+        b.state = SessionState::Failed;
+        b.summary = Some("the build is broken".into());
+    });
+    put_status(&mut d, 1, |b| {
+        b.state = SessionState::Blocked;
+        b.step = "waiting for review".into();
+    });
+    put_status(&mut d, 2, |b| {
+        b.state = SessionState::Blocked;
+        b.step = "waiting for review".into();
+        b.summary = Some("needs a decision on the schema".into());
+    });
+    put_status(&mut d, 3, |_| {});
+    put_status(&mut d, 4, |b| b.state = SessionState::Idle);
+    let reasons = |d: &mut Driver| -> Vec<Option<String>> {
+        let rows = board(
+            d,
+            Filter {
+                include_closed: true,
+                ..Filter::default()
+            },
+        );
+        let mut by: Vec<(usize, Option<String>)> = rows
+            .into_iter()
+            .map(|r| {
+                (
+                    d.sessions.iter().position(|s| *s == r.session).unwrap(),
+                    r.state_reason,
+                )
+            })
+            .collect();
+        by.sort();
+        by.into_iter().map(|(_, r)| r).collect()
+    };
+    assert_eq!(
+        reasons(&mut d),
+        vec![
+            Some("the build is broken".into()),
+            Some("waiting for review".into()),
+            Some("needs a decision on the schema".into()),
+            None,
+            None
+        ]
+    );
+    // Silence: stale has no reason; failed by silence names the threshold, and stays the same text as time
+    // passes, so the row does not change with every tick.
+    d.step(&Op::Tick(1_000));
+    let stale = reasons(&mut d);
+    assert_eq!(stale[3], None, "stale needs no reason");
+    d.step(&Op::Tick(2_000));
+    let failed = reasons(&mut d);
+    assert_eq!(failed[3].as_deref(), Some("no status for 3 seconds"));
+    assert_eq!(failed[4].as_deref(), Some("no status for 3 seconds"));
+    d.step(&Op::Tick(500));
+    assert_eq!(reasons(&mut d), failed);
+    // The session row says the same.
+    let ev = d
+        .engine
+        .read(&Query::Session {
+            id: d.sessions[3].clone(),
+            window: Window::default(),
+        })
+        .unwrap();
+    let ViewEvent::Snapshot { rows, .. } = ev else {
+        panic!("a snapshot")
+    };
+    assert!(matches!(&rows[0], Row::Session(s)
+        if s.state_reason.as_deref() == Some("no status for 3 seconds")));
+}
+
+#[test]
+fn an_overlap_row_carries_its_files_ranges_and_claim() {
+    let mut d = filter_fixture();
+    let ev = d
+        .engine
+        .read(&Query::Overlaps {
+            space: SPACE.into(),
+            window: window(200, None, Filter::default()),
+        })
+        .unwrap();
+    let ViewEvent::Snapshot { rows, .. } = ev else {
+        panic!("a snapshot")
+    };
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|r| match r {
+            Row::Overlap(o) => o,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    // The file overlap: both sides' ranges, in the order of the parties.
+    let hunk = rows
+        .iter()
+        .find(|o| o.kind == han_node::api::OverlapKind::HunkRange)
+        .expect("a hunk overlap");
+    assert_eq!(hunk.files.len(), 1);
+    let file = &hunk.files[0];
+    assert_eq!(file.path, "src/a.rs");
+    let first_is_s0 = hunk.parties[0].session.as_deref() == Some(d.sessions[0].as_str());
+    let (a, b) = if first_is_s0 {
+        (vec![(1, 5)], vec![(2, 3)])
+    } else {
+        (vec![(2, 3)], vec![(1, 5)])
+    };
+    assert_eq!((&file.ranges_a, &file.ranges_b), (&a, &b));
+    assert!(hunk.claim.is_none());
+    assert!(hunk.conflict.is_none(), "the node simulates no merges yet");
+    // The issue overlap: a claim, no files.
+    let claim = rows
+        .iter()
+        .find(|o| o.kind == han_node::api::OverlapKind::IssueClaim)
+        .expect("an issue overlap");
+    let c = claim.claim.as_ref().unwrap();
+    assert_eq!(c.kind, han_node::api::ClaimKind::Issue);
+    assert_eq!(c.reference, ISSUES[0]);
+    assert_eq!(c.expires_at, None);
+    assert!(claim.files.is_empty());
+    // The wire name of the reference is `ref`.
+    let json = serde_json::to_value(&claim.claim).unwrap();
+    assert_eq!(json["ref"], ISSUES[0]);
+}
+
+#[test]
+fn leases_overlap_with_a_claim_that_ends() {
+    let mut d = Driver::new();
+    d.step(&Op::Lease {
+        actor: 0,
+        path: 2, // docs/
+        ttl: 1000,
+    });
+    d.step(&Op::Lease {
+        actor: 1,
+        path: 2,
+        ttl: 500,
+    });
+    d.step(&Op::Tick(1));
+    let ev = d
+        .engine
+        .read(&Query::Overlaps {
+            space: SPACE.into(),
+            window: window(200, None, Filter::default()),
+        })
+        .unwrap();
+    let ViewEvent::Snapshot { rows, .. } = ev else {
+        panic!("a snapshot")
+    };
+    let Row::Overlap(o) = &rows[0] else {
+        panic!("an overlap")
+    };
+    let c = o.claim.as_ref().expect("a claim");
+    assert_eq!(c.kind, han_node::api::ClaimKind::Lease);
+    assert_eq!(c.reference, "docs/");
+    assert_eq!(
+        c.expires_at.as_deref(),
+        Some("2026-01-01T00:08:20Z"),
+        "the earlier lease ends the overlap"
+    );
+}
+
+#[test]
+fn board_rows_summarise_who_they_overlap_with() {
+    let mut d = filter_fixture();
+    let rows = board(&mut d, Filter::default());
+    let row = |d: &Driver, i: usize| {
+        rows.iter()
+            .find(|r| r.session == d.sessions[i])
+            .unwrap()
+            .clone()
+    };
+    let s0 = row(&d, 0);
+    assert_eq!(s0.overlap_with.len(), 2, "{:?}", s0.overlap_with);
+    let hunk = &s0.overlap_with[0];
+    assert_eq!(hunk.session.as_deref(), Some(d.sessions[3].as_str()));
+    assert_eq!(
+        (hunk.tier, hunk.kind),
+        (2, han_node::api::OverlapKind::HunkRange)
+    );
+    assert_eq!(hunk.files, vec!["src/a.rs".to_owned()]);
+    assert_eq!(hunk.agent, ACTORS[0]);
+    let claim = &s0.overlap_with[1];
+    assert_eq!(claim.agent, ACTORS[1]);
+    assert_eq!(claim.person, ACTORS[1]);
+    assert_eq!(claim.issue.as_deref(), Some(ISSUES[0]));
+    assert_eq!(claim.tier, 1);
+    assert!(claim.files.is_empty());
+    // Bob is only on the issue; carol is on nothing.
+    assert_eq!(row(&d, 1).overlap_with.len(), 1);
+    assert_eq!(row(&d, 1).overlap_with[0].agent, ACTORS[0]);
+    assert!(row(&d, 2).overlap_with.is_empty());
+    // The kinds the badge shows agree with the detail.
+    assert_eq!(
+        s0.overlaps,
+        vec![
+            han_node::api::OverlapKind::IssueClaim,
+            han_node::api::OverlapKind::HunkRange
+        ]
+    );
 }

@@ -119,8 +119,10 @@ async fn the_board_the_session_pane_and_steering_work_against_a_real_node() {
 
     // Steering: `i`, a line, Enter. The node signs a session.input and the Inputs view brings it back.
     h.keys("iuse the cache<enter>").await;
-    let screen = h.wait_for("use the cache").await;
-    assert!(screen.contains("sent"), "{screen}");
+    h.wait_for("use the cache").await;
+    // The row shows "sending" first; the receipt turns it into "sent".
+    let screen = h.wait_for("sent").await;
+    assert!(screen.contains("use the cache"), "{screen}");
     until("the node holds the input", || {
         matches!(
             node.read(&Query::Inputs {

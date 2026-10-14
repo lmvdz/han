@@ -528,15 +528,20 @@ impl BoardState {
         self.reset_window();
     }
 
-    /// Parses and applies the filter box.
-    pub fn set_filter(&mut self, text: &str, me: Option<&str>) {
-        let parsed = filter::parse(text, me);
+    /// Parses and applies the filter box. False when the text is wrong: the filter stays as it was and
+    /// `filter_errors` says what is wrong.
+    pub fn set_filter(&mut self, text: &str) -> bool {
+        let parsed = filter::parse(text);
+        self.filter_errors = parsed.errors;
+        if !self.filter_errors.is_empty() {
+            return false;
+        }
         self.filter_text = text.trim().to_owned();
         self.filter = parsed.filter;
-        self.filter_errors = parsed.errors;
         self.selected = None;
         self.sel_index = 0;
         self.reset_window();
+        true
     }
 
     /// Whether closed sessions are included.

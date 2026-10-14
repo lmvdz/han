@@ -5,8 +5,8 @@
 ┃ ● @lars      la│Enter           open the session pane (on a group header: collapse or open it)                │12/0✓  41k   0s ┃
 ┃ ● @ada       ad│h l / ← →       to the group header / collapse and open                                       │–      41k   20s┃
 ┃ ▾ #52 Login flo│t               group by issue, person, state (remembered per space)                          │                ┃
-┃▌◐ @lars      la│/  x  c         filter box (person: agent: issue: state: is:closed ...), clear, closed on/off │30/2✗  41k   1m ┃
-┃ ◌ @bo        bo│o  a            overlap detail; approvals for this session                                    │–      41k   14m┃
+┃▌◐ @lars      la│/  x  c         filter box (person: agent: harness: repo: path: label: state: overlap: mine: …│30/2✗  41k   1m ┃
+┃ ◌ @bo        bo│o  a            overlap detail (who, tier, files); approvals for this session                 │–      41k   14m┃
 ┃ ▾ #60 Docs (2) │Session                                                                                       │                ┃
 ┃ ✓ @ada       ad│1 2 3 / [ ]     stream, timeline, changes                                                     │–      41k   3h ┃
 ┃ ○ @lars      la│j k  G          scroll; G follows the live end                                                │–      –     2m ┃

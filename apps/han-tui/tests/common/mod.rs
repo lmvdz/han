@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use han_node::api::{
-    ApprovalRow, BoardRow, Group, OverlapKind, Query, Row, SessionState, SpaceLink, SpaceStatusRow,
-    Tests,
+    ApprovalRow, BoardRow, Group, OverlapKind, OverlapSummary, Query, Row, SessionState, SpaceLink,
+    SpaceStatusRow, Tests,
 };
 use han_tui::testing::{
     FakeApi, Harness, approval, board_row, node_status, page_of, session_row, snapshot,
@@ -41,6 +41,15 @@ pub fn team() -> Vec<BoardRow> {
     lars.tool = Some("cargo test".into());
     lars.tests = Some(Tests { pass: 12, fail: 0 });
     lars.overlaps = vec![OverlapKind::HunkRange];
+    lars.overlap_with = vec![OverlapSummary {
+        session: Some("s2".into()),
+        agent: "ada-bot".into(),
+        person: "@ada".into(),
+        issue: Some("#41".into()),
+        tier: 2,
+        kind: OverlapKind::HunkRange,
+        files: vec!["src/f0.rs".into(), "src/f1.rs".into()],
+    }];
     lars.last_active_ms = NOW;
     lars.files = (0..4)
         .map(|i| han_node::api::FileTouch {
@@ -58,6 +67,26 @@ pub fn team() -> Vec<BoardRow> {
     );
     ada.issue = Some("#41".into());
     ada.overlaps = vec![OverlapKind::HunkRange, OverlapKind::IssueClaim];
+    ada.overlap_with = vec![
+        OverlapSummary {
+            session: Some("s1".into()),
+            agent: "lars-coder".into(),
+            person: "@lars".into(),
+            issue: Some("#41".into()),
+            tier: 2,
+            kind: OverlapKind::HunkRange,
+            files: vec!["src/f0.rs".into()],
+        },
+        OverlapSummary {
+            session: None,
+            agent: "bo-runner".into(),
+            person: "@bo".into(),
+            issue: Some("#41".into()),
+            tier: 1,
+            kind: OverlapKind::IssueClaim,
+            files: vec![],
+        },
+    ];
     ada.last_active_ms = NOW - 20_000;
     ada.can_steer = false;
     ada.sandbox = Some(han_node::api::Sandbox {
