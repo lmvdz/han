@@ -11,6 +11,8 @@ use han_node::api::{Fidelity, SandboxBackend};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
+mod production_shim;
+
 const CRED: &str = "han-fake-login-not-a-secret";
 
 fn s(p: &Path) -> String {
@@ -82,7 +84,7 @@ async fn probe_with_login(backend: Preference) {
             wall_time: Some(Duration::from_secs(120)),
             ..Limits::default()
         },
-        shim: Some(PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim"))),
+        shim: production_shim::shim(),
         inside_port: None,
     };
     let mut sb = sandbox::launch(spec)

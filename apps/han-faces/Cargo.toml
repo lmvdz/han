@@ -1,0 +1,19 @@
+[package]
+name = "han-faces"
+description = "The command-line faces of HAN that only talk to the running node: board, space, task, device and outbox. They depend on the node API types and the JSON-RPC client, never the runtime."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap.workspace = true
+# A face: the node API types and the JSON-RPC client only, never the runtime (crates/han-node/tests/layering.rs).
+han-node = { path = "../../crates/han-node", version = "0.1.0", default-features = false }
+han-registry.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[lints]
+workspace = true

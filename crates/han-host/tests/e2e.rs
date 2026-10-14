@@ -21,6 +21,7 @@ use han_node::api::{BoxFuture, CallResult, Command, NodeApi, Query, Row, Session
 use han_vcs::GitVcs;
 
 mod common;
+mod production_shim;
 use common::*;
 
 /// A bridge for the second agent's tools: only reads matter here.
@@ -213,10 +214,8 @@ async fn story(backend: &str) {
             login_dir: None,
             allow_hosts: Vec::new(),
             toolchains: Default::default(),
-            test_loopback_upstream: false,
-            test_roots: Vec::new(),
         },
-        shim: PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim")),
+        shim: production_shim::shim(),
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
@@ -227,6 +226,7 @@ async fn story(backend: &str) {
         api: Arc::new(coder.clone()),
         vcs: Arc::new(GitVcs::new(root.join("coder").join("objects"))),
         signer: Some((CODER.into(), "d1".into(), seed(2))),
+        proxy_hook: None,
     };
     let (host_stop, host_rx) = tokio::sync::watch::channel(false);
     let host_task = tokio::spawn(run_session(cfg, deps, host_rx));

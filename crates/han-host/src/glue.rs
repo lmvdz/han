@@ -12,7 +12,7 @@ use crate::acp::McpServerSpec;
 use crate::driver::{
     CredentialMode, KeyHeader, PrepareCtx, bind_login, login_binding, prepare_session_dir,
 };
-use crate::host::HostConfig;
+use crate::host::{HostConfig, ProxyHook};
 use crate::mask::Masker;
 use crate::proxy::{
     AllowEntry, KeySource, KeyStyle, ModelRoute, Proxy, ProxyConfig, ProxyHandle, Roots,
@@ -98,6 +98,7 @@ impl Egress {
     /// han-mcp on the tunnel.
     pub async fn start(
         cfg: &HostConfig,
+        hook: Option<&ProxyHook>,
         bridge: &Arc<dyn HostBridge>,
         token: &str,
         _workspace: &Workspace,
@@ -130,14 +131,9 @@ impl Egress {
                     KeyHeader::Bearer => KeyStyle::Bearer,
                 },
                 key: KeySource::new(key),
-                roots: if cfg.sandbox.test_roots.is_empty() {
-                    Roots::System
-                } else {
-                    Roots::Only(cfg.sandbox.test_roots.clone())
-                },
+                roots: Roots::System,
             });
         }
-        pc.allow_private_upstreams = cfg.sandbox.test_loopback_upstream;
         let b = Arc::clone(bridge);
         pc.mcp = Some(Arc::new(move |stream| {
             let b = Arc::clone(&b);
@@ -147,6 +143,9 @@ impl Egress {
                 }
             });
         }));
+        if let Some(hook) = hook {
+            hook(&mut pc);
+        }
         let proxy = Proxy::start(pc).await.map_err(|e| e.to_string())?;
         Ok(Egress {
             proxy,
@@ -195,7 +194,7 @@ impl Egress {
         )
         .map_err(|e| format!("driver: {e}"))?;
         let temp = agent_dir.parent().unwrap_or(agent_dir).join("tmp");
-        let mut ro: Vec<PathBuf> = vec![prepared.program.clone(), cfg.shim.clone()];
+        let mut ro: Vec<PathBuf> = vec![prepared.program.clone(), cfg.shim.program.clone()];
         if cfg.node.is_absolute() {
             ro.push(cfg.node.clone());
         }
@@ -244,7 +243,7 @@ impl Egress {
                 processes: None,
                 wall_time: None,
             },
-            shim: Some(cfg.shim.clone()),
+            shim: cfg.shim.clone(),
             inside_port,
         };
         let mut child = sandbox::launch(spec).await.map_err(|e| e.to_string())?;

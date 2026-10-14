@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::acp::{GateFidelity, McpServerSpec};
+use crate::sandbox::ShimCommand;
 
 /// How HAN's MCP tools reach the agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +122,7 @@ pub struct DriverConfig {
     pub name: String,
     /// The harness label for status (`han.status/1` `harness`).
     pub harness: String,
-    /// The command. Placeholders: `{node}`, `{adapter_dir}`, `{agent_dir}`, `{worktree}`, `{shim}`,
+    /// The command. Placeholders: `{node}`, `{adapter_dir}`, `{agent_dir}`, `{worktree}`,
     /// `{proxy_url}`, `{proxy_port}`, `{proxy_token}`, `{node_flags}` (expands to the flags, one argument
     /// each).
     pub command: Vec<String>,
@@ -376,7 +377,7 @@ pub fn bind_login(
 }
 
 /// What the host knows when it prepares a session's launch.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PrepareCtx {
     /// The node executable.
     pub node: PathBuf,
@@ -386,8 +387,8 @@ pub struct PrepareCtx {
     pub agent_dir: PathBuf,
     /// The session's worktree.
     pub worktree: PathBuf,
-    /// The in-sandbox shim program (runs `mcp-stub`).
-    pub shim: PathBuf,
+    /// The in-sandbox shim (runs `mcp-stub`).
+    pub shim: ShimCommand,
     /// The proxy port the agent reaches (inside the sandbox: the shim's loopback port).
     pub proxy_port: u16,
     /// The per-session proxy token (SR-28).
@@ -411,7 +412,6 @@ impl PrepareCtx {
         m.insert("adapter_dir", p(&self.adapter_dir));
         m.insert("agent_dir", p(&self.agent_dir));
         m.insert("worktree", p(&self.worktree));
-        m.insert("shim", p(&self.shim));
         m.insert("proxy_url", self.proxy_url());
         m.insert("proxy_port", self.proxy_port.to_string());
         m.insert("proxy_token", self.proxy_token.clone());
@@ -458,14 +458,14 @@ pub struct PreparedLaunch {
 pub fn han_mcp_server(ctx: &PrepareCtx) -> McpServerSpec {
     McpServerSpec::Stdio {
         name: ctx.mcp_name.clone().unwrap_or_else(|| "han".into()),
-        command: ctx.shim.clone(),
-        args: vec![
+        command: ctx.shim.program.clone(),
+        args: ctx.shim.args([
             "mcp-stub".into(),
             "--proxy".into(),
             format!("127.0.0.1:{}", ctx.proxy_port),
             "--token".into(),
             ctx.proxy_token.clone(),
-        ],
+        ]),
         env: vec![],
     }
 }
@@ -670,7 +670,7 @@ mod tests {
             adapter_dir: PathBuf::from("/rt/pi-acp"),
             agent_dir: dir.join("agent"),
             worktree: dir.join("wt"),
-            shim: PathBuf::from("/rt/han-agent-shim"),
+            shim: ShimCommand::new("/rt/han", ["shim"]),
             proxy_port: 18090,
             proxy_token: "tok123".into(),
             pi_command: None,
@@ -709,7 +709,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mcp["mcpServers"]["han"]["exposure"], "direct");
-        assert_eq!(mcp["mcpServers"]["han"]["args"][0], "mcp-stub");
+        // the shim's own prefix first (`han shim`), then its verb
+        assert_eq!(mcp["mcpServers"]["han"]["args"][0], "shim");
+        assert_eq!(mcp["mcpServers"]["han"]["args"][1], "mcp-stub");
         let models: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("agent/models.json")).unwrap(),
         )

@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 pub const KNOWN: &[&str] = &["rust"];
 
 /// Which toolchains an agent gets and where they live: the node's typed value, as it arrives.
-pub use han_node::agents::ToolchainSpec as ToolchainConfig;
+pub use han_registry::ToolchainSpec as ToolchainConfig;
 
 /// What the sandbox can do, which decides what a toolchain must be given. One value per backend; every
 /// backend-specific grant or step of a toolchain is a branch on it in that toolchain's planner.

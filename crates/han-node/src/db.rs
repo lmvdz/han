@@ -11,7 +11,8 @@ use han_core::json::Value;
 use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
 
-use crate::api::{HomeRef, StatusBody};
+use crate::api::StatusBody;
+use crate::home::HomeAddr;
 
 /// The storage format version this crate writes. A file with a higher one is refused.
 pub const FORMAT_VERSION: u32 = 2;
@@ -92,7 +93,7 @@ pub struct Follow {
     /// The space.
     pub space: String,
     /// Its home.
-    pub home: HomeRef,
+    pub home: HomeAddr,
     /// The last seq whose receipt this device verified.
     pub head: u64,
     /// The receipt hash of that seq (`""` before seq 1), the `prev` the next record must carry.
@@ -246,7 +247,7 @@ impl NodeDb {
     }
 
     /// Starts following `space` (a no-op if it already is).
-    pub fn add_follow(&self, space: &str, home: &HomeRef) -> Result<bool> {
+    pub fn add_follow(&self, space: &str, home: &HomeAddr) -> Result<bool> {
         let n = self.lock().execute(
             "INSERT OR IGNORE INTO follows (space, home) VALUES (?1, ?2)",
             [space, &serde_json::to_string(home)?],

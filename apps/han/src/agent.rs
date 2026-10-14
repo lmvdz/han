@@ -14,11 +14,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::home::{HomeChoice, HomeOpts};
 use clap::{Args, Subcommand};
 use han_node::NodeApi;
 use han_node::api::{CallResult, Command};
 use han_node::rpc::{RpcClient, default_endpoint};
+use han_registry::{AgentEdit, HomeRef};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -69,8 +69,9 @@ enum AgentCmd {
         /// over the home's admin socket.
         #[arg(long)]
         home_data: Option<PathBuf>,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The agent's home: a home ticket (`han1home.…`) or a ServerName. Default: the agent's server.
+        #[arg(long)]
+        home: Option<HomeRef>,
     },
     /// Makes an agent's key and prints what its home registers.
     Create {
@@ -89,8 +90,9 @@ enum AgentCmd {
     Confirm {
         /// The agent.
         agent: String,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The agent's home: a home ticket (`han1home.…`) or a ServerName. Default: the agent's server.
+        #[arg(long)]
+        home: Option<HomeRef>,
         /// The operator (this node's actor).
         #[arg(long)]
         operator: String,
@@ -113,8 +115,10 @@ enum AgentCmd {
         /// The issue, `github:owner/repo#123`.
         #[arg(long)]
         issue: Option<String>,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The agent's home: a home ticket (`han1home.…`) or a ServerName. The node follows the agent's profile
+        /// there to find its operator.
+        #[arg(long)]
+        home: Option<HomeRef>,
     },
     /// Installs a harness's pinned ACP adapter (npm, with Node 22) into the data directory and records where.
     SetupHarness {
@@ -223,13 +227,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             server,
             operator,
         } => {
-            let r = client
-                .call(Command::AgentCreate {
-                    name,
-                    server,
-                    operator: operator.clone(),
-                })
-                .await?;
+            let r = client.call(Command::AgentCreate { name, server }).await?;
             if let CallResult::Agent {
                 actor,
                 key_id,
@@ -248,7 +246,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             agent,
             home,
             operator,
-        } => confirm_cmd(&client, &agent, &home, &operator).await?,
+        } => confirm_cmd(&client, &agent, home.as_ref(), &operator).await?,
         AgentCmd::Start {
             space,
             agent,
@@ -257,21 +255,6 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             issue,
             home,
         } => {
-            let harness = match harness {
-                Some(h) => h,
-                None => crate::harness::default_harness(&args.data, &agent)?
-                    .ok_or("give --harness (or record one with `han agent add --harness`)")?,
-            };
-            if let Some(choice) = home.resolve(Some(agent.as_str()))? {
-                pin(&client, &choice).await?;
-                // The node names the agent's operator from its profile, so it follows the profile first.
-                let _ = client
-                    .call(Command::SpaceFollow {
-                        home: choice.home,
-                        space: format!("profile:{agent}"),
-                    })
-                    .await;
-            }
             let mut tries = 0;
             loop {
                 let r = client
@@ -281,6 +264,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                         harness: harness.clone(),
                         repo: repo.clone(),
                         issue: issue.clone(),
+                        home: home.clone(),
                     })
                     .await;
                 if tries < 600 && profile_pending(&r) {
@@ -315,23 +299,11 @@ fn profile_pending(r: &Result<CallResult, han_node::api::NodeError>) -> bool {
     }
 }
 
-/// Hands the node a home named by ticket or keys, so it dials and trusts it with no HTTPS well-known.
-pub async fn pin(client: &RpcClient, choice: &HomeChoice) -> Res<()> {
-    if let Some(t) = &choice.pin {
-        client
-            .call(Command::HomePin {
-                ticket: t.to_text(),
-            })
-            .await?;
-    }
-    Ok(())
-}
-
 /// `han agent confirm` and `han actor confirm`.
 pub async fn confirm_cmd(
     client: &RpcClient,
     actor: &str,
-    home: &HomeOpts,
+    home: Option<&HomeRef>,
     operator: &str,
 ) -> Res<()> {
     match crate::enroll::confirm(client, actor, home, operator, 600).await {
@@ -359,7 +331,7 @@ struct Add {
     harness: Option<String>,
     space: Option<String>,
     home_data: Option<PathBuf>,
-    home: HomeOpts,
+    home: Option<HomeRef>,
 }
 
 /// `han agent add`.
@@ -376,10 +348,13 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
     let changed = crate::harness::record_settings(
         data,
         &actor,
-        a.os_user.as_deref(),
-        a.sandbox.as_deref(),
-        a.allow_advisory,
-        a.harness.as_deref(),
+        &AgentEdit {
+            os_user: a.os_user.clone(),
+            sandbox: a.sandbox.clone(),
+            allow_advisory: a.allow_advisory.then_some(true),
+            harness: a.harness.clone(),
+            toolchains: None,
+        },
     )?;
     if changed {
         println!(
@@ -411,7 +386,6 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
         .call(Command::AgentCreate {
             name: a.name.clone(),
             server: server.clone(),
-            operator: a.operator.clone(),
         })
         .await?
     else {
@@ -426,7 +400,7 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
         key_id: &key_id,
         public_key: &public_key,
         operator: &a.operator,
-        home: &a.home,
+        home: a.home.as_ref(),
         home_data: a.home_data.as_deref(),
         space: a.space.as_deref(),
         client: Some(client),

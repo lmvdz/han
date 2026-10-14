@@ -7,7 +7,7 @@ User=%i
 Group=%i
 Environment=HOME=/var/lib/han-agents/%i
 WorkingDirectory=/var/lib/han-agents/%i
-ExecStart=/usr/local/bin/han host --args-file /var/lib/han-agents/%i/spawn/host.json
+ExecStart=/usr/local/bin/han host --spec /var/lib/han-agents/%i/spawn/host.json
 KillSignal=SIGINT
 Restart=no
 UMask=0077

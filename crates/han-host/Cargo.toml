@@ -15,6 +15,7 @@ getrandom.workspace = true
 han-core.workspace = true
 han-mcp = { path = "../han-mcp", version = "0.1.0" }
 han-node = { path = "../han-node", version = "0.1.0", default-features = false }
+han-registry.workspace = true
 han-timeline = { path = "../han-timeline", version = "0.1.0" }
 han-vcs = { path = "../han-vcs", version = "0.1.0" }
 notify = "8.2"

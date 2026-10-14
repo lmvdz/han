@@ -1,5 +1,5 @@
 //! A node joins a home that has no HTTPS well-known (a placeholder ServerName, no DNS) by a home ticket
-//! (`Command::HomePin`): the ticket's node is dialed, its keys check the receipts (ticket-pinned trust), and
+//! (`HomeRef::Ticket` in a command, which the node pins): the ticket's node is dialed, its keys check the receipts (ticket-pinned trust), and
 //! the binding survives a restart of the node with no flag. `han agent confirm` then works end to end.
 
 use std::net::SocketAddr;
@@ -101,18 +101,21 @@ async fn scenario() {
         keys: home.server_keys(),
     };
     assert_eq!(HomeTicket::parse(&ticket.to_text()), Some(ticket.clone()));
-    let home_ref = HomeRef {
-        server: SERVER.into(),
-        node: addr.node.clone(),
-        addrs: addr.addrs.clone(),
-        relays: vec![],
-    };
+    let home_ref = HomeRef::Ticket(ticket.to_text());
 
     // a ticket that names no address, or is not a home ticket, is refused
     let node = start(&dir).await;
     let e = node
         .call(Command::HomePin {
             ticket: "han1abc".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(e, NodeError::Invalid { .. }), "{e:?}");
+    let e = node
+        .call(Command::SpaceFollow {
+            home: Some(HomeRef::Ticket("han1abc".into())),
+            space: PROFILE.into(),
         })
         .await
         .unwrap_err();
@@ -125,7 +128,7 @@ async fn scenario() {
         async move {
             let _ = node
                 .call(Command::SpaceFollow {
-                    home: home_ref,
+                    home: Some(home_ref),
                     space: PROFILE.into(),
                 })
                 .await;
@@ -147,11 +150,7 @@ async fn scenario() {
         }
     };
 
-    node.call(Command::HomePin {
-        ticket: ticket.to_text(),
-    })
-    .await
-    .unwrap();
+    // the ticket in the command is pinned by the node: no separate step
     let r = confirm(&node).await.unwrap();
     assert!(
         matches!(&r, CallResult::Receipt { space, .. } if space == PROFILE),

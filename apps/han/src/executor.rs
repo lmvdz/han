@@ -11,8 +11,8 @@ use clap::{Args, Subcommand};
 use han_exec::{ExecConfig, RepoTarget};
 use han_node::keys::{FileKeyStore, KeyStore};
 use han_node::rpc::{RpcClient, default_endpoint};
+use han_registry::HomeRef;
 
-use crate::home::HomeOpts;
 use crate::rolenode::{key_dir, key_name};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
@@ -61,8 +61,9 @@ enum ExecutorCmd {
         /// Relays for the executor: `n0`, `none` or URLs.
         #[arg(long, default_value = "n0")]
         relay: String,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The executor's home: a home ticket (`han1home.…`) or a ServerName. Default: the executor's server.
+        #[arg(long)]
+        home: Option<HomeRef>,
     },
 }
 
@@ -152,14 +153,14 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
 
     // 3. exec.env (what the unit reads)
     let env_path = dir.join("exec.env");
-    let ticket = home.home.clone().unwrap_or_default();
+    let home_text = home.as_ref().map(ToString::to_string).unwrap_or_default();
     let env = format!(
-        "HAN_SERVER={server}\nHAN_SPACE={}\nHAN_RELAY={relay}\nHAN_HOME_TICKET={ticket}\n",
+        "HAN_SERVER={server}\nHAN_SPACE={}\nHAN_RELAY={relay}\nHAN_HOME={home_text}\n",
         space.clone().unwrap_or_default()
     );
     if std::fs::read_to_string(&env_path).ok().as_deref() == Some(env.as_str()) {
         println!("  unchanged: {}", env_path.display());
-    } else if space.is_none() && ticket.is_empty() && env_path.exists() {
+    } else if space.is_none() && home_text.is_empty() && env_path.exists() {
         println!(
             "  unchanged: {} (no --space or --home given)",
             env_path.display()
@@ -193,14 +194,14 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
         key_id: "k1",
         public_key: &public_key,
         operator: &operator,
-        home: &home,
+        home: home.as_ref(),
         home_data: home_data.as_deref(),
         space: space.as_deref(),
         client: client.as_ref(),
     })
     .await?;
     println!(
-        "by hand: han exec --actor {actor} --space {} --home-ticket <ticket> --keys {} --data {} --config {}",
+        "by hand: han exec --actor {actor} --space {} --home <ticket> --keys {} --data {} --config {}",
         space.as_deref().unwrap_or("<space>"),
         dir.display(),
         dir.join("state").display(),

@@ -721,7 +721,7 @@ async fn up(a: UpArgs) -> Res<()> {
             let driver = fake_driver(&fake_agent.clone().unwrap_or_default(), &script_path);
             let driver_path = fake.join("driver.json");
             std::fs::write(&driver_path, serde_json::to_string_pretty(&driver)?)?;
-            let record = han_node::agents::HarnessInstall {
+            let record = han_registry::HarnessInstall {
                 harness: "fake".into(),
                 node: PathBuf::from("node"),
                 adapter_dir: fake.clone(),
@@ -777,7 +777,7 @@ async fn up(a: UpArgs) -> Res<()> {
                     &exec_actor,
                     "--space",
                     &space,
-                    "--home-ticket",
+                    "--home",
                     &ticket,
                     "--keys",
                     &s(&exec_dir),

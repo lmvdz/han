@@ -15,6 +15,7 @@ use han_node::api::{
 use han_vcs::GitVcs;
 
 mod common;
+mod production_shim;
 use common::*;
 
 /// A node whose stream publishes take `delay` each.
@@ -113,11 +114,9 @@ async fn the_final_message_arrives_through_a_slow_node_after_stop() {
             ro: vec![script.clone()],
             login_dir: None,
             allow_hosts: Vec::new(),
-            test_loopback_upstream: false,
-            test_roots: Vec::new(),
             toolchains: Default::default(),
         },
-        shim: PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim")),
+        shim: production_shim::shim(),
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
@@ -131,6 +130,7 @@ async fn the_final_message_arrives_through_a_slow_node_after_stop() {
         }),
         vcs: Arc::new(GitVcs::new(root.join("coder").join("objects"))),
         signer: Some((CODER.into(), "d1".into(), seed(2))),
+        proxy_hook: None,
     };
     let (stop, rx) = tokio::sync::watch::channel(false);
     let host = tokio::spawn(run_session(cfg, deps, rx));

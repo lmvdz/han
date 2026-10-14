@@ -7,8 +7,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use han_node::rpc::{RpcClient, default_endpoint};
-
-use crate::home::HomeOpts;
+use han_registry::HomeRef;
 
 /// Options of `han actor`.
 #[derive(Args)]
@@ -30,8 +29,9 @@ enum ActorCmd {
     Confirm {
         /// The actor, `@name:server`.
         actor: String,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The actor's home: a home ticket (`han1home.…`) or a ServerName. Default: the actor's server.
+        #[arg(long)]
+        home: Option<HomeRef>,
         /// The operator (this node's actor).
         #[arg(long)]
         operator: String,
@@ -54,6 +54,6 @@ pub async fn run(args: ActorArgs) -> Result<(), Box<dyn std::error::Error>> {
             actor,
             home,
             operator,
-        } => crate::agent::confirm_cmd(&client, &actor, &home, &operator).await,
+        } => crate::agent::confirm_cmd(&client, &actor, home.as_ref(), &operator).await,
     }
 }

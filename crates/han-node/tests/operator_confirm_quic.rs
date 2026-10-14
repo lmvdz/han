@@ -49,7 +49,7 @@ async fn agent_confirm(
 ) -> Result<CallResult, NodeError> {
     let _ = face
         .call(Command::SpaceFollow {
-            home: home.clone(),
+            home: Some(home.clone()),
             space: PROFILE.into(),
         })
         .await;
@@ -114,12 +114,7 @@ async fn scenario() {
     .await
     .unwrap();
     let fetcher = Fetcher::new().with_base(SERVER, &format!("http://{}", http.local_addr()));
-    let home_ref = HomeRef {
-        server: SERVER.into(),
-        node: addr.node.clone(),
-        addrs: addr.addrs.clone(),
-        relays: vec![],
-    };
+    let home_ref = HomeRef::Server(SERVER.into());
     let server_keys = Arc::new(StaticKeys::new());
     server_keys.set(SERVER, home.server_keys());
 

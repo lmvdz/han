@@ -27,29 +27,13 @@ retry_after_ms: number | null, } | { "code": "conflict",
  */
 message: string, };
 
-export type HomeRef = { 
-/**
- * The ServerName, as put in `dialed` (G-08).
- */
-server: string, 
-/**
- * The node id of the home's sequencer.
- */
-node: string, 
-/**
- * Direct addresses, `ip:port`.
- */
-addrs: Array<string>, 
-/**
- * Relay URLs.
- */
-relays: Array<string>, };
+export type HomeRef = { "ticket": string } | { "server": string };
 
 export type Command = { "type": "space_create", 
 /**
- * The home that will sequence it.
+ * The home that will sequence it (default: the home of this device's actor).
  */
-home: HomeRef, 
+home?: HomeRef, 
 /**
  * The space's name (content of `space.create`).
  */
@@ -71,9 +55,9 @@ ticket: string, } | { "type": "home_pin",
  */
 ticket: string, } | { "type": "space_follow", 
 /**
- * The home of the space.
+ * The home of the space. A ticket is pinned first. Default: the server the space id names.
  */
-home: HomeRef, 
+home?: HomeRef, 
 /**
  * The space.
  */
@@ -115,11 +99,7 @@ name: string,
 /**
  * The server it lives on.
  */
-server: string, 
-/**
- * Its operator.
- */
-operator: string, } | { "type": "agent_start", 
+server: string, } | { "type": "agent_start", 
 /**
  * The space.
  */
@@ -129,9 +109,9 @@ space: string,
  */
 agent: string, 
 /**
- * The harness.
+ * The harness (default: the one recorded for the agent).
  */
-harness: string, 
+harness?: string, 
 /**
  * The repository, `github:owner/repo`.
  */
@@ -139,7 +119,12 @@ repo?: string,
 /**
  * The issue, `github:owner/repo#123`.
  */
-issue?: string, } | { "type": "agent_stop", 
+issue?: string, 
+/**
+ * The agent's home, when the node does not follow the agent's profile yet: the node pins it (a
+ * ticket), follows `profile:<agent>` there, and takes the operator from it.
+ */
+home?: HomeRef, } | { "type": "agent_stop", 
 /**
  * The session, or the agent actor.
  */

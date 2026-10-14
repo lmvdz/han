@@ -146,47 +146,36 @@ fn han_github_holds_no_write_key_material() {
 }
 
 #[test]
-fn face_sources_use_only_the_api_and_the_rpc_client() {
-    let mut faces = vec![
-        root().join("apps/han/src/board.rs"),
-        root().join("apps/han/src/agent.rs"),
-        root().join("apps/han/src/space.rs"),
-        root().join("apps/han/src/task.rs"),
-        root().join("apps/han/src/tui.rs"),
-    ];
-    // The terminal face is a crate of its own: every source file of it is a face source.
-    for entry in std::fs::read_dir(root().join("apps/han-tui/src")).expect("apps/han-tui/src") {
-        let path = entry.expect("a directory entry").path();
-        if path.extension().is_some_and(|e| e == "rs") {
-            faces.push(path);
-        }
-    }
-    for file in faces {
-        let text =
-            std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-        for (i, line) in text.lines().enumerate() {
-            let mut rest = line;
-            while let Some(at) = rest.find("han_node::") {
-                let after = &rest[at + "han_node::".len()..];
-                let ok = ["api", "rpc::", "NodeApi", "NodeError", "ViewStream"]
-                    .iter()
-                    .any(|p| after.starts_with(p));
-                assert!(
-                    ok,
-                    "{}:{}: a face may use only han_node::api and the rpc client: {line}",
-                    file.display(),
-                    i + 1
-                );
-                rest = after;
-            }
-            for banned in ["han_core::", "han_net::", "han_seq::"] {
-                assert!(
-                    !line.contains(banned),
-                    "{}:{}: a face must not use {banned}",
-                    file.display(),
-                    i + 1
-                );
-            }
-        }
-    }
+fn the_command_line_faces_get_only_the_api_types() {
+    // PLAN 3: `han board`, `space`, `task`, `device` and `outbox` are a crate of their own, so the rule is a
+    // fact of its dependency tree and not of a search of its sources.
+    let faces = tree(&["-p", "han-faces"]);
+    assert_absent(
+        "han-faces",
+        &faces,
+        &[
+            "han-core",
+            "han-net",
+            "han-seq",
+            "han-timeline",
+            "han-host",
+            "iroh",
+            "rusqlite",
+            "keyring",
+            "ed25519-dalek",
+        ],
+    );
+    assert!(faces.iter().any(|d| d == "han-node"));
+}
+
+#[test]
+fn the_registry_types_carry_no_runtime() {
+    // han-registry is what a node and the processes it launches agree on; a face may depend on it.
+    let reg = tree(&["-p", "han-registry"]);
+    assert_absent("han-registry", &reg, ASYNC_AND_IO);
+    assert_absent(
+        "han-registry",
+        &reg,
+        &["han-core", "han-net", "han-seq", "han-node", "han-host"],
+    );
 }

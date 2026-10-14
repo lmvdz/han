@@ -15,6 +15,7 @@ use han_node::api::{
 use han_vcs::GitVcs;
 
 mod common;
+mod production_shim;
 use common::*;
 
 const KEY: &str = "AKIAIOSFODNN7EXAMPLE";
@@ -100,10 +101,8 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
             login_dir: None,
             allow_hosts: Vec::new(),
             toolchains: Default::default(),
-            test_loopback_upstream: false,
-            test_roots: Vec::new(),
         },
-        shim: PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim")),
+        shim: production_shim::shim(),
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
@@ -114,6 +113,7 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
         api: Arc::new(coder.clone()),
         vcs: Arc::new(GitVcs::new(root.join("coder").join("objects"))),
         signer: Some((CODER.into(), "d1".into(), seed(2))),
+        proxy_hook: None,
     };
     let (stop, rx) = tokio::sync::watch::channel(false);
     let host = tokio::spawn(run_session(cfg, deps, rx));

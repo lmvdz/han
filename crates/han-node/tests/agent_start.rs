@@ -1,5 +1,5 @@
-//! `AgentStart` hands the host everything it needs (the harness as set up, the node, the sandbox, the home
-//! ticket) and names the agent's operator from its profile, not the node's own actor.
+//! `AgentStart` hands the supervisor one `HostSpec` with everything the host needs (the harness as set up, the
+//! node, the sandbox, the home) and names the agent's operator from its profile, not the node's own actor.
 
 mod common;
 
@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{World, call, pubkey, space_of};
 use han_net::{HomeTicket, NodeAddr};
-use han_node::agents::HarnessInstall;
 use han_node::api::{CallResult, Command, NodeApi, NodeError};
 use han_node::supervisor::{RoleSpec, RoleStatus, Supervisor, SupervisorError};
+use han_registry::{HarnessInstall, HomeRef};
 
 const ALICE: &str = "@alice:a.localhost";
 const BOB: &str = "@bob:a.localhost";
@@ -29,14 +29,6 @@ impl Supervisor for Recording {
     fn status(&self) -> Vec<(String, RoleStatus)> {
         Vec::new()
     }
-}
-
-/// The value after `flag` in the arguments.
-fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-    args.iter()
-        .position(|a| a == flag)
-        .and_then(|i| args.get(i + 1))
-        .map(String::as_str)
 }
 
 struct Setup {
@@ -84,9 +76,10 @@ fn start(space: &str, harness: &str) -> Command {
     Command::AgentStart {
         space: space.into(),
         agent: AGENT.into(),
-        harness: harness.into(),
+        harness: Some(harness.into()),
         repo: Some("github:o/r".into()),
         issue: Some("github:o/r#1".into()),
+        home: None,
     }
 }
 
@@ -166,41 +159,40 @@ async fn start_names_the_profiles_operator_and_passes_the_install() {
     start_when_known(&s, "claude").await.unwrap();
     let specs = s.sup.0.lock().unwrap();
     let spec = specs.last().unwrap();
-    let a = &spec.args;
+    let h = &spec.spec;
     assert_eq!(
-        arg(a, "--operator"),
+        h.operator.as_deref(),
         Some(ALICE),
         "the profile's operator, not {BOB}"
     );
-    assert_eq!(arg(a, "--harness"), Some("claude"));
-    assert_eq!(arg(a, "--node"), Some("/opt/node22/bin/node"));
+    assert_eq!(h.harness.name, "claude");
+    assert_eq!(
+        h.harness.node.as_deref(),
+        Some(std::path::Path::new("/opt/node22/bin/node"))
+    );
     assert!(
-        arg(a, "--adapter-dir")
+        h.harness
+            .adapter_dir
+            .as_ref()
             .unwrap()
             .ends_with("claude-agent-acp")
     );
-    assert_eq!(arg(a, "--sandbox"), Some("bwrap"));
-    assert_eq!(arg(a, "--agent"), Some(AGENT));
-    assert_eq!(arg(a, "--issue"), Some("github:o/r#1"));
-    assert_eq!(
-        arg(a, "--keys").map(std::path::Path::new),
-        Some(s.data.as_path())
-    );
+    assert_eq!(h.sandbox.backend, "bwrap");
+    assert_eq!(h.agent, AGENT);
+    assert_eq!(h.space, s.space);
+    assert_eq!(h.work.issue.as_deref(), Some("github:o/r#1"));
+    assert_eq!(h.work.executor.as_deref(), Some("@exec:a.localhost"));
+    assert_eq!(h.dirs.keys, s.data);
     assert!(
-        arg(a, "--data")
-            .unwrap()
+        h.dirs
+            .state
+            .to_string_lossy()
             .replace('\\', "/")
             .contains("agents/_coder_a_localhost")
     );
-    assert_eq!(arg(a, "--home-server"), Some("a.localhost"));
+    // a home joined by ticket: the host gets the ticket in its spec
+    assert_eq!(h.home, HomeRef::Ticket(ticket));
     assert!(spec.run_as.is_none());
-    assert!(
-        spec.env
-            .iter()
-            .any(|(k, v)| k == "HAN_HOME_TICKET" && v == &ticket),
-        "{:?}",
-        spec.env.iter().map(|(k, _)| k).collect::<Vec<_>>()
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -213,10 +205,12 @@ async fn a_custom_harness_needs_no_install_and_pi_does() {
     assert!(message.contains("han agent setup-harness pi"), "{message}");
     start_when_known(&s, "/etc/han/driver.toml").await.unwrap();
     let specs = s.sup.0.lock().unwrap();
-    let a = &specs.last().unwrap().args;
-    assert_eq!(arg(a, "--harness"), Some("/etc/han/driver.toml"));
-    assert_eq!(arg(a, "--node"), None);
-    assert_eq!(arg(a, "--sandbox"), Some("auto"));
+    let h = &specs.last().unwrap().spec;
+    assert_eq!(h.harness.name, "/etc/han/driver.toml");
+    assert_eq!(h.harness.node, None);
+    assert_eq!(h.sandbox.backend, "auto");
+    // no pin: the host reaches the home by its ServerName
+    assert_eq!(h.home, HomeRef::Server("a.localhost".into()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -238,7 +232,6 @@ async fn an_agent_mapped_to_an_os_user_runs_as_it() {
         Command::AgentCreate {
             name: "coder".into(),
             server: "a.localhost".into(),
-            operator: ALICE.into(),
         },
     )
     .await;
@@ -251,14 +244,8 @@ async fn an_agent_mapped_to_an_os_user_runs_as_it() {
         let run_as = spec.run_as.as_ref().unwrap();
         assert_eq!(run_as.os_user, "han-agent1");
         assert_eq!(run_as.state_dir, state);
-        assert_eq!(
-            arg(&spec.args, "--keys").map(std::path::Path::new),
-            Some(state.as_path())
-        );
-        assert_eq!(
-            arg(&spec.args, "--data").map(std::path::Path::new),
-            Some(state.as_path())
-        );
+        assert_eq!(spec.spec.dirs.keys, state);
+        assert_eq!(spec.spec.dirs.state, state);
     } else {
         assert!(matches!(r, Err(NodeError::Unavailable { .. })), "{r:?}");
     }

@@ -11,7 +11,7 @@ use han_node::api::{Fidelity, SandboxBackend};
 
 use super::{
     BackendAvailability, SandboxError, SandboxInfo, SandboxSpec, Sandboxed, build_env,
-    from_tokio_child, random_hex, shim_path,
+    from_tokio_child, random_hex,
 };
 
 const SOCK_DIR_INSIDE: &str = "/run/han";
@@ -96,7 +96,6 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         return Err(SandboxError::Unavailable(avail.detail));
     }
     let bwrap = find("bwrap").ok_or_else(|| SandboxError::Unavailable("bwrap".into()))?;
-    let shim = shim_path(spec)?;
     let mut tasks = Vec::new();
     let mut gaps = Vec::new();
 
@@ -145,7 +144,7 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         let s = p.to_string_lossy().into_owned();
         args.extend(["--ro-bind".into(), s.clone(), s]);
     }
-    let shim_s = shim.to_string_lossy().into_owned();
+    let shim_s = spec.shim.program.to_string_lossy().into_owned();
     args.extend(["--ro-bind".into(), shim_s.clone(), shim_s.clone()]);
     for p in spec.rw.iter().chain(std::iter::once(&spec.temp)) {
         let s = p.to_string_lossy().into_owned();
@@ -162,6 +161,7 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
     args.extend(["--chdir".into(), spec.cwd.to_string_lossy().into_owned()]);
     args.push("--".into());
     args.push(shim_s);
+    args.extend(spec.shim.prefix_args.iter().cloned());
     args.push("listen".into());
     args.extend(["--port".into(), port.to_string()]);
     if spec.proxy.is_some() {

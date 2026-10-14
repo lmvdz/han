@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use han_core::SigningKey;
 use han_host::driver::{CredentialMode, DriverConfig, McpMode};
+use han_net::wellknown::{Fetcher, WellKnown};
 use han_net::{MemNetwork, MemTransport, ServeOptions, serve};
 use han_node::api::{CallResult, Command, HomeRef, NodeApi, Query, Row, ViewEvent};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore};
@@ -74,7 +75,9 @@ pub fn origin(root: &Path) -> PathBuf {
 
 pub struct World {
     _net: MemNetwork,
-    pub home_ref: HomeRef,
+    pub home_ref: Option<HomeRef>,
+    /// Answers `/.well-known/han` for the home from memory.
+    fetcher: Fetcher,
     pub home: Arc<Home>,
     keys: Arc<StaticKeys>,
     clock: Arc<TestClock>,
@@ -116,14 +119,19 @@ impl World {
             Arc::clone(&home),
             ServeOptions::default(),
         );
-        World {
-            _net: net.clone(),
-            home_ref: HomeRef {
-                server: SERVER.into(),
+        let fetcher = Fetcher::new().with_document(WellKnown {
+            server: SERVER.into(),
+            sequencer: vec![han_net::NodeAddr {
                 node: pubkey(200),
                 addrs: vec![],
                 relays: vec!["https://mem.invalid".into()],
-            },
+            }],
+            keys: home.server_keys(),
+        });
+        World {
+            fetcher,
+            _net: net.clone(),
+            home_ref: Some(HomeRef::Server(SERVER.into())),
             home,
             keys,
             clock,
@@ -151,6 +159,7 @@ impl World {
         config.flush_every = Duration::from_millis(100);
         config.connect_wait = Duration::from_secs(3);
         config.data_dir = Some(self.dir.join(format!("node-{n}")));
+        config.fetcher = self.fetcher.clone();
         Node::start(NodeParts {
             config,
             transport: MemTransport::new(&self.net, &pubkey(n)),

@@ -127,9 +127,10 @@ async fn errors_are_the_closed_set() {
         .call(Command::AgentStart {
             space: "x:a.localhost".into(),
             agent: "@c:a.localhost".into(),
-            harness: "pi".into(),
+            harness: Some("pi".into()),
             repo: None,
             issue: None,
+            home: None,
         })
         .await
         .unwrap_err();
