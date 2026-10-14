@@ -24,8 +24,9 @@ use crate::api::{
 };
 use crate::db::{NodeDb, OutboxRow};
 use crate::keys::{DEVICE_KEY, FileKeyStore, KeyStore};
+use crate::retry::{Disposition, Via, disposition, node_error as map_net_error, stored_error};
 use crate::supervisor::{Role, RoleSpec, RoleStatus, RunAs, Supervisor, SupervisorError};
-use crate::sync::{LinkCmd, LinkHandle, ServerKeys, is_final, map_net_error, run_link};
+use crate::sync::{LinkCmd, LinkHandle, ServerKeys, run_link};
 pub use crate::views::Freshness;
 use crate::views::{Engine, NodeInfo};
 
@@ -302,7 +303,8 @@ impl<T: Transport> Inner<T> {
                         .receipt
                         .and_then(|r| serde_json::from_str(&r).ok())
                         .map(Outcome::Sent),
-                    "rejected" => Some(Outcome::Rejected(NodeError::denied(
+                    "rejected" => Some(Outcome::Rejected(stored_error(
+                        row.code.as_deref(),
                         row.error.unwrap_or_default(),
                     ))),
                     "failed" => Some(Outcome::Rejected(NodeError::unavailable(
@@ -353,6 +355,15 @@ impl<T: Transport> Inner<T> {
             .unwrap_or_else(|p| p.into_inner())
             .insert(row.id, self.clock.now_ms().saturating_add(wait));
         None
+    }
+
+    /// Makes `row` wait one base backoff without counting a try.
+    fn hold_row(&self, row: &OutboxRow) {
+        let wait = u64::try_from(self.cfg.outbox_backoff.as_millis()).unwrap_or(u64::MAX);
+        self.outbox_retry_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(row.id, self.clock.now_ms().saturating_add(wait));
     }
 
     /// Whether `row` is still waiting out a backoff.
@@ -407,23 +418,42 @@ impl<T: Transport> Inner<T> {
                 }
                 Err(e) => {
                     let err = map_net_error(&e);
-                    if is_final(&err) {
-                        let _ = self.db.outbox_rejected(row.id, &err.to_string());
-                        if want == Some(row.id) {
-                            mine = Some(Outcome::Rejected(err));
-                        }
-                    } else {
-                        let counts = matches!(e, han_net::NetError::Remote(_));
-                        if let Some(given_up) = self.defer_row(&row, &err, counts) {
+                    match disposition(Via::Call, &e) {
+                        Disposition::Final => {
+                            let _ = self
+                                .db
+                                .outbox_rejected(row.id, err.code(), &err.to_string());
                             if want == Some(row.id) {
-                                mine = Some(Outcome::Rejected(given_up));
+                                mine = Some(Outcome::Rejected(err));
                             }
-                            continue;
                         }
-                        if want == Some(row.id) || mine.is_none() {
-                            mine = Some(Outcome::Offline);
+                        Disposition::Moved { to } => {
+                            // Not a failed try and not counted: the entry waits, and the Outbox view says why.
+                            let _ = self.db.outbox_note(
+                                row.id,
+                                &format!(
+                                    "the space moved to {to}; follow it there (home pin) to send this entry"
+                                ),
+                            );
+                            self.hold_row(&row);
+                            if want == Some(row.id) || mine.is_none() {
+                                mine = Some(Outcome::Offline);
+                            }
+                            break;
                         }
-                        break;
+                        Disposition::Retry { .. } | Disposition::Misconfigured => {
+                            let counts = matches!(e, han_net::NetError::Remote(_));
+                            if let Some(given_up) = self.defer_row(&row, &err, counts) {
+                                if want == Some(row.id) {
+                                    mine = Some(Outcome::Rejected(given_up));
+                                }
+                                continue;
+                            }
+                            if want == Some(row.id) || mine.is_none() {
+                                mine = Some(Outcome::Offline);
+                            }
+                            break;
+                        }
                     }
                 }
             }

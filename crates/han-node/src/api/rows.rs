@@ -714,6 +714,10 @@ pub enum SpaceLink {
     Offline,
     /// A receipt did not verify; the device stopped following.
     Rejected,
+    /// The home answered, but this device's setup does not fit it (for example the home does not know this
+    /// device's actor, or its key does not match the pin); the reason is in the space's link error. The link
+    /// retries slowly; fix the setup.
+    Misconfigured,
 }
 
 /// How a space is doing on this device.
@@ -795,6 +799,10 @@ pub struct OutboxRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub error: Option<String>,
+    /// This entry is the first one waiting in its space and its last try failed: it holds back every entry
+    /// behind it (R-07: finish what is stored before appending anything new).
+    #[serde(default)]
+    pub blocking: bool,
 }
 
 /// Where joining a space stands.
@@ -811,6 +819,9 @@ pub enum JoinStage {
     Ready,
     /// A receipt did not verify; the join stopped.
     Rejected,
+    /// The home does not fit this device's setup (it does not know the actor, or a key does not match);
+    /// `error` says what.
+    Misconfigured,
 }
 
 /// Progress of joining one space.
@@ -871,6 +882,10 @@ pub struct NodeStatusRow {
     /// The codes of the last errors (calls and views), oldest first, at most [`RECENT_ERRORS`].
     #[serde(default)]
     pub recent_errors: Vec<ErrorNote>,
+    /// What is stuck right now, as sentences: a link whose setup does not fit its home, a space whose outbox
+    /// is held by an entry the home will not take ("space X blocked by outbox entry N: reason").
+    #[serde(default)]
+    pub problems: Vec<String>,
 }
 
 /// How many errors `NodeStatusRow::recent_errors` holds.

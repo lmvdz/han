@@ -382,3 +382,87 @@ async fn an_entry_the_home_keeps_deferring_fails_and_can_be_retried() {
     assert!(matches!(err, NodeError::NotFound { .. }), "{err:?}");
     alice.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_actor_the_home_does_not_know_gets_a_misconfigured_link_with_the_reason() {
+    let world = World::new(&[(ALICE, 31)]);
+    // zed has a device key but no profile at the home: hello is answered `not_found`, which is a setup fault
+    let zed = world.node("@zed:a.localhost", 40);
+    call(
+        &zed,
+        Command::SpaceFollow {
+            home: world.home_ref.clone(),
+            space: "x1:a.localhost".into(),
+        },
+    )
+    .await;
+    let mut status = Watched::open(
+        &zed,
+        Query::SpaceStatus {
+            space: "x1:a.localhost".into(),
+            window: window(),
+        },
+    );
+    until("the link is misconfigured and says why", || {
+        status.rows().iter().any(|r| {
+            matches!(r, Row::SpaceStatus(s) if s.link == SpaceLink::Misconfigured
+                && s.error.as_deref().is_some_and(|e| e.contains("not_found")))
+        })
+    })
+    .await;
+    let mut node = Watched::open(&zed, Query::NodeStatus { window: window() });
+    until("the node status lists the problem", || {
+        node.rows().iter().any(|r| {
+            matches!(r, Row::NodeStatus(n) if n.problems.iter().any(|p| p.contains("misconfigured")))
+        })
+    })
+    .await;
+    zed.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stuck_entry_is_shown_as_blocking_its_space() {
+    let world = World::new(&[(ALICE, 31)]);
+    let alice = world.node_with(ALICE, 31, |c| {
+        c.outbox_max_attempts = 100_000;
+        c.outbox_backoff = Duration::ZERO;
+        c.connect_wait = Duration::from_millis(300);
+    });
+    let space = space_of(&call(&alice, create(&world)).await);
+    let stuck = match call(
+        &alice,
+        Command::MemberSet {
+            space: space.clone(),
+            actor: "@carol:far.example".into(),
+            role: "member".into(),
+        },
+    )
+    .await
+    {
+        CallResult::Queued { outbox_id, .. } => outbox_id,
+        other => panic!("expected Queued, got {other:?}"),
+    };
+    let mut outbox = Watched::open(
+        &alice,
+        Query::Outbox {
+            space: None,
+            window: window(),
+        },
+    );
+    until("the entry is shown as blocking", || {
+        outbox
+            .rows()
+            .iter()
+            .any(|r| matches!(r, Row::Outbox(o) if o.outbox_id == stuck && o.blocking))
+    })
+    .await;
+    let mut node = Watched::open(&alice, Query::NodeStatus { window: window() });
+    until("the node status names the blocked space", || {
+        node.rows().iter().any(|r| {
+            matches!(r, Row::NodeStatus(n) if n.problems.iter().any(|p|
+                p.contains(&format!("space {space} blocked by outbox entry {stuck}"))))
+        })
+    })
+    .await;
+    alice.shutdown();
+}

@@ -578,6 +578,7 @@ impl Engine {
         let admitted = m.roles.get(&self.me).is_some_and(|r| r.reads());
         let stage = match m.link {
             SpaceLink::Rejected => JoinStage::Rejected,
+            SpaceLink::Misconfigured => JoinStage::Misconfigured,
             SpaceLink::Connecting => JoinStage::Connecting,
             SpaceLink::Offline if waiting => JoinStage::WaitingForAdmission,
             SpaceLink::Offline => JoinStage::Connecting,
@@ -595,6 +596,32 @@ impl Engine {
                 error: m.link_error.clone(),
             }),
         )])
+    }
+
+    /// What is stuck, one sentence each, in space order.
+    fn problems(&self) -> Vec<String> {
+        let mut spaces: Vec<&SpaceModel> = self.spaces.values().collect();
+        spaces.sort_by(|a, b| a.space.cmp(&b.space));
+        let mut out = Vec::new();
+        for m in spaces {
+            if m.link == SpaceLink::Misconfigured {
+                out.push(format!(
+                    "space {}: link to {} misconfigured: {}",
+                    m.space,
+                    m.home,
+                    m.link_error.as_deref().unwrap_or("no reason given")
+                ));
+            }
+            if let Some(i) = m.blocking_entry() {
+                out.push(format!(
+                    "space {} blocked by outbox entry {}: {}",
+                    m.space,
+                    i.id,
+                    i.error.as_deref().unwrap_or("not sent")
+                ));
+            }
+        }
+        out
     }
 
     fn node_row(&self) -> (Facets, Row) {
@@ -619,6 +646,7 @@ impl Engine {
                 subscriptions: u32::try_from(self.live_subs).unwrap_or(u32::MAX),
                 resyncs: self.resyncs,
                 recent_errors: self.errors.iter().cloned().collect(),
+                problems: self.problems(),
             }),
         )
     }
@@ -783,6 +811,7 @@ impl Engine {
                                 attempts: i.attempts,
                                 seq: i.seq,
                                 error: i.error.clone(),
+                                blocking: m.blocking_entry().is_some_and(|b| b.id == i.id),
                             }),
                         ));
                     }

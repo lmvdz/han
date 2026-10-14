@@ -186,3 +186,22 @@ fn the_checked_in_typescript_matches_the_rust_types() {
         "apps/han-gui/src/gen/node-api.ts is out of date: run `HAN_UPDATE_GEN=1 cargo test -p han-node --test parts`"
     );
 }
+
+#[test]
+fn a_rejected_outbox_row_keeps_the_code_the_home_answered() {
+    let db = NodeDb::in_memory().unwrap();
+    let entry = han_core::json::Value::Str("e".into());
+    let id = db
+        .outbox_insert("s:a.localhost", "id1", &entry, None)
+        .unwrap();
+    db.outbox_rejected(id, "invalid", "bad shape").unwrap();
+    let info = db.outbox_get(id).unwrap().unwrap();
+    assert_eq!(
+        (
+            info.state.as_str(),
+            info.code.as_deref(),
+            info.error.as_deref()
+        ),
+        ("rejected", Some("invalid"), Some("bad shape"))
+    );
+}

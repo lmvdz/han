@@ -1338,6 +1338,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             han_node::api::SpaceLink::Live => "live",
             han_node::api::SpaceLink::Offline => "offline",
             han_node::api::SpaceLink::Rejected => "rejected",
+            han_node::api::SpaceLink::Misconfigured => "misconfigured",
         };
         let style = match s.link {
             han_node::api::SpaceLink::Live => Style::new().fg(Color::Green),

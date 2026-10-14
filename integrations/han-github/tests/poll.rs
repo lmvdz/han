@@ -100,6 +100,7 @@ impl NodeApi for Node {
                 subscriptions: 0,
                 resyncs: 0,
                 recent_errors: vec![],
+                problems: vec![],
             })],
             other => panic!("unexpected view {other:?}"),
         };

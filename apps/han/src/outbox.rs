@@ -57,8 +57,13 @@ pub async fn run(args: OutboxArgs) -> Result<(), Box<dyn std::error::Error>> {
                         if let Row::Outbox(o) = row {
                             let seq = o.seq.map(|s| format!(" seq {s}")).unwrap_or_default();
                             let error = o.error.map(|e| format!(": {e}")).unwrap_or_default();
+                            let blocking = if o.blocking {
+                                " [blocks the space]"
+                            } else {
+                                ""
+                            };
                             println!(
-                                "{} {} {} {} (tries {}){seq}{error}",
+                                "{} {} {} {} (tries {}){seq}{blocking}{error}",
                                 o.outbox_id, o.space, o.kind, o.state, o.attempts
                             );
                         }
