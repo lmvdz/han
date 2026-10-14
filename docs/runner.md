@@ -310,7 +310,15 @@ sudo -u han han agent add coder --operator <you> --os-user han-agent1 --sandbox 
     --space <space> --home <ticket> --home-data /var/lib/han/seq --data /var/lib/han/node
 ```
 
-`--os-user` records the agent in `agents.json` (the node reads it at every start; no restart) and puts the agent's key in `/var/lib/han-agents/han-agent1/keys`, where only that user and the group can read it. `han agent add` then registers the profile (`--home-data` is this machine's home), has the operator confirm it (only if this node acts as the operator; otherwise it prints `han actor confirm …` for the operator's device) and makes the agent a member of the space. `stateDir` defaults to `/var/lib/han-agents/<osUser>`; the agent's key, sessions, taint store and login live there. `--harness claude` installs the pinned adapter into the node's data folder; for an OS-user agent install it where the agent can read it: `sudo -u han han agent setup-harness claude --data /var/lib/han/node --dir /opt/han/claude` (then `chmod -R a+rX /opt/han`). One session per OS user runs at a time (the unit is the user's); a second `han agent start` for the same user answers `conflict`.
+`--os-user` records the agent in `agents.json` (the node reads it at every start; no restart) and puts the agent's key in `/var/lib/han-agents/han-agent1/keys`, where only that user and the group can read it. `han agent add` then registers the profile (`--home-data` is this machine's home), has the operator confirm it (only if this node acts as the operator; otherwise it prints `han actor confirm …` for the operator's device) and makes the agent a member of the space. `stateDir` defaults to `/var/lib/han-agents/<osUser>`; the agent's key, sessions, taint store and login live there. `--harness claude` installs the pinned adapter into the node's data folder; for an OS-user agent install it where the agent can read it: `sudo -u han han agent setup-harness claude --data /var/lib/han/node --dir /opt/han/claude` (then `chmod -R a+rX /opt/han`). To change an agent later, use `han agent set` (it needs no root and no running node, and prints `changed:` or `unchanged:`); do not edit `agents.json` by hand:
+
+```sh
+sudo -u han han agent set @coder:<server> --os-user han-agent1 --sandbox bwrap --toolchains rust --harness claude --data /var/lib/han/node
+```
+
+`--toolchains` takes a comma separated list (`rust`; `""` for none), `--allow-advisory` lets the agent run with no OS sandbox (advisory), and only what is given changes. A value no launch could use (`--sandbox chroot`) is refused and nothing is written.
+
+One session per OS user runs at a time (the unit is the user's); a second `han agent start` for the same user answers `conflict`.
 
 Log the agent in once, as its own user (this runs `claude` interactively, outside any sandbox):
 
@@ -328,18 +336,16 @@ Without it an agent cannot run `cargo`, and proposes code it never built. The sa
 and `crates.io`, `static.crates.io` and `index.crates.io` on its proxy allow-list, and nothing else. Nothing is
 downloaded into the toolchain inside the sandbox: install everything a repository pins first.
 
-The agent runs as `han-agent1` under `ProtectHome=yes`, so it cannot read `/home/han/.rustup` (mode 750, owned by
-`han`). Share one root-owned toolchain instead; bubblewrap already binds `/opt` read-only:
+The agent runs as `han-agent1` under `ProtectHome=yes`, so it cannot read `/home/han/.rustup` (mode 750, owned by `han`). Share one root-owned toolchain instead; bubblewrap already binds `/opt` read-only. One command provisions it:
 
 ```sh
-sudo mkdir -p /opt/rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo   sh -s -- -y --no-modify-path --profile minimal -c clippy -c rustfmt
-# every toolchain a repository's rust-toolchain.toml names, for example:
-sudo RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo /opt/rust/cargo/bin/rustup toolchain install 1.97.1 --profile minimal -c clippy -c rustfmt
-sudo chmod -R a+rX /opt/rust                    # readable by han-agent1, writable by root only
+sudo han runner setup --toolchain rust --repo /srv/repos/han --repo /srv/repos/other --data /var/lib/han/node
+sudo han runner setup --toolchain rust --rust-toolchain 1.97.1 --dry-run     # see the plan, change nothing
 ```
 
-Then in `agents.json` (read at every start):
+It installs rustup into `/opt/rust` (`RUSTUP_HOME=/opt/rust/rustup`, `CARGO_HOME=/opt/rust/cargo`, the minimal profile plus clippy and rustfmt), installs the toolchain each `--repo` pins in its `rust-toolchain.toml` and every `--rust-toolchain` you name, makes `/opt/rust` readable by all and writable by root only (`chmod -R a+rX`), and records `toolchains` and `toolchainPaths` in `agents.json` (below). It is idempotent: a second run says `unchanged:` for each step and installs only what is new, so run it again when a repository bumps its pin. It also does the users, units and polkit rule of 7.1; `--toolchain-only` skips those (for a container with no systemd). It is Linux and root only, like the rest of `han runner setup`. `han doctor --repo <path>` tells you when a pin is not installed and prints this command with the repository in it.
+
+That leaves this in `agents.json` (read at every start; `han agent set` changes the per agent part):
 
 ```json
 {
@@ -358,6 +364,43 @@ refuses to start and names it. Check from the agent's side: `sudo -u han-agent1 
 works, and `cargo build` in a session reaches crates.io through the proxy only.
 
 ## 8. Check it
+
+### 8.1 `han doctor`
+
+```sh
+sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
+```
+
+`han doctor` reads, and changes nothing. For every problem it prints one line of cause and the exact command that fixes it, and it exits 0 when all is well and 1 when it found any. It looks at:
+
+- the node: whether it answers, the links of its spaces (a link whose setup does not fit its home, `Misconfigured`, with the reason), the outbox entries that hold a space back (R-07), and what else the node lists as stuck (a profile that has not arrived);
+- `agents.json` and the harness records: an unreadable file, an OS user name or sandbox or toolchain no launch could use, an OS user that does not exist on this machine, a harness that is not set up or whose files are gone;
+- logins: whether an agent that uses Claude Code has one (as `han agent login --check` does, without reading it);
+- the device's presence setting: approvals that need a person but a backend with no check (or `pkcheck` missing);
+- the Rust toolchain the sandboxes get: enabled but not installed, or a `--repo` whose `rust-toolchain.toml` pins a toolchain that is not installed;
+- Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).
+
+`--json` prints the report for scripts. The schema is `han-doctor/1`, and fields are only added, never renamed or removed, within it:
+
+```json
+{
+  "schema": "han-doctor/1",
+  "healthy": false,
+  "data": "/var/lib/han/node",
+  "findings": [
+    {
+      "id": "agent.login.missing",
+      "subject": "@coder:han.example",
+      "cause": "@coder:han.example has no Claude Code login in /var/lib/han-agents/han-agent1/claude-config",
+      "fix": "han agent login @coder:han.example --data /var/lib/han/node"
+    }
+  ]
+}
+```
+
+`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it.
+
+### 8.2 By hand
 
 On the runner, the well-known document must list the home's node id:
 

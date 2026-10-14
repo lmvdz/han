@@ -3,7 +3,12 @@
 //! unit, the executor unit (left disabled), the polkit rule and the node's drop-in. Everything else
 //! (`han home`, `han agent add`, `han executor add`) runs without root.
 //!
+//! `han runner setup --toolchain rust` also provisions the shared Rust toolchain of docs/runner.md 7.2 (`/opt/rust`,
+//! read-only to the agents' sandboxes) and records where it is in `agents.json`.
+//!
 //! Safe to repeat: every step looks at what is there first and the output says what changed.
+
+use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
@@ -31,6 +36,24 @@ enum RunnerCmd {
         /// Restart a running `han-seq` or `han-node` unit whose binary has been replaced.
         #[arg(long)]
         restart_stale: bool,
+        /// Also provision a shared toolchain for the agents' sandboxes (`rust`): rustup in /opt/rust with the
+        /// minimal profile, clippy and rustfmt, every toolchain the repositories pin, readable by all and
+        /// writable by root only; `toolchains` and `toolchainPaths` go into `agents.json`.
+        #[arg(long, value_parser = ["rust"])]
+        toolchain: Option<String>,
+        /// A repository whose `rust-toolchain.toml` names a toolchain to install (repeatable).
+        #[arg(long = "repo", requires = "toolchain")]
+        repos: Vec<PathBuf>,
+        /// A Rust toolchain to install, whether or not a repository pins it (repeatable).
+        #[arg(long, requires = "toolchain")]
+        rust_toolchain: Vec<String>,
+        /// The node's data directory, where `agents.json` is.
+        #[arg(long, default_value = "/var/lib/han/node", requires = "toolchain")]
+        data: PathBuf,
+        /// Do only the `--toolchain` step: no users, units or polkit rule (for a machine without systemd, such
+        /// as a container).
+        #[arg(long, requires = "toolchain")]
+        toolchain_only: bool,
         /// Print what would change and change nothing.
         #[arg(long)]
         dry_run: bool,
@@ -50,16 +73,37 @@ pub async fn run(args: RunnerArgs) -> Result<(), Box<dyn std::error::Error>> {
         exec_user,
         agents,
         restart_stale,
+        toolchain,
+        repos,
+        rust_toolchain,
+        data,
+        toolchain_only,
         dry_run,
     } = args.cmd;
-    linux::setup(&node_user, &exec_user, agents, restart_stale, dry_run)
+    let rust = toolchain.map(|_| linux::Rust {
+        repos,
+        channels: rust_toolchain,
+        data,
+        only: toolchain_only,
+    });
+    linux::setup(
+        &node_user,
+        &exec_user,
+        agents,
+        restart_stale,
+        rust.as_ref(),
+        dry_run,
+    )
 }
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::os::unix::fs::PermissionsExt as _;
-    use std::path::Path;
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use std::path::{Path, PathBuf};
     use std::process::Command;
+
+    use han_registry::AgentsFile;
 
     type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -69,6 +113,18 @@ mod linux {
     const AGENTS_ROOT: &str = "/var/lib/han-agents";
     const NODE_DATA: &str = "/var/lib/han";
     const EXEC_DIR: &str = "/var/lib/han-exec";
+
+    /// The shared Rust toolchain asked for.
+    pub struct Rust {
+        pub repos: Vec<PathBuf>,
+        pub channels: Vec<String>,
+        pub data: PathBuf,
+        /// Nothing but the toolchain.
+        pub only: bool,
+    }
+
+    const RUST_HOME: &str = "/opt/rust";
+    const RUST_COMPONENTS: [&str; 4] = ["-c", "clippy", "-c", "rustfmt"];
 
     struct Ctx {
         dry: bool,
@@ -83,11 +139,25 @@ mod linux {
 
         /// Runs a program; in a dry run only says so.
         fn cmd(&mut self, program: &str, args: &[&str], what: &str) -> Res<()> {
+            self.cmd_env(program, args, &[], what)
+        }
+
+        /// Like [`Ctx::cmd`], with environment variables.
+        fn cmd_env(
+            &mut self,
+            program: &str,
+            args: &[&str],
+            env: &[(&str, &str)],
+            what: &str,
+        ) -> Res<()> {
             if self.dry {
                 self.say("would:", what);
                 return Ok(());
             }
-            let out = Command::new(program).args(args).output()?;
+            let out = Command::new(program)
+                .args(args)
+                .envs(env.iter().copied())
+                .output()?;
             if !out.status.success() {
                 return Err(format!(
                     "{program} {}: {}",
@@ -193,6 +263,7 @@ mod linux {
         exec_user: &str,
         agents: u32,
         restart_stale: bool,
+        rust: Option<&Rust>,
         dry: bool,
     ) -> Res<()> {
         if !han_registry::valid_os_user(node_user) || !han_registry::valid_os_user(exec_user) {
@@ -209,6 +280,10 @@ mod linux {
             changed: false,
             reload: false,
         };
+        if let Some(r) = rust.filter(|r| r.only) {
+            rust_toolchain(&mut c, r, node_user)?;
+            return finish(&c, false);
+        }
 
         println!("users");
         if user_exists(node_user) {
@@ -331,6 +406,10 @@ mod linux {
             ),
         );
 
+        if let Some(r) = rust {
+            rust_toolchain(&mut c, r, node_user)?;
+        }
+
         println!("running services");
         let mut warnings = false;
         for (pid, data) in crate::homecmd::stale_homes() {
@@ -378,26 +457,22 @@ mod linux {
                 );
             }
         }
-        if dry {
+        finish(&c, warnings)
+    }
+
+    /// The last line of the output.
+    fn finish(c: &Ctx, warnings: bool) -> Res<()> {
+        let pending = if warnings {
+            ", with restarts pending"
+        } else {
+            ""
+        };
+        if c.dry {
             println!("dry run: nothing changed");
         } else if c.changed {
-            println!(
-                "done: changes made{}",
-                if warnings {
-                    ", with restarts pending"
-                } else {
-                    ""
-                }
-            );
+            println!("done: changes made{pending}");
         } else {
-            println!(
-                "done: nothing to change{}",
-                if warnings {
-                    ", with restarts pending"
-                } else {
-                    ""
-                }
-            );
+            println!("done: nothing to change{pending}");
         }
         Ok(())
     }
@@ -416,5 +491,163 @@ mod linux {
         }
         std::fs::read_link(format!("/proc/{pid}/exe"))
             .is_ok_and(|e| e.to_string_lossy().ends_with(" (deleted)"))
+    }
+
+    /// Whether anything under `dir` is not readable by all (or a directory not searchable by all).
+    fn unreadable_by_all(dir: &str) -> bool {
+        Command::new("find")
+            .args([
+                dir, "(", "-not", "-perm", "-o+r", "-o", "(", "-type", "d", "-not", "-perm",
+                "-o+x", ")", ")", "-print", "-quit",
+            ])
+            .output()
+            .is_ok_and(|o| !o.stdout.is_empty())
+    }
+
+    /// Installs rustup under [`RUST_HOME`] with a first toolchain; the installer is downloaded to a file only
+    /// this run made, then run.
+    fn install_rustup(c: &mut Ctx, env: &[(&str, &str)], first: &str) -> Res<()> {
+        let what = "installed rustup in /opt/rust";
+        if c.dry {
+            c.say("would:", what);
+            return Ok(());
+        }
+        let script = std::env::temp_dir().join(format!("han-rustup-{}.sh", std::process::id()));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&script)?;
+        let path = script.to_string_lossy().into_owned();
+        let got = c.cmd(
+            "curl",
+            &[
+                "--proto",
+                "=https",
+                "--tlsv1.2",
+                "-sSf",
+                "-o",
+                &path,
+                "https://sh.rustup.rs",
+            ],
+            "downloaded the rustup installer",
+        );
+        let result = got.and_then(|()| {
+            let mut args = vec![
+                path.as_str(),
+                "-y",
+                "--no-modify-path",
+                "--profile",
+                "minimal",
+                "--default-toolchain",
+                first,
+            ];
+            args.extend(RUST_COMPONENTS);
+            c.cmd_env("sh", &args, env, what)
+        });
+        let _ = std::fs::remove_file(&script);
+        result
+    }
+
+    /// `--toolchain rust`: the shared toolchain of docs/runner.md 7.2.
+    fn rust_toolchain(c: &mut Ctx, r: &Rust, node_user: &str) -> Res<()> {
+        println!("rust toolchain ({RUST_HOME})");
+        let rustup_home = format!("{RUST_HOME}/rustup");
+        let cargo_home = format!("{RUST_HOME}/cargo");
+        let cargo_bin = format!("{cargo_home}/bin");
+        let rustup = format!("{cargo_bin}/rustup");
+        let env = [
+            ("RUSTUP_HOME", rustup_home.as_str()),
+            ("CARGO_HOME", cargo_home.as_str()),
+        ];
+
+        // what was asked for, and what the repositories pin
+        let mut want: Vec<String> = Vec::new();
+        for ch in &r.channels {
+            if !want.contains(ch) {
+                want.push(ch.clone());
+            }
+        }
+        let pins = crate::rusttool::pins(&r.repos);
+        for repo in &r.repos {
+            if !pins.iter().any(|(p, _)| p == repo) {
+                c.say("note:", &format!("{} pins no toolchain", repo.display()));
+            }
+        }
+        for (repo, ch) in pins {
+            c.say("pinned:", &format!("{ch} by {}", repo.display()));
+            if !want.contains(&ch) {
+                want.push(ch);
+            }
+        }
+
+        // the toolchain rustup installs with itself
+        let mut first = None;
+        if Path::new(&rustup).is_file() {
+            c.say("unchanged:", &format!("rustup in {RUST_HOME}"));
+        } else {
+            c.dir(RUST_HOME, None, 0o755)?;
+            let name = want.first().map_or("stable", String::as_str).to_owned();
+            install_rustup(c, &env, &name)?;
+            first = Some(name);
+        }
+        let have = crate::rusttool::installed(Path::new(&rustup_home));
+        for ch in &want {
+            if first.as_ref() == Some(ch) {
+                c.say("note:", &format!("toolchain {ch} came with rustup"));
+            } else if crate::rusttool::channel_installed(ch, &have) {
+                c.say("unchanged:", &format!("toolchain {ch}"));
+            } else if Path::new(&rustup).is_file() || c.dry {
+                let mut args = vec!["toolchain", "install", ch.as_str(), "--profile", "minimal"];
+                args.extend(RUST_COMPONENTS);
+                c.cmd_env(&rustup, &args, &env, &format!("installed toolchain {ch}"))?;
+            }
+        }
+
+        // readable by every agent user, writable by root only
+        if Path::new(RUST_HOME).exists() {
+            if unreadable_by_all(RUST_HOME) {
+                c.cmd(
+                    "chmod",
+                    &["-R", "a+rX", RUST_HOME],
+                    &format!("{RUST_HOME} is readable by all"),
+                )?;
+            } else {
+                c.say("unchanged:", &format!("{RUST_HOME} is readable by all"));
+            }
+        }
+
+        // where the sandboxes find it
+        let mut file = AgentsFile::load(&r.data)?;
+        let paths: BTreeMap<String, PathBuf> = [
+            ("rustupHome".to_owned(), PathBuf::from(&rustup_home)),
+            ("cargoBin".to_owned(), PathBuf::from(&cargo_bin)),
+        ]
+        .into();
+        let shown = r.data.join("agents.json").display().to_string();
+        if !file.set_toolchain("rust", paths)? {
+            c.say(
+                "unchanged:",
+                &format!("toolchains and toolchainPaths in {shown}"),
+            );
+        } else if c.dry {
+            c.say(
+                "would:",
+                &format!("write toolchains and toolchainPaths to {shown}"),
+            );
+        } else {
+            if !r.data.exists() {
+                let owner = user_exists(node_user).then_some(node_user);
+                c.dir(&r.data.to_string_lossy(), owner, 0o700)?;
+            }
+            file.save(&r.data)?;
+            // the node's user owns its data: `han agent set` runs as that user
+            c.cmd(
+                "chown",
+                &[&format!("--reference={}", r.data.display()), &shown],
+                &format!("wrote toolchains and toolchainPaths to {shown}"),
+            )?;
+        }
+        Ok(())
     }
 }

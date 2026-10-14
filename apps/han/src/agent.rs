@@ -7,6 +7,9 @@
 //!   key in the node's key store and prints what its home must register (the profile with its operator).
 //! * `han agent start --space S --agent @coder:han.example --harness pi|claude --repo github:o/r --issue
 //!   github:o/r#12` asks the node's supervisor to start a `han host` for the session.
+//! * `han agent set @coder:han.example --os-user han-agent1 --sandbox bwrap --toolchains rust --harness claude`
+//!   changes how an agent is launched (`agents.json`) and nothing else; it needs no running node, never hand-edit
+//!   the file. Prints `changed:` or `unchanged:`.
 //! * `han agent stop @coder:han.example` stops its sessions.
 //! * `han agent setup-harness claude|pi` installs the pinned ACP adapter into the data directory, so `start`
 //!   needs no flags; `han agent login @coder:han.example` logs the agent in to Claude Code once, in its own
@@ -148,6 +151,28 @@ enum AgentCmd {
         #[arg(long)]
         claude: Option<PathBuf>,
     },
+    /// Changes how an agent is launched, in `<data>/agents.json`; only what is given changes. Needs no running
+    /// node. Prints `changed:` or `unchanged:`.
+    Set {
+        /// The agent actor, `@name:server`.
+        agent: String,
+        /// Linux: run the agent's host as this OS user (SR-83).
+        #[arg(long)]
+        os_user: Option<String>,
+        /// The sandbox: `auto`, `mxc`, `bwrap` or `none`.
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Whether the agent may run with no OS sandbox when none is available (`--allow-advisory`, or
+        /// `--allow-advisory=false`).
+        #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+        allow_advisory: Option<bool>,
+        /// The toolchains inside its sandbox, comma separated (`rust`); `""` for none.
+        #[arg(long)]
+        toolchains: Option<String>,
+        /// The harness `han agent start` uses by default.
+        #[arg(long)]
+        harness: Option<String>,
+    },
     /// Stops an agent's sessions, or one `host-<agent>#<issue>`.
     Stop {
         /// The agent or session name.
@@ -171,6 +196,24 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                 dir.as_deref(),
                 claude.as_deref(),
             );
+        }
+        AgentCmd::Set {
+            agent,
+            os_user,
+            sandbox,
+            allow_advisory,
+            toolchains,
+            harness,
+        } => {
+            let edit = AgentEdit {
+                os_user: os_user.clone(),
+                sandbox: sandbox.clone(),
+                allow_advisory: *allow_advisory,
+                harness: harness.clone(),
+                toolchains: toolchains.as_deref().map(split_list),
+            };
+            println!("{}", set(&args.data, agent, &edit)?);
+            return Ok(());
         }
         AgentCmd::SetupHarness { harness, dir, node } => {
             let r = crate::harness::setup(&args.data, harness, dir.as_deref(), node.as_deref())?;
@@ -278,13 +321,44 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("started a session of {agent}");
         }
-        AgentCmd::Login { .. } | AgentCmd::SetupHarness { .. } => {}
+        AgentCmd::Login { .. } | AgentCmd::SetupHarness { .. } | AgentCmd::Set { .. } => {}
         AgentCmd::Stop { target } => {
             client.call(Command::AgentStop { target }).await?;
             println!("stopped");
         }
     }
     Ok(())
+}
+
+/// `a,b` as names; the empty string is no names.
+fn split_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `han agent set`: applies `edit` to `agent` in `<data>/agents.json` and says what happened.
+fn set(data: &Path, agent: &str, edit: &AgentEdit) -> Res<String> {
+    if !agent
+        .strip_prefix('@')
+        .and_then(|a| a.split_once(':'))
+        .is_some_and(|(n, s)| !n.is_empty() && !s.is_empty())
+    {
+        return Err(format!("{agent:?} is not an agent actor (@name:server)").into());
+    }
+    if *edit == AgentEdit::default() {
+        return Err(
+            "nothing to set: give --os-user, --sandbox, --allow-advisory, --toolchains or --harness".into(),
+        );
+    }
+    let path = data.join("agents.json");
+    Ok(if crate::harness::record_settings(data, agent, edit)? {
+        format!("changed: {agent} in {}", path.display())
+    } else {
+        format!("unchanged: {agent} in {}", path.display())
+    })
 }
 
 /// Whether a failed start only waits for the agent's profile to arrive.
@@ -415,4 +489,67 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use han_registry::AgentsFile;
+
+    use super::*;
+
+    #[test]
+    fn set_is_idempotent_and_changes_only_what_is_given() {
+        let d = tempfile::tempdir().unwrap();
+        let edit = AgentEdit {
+            os_user: Some("han-agent1".into()),
+            toolchains: Some(split_list("rust")),
+            ..AgentEdit::default()
+        };
+        let first = set(d.path(), "@coder:han.example", &edit).unwrap();
+        assert!(first.starts_with("changed: @coder:han.example"), "{first}");
+        let again = set(d.path(), "@coder:han.example", &edit).unwrap();
+        assert!(again.starts_with("unchanged: "), "{again}");
+        let sandbox = AgentEdit {
+            sandbox: Some("bwrap".into()),
+            ..AgentEdit::default()
+        };
+        assert!(
+            set(d.path(), "@coder:han.example", &sandbox)
+                .unwrap()
+                .starts_with("changed: ")
+        );
+        let file = AgentsFile::load(d.path()).unwrap();
+        let a = file.agent("@coder:han.example");
+        assert_eq!(a.os_user.as_deref(), Some("han-agent1"));
+        assert_eq!(a.sandbox.as_deref(), Some("bwrap"));
+        assert_eq!(a.toolchains, Some(vec!["rust".to_owned()]));
+        // an empty list turns the toolchains off for this agent; it is a change, then not
+        let none = AgentEdit {
+            toolchains: Some(split_list("")),
+            ..AgentEdit::default()
+        };
+        assert!(
+            set(d.path(), "@coder:han.example", &none)
+                .unwrap()
+                .starts_with("changed: ")
+        );
+        assert!(
+            set(d.path(), "@coder:han.example", &none)
+                .unwrap()
+                .starts_with("unchanged: ")
+        );
+    }
+
+    #[test]
+    fn set_refuses_what_no_launch_could_use() {
+        let d = tempfile::tempdir().unwrap();
+        let bad = AgentEdit {
+            sandbox: Some("chroot".into()),
+            ..AgentEdit::default()
+        };
+        assert!(set(d.path(), "@coder:han.example", &bad).is_err());
+        assert!(set(d.path(), "coder", &bad).is_err());
+        assert!(set(d.path(), "@coder:han.example", &AgentEdit::default()).is_err());
+        assert!(!d.path().join("agents.json").exists());
+    }
 }
