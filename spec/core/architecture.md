@@ -739,7 +739,7 @@ Run `python ref/run_all.py`. Results: [ref/RESULTS.md](../../ref/RESULTS.md). `p
 | Tool | What it does |
 |---|---|
 | `ref/policy.py` | executable reference of §6 and the R-09 body schemas |
-| `conformance/vectors/` + `run_vectors.py` | <!--s:vec_n-->168<!--/s--> vectors, <!--s:vec_steps-->3015<!--/s--> steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
+| `conformance/vectors/` + `run_vectors.py` | <!--s:vec_n-->169<!--/s--> vectors, <!--s:vec_steps-->3033<!--/s--> steps (including the §1.1 worked example); expectations hand-written from this document; every step also checks purity and determinism |
 | `ref/mutate_vectors.py` | <!--s:mut_pol-->255<!--/s--> single-rule Policy mutations; the vectors must catch each one |
 | `ref/fuzz_fold.py` | <!--s:fuzz_n-->2,000<!--/s--> random histories in populated rooms: `decide`/`fold` never fail on an allowed entry, stay pure, keep budgets in bounds, never change a final phase |
 | `ref/wire.py` + `run_wire.py` | the `han/1` frames on the legacy WebSocket carrier (§8.2), with real Ed25519: reference sequencer (the §4.1 append pipeline, with a steady clock for R-16, P-01 pinning, `read` for entries, `state` with `at`, `cursor`, `effect` and `agent`, context blobs) and verifier (R-14), gossip signals (R-15); the one order of verdicts of §4.1 with a scenario per adjacent pair; `state` paged in every map by items and by bytes (§3, H3), selectors that exclude each other, items that cannot fit asserted and never answered `unavailable`, notices that are never replayed, negative big integers (G-07); <!--s:wire_scen-->60<!--/s--> scenarios |

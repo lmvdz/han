@@ -2154,6 +2154,27 @@ v.step(prop("pm", author=M), "allow", check={"effects.pm.guardedFor": []}).step(
 add(v.done())
 
 
+v = V("never-confirmed-agent-is-unaccountable", ["P-03", "P-07 E1", "P-07 E2", "P-05"], "an agent whose operator never confirmed it: under allowAgents any it may join and act; once the space switches to with-operator it can't propose, claim, open a budgeted task, or have its proposal claimed, a new grant to such an agent is denied, a move between readable roles is not re-checked, and a confirmation lets it act again")
+UNCONF = {"actorKind": "agent", "operator": OP, "operatorConfirmed": False, "keys": {"k1": {"publicKey": "pk", "status": "valid"}}}
+BOT2 = "@bot2:b.example"
+v.prof(BOT, UNCONF).prof(BOT2, UNCONF).prof(X, dict(human(), actorKind="service", operatorConfirmed=True))
+team(v, policy(budget=USD(500)))
+v.step(ms("b", O, BOT, "member"), "allow", note="allowAgents any: no confirmation needed")
+v.step(E("t", "task", O, {"to": [BOT], "budget": USD(100)}), "allow")
+v.step(prop("p0", author=BOT, cost=USD(5), task="t"), "allow", note="any: an unconfirmed agent may propose")
+v.step(E("pol", "policy.set", O, {"policy": policy(budget=USD(500), allowAgents="with-operator")}), "allow")
+v.step(ms("b2", O, BOT2, "member"), "denied", note="granting a readable role to an unconfirmed agent")
+v.step(prop("p1", author=BOT, cost=USD(5), task="t"), "denied", note="accountability is re-checked at every proposal")
+v.step(E("t2", "task", BOT, {"to": [BOT], "budget": USD(10), "parent": "t"}), "denied", note="and at every budgeted task")
+v.step(claim("c0", "p0"), "denied", note="E2: the proposer is not accountable at claim time")
+v.step(prop("p2", author=O, executor=BOT, cost=USD(5)), "allow", note="a human may still name the agent as executor")
+v.step(claim("c2", "p2", author=BOT), "denied", note="E1: the executor is not accountable")
+v.step(ms("g", O, BOT, "guest"), "allow", note="moving between readable roles is never re-checked")
+v.step(ms("b3", O, BOT, "member"), "allow", note="nor is moving back")
+v.step(claim("c0b", "p0"), "allow", profiles={BOT: dict(UNCONF, operatorConfirmed=True)}, note="the operator confirmed: its proposal can be claimed")
+v.step(prop("p3", author=BOT, cost=USD(5), task="t"), "allow")
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",
