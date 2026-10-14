@@ -76,6 +76,9 @@ fn render(rows: &[Row], total: u32) -> String {
         }
         out.push_str(&line(b));
         out.push('\n');
+        if let Some(budget) = &b.budget {
+            out.push_str(&format!("    {}\n", budget.text()));
+        }
     }
     out.push_str(&format!("{} of {total} session(s)\n", rows.len()));
     out

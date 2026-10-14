@@ -18,7 +18,8 @@ pub use agents::{
     valid_os_user,
 };
 pub use home::{HomeRef, TICKET_PREFIX};
-pub use launch::{Launch, LaunchError, Registry, Resolved, RunAs};
+pub use launch::{Launch, LaunchError, PRICES_FILE, Registry, Resolved, RunAs};
 pub use spec::{
-    Dirs, HarnessSpec, HostSpec, ProxySpec, SandboxPolicy, WorkSpec, spec_file, unit_spec_file,
+    BudgetSpec, Dirs, HarnessSpec, HostSpec, PriceSpec, ProxySpec, SandboxPolicy, WorkSpec,
+    spec_file, unit_spec_file,
 };

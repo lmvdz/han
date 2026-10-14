@@ -123,6 +123,18 @@ struct UpArgs {
     /// (`han-fake-agent replay`).
     #[arg(long, default_value = "simple")]
     script: String,
+    /// Give the space a budget, `UNIT=AMOUNT` (for example `USD-cent=100`): the space policy's `budget`.
+    #[arg(long)]
+    budget: Option<String>,
+    /// Run the fake agent in API-key mode against the model provider at this `https://` URL: its model calls
+    /// go through the session proxy, which holds the key and counts the tokens. With `--budget` the node
+    /// gets a price table for that unit: the model `fake-model` at one unit per token, in and out.
+    #[arg(long)]
+    model_url: Option<String>,
+    /// A PEM file of the certificate authority that signed the provider's certificate (a test provider has
+    /// its own).
+    #[arg(long, requires = "model_url")]
+    model_ca: Option<PathBuf>,
     /// Do not register the executor (to see how a proposal with no executor is refused).
     #[arg(long)]
     no_executor: bool,
@@ -363,9 +375,36 @@ fn strs(v: &[&str]) -> Vec<String> {
 
 /// The space policy of the dogfood: members create work, and every effect that leaves the machine waits for
 /// an owner's approval.
-fn dogfood_policy() -> Res<String> {
+/// The model the dev stack's price table knows.
+const FAKE_MODEL: &str = "fake-model";
+
+/// `UNIT=AMOUNT` of `--budget`.
+fn parse_budget(text: &str) -> Res<(String, u64)> {
+    let (unit, amount) = text
+        .split_once('=')
+        .ok_or("--budget is UNIT=AMOUNT, for example USD-cent=100")?;
+    let ok = !unit.is_empty()
+        && unit.len() <= 32
+        && unit
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if !ok {
+        return Err(format!("{unit:?} is not a budget unit ([A-Za-z0-9_-]{{1,32}})").into());
+    }
+    Ok((unit.to_owned(), amount.parse()?))
+}
+
+fn dogfood_policy(budget: Option<&(String, u64)>) -> Res<String> {
     let mut p = han_seq::build::space_policy("members", "invite");
     if let han_core::Value::Object(m) = &mut p {
+        if let Some((unit, amount)) = budget {
+            m.insert(
+                "budget".into(),
+                han_core::json::parse(
+                    format!(r#"{{"unit":"{unit}","amount":{amount}}}"#).as_bytes(),
+                )?,
+            );
+        }
         m.insert(
             "approvals".into(),
             han_core::json::parse(
@@ -385,6 +424,21 @@ const SIMPLE_SCRIPT: &str = r#"{
       {"type": "tool_call", "id": "t1", "title": "read README.md", "kind": "read", "locations": ["README.md"], "rawInput": {"path": "README.md"}},
       {"type": "tool_update", "id": "t1", "status": "completed", "output": "a demo repository"},
       {"type": "message", "text": "I read the task. Which branch should I target?"},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [{"type": "message", "text": "Noted."}, {"type": "end", "stopReason": "end_turn"}]}
+  ]
+}"#;
+
+/// Two model calls through the session proxy: the first is paid for, the second finds the budget spent.
+const MODEL_CALLS_SCRIPT: &str = r#"{
+  "agent": {"name": "han-fake-agent", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "model_call", "model": "fake-model", "max_tokens": 20},
+      {"type": "model_call", "model": "fake-model", "max_tokens": 20},
+      {"type": "message", "text": "Both calls are made."},
       {"type": "end", "stopReason": "end_turn"}
     ]},
     {"steps": [{"type": "message", "text": "Noted."}, {"type": "end", "stopReason": "end_turn"}]}
@@ -509,6 +563,10 @@ async fn up(a: UpArgs) -> Res<()> {
         harness: a.harness,
         services: BTreeMap::new(),
     };
+    let budget = a.budget.as_deref().map(parse_budget).transpose()?;
+    if a.model_url.is_some() && a.harness != Harness::Fake {
+        return Err("--model-url is for the fake harness".into());
+    }
     // Programs first, so a missing one fails before anything runs.
     let fake_agent = match a.harness {
         Harness::Fake => Some(sibling("han-fake-agent", a.fake_agent.as_ref())?),
@@ -623,7 +681,7 @@ async fn up(a: UpArgs) -> Res<()> {
         .ok_or("no space id")?;
     state.space = space.clone();
     let policy = dir.join("policy.json");
-    std::fs::write(&policy, dogfood_policy()?)?;
+    std::fs::write(&policy, dogfood_policy(budget.as_ref())?)?;
     han(&[
         "space".into(),
         "policy".into(),
@@ -679,6 +737,17 @@ async fn up(a: UpArgs) -> Res<()> {
         ),
     )?;
 
+    // The model provider the session proxy forwards to, and the node's prices for it.
+    if let (Some(_), Some((unit, _))) = (&a.model_url, &budget) {
+        // one unit per token, in and out (prices are per million tokens)
+        std::fs::write(
+            person_data.join(han_registry::PRICES_FILE),
+            serde_json::to_string_pretty(&serde_json::json!({
+                unit: {FAKE_MODEL: {"input": 1_000_000, "output": 1_000_000}}
+            }))?,
+        )?;
+    }
+
     println!("5. the agent");
     let mut add = vec![
         "agent".into(),
@@ -700,13 +769,14 @@ async fn up(a: UpArgs) -> Res<()> {
             let fake = dir.join("fake");
             std::fs::create_dir_all(&fake)?;
             let script_path = match a.script.as_str() {
-                "simple" | "propose" | "propose-late" => {
+                "simple" | "propose" | "propose-late" | "model-calls" => {
                     let p = fake.join("script.json");
                     std::fs::write(
                         &p,
                         match a.script.as_str() {
                             "simple" => SIMPLE_SCRIPT,
                             "propose" => PROPOSE_SCRIPT,
+                            "model-calls" => MODEL_CALLS_SCRIPT,
                             _ => PROPOSE_LATE_SCRIPT,
                         },
                     )?;
@@ -718,7 +788,30 @@ async fn up(a: UpArgs) -> Res<()> {
                     p
                 }
             };
-            let driver = fake_driver(&fake_agent.clone().unwrap_or_default(), &script_path);
+            let mut driver = fake_driver(&fake_agent.clone().unwrap_or_default(), &script_path);
+            if let Some(url) = &a.model_url {
+                // API-key mode: the proxy holds the key and forwards to the fake model; the agent finds
+                // the proxy and its session token in its environment
+                let key = fake.join("model.key");
+                std::fs::write(&key, "sk-fake-dev-model-key")?;
+                driver.credentials = han_host::driver::CredentialMode::ApiKey {
+                    provider_base: url.clone(),
+                    header: han_host::driver::KeyHeader::XApiKey,
+                    dummy_key: "han-dummy-key-not-a-secret".into(),
+                    paths: vec!["/v1/messages".into()],
+                    provider_id: None,
+                    api: None,
+                    models: vec![FAKE_MODEL.into()],
+                    ca_file: a.model_ca.as_deref().map(abs),
+                };
+                driver
+                    .env
+                    .push(("HAN_MODEL_URL".into(), "{proxy_url}".into()));
+                driver
+                    .env
+                    .push(("HAN_MODEL_TOKEN".into(), "{proxy_token}".into()));
+                add.extend(strs(&["--model-key-file", &s(&key)]));
+            }
             let driver_path = fake.join("driver.json");
             std::fs::write(&driver_path, serde_json::to_string_pretty(&driver)?)?;
             let record = han_registry::HarnessInstall {

@@ -106,6 +106,7 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
+        budget: None,
         turn_timeout: Duration::from_secs(60),
         exclusion: Vec::new(),
     };

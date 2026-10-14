@@ -219,6 +219,7 @@ async fn story(backend: &str) {
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
+        budget: None,
         turn_timeout: Duration::from_secs(120),
         exclusion: Vec::new(),
     };

@@ -29,14 +29,14 @@ pub use query::{
     SessionPart, Target, Window, glob_match,
 };
 pub use rows::{
-    AGENT_TEXT, AgentText, ApprovalRow, BoardRow, BoardTotals, ClaimKind, CostRow, DiffOp,
-    EffectRow, ErrorNote, Fidelity, FilePatchRow, FileTouch, GroupTotal, GuardRow, InputRow,
-    JoinProgressRow, JoinStage, Needed, NeededGuard, NodeStatusRow, OutboxRow, OverlapClaim,
-    OverlapConflict, OverlapFile, OverlapKind, OverlapParty, OverlapRow, OverlapSummary,
-    PatchStatus, PlanItem, RECENT_ERRORS, RoleInfo, Row, SUMMARY_FIELDS, SUMMARY_TEXT, Sandbox,
-    SandboxBackend, SessionRights, SessionRow, SessionState, SpaceLink, SpaceStatusRow,
-    StateCounts, StatusBody, TaskRow, Tests, TimelinePointRow, Tokens, ViewEvent, ViewMirror,
-    WhoRow,
+    AGENT_TEXT, AgentText, ApprovalRow, BoardRow, BoardTotals, BudgetStatus, ClaimKind, CostRow,
+    DiffOp, EffectRow, ErrorNote, Fidelity, FilePatchRow, FileTouch, GroupTotal, GuardRow,
+    InputRow, JoinProgressRow, JoinStage, Needed, NeededGuard, NodeStatusRow, OutboxRow,
+    OverlapClaim, OverlapConflict, OverlapFile, OverlapKind, OverlapParty, OverlapRow,
+    OverlapSummary, PatchStatus, PlanItem, RECENT_ERRORS, RoleInfo, Row, SUMMARY_FIELDS,
+    SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRights, SessionRow, SessionState, SpaceLink,
+    SpaceStatusRow, StateCounts, StatusBody, TaskBudget, TaskRow, Tests, TimelinePointRow, Tokens,
+    ViewEvent, ViewMirror, WhoRow,
 };
 pub use stream::{BoxFuture, MAX_BACKLOG, NodeApi, ViewSink, ViewStream};
 

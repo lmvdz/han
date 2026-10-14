@@ -146,6 +146,10 @@ pub struct AgentSettings {
     /// The toolchains this agent gets inside its sandbox, over the file's (`["rust"]`; `[]` for none).
     #[serde(default)]
     pub toolchains: Option<Vec<String>>,
+    /// API-key mode: a file (readable only by this user) holding the model key. The key stays in the host's
+    /// proxy; the agent never sees it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_key_file: Option<PathBuf>,
 }
 
 /// A change to one agent's settings (`han agent add`, `han agent set`): what is `Some` is set, the rest stays.
@@ -161,6 +165,8 @@ pub struct AgentEdit {
     pub harness: Option<String>,
     /// The toolchains inside its sandbox (`[]` for none).
     pub toolchains: Option<Vec<String>>,
+    /// The file holding the model key (API-key mode).
+    pub model_key_file: Option<PathBuf>,
 }
 
 /// The sandboxes `han` knows.
@@ -254,6 +260,9 @@ impl AgentsFile {
         }
         if let Some(t) = &edit.toolchains {
             now.toolchains = Some(t.clone());
+        }
+        if let Some(f) = &edit.model_key_file {
+            now.model_key_file = Some(f.clone());
         }
         if before.as_ref() == Some(&now) || (before.is_none() && now == AgentSettings::default()) {
             return Ok(false);

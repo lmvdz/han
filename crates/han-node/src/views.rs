@@ -456,6 +456,11 @@ impl Engine {
             .collect()
     }
 
+    /// The budget a session in `space` may spend, working `task` if it has one: unit and amount.
+    pub fn session_budget(&self, space: &str, task: Option<&str>) -> Option<(String, u64)> {
+        self.spaces.get(space).and_then(|m| m.session_budget(task))
+    }
+
     /// The operator the profile space `space` names, once its first record has arrived.
     pub fn profile_operator(&self, space: &str) -> Option<String> {
         self.spaces

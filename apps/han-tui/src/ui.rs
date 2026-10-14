@@ -636,6 +636,9 @@ fn draw_session(f: &mut Frame, app: &App, area: Rect) {
             };
             facts.push(format!("sandbox: {backend} ({fidelity})"));
         }
+        if let Some(b) = &s.budget {
+            facts.push(b.text());
+        }
         if s.publish_errors > 0 {
             facts.push(format!("{} publish error(s)", s.publish_errors));
         }

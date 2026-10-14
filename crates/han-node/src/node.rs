@@ -1269,6 +1269,7 @@ impl<T: Transport> Node<T> {
                         || HomeRef::Server(server.clone()),
                         |t| HomeRef::Ticket(t.to_text()),
                     );
+                let budget = inner.engine().session_budget(&space, None);
                 let resolved = Registry::open(data_dir)
                     .resolve(&Launch {
                         space,
@@ -1279,6 +1280,7 @@ impl<T: Transport> Node<T> {
                         issue,
                         home: host_home,
                         executor: format!("@exec:{server}"),
+                        budget,
                     })
                     .map_err(|e| match e {
                         LaunchError::Invalid(m) => NodeError::invalid(m),

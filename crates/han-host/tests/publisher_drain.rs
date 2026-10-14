@@ -120,6 +120,7 @@ async fn the_final_message_arrives_through_a_slow_node_after_stop() {
         node: PathBuf::from("node"),
         adapter_dir: PathBuf::new(),
         model_key: None,
+        budget: None,
         turn_timeout: Duration::from_secs(60),
         exclusion: Vec::new(),
     };

@@ -110,6 +110,9 @@ pub struct HostConfig {
     pub adapter_dir: PathBuf,
     /// The real model key in API-key mode (held only by the proxy).
     pub model_key: Option<String>,
+    /// The session's budget (unit, limit and the node's prices), narrowed to the task's when the session works
+    /// a budgeted task.
+    pub budget: Option<han_registry::BudgetSpec>,
     /// How long one turn may take.
     pub turn_timeout: Duration,
     /// Paths never mirrored or streamed (globs), on top of the default list.
@@ -927,6 +930,84 @@ pub async fn run_session(
     }
 }
 
+/// The session's budget, narrowed to the budget of the task it works when that is smaller (P-05: an agent's
+/// spending is charged to its task). The unit is the space's either way; a task in another unit is not
+/// believed.
+async fn narrowed_budget(
+    cfg: &HostConfig,
+    api: &dyn NodeApi,
+    task: Option<&str>,
+) -> Option<han_registry::BudgetSpec> {
+    let (spec, task) = (cfg.budget.as_ref()?, task?);
+    let rows = snapshot(
+        api,
+        Query::Tasks {
+            space: cfg.space.clone(),
+            assignee: Some(cfg.agent.clone()),
+            window: Window::default(),
+        },
+    )
+    .await
+    .ok()?;
+    let own = rows.iter().find_map(|r| match r {
+        Row::Task(x) if x.task == task => x.budget.clone(),
+        _ => None,
+    })?;
+    (own.unit == spec.unit && own.amount < spec.limit).then(|| han_registry::BudgetSpec {
+        limit: own.amount,
+        ..spec.clone()
+    })
+}
+
+/// Reports what the proxy counts: the tokens and their cost (API-key mode) and the budget with whether it is
+/// enforced, a few times a second while anything changes. Ends when the signal channel closes.
+fn watch_usage(
+    shared: Arc<Shared>,
+    observer: crate::proxy::ProxyObserver,
+    budget: Option<crate::glue::SessionBudget>,
+    api_key: bool,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last = None;
+        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            tick.tick().await;
+            if shared.signals_closed() {
+                break;
+            }
+            let usage = observer.usage();
+            let spent = budget.as_ref().map_or(0, |b| b.spent());
+            let refused = observer
+                .decisions()
+                .iter()
+                .rev()
+                .find(|d| d.reason.starts_with("budget-"))
+                .map(|d| d.reason);
+            let now = (usage, spent, refused);
+            if last == Some(now) {
+                continue;
+            }
+            last = Some(now);
+            if api_key {
+                shared.signal(Signal::Tokens(han_node::api::Tokens {
+                    input: usage.input + usage.cache_read + usage.cache_creation,
+                    out: usage.output,
+                    cost: spent,
+                }));
+            }
+            if let Some(b) = &budget {
+                shared.signal(Signal::Budget(han_node::api::BudgetStatus {
+                    unit: b.unit.clone(),
+                    limit: b.limit,
+                    spent,
+                    not_enforced: b.not_enforced.map(str::to_owned),
+                    refused: refused.map(str::to_owned),
+                }));
+            }
+        }
+    })
+}
+
 async fn run_opened(
     cfg: &HostConfig,
     deps: &HostDeps,
@@ -935,6 +1016,17 @@ async fn run_opened(
     stop: &mut watch::Receiver<bool>,
 ) -> Result<SessionState, HostError> {
     let api = deps.api.clone();
+    let narrowed;
+    let cfg = match narrowed_budget(cfg, api.as_ref(), task.as_ref().map(|t| t.0.as_str())).await {
+        Some(budget) => {
+            narrowed = HostConfig {
+                budget: Some(budget),
+                ..cfg.clone()
+            };
+            &narrowed
+        }
+        None => cfg,
+    };
     let worktree = cfg.session_dir.join("wt");
     let agent_dir = cfg.session_dir.join("agent");
     let temp = cfg.session_dir.join("tmp");
@@ -1048,6 +1140,22 @@ async fn run_opened(
         );
     }
     let _ = gaps;
+    let usage_watch = (env.budget().is_some()
+        || matches!(
+            cfg.driver.credentials,
+            crate::driver::CredentialMode::ApiKey { .. }
+        ))
+    .then(|| {
+        watch_usage(
+            shared.clone(),
+            env.proxy().observer(),
+            env.budget().cloned(),
+            matches!(
+                cfg.driver.credentials,
+                crate::driver::CredentialMode::ApiKey { .. }
+            ),
+        )
+    });
     if !launched_gaps.is_empty() {
         shared.signal(Signal::Summary(crate::status::sandbox_note(
             &launched_sandbox,
@@ -1270,6 +1378,9 @@ async fn run_opened(
         Signal::Done
     });
     drop(mirror);
+    if let Some(w) = usage_watch {
+        w.abort();
+    }
     // Close the signal channel and wait for the publisher: it folds what is queued, sends the last items and
     // the final status, then returns. Only when it overruns the bound is it stopped, and that is logged.
     shared.close_signals();
@@ -1569,5 +1680,123 @@ mod tests {
             effect: json!({"method": "POST", "url": "http://x.example/"}),
         };
         let _ = req;
+    }
+
+    /// A node whose task view holds one task with this budget.
+    struct Tasks(Option<(&'static str, u64)>);
+
+    impl NodeApi for Tasks {
+        fn call(&self, _cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
+            Box::pin(async { Ok(CallResult::Done) })
+        }
+        fn view(&self, _query: Query) -> ViewStream {
+            let (sink, stream) = ViewStream::channel();
+            sink.send(ViewEvent::Snapshot {
+                seq: 1,
+                rows: vec![Row::Task(han_node::api::TaskRow {
+                    key: "k".into(),
+                    space: "s".into(),
+                    task: "t1".into(),
+                    seq: 1,
+                    author: "@a:b".into(),
+                    to: vec!["@coder:b".into()],
+                    external: None,
+                    ask: None,
+                    open: true,
+                    guarded_for: Vec::new(),
+                    accepted: Vec::new(),
+                    budget: self.0.map(|(unit, amount)| han_node::api::TaskBudget {
+                        unit: unit.into(),
+                        amount,
+                    }),
+                })],
+                total: 1,
+                offset: 0,
+                next_cursor: None,
+                now_ms: 0,
+                totals: None,
+            });
+            stream
+        }
+    }
+
+    fn budgeted(limit: u64) -> han_registry::BudgetSpec {
+        han_registry::BudgetSpec {
+            unit: "USD-cent".into(),
+            limit,
+            prices: [("m".to_owned(), han_registry::PriceSpec::default())].into(),
+        }
+    }
+
+    fn cfg_with(budget: Option<han_registry::BudgetSpec>) -> HostConfig {
+        HostConfig {
+            space: "s".into(),
+            agent: "@coder:b".into(),
+            operator: None,
+            driver: crate::driver::builtin("pi").unwrap(),
+            repo: RepoConfig {
+                name: ".".into(),
+                source: ".".into(),
+                base: "HEAD".into(),
+                default_branch: "main".into(),
+            },
+            issue: None,
+            task: None,
+            executor: "@exec:b".into(),
+            session_dir: PathBuf::new(),
+            taint_db: PathBuf::new(),
+            guarded: false,
+            strict_on_read: true,
+            sandbox: SandboxChoice {
+                backend: "none".into(),
+                allow_advisory: true,
+                ro: Vec::new(),
+                login_dir: None,
+                allow_hosts: Vec::new(),
+                toolchains: Default::default(),
+            },
+            shim: ShimCommand::new("han", ["shim"]),
+            node: PathBuf::from("node"),
+            adapter_dir: PathBuf::new(),
+            model_key: None,
+            budget,
+            turn_timeout: Duration::from_secs(1),
+            exclusion: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_task_budget_narrows_the_session_budget_and_never_widens_it() {
+        let cfg = cfg_with(Some(budgeted(500)));
+        // the task holds 300 of the space's 500: the session may spend 300, at the same prices
+        let narrowed = narrowed_budget(&cfg, &Tasks(Some(("USD-cent", 300))), Some("t1"))
+            .await
+            .unwrap();
+        assert_eq!((narrowed.limit, narrowed.prices.len()), (300, 1));
+        // a task with more than the space, in another unit, or with no budget changes nothing
+        for own in [Some(("USD-cent", 900)), Some(("EUR-cent", 10)), None] {
+            assert!(
+                narrowed_budget(&cfg, &Tasks(own), Some("t1"))
+                    .await
+                    .is_none(),
+                "{own:?}"
+            );
+        }
+        // no task, another task, or no budget in the space: nothing to narrow
+        assert!(
+            narrowed_budget(&cfg, &Tasks(Some(("USD-cent", 1))), None)
+                .await
+                .is_none()
+        );
+        assert!(
+            narrowed_budget(&cfg, &Tasks(Some(("USD-cent", 1))), Some("t2"))
+                .await
+                .is_none()
+        );
+        assert!(
+            narrowed_budget(&cfg_with(None), &Tasks(Some(("USD-cent", 1))), Some("t1"))
+                .await
+                .is_none()
+        );
     }
 }

@@ -49,6 +49,7 @@ fn status(session: &str, step: &str, seq: u64) -> StatusBody {
         }),
         summary: None,
         sandbox: None,
+        budget: None,
         publish_errors: 0,
         seq,
         at: "2026-10-13T10:00:00Z".into(),
