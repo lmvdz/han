@@ -7,6 +7,7 @@ mod agent;
 mod conform;
 mod dev;
 mod dial;
+mod doctor;
 mod enroll;
 mod exec;
 mod executor;
@@ -17,6 +18,7 @@ mod keys;
 mod node;
 mod rolenode;
 mod runner;
+mod rusttool;
 mod seq;
 mod seqadmin;
 mod service;
@@ -66,6 +68,8 @@ enum Cmd {
     Actor(actor::ActorArgs),
     /// Set an executor up.
     Executor(executor::ExecutorArgs),
+    /// Say what is wrong on this machine, each problem with its cause and the exact command that fixes it.
+    Doctor(doctor::DoctorArgs),
     /// Linux runners: the root-level setup (users, units, polkit rule).
     Runner(runner::RunnerArgs),
     /// A complete local HAN on loopback for trying things and for the end-to-end tests.
@@ -130,6 +134,7 @@ async fn run(cli: Cli) {
         Cmd::Home(a) => homecmd::run(a).await,
         Cmd::Actor(a) => actor::run(a).await,
         Cmd::Executor(a) => executor::run(a).await,
+        Cmd::Doctor(a) => doctor::run(a).await,
         Cmd::Runner(a) => runner::run(a).await,
         Cmd::Dev(a) => dev::run(a).await,
         Cmd::Agent(a) => agent::run(a).await,

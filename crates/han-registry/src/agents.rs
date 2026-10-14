@@ -262,6 +262,28 @@ impl AgentsFile {
         Ok(true)
     }
 
+    /// Turns the toolchain `tool` on for every agent and records where it lives (`han runner setup --toolchain`):
+    /// the file's own list and location overrides, not an agent's. Says whether anything changed.
+    pub fn set_toolchain(
+        &mut self,
+        tool: &str,
+        paths: BTreeMap<String, PathBuf>,
+    ) -> Result<bool, String> {
+        if !TOOLCHAINS.contains(&tool) {
+            return Err(format!("unknown toolchain {tool:?}: rust"));
+        }
+        let mut changed = false;
+        if !self.toolchains.iter().any(|t| t == tool) {
+            self.toolchains.push(tool.to_owned());
+            changed = true;
+        }
+        if self.toolchain_paths.get(tool) != Some(&paths) {
+            self.toolchain_paths.insert(tool.to_owned(), paths);
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     /// The settings of `actor` (defaults when it has none).
     pub fn agent(&self, actor: &str) -> AgentSettings {
         self.agents.get(actor).cloned().unwrap_or_default()
@@ -355,5 +377,46 @@ mod tests {
         // The default is none, and an unknown key is still refused.
         assert!(AgentsFile::default().toolchains_of("@a:x").is_empty());
         assert!(serde_json::from_str::<AgentsFile>(r#"{"toolchain": []}"#).is_err());
+    }
+
+    #[test]
+    fn an_edit_changes_only_what_it_names_and_says_when_nothing_changed() {
+        let mut f = AgentsFile::default();
+        let edit = AgentEdit {
+            os_user: Some("han-agent1".into()),
+            toolchains: Some(vec!["rust".into()]),
+            ..AgentEdit::default()
+        };
+        assert!(f.set("@a:x", &edit).unwrap());
+        assert!(!f.set("@a:x", &edit).unwrap());
+        let sandbox = AgentEdit {
+            sandbox: Some("bwrap".into()),
+            ..AgentEdit::default()
+        };
+        assert!(f.set("@a:x", &sandbox).unwrap());
+        let a = f.agent("@a:x");
+        assert_eq!(a.os_user.as_deref(), Some("han-agent1"));
+        assert_eq!(a.toolchains, Some(vec!["rust".to_owned()]));
+        // a value no launch could use is refused, and nothing is written
+        let bad = AgentEdit {
+            sandbox: Some("chroot".into()),
+            ..AgentEdit::default()
+        };
+        assert!(f.set("@a:x", &bad).is_err());
+        assert_eq!(f.agent("@a:x").sandbox.as_deref(), Some("bwrap"));
+    }
+
+    #[test]
+    fn a_toolchain_is_turned_on_once_with_its_paths() {
+        let mut f = AgentsFile::default();
+        let paths: BTreeMap<String, PathBuf> = [
+            ("rustupHome".to_owned(), PathBuf::from("/opt/rust/rustup")),
+            ("cargoBin".to_owned(), PathBuf::from("/opt/rust/cargo/bin")),
+        ]
+        .into();
+        assert!(f.set_toolchain("rust", paths.clone()).unwrap());
+        assert!(!f.set_toolchain("rust", paths).unwrap());
+        assert_eq!(f.toolchains, ["rust"]);
+        assert!(f.set_toolchain("go", BTreeMap::new()).is_err());
     }
 }

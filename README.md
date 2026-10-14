@@ -72,6 +72,8 @@ han tui <space>                                             # or: han tui <space
 - `han space member` gives them a role, and `han space policy <space> <file>` sets the space's policy.
 - `han device` pairs a second device into your profile.
 - To surface GitHub issues, run `han-github run --config han-github.toml` ([integrations/han-github](integrations/han-github/README.md)).
+- `han agent set <agent> --sandbox bwrap --toolchains rust` changes how an agent is launched; do not edit `agents.json` by hand.
+- `han doctor` says what is wrong on this machine, with the exact command that fixes each problem (`--json` for scripts).
 - A shared runner on a Linux VM is set up as in [docs/runner.md](docs/runner.md).
 
 The book's [Getting started](docs/getting-started.md) page walks through the same steps.
