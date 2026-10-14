@@ -14,11 +14,14 @@ Licence: CC-BY-4.0, like the rest of `spec/`.
 | 4 | [diffs.md](diffs.md) | the diff and changed-files views on `@pierre/diffs` and `@pierre/trees`, push and merge previews, the pairwise overlap view | 23 (AC-DIF-01…23); 6 pending | 5 |
 | 5 | [shell.md](shell.md) | the app shell: the window, routes, the command palette, keybindings with when-clauses, settings, theming, startup, onboarding (identity, add a device, join by ticket, create and invite), devices, trust | 34 (AC-SHL-01…34); 5 pending | 7 |
 | 6 | [data.md](data.md) | the data layer contract: the Tauri bridge, the `HanClient` service, generated types with Schema decoding, view atoms, command lifecycle, loading and error states, persistence, the mock client and fixtures, lint checks, and requirements on the node API | 23 (AC-DAT-01…23); 6 pending | 20 |
-| | **Total** | | **168; 64 pending node API** | **53** (9 resolved and 8 partly resolved by PR #35) |
+| 7 | [tui-session.md](tui-session.md) | the TUI's session view (`han tui`, Stream and Record tabs): the live transcript built from `Session` items, entries per item kind, folding, grouping, following and paging, the reader, steps mode, steering and approvals through the existing keys, untrusted-text rules, colour-off and narrow terminals, performance budgets | 50 (TSV-1…50); 12 pending | 4 |
+| | **Total** | | **218; 76 pending node API** | **57** (9 resolved and 8 partly resolved by PR #35) |
 
 "Pending" marks an acceptance criterion that depends on a node API item the M3 node (PR #35) doesn't provide yet. Each is labelled "pending node API (Q-…)" with the question it waits on. Until that item lands, Team B builds against a provisional type (data.md DAT-3) and runs the criterion against the mock. The criterion is final once the generated type replaces the provisional one.
 
 Read data.md first, for the data model, then shell.md, for the frame and the shared conventions, then the surfaces.
+
+tui-session.md is the one terminal spec here. It applies to `apps/han-tui`, which a Team B session may extend from it alone. Its acceptance criteria run on ratatui's TestBackend through the TUI's test harness, not in a browser. Its node API needs are listed in its own §10 (P-1…P-14).
 
 ## Shared conventions
 

@@ -17,6 +17,7 @@
   - [Diffs and changed files](ui/diffs.md)
   - [App shell](ui/shell.md)
   - [Data layer](ui/data.md)
+  - [TUI session view](ui/tui-session.md)
 - [Implementation plan](PLAN.md)
 - [Shared runner setup](runner.md)
 - [Review history](decisions/HISTORY.md)
