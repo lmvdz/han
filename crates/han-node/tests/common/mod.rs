@@ -51,9 +51,12 @@ impl World {
     pub fn offline(people: &[(&str, u8)]) -> World {
         let net = MemNetwork::default();
         let clock = Arc::new(TestClock::new(START_SECS));
+        // The counter keeps two worlds of one process apart even when the clock is coarse.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "han-node-test-{}-{}",
+            "han-node-test-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
