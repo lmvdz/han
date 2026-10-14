@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use clap::Args;
 use han_exec::{ExecConfig, Executor, ExecutorConfig, NeedsApproval, SystemElapsed};
+use han_registry::HomeRef;
 use han_vcs::GitVcs;
 
-use crate::rolenode::{self, HomeArgs};
+use crate::rolenode;
 
 /// Options of `han exec`.
 #[derive(Args)]
@@ -26,8 +27,9 @@ pub struct ExecArgs {
     /// The space to serve.
     #[arg(long)]
     space: String,
-    #[command(flatten)]
-    home: HomeArgs,
+    /// The space's home: a home ticket (`han1home.…`) or a ServerName.
+    #[arg(long, env = "HAN_HOME")]
+    home: HomeRef,
     /// The executor's state directory: ledger, lock, scratch, its node's data.
     #[arg(long, default_value = "han-exec")]
     data: PathBuf,

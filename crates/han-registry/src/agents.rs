@@ -1,10 +1,10 @@
-//! What a node knows about launching agents on this machine, kept in its data directory so a change needs no
+//! What a machine knows about launching agents, kept in the node's data directory so a change needs no
 //! restart and `han agent start` needs no flags:
 //!
 //! * `harness/<name>.json` (written by `han agent setup-harness`): the node executable and the adapter
 //!   package directory of an installed harness.
-//! * `agents.json` (written by the runner's admin): the sandbox to use and, on Linux, the OS user an agent runs
-//!   as (SR-83).
+//! * `agents.json` (written by `han agent add` and `han agent set`): the sandbox to use, the toolchains and, on
+//!   Linux, the OS user an agent runs as (SR-83).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -148,6 +148,49 @@ pub struct AgentSettings {
     pub toolchains: Option<Vec<String>>,
 }
 
+/// A change to one agent's settings (`han agent add`, `han agent set`): what is `Some` is set, the rest stays.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentEdit {
+    /// The OS user the agent's host runs as.
+    pub os_user: Option<String>,
+    /// The sandbox: `auto`, `mxc`, `bwrap` or `none`.
+    pub sandbox: Option<String>,
+    /// Whether the agent may run with no OS sandbox.
+    pub allow_advisory: Option<bool>,
+    /// The harness `han agent start` uses by default.
+    pub harness: Option<String>,
+    /// The toolchains inside its sandbox (`[]` for none).
+    pub toolchains: Option<Vec<String>>,
+}
+
+/// The sandboxes `han` knows.
+pub const SANDBOXES: [&str; 4] = ["auto", "mxc", "bwrap", "none"];
+
+/// The toolchains `han` knows.
+pub const TOOLCHAINS: [&str; 1] = ["rust"];
+
+impl AgentEdit {
+    /// Refuses a value no launch could use, so a typo is found now and not at the next start.
+    pub fn check(&self) -> Result<(), String> {
+        if let Some(u) = &self.os_user
+            && !valid_os_user(u)
+        {
+            return Err(format!("{u:?} is not an OS user name"));
+        }
+        if let Some(s) = &self.sandbox
+            && !SANDBOXES.contains(&s.as_str())
+        {
+            return Err(format!("unknown sandbox {s:?}: auto, mxc, bwrap or none"));
+        }
+        for t in self.toolchains.iter().flatten() {
+            if !TOOLCHAINS.contains(&t.as_str()) {
+                return Err(format!("unknown toolchain {t:?}: rust"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// `agents.json`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -177,6 +220,46 @@ impl AgentsFile {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AgentsFile::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }
+    }
+
+    /// Writes `<data_dir>/agents.json`.
+    pub fn save(&self, data_dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(data_dir)?;
+        let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(
+            data_dir.join("agents.json"),
+            format!(
+                "{text}
+"
+            ),
+        )
+    }
+
+    /// Applies `edit` to the settings of `actor`; only what the edit names changes. Says whether anything did.
+    pub fn set(&mut self, actor: &str, edit: &AgentEdit) -> Result<bool, String> {
+        edit.check()?;
+        let before = self.agents.get(actor).cloned();
+        let mut now = before.clone().unwrap_or_default();
+        if let Some(u) = &edit.os_user {
+            now.os_user = Some(u.clone());
+        }
+        if let Some(s) = &edit.sandbox {
+            now.sandbox = Some(s.clone());
+        }
+        if let Some(a) = edit.allow_advisory {
+            now.allow_advisory = a;
+        }
+        if let Some(h) = &edit.harness {
+            now.harness = Some(h.clone());
+        }
+        if let Some(t) = &edit.toolchains {
+            now.toolchains = Some(t.clone());
+        }
+        if before.as_ref() == Some(&now) || (before.is_none() && now == AgentSettings::default()) {
+            return Ok(false);
+        }
+        self.agents.insert(actor.to_owned(), now);
+        Ok(true)
     }
 
     /// The settings of `actor` (defaults when it has none).

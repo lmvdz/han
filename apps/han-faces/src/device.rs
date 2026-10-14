@@ -41,15 +41,22 @@ enum DeviceCmd {
     },
 }
 
+/// SHA-256 of `bytes`, lowercase hex.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// The key id a paired device gets: `d` and the first 8 hex digits of the SHA-256 of its public key (the same
 /// rule as the node's `DevicePair`).
 pub fn paired_key_id(public_key: &str) -> String {
-    format!(
-        "d{}",
-        &han_core::ids::sha256_hex(public_key.as_bytes())[..8]
-    )
+    format!("d{}", &sha256_hex(public_key.as_bytes())[..8])
 }
 
+/// Runs `han device` against the running node.
 pub async fn run(args: DeviceArgs) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = args
         .endpoint
@@ -78,7 +85,7 @@ pub async fn run(args: DeviceArgs) -> Result<(), Box<dyn std::error::Error>> {
             client
                 .call(Command::DevicePair { code: code.clone() })
                 .await?;
-            let digest = han_core::ids::sha256_hex(public.as_bytes());
+            let digest = sha256_hex(public.as_bytes());
             println!(
                 "paired key {} (check {}-{})",
                 paired_key_id(public),

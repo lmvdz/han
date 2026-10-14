@@ -1,7 +1,7 @@
 //! Windows: Microsoft MXC ProcessContainer (AppContainer / BaseContainer, no admin).
 //!
 //! Egress: MXC's proxy mode and direct host loopback do not work on current Windows builds (spike Q2), so the
-//! container may reach exactly one container-local loopback port, where `han-agent-shim listen` runs; the shim
+//! container may reach exactly one container-local loopback port, where the shim's `listen` runs; the shim
 //! forwards to `\\.\pipe\hanproxy-<session>-<random>`, which this host creates with a DACL for SYSTEM, the
 //! owner and ALL APPLICATION PACKAGES, and bridges to the proxy's TCP port.
 
@@ -21,7 +21,7 @@ use tokio::sync::watch;
 
 use super::{
     BackendAvailability, ChildIn, ChildOut, SandboxError, SandboxInfo, SandboxSpec, Sandboxed,
-    build_env, name_part, random_hex, shim_path,
+    build_env, name_part, random_hex,
 };
 
 pub(super) fn probe() -> BackendAvailability {
@@ -128,7 +128,6 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
     if !avail.available {
         return Err(SandboxError::Unavailable(format!("mxc: {}", avail.detail)));
     }
-    let shim = shim_path(spec)?;
     let mut tasks = Vec::new();
 
     // The container-local port of the shim, and the session pipe behind it.
@@ -173,7 +172,9 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         }
     }
 
-    let mut cmd = vec![quote(&shim.to_string_lossy()), "listen".into()];
+    let mut cmd = vec![quote(&spec.shim.program.to_string_lossy())];
+    cmd.extend(spec.shim.prefix_args.iter().map(|a| quote(a)));
+    cmd.push("listen".into());
     if spec.proxy.is_some() {
         cmd.extend([
             "--port".into(),
@@ -209,7 +210,7 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    if let Some(d) = shim.parent() {
+    if let Some(d) = spec.shim.program.parent() {
         ro.push(d.to_string_lossy().into_owned());
     }
     ro.push(root.clone());

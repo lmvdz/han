@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use han_host::driver::{builtin, login_present};
-use han_node::agents::{AgentsFile, HarnessInstall};
+use han_registry::{AgentEdit, AgentsFile, HarnessInstall, Registry};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -353,56 +353,20 @@ pub fn login(
     }
 }
 
-/// The harness `han agent add` recorded for `agent`, if any.
-pub fn default_harness(data: &Path, agent: &str) -> Res<Option<String>> {
-    Ok(AgentsFile::load(data)?.agent(agent).harness)
-}
-
 /// Whether the harness `name` is set up in the node's data directory.
 pub fn is_set_up(data: &Path, name: &str) -> Res<bool> {
-    Ok(HarnessInstall::load(data, name)?.is_some())
+    Ok(Registry::open(data).harness_set_up(name)?)
 }
 
-/// Records how `actor` is launched in `<data>/agents.json`; only what is given changes. Says whether the file
-/// changed.
-pub fn record_settings(
-    data: &Path,
-    actor: &str,
-    os_user: Option<&str>,
-    sandbox: Option<&str>,
-    allow_advisory: bool,
-    harness: Option<&str>,
-) -> Res<bool> {
-    if let Some(u) = os_user
-        && !han_node::agents::valid_os_user(u)
-    {
-        return Err(format!("{u:?} is not an OS user name").into());
-    }
+/// Applies `edit` to how `actor` is launched, in `<data>/agents.json`; only what the edit names changes. Says
+/// whether the file changed.
+pub fn record_settings(data: &Path, actor: &str, edit: &AgentEdit) -> Res<bool> {
     let mut file = AgentsFile::load(data)?;
-    let before = file.agents.get(actor).cloned();
-    let mut now = before.clone().unwrap_or_default();
-    if let Some(u) = os_user {
-        now.os_user = Some(u.to_owned());
+    let changed = file.set(actor, edit)?;
+    if changed {
+        file.save(data)?;
     }
-    if let Some(s) = sandbox {
-        now.sandbox = Some(s.to_owned());
-    }
-    if allow_advisory {
-        now.allow_advisory = true;
-    }
-    if let Some(h) = harness {
-        now.harness = Some(h.to_owned());
-    }
-    if before.as_ref() == Some(&now)
-        || (before.is_none() && now == han_node::agents::AgentSettings::default())
-    {
-        return Ok(false);
-    }
-    file.agents.insert(actor.to_owned(), now);
-    std::fs::create_dir_all(data)?;
-    let text = serde_json::to_string_pretty(&file)?;
-    std::fs::write(data.join("agents.json"), format!("{text}\n"))?;
-    Ok(true)
+    Ok(changed)
 }
 
 #[cfg(test)]

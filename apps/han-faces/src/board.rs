@@ -111,6 +111,7 @@ fn line(b: &BoardRow) -> String {
     )
 }
 
+/// Runs `han board` against the running node.
 pub async fn run(args: BoardArgs) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = args
         .endpoint

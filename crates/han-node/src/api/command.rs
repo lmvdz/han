@@ -5,20 +5,7 @@ use ts_rs::TS;
 
 use super::rows::StatusBody;
 
-/// A home and the node to dial for it (the same facts a `/.well-known/han` document or a ticket carries).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-pub struct HomeRef {
-    /// The ServerName, as put in `dialed` (G-08).
-    pub server: String,
-    /// The node id of the home's sequencer.
-    pub node: String,
-    /// Direct addresses, `ip:port`.
-    #[serde(default)]
-    pub addrs: Vec<String>,
-    /// Relay URLs.
-    #[serde(default)]
-    pub relays: Vec<String>,
-}
+pub use han_registry::HomeRef;
 
 /// Something a face asks of the device. Commands that write the log end as a receipt (or are queued in the
 /// outbox when the home cannot be reached); the verdict of Policy comes back as a [`super::NodeError`].
@@ -27,8 +14,10 @@ pub struct HomeRef {
 pub enum Command {
     /// Creates a space at `home` with this device's person as its owner, and follows it.
     SpaceCreate {
-        /// The home that will sequence it.
-        home: HomeRef,
+        /// The home that will sequence it (default: the home of this device's actor).
+        #[serde(default)]
+        #[ts(optional)]
+        home: Option<HomeRef>,
         /// The space's name (content of `space.create`).
         name: String,
         /// `members` or `public`.
@@ -49,8 +38,10 @@ pub enum Command {
     },
     /// Follows a space this person already belongs to (for example on a new device).
     SpaceFollow {
-        /// The home of the space.
-        home: HomeRef,
+        /// The home of the space. A ticket is pinned first. Default: the server the space id names.
+        #[serde(default)]
+        #[ts(optional)]
+        home: Option<HomeRef>,
         /// The space.
         space: String,
     },
@@ -87,8 +78,6 @@ pub enum Command {
         name: String,
         /// The server it lives on.
         server: String,
-        /// Its operator.
-        operator: String,
     },
     /// Starts a session of an agent through the host role (not before M4).
     AgentStart {
@@ -96,8 +85,10 @@ pub enum Command {
         space: String,
         /// The agent actor.
         agent: String,
-        /// The harness.
-        harness: String,
+        /// The harness (default: the one recorded for the agent).
+        #[serde(default)]
+        #[ts(optional)]
+        harness: Option<String>,
         /// The repository, `github:owner/repo`.
         #[serde(default)]
         #[ts(optional)]
@@ -106,6 +97,11 @@ pub enum Command {
         #[serde(default)]
         #[ts(optional)]
         issue: Option<String>,
+        /// The agent's home, when the node does not follow the agent's profile yet: the node pins it (a
+        /// ticket), follows `profile:<agent>` there, and takes the operator from it.
+        #[serde(default)]
+        #[ts(optional)]
+        home: Option<HomeRef>,
     },
     /// Stops the host role of a session (not before M4).
     AgentStop {

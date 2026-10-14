@@ -31,7 +31,9 @@ use crate::acp::{AcpDriver, AgentDriver, AgentEvent, Mode, SessionConfig, TurnIn
 use crate::driver::DriverConfig;
 use crate::items::ItemFeed;
 use crate::mask::{MaskedApi, Masker};
+use crate::proxy::ProxyConfig;
 use crate::r24::{self, Driver, DriverKind, GuardFacts, TaintStore, TaskDuty};
+use crate::sandbox::ShimCommand;
 use crate::status::{Signal, StatusDeriver};
 
 /// Why a session could not run.
@@ -100,8 +102,8 @@ pub struct HostConfig {
     pub strict_on_read: bool,
     /// Sandbox and egress.
     pub sandbox: SandboxChoice,
-    /// The in-sandbox shim program.
-    pub shim: PathBuf,
+    /// The in-sandbox shim.
+    pub shim: ShimCommand,
     /// Node and adapter, for drivers that launch through node.
     pub node: PathBuf,
     /// The adapter's directory.
@@ -130,10 +132,6 @@ pub struct SandboxChoice {
     pub allow_hosts: Vec<String>,
     /// Toolchains the agent gets inside the sandbox (read-only roots, per-agent caches, registry hosts).
     pub toolchains: crate::toolchain::ToolchainConfig,
-    /// Test only: let the proxy connect to loopback upstreams (a mock provider).
-    pub test_loopback_upstream: bool,
-    /// Test only: extra TLS roots for the model route.
-    pub test_roots: Vec<Vec<u8>>,
 }
 
 /// How a session ended.
@@ -681,7 +679,13 @@ pub struct HostDeps {
     /// The agent's actor, key id and key seed, which sign timeline batches (the host process is the
     /// agent's node; the seed never leaves it).
     pub signer: Option<(String, String, [u8; 32])>,
+    /// Test only: changes the session's proxy configuration after the host has made it (to reach a mock
+    /// provider on loopback, or to trust its certificate). A real session leaves it `None`.
+    pub proxy_hook: Option<ProxyHook>,
 }
+
+/// A change to a session's [`ProxyConfig`], injected by a test.
+pub type ProxyHook = Arc<dyn Fn(&mut ProxyConfig) + Send + Sync>;
 
 /// A task being worked: its id, its author, the issue it came from and its ask.
 type TaskInfo = (String, String, Option<String>, Option<String>);
@@ -925,6 +929,7 @@ async fn run_opened(
 
     let env = crate::glue::Egress::start(
         cfg,
+        deps.proxy_hook.as_ref(),
         &shared_bridge(&shared),
         &token,
         &workspace,

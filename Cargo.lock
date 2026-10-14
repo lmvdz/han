@@ -1827,9 +1827,11 @@ dependencies = [
  "getrandom 0.3.4",
  "han-core",
  "han-exec",
+ "han-faces",
  "han-host",
  "han-net",
  "han-node",
+ "han-registry",
  "han-seq",
  "han-tui",
  "han-vcs",
@@ -1883,6 +1885,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "han-faces"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "han-node",
+ "han-registry",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
+]
+
+[[package]]
 name = "han-github"
 version = "0.1.0"
 dependencies = [
@@ -1918,6 +1932,7 @@ dependencies = [
  "han-mcp",
  "han-net",
  "han-node",
+ "han-registry",
  "han-seq",
  "han-timeline",
  "han-vcs",
@@ -1983,6 +1998,7 @@ dependencies = [
  "getrandom 0.3.4",
  "han-core",
  "han-net",
+ "han-registry",
  "han-seq",
  "han-timeline",
  "han-tui",
@@ -1998,6 +2014,16 @@ dependencies = [
  "tracing",
  "ts-rs",
  "widestring",
+]
+
+[[package]]
+name = "han-registry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ts-rs",
 ]
 
 [[package]]

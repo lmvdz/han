@@ -483,7 +483,7 @@ async fn mcp_call(
         let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("spawn {command}: {e}"))?;

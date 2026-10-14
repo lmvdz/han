@@ -10,10 +10,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use han_host::proxy::{Proxy, ProxyConfig, ProxyHandle};
-use han_host::sandbox::{self, Limits, Preference, ProxyTarget, SandboxError, SandboxSpec};
+use han_host::sandbox::{
+    self, Limits, Preference, ProxyTarget, SandboxError, SandboxSpec, ShimCommand,
+};
 use han_node::api::{Fidelity, SandboxBackend};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+mod production_shim;
 
 const TOKEN: &str = "tok-PROBE-AAAAAAAAAAAAAAAAAAAA";
 const CANARY: &str = "han-canary-secret-not-real-41d7";
@@ -22,8 +26,8 @@ fn probe_exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_han-sandbox-probe"))
 }
 
-fn shim_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim"))
+fn shim_exe() -> ShimCommand {
+    production_shim::shim()
 }
 
 fn available(b: SandboxBackend) -> bool {
@@ -149,7 +153,7 @@ async fn run_probe(
             wall_time: Some(Duration::from_secs(120)),
             ..Limits::default()
         },
-        shim: Some(shim_exe()),
+        shim: shim_exe(),
         inside_port: None,
     };
     let mut sb = sandbox::launch(spec)
@@ -398,7 +402,7 @@ async fn advisory_mode_needs_permission_and_says_so() {
         }),
         allow_advisory: false,
         limits: Limits::default(),
-        shim: Some(shim_exe()),
+        shim: shim_exe(),
         inside_port: None,
     };
     match sandbox::launch(spec.clone()).await {
@@ -452,18 +456,18 @@ async fn wall_time_and_kill_end_the_tree() {
         session: "wall".into(),
         backend,
         // the shim with no command forwards until it is killed
-        program: shim.clone(),
-        args: vec![
+        program: shim.program.clone(),
+        args: shim.args([
             "listen".into(),
             "--port".into(),
             "18999".into(),
             "--tcp".into(),
             "127.0.0.1:9".into(),
-        ],
+        ]),
         cwd: f.wt.clone(),
         env: vec![],
         rw: vec![f.wt.clone()],
-        ro: vec![shim.clone()],
+        ro: vec![shim.program.clone()],
         temp: f.temp.clone(),
         proxy: None,
         allow_advisory: true,
@@ -471,7 +475,7 @@ async fn wall_time_and_kill_end_the_tree() {
             wall_time: wall,
             ..Limits::default()
         },
-        shim: Some(shim.clone()),
+        shim: shim.clone(),
         inside_port: None,
     };
     let mut sb = sandbox::launch(mk(Some(Duration::from_secs(2))))
@@ -514,18 +518,18 @@ async fn stdio_and_the_mcp_stub_cross_the_sandbox() {
     let spec = SandboxSpec {
         session: "stub".into(),
         backend,
-        program: shim.clone(),
-        args: vec![
+        program: shim.program.clone(),
+        args: shim.args([
             "mcp-stub".into(),
             "--proxy".into(),
             "127.0.0.1:{proxy_port}".into(),
             "--token".into(),
             "{proxy_token}".into(),
-        ],
+        ]),
         cwd: f.wt.clone(),
         env: vec![],
         rw: vec![f.wt.clone()],
-        ro: vec![shim.clone()],
+        ro: vec![shim.program.clone()],
         temp: f.temp.clone(),
         proxy: Some(ProxyTarget {
             addr: proxy.addr(),
@@ -533,7 +537,7 @@ async fn stdio_and_the_mcp_stub_cross_the_sandbox() {
         }),
         allow_advisory: true,
         limits: Limits::default(),
-        shim: Some(shim.clone()),
+        shim: shim.clone(),
         inside_port: None,
     };
     let mut sb = sandbox::launch(spec).await.unwrap();

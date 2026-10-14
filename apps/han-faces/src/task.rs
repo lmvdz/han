@@ -126,6 +126,7 @@ pub fn line(t: &TaskRow) -> String {
     )
 }
 
+/// Runs `han task` against the running node.
 pub async fn run(args: TaskArgs) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = args
         .endpoint

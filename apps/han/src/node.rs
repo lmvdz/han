@@ -16,9 +16,9 @@ use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore, KeyringStore};
 use han_node::rpc::{default_endpoint, serve};
 use han_node::supervisor::ProcessSpawner;
 use han_node::{Node, NodeConfig, NodeParts, WellKnownKeys};
+use han_registry::HomeRef;
 use han_seq::SystemClock;
 
-use crate::home::HomeOpts;
 use crate::seq::relay_choice;
 use crate::service;
 
@@ -84,8 +84,11 @@ pub struct NodeOpts {
     /// The pipe or socket to serve the node API on, if it is not the default of `--data`.
     #[arg(long)]
     endpoint: Option<String>,
-    #[command(flatten)]
-    home: HomeOpts,
+    /// A home ticket (`han1home.…`, from `han seq` or `han ticket`) to pin: the home's node and receipt keys are
+    /// kept in the data directory as ticket-pinned trust, so a home with no HTTPS well-known needs no flag at
+    /// the next start.
+    #[arg(long)]
+    home: Option<HomeRef>,
 }
 
 /// The arguments of `han node` that reproduce `o` (for a service).
@@ -109,8 +112,8 @@ fn run_args(o: &NodeOpts) -> Result<Vec<String>, String> {
     if let Some(e) = &o.endpoint {
         a.extend(["--endpoint".into(), e.clone()]);
     }
-    if let Some(h) = &o.home.home {
-        a.extend(["--home".into(), h.clone()]);
+    if let Some(h) = &o.home {
+        a.extend(["--home".into(), h.to_string()]);
     }
     Ok(a)
 }
@@ -218,17 +221,15 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         supervisor: Arc::new(ProcessSpawner::new(std::env::current_exe()?)),
     })?;
 
-    // A home named by ticket or node address is kept in the data directory, so a restart needs no flag.
-    if let Some(choice) = args.home.resolve(Some(actor))? {
-        match choice.pin {
-            Some(t) => {
-                node.call(Command::HomePin {
-                    ticket: t.to_text(),
-                })
-                .await?;
-            }
-            None => return Err("--home-node needs --home-key (or use --home with a ticket)".into()),
+    // A home named by ticket is kept in the data directory, so a restart needs no flag.
+    match args.home {
+        Some(HomeRef::Ticket(ticket)) => {
+            node.call(Command::HomePin { ticket }).await?;
         }
+        Some(HomeRef::Server(_)) => {
+            return Err("--home is a home ticket (han1home.…): a ServerName needs no pin".into());
+        }
+        None => {}
     }
 
     let endpoint = args

@@ -6,12 +6,14 @@ members = [
     "crates/han-seq",
     "crates/han-net",
     "crates/han-node",
+    "crates/han-registry",
     "crates/han-vcs",
     "crates/han-mcp",
     "crates/han-exec",
     "crates/han-host",
     "apps/han",
     "apps/han-tui",
+    "apps/han-faces",
     "integrations/han-github",
 ]
 
@@ -32,6 +34,7 @@ han-core = { path = "crates/han-core", version = "0.1.0" }
 han-seq = { path = "crates/han-seq", version = "0.1.0" }
 han-net = { path = "crates/han-net", version = "0.1.0" }
 han-node = { path = "crates/han-node", version = "0.1.0" }
+han-registry = { path = "crates/han-registry", version = "0.1.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = "2"

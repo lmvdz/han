@@ -67,6 +67,40 @@ pub struct ProxyTarget {
     pub token: String,
 }
 
+/// The program the sandbox runs as its shim, and the arguments that go before the shim's own verbs (`listen`,
+/// `mcp-stub`). Production is this executable with `shim` in front (`han shim listen …`); a launch says so
+/// itself, and the sandbox runs exactly that. It looks nowhere else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShimCommand {
+    /// The program.
+    pub program: PathBuf,
+    /// The arguments before the verb.
+    pub prefix_args: Vec<String>,
+}
+
+impl ShimCommand {
+    /// `program` with `prefix_args` before the verb.
+    pub fn new(
+        program: impl Into<PathBuf>,
+        prefix_args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        ShimCommand {
+            program: program.into(),
+            prefix_args: prefix_args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// The production shim: `han shim`, with `han` this very executable.
+    pub fn of_current_exe() -> io::Result<Self> {
+        Ok(ShimCommand::new(std::env::current_exe()?, ["shim"]))
+    }
+
+    /// The arguments for a run of the shim: the prefix, then `verb_args`.
+    pub fn args(&self, verb_args: impl IntoIterator<Item = String>) -> Vec<String> {
+        self.prefix_args.iter().cloned().chain(verb_args).collect()
+    }
+}
+
 /// What to launch, and how confined.
 #[derive(Clone, Debug)]
 pub struct SandboxSpec {
@@ -95,8 +129,8 @@ pub struct SandboxSpec {
     pub allow_advisory: bool,
     /// Resource caps.
     pub limits: Limits,
-    /// The `han-agent-shim` program; default: `HAN_AGENT_SHIM`, then next to the current executable.
-    pub shim: Option<PathBuf>,
+    /// The program that runs inside the sandbox as the shim.
+    pub shim: ShimCommand,
     /// The loopback port the proxy has inside the sandbox; `None` lets the backend choose. A host that writes
     /// config files naming the port before launch picks one with [`pick_inside_port`].
     pub inside_port: Option<u16>,
@@ -287,34 +321,6 @@ fn auto_backend() -> SandboxBackend {
         .find(|b| b.available)
         .map(|b| b.backend)
         .unwrap_or(SandboxBackend::None)
-}
-
-/// The shim program to put inside the sandbox.
-pub(crate) fn shim_path(spec: &SandboxSpec) -> Result<PathBuf, SandboxError> {
-    if let Some(p) = &spec.shim {
-        return Ok(p.clone());
-    }
-    if let Some(p) = std::env::var_os("HAN_AGENT_SHIM") {
-        return Ok(PathBuf::from(p));
-    }
-    let exe = std::env::current_exe()?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| SandboxError::Invalid("no executable directory".into()))?;
-    let name = if cfg!(windows) {
-        "han-agent-shim.exe"
-    } else {
-        "han-agent-shim"
-    };
-    for d in [Some(dir), dir.parent()].into_iter().flatten() {
-        let p = d.join(name);
-        if p.is_file() {
-            return Ok(p);
-        }
-    }
-    Err(SandboxError::Invalid(format!(
-        "cannot find {name}; set HAN_AGENT_SHIM"
-    )))
 }
 
 /// A random hex string from the OS CSPRNG.

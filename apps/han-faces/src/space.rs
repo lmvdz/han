@@ -1,8 +1,8 @@
 //! `han space`: follow a space and list the followed ones, through the running node (a face over its pipe).
 //!
-//! * `han space follow <space> --home <ticket>` makes the node follow a space this person already belongs to.
+//! * `han space follow <space> [--home <ticket>]` makes the node follow a space this person already belongs to.
 //! * `han space list` prints the spaces the node follows, with the state of each link.
-//! * `han space create --name N --home <ticket>` creates a space at that home, owned by this person.
+//! * `han space create --name N [--home <ticket>]` creates a space at that home, owned by this person.
 //! * `han space member <space> <actor> <role>` gives an actor a role (an owner's command).
 //! * `han space policy <space> <file>` replaces the space's policy with the JSON in the file.
 
@@ -12,8 +12,7 @@ use clap::{Args, Subcommand};
 use han_node::NodeApi;
 use han_node::api::{CallResult, Command, Query, Row, ViewEvent, Window};
 use han_node::rpc::{RpcClient, default_endpoint};
-
-use crate::home::HomeOpts;
+use han_registry::HomeRef;
 
 /// Options of `han space`.
 #[derive(Args)]
@@ -34,8 +33,10 @@ enum SpaceCmd {
     Follow {
         /// The space id.
         space: String,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The space's home: a home ticket (`han1home.…`) or a ServerName. Default: the server the space id
+        /// names.
+        #[arg(long)]
+        home: Option<HomeRef>,
     },
     /// Lists the spaces the node follows.
     List,
@@ -50,8 +51,10 @@ enum SpaceCmd {
         /// `invite`, `open` or `closed`.
         #[arg(long, default_value = "invite")]
         join: String,
-        #[command(flatten)]
-        home: HomeOpts,
+        /// The home that sequences it: a home ticket (`han1home.…`) or a ServerName. Default: the home of this
+        /// device's actor.
+        #[arg(long)]
+        home: Option<HomeRef>,
     },
     /// Gives an actor a role in a space: `owner`, `member`, `guest`, `banned` or `none`.
     Member {
@@ -71,6 +74,7 @@ enum SpaceCmd {
     },
 }
 
+/// Runs `han space` against the running node.
 pub async fn run(args: SpaceArgs) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = args
         .endpoint
@@ -79,20 +83,9 @@ pub async fn run(args: SpaceArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = RpcClient::connect(&endpoint).await?;
     match args.cmd {
         SpaceCmd::Follow { space, home } => {
-            // The space id ends in its home's ServerName, which stands in for `--home-server`.
-            let choice = home
-                .resolve(Some(space.as_str()))?
-                .ok_or("give --home <ticket>, or --home-node (and --home-server)")?;
-            if let Some(t) = &choice.pin {
-                client
-                    .call(Command::HomePin {
-                        ticket: t.to_text(),
-                    })
-                    .await?;
-            }
             client
                 .call(Command::SpaceFollow {
-                    home: choice.home,
+                    home,
                     space: space.clone(),
                 })
                 .await?;
@@ -123,19 +116,9 @@ pub async fn run(args: SpaceArgs) -> Result<(), Box<dyn std::error::Error>> {
             join,
             home,
         } => {
-            let choice = home
-                .resolve(None)?
-                .ok_or("give --home <ticket>, or --home-node with --home-server")?;
-            if let Some(t) = &choice.pin {
-                client
-                    .call(Command::HomePin {
-                        ticket: t.to_text(),
-                    })
-                    .await?;
-            }
             match client
                 .call(Command::SpaceCreate {
-                    home: choice.home,
+                    home,
                     name,
                     visibility,
                     join,

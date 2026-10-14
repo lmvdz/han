@@ -195,9 +195,7 @@ mod linux {
         restart_stale: bool,
         dry: bool,
     ) -> Res<()> {
-        if !han_node::agents::valid_os_user(node_user)
-            || !han_node::agents::valid_os_user(exec_user)
-        {
+        if !han_registry::valid_os_user(node_user) || !han_registry::valid_os_user(exec_user) {
             return Err("an OS user name starts with a lowercase letter or _, then lowercase letters, digits, - and _".into());
         }
         if !dry && !is_root() {

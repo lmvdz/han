@@ -39,6 +39,7 @@ enum OutboxCmd {
     },
 }
 
+/// Runs `han outbox` against the running node.
 pub async fn run(args: OutboxArgs) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = args
         .endpoint

@@ -8,15 +8,16 @@
 //!   proxy's MCP tunnel (`CONNECT han-mcp.invalid:1` with the session token) and copies stdin to the tunnel
 //!   and the tunnel to stdout, so han-mcp itself runs outside the sandbox (SR-29).
 //!
-//! Usage (the `han-agent-shim` binary, `han shim` and `han` itself call [`main`]):
+//! Usage (`han shim` calls [`main`]):
 //!
 //! ```text
-//! han-agent-shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args…
-//! han-agent-shim mcp-stub --proxy 127.0.0.1:P --token T
+//! han shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args…
+//! han shim mcp-stub --proxy 127.0.0.1:P --token T
 //! ```
 //!
-//! The sandboxes run whatever program the host names as its shim with these verbs first, so a program
-//! offered as the shim must take them as its first argument: `han host` offers `han` itself, which does.
+//! The sandboxes run the [`crate::sandbox::ShimCommand`] the host gives them, program and leading arguments
+//! as given, then these verbs. `han host` gives `han` itself with `shim` in front, and nothing else is looked
+//! for.
 
 use std::io;
 use std::net::SocketAddr;
@@ -179,7 +180,7 @@ async fn mcp_stub(proxy: SocketAddr, token: &str) -> io::Result<()> {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: han-agent-shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args...\n       han-agent-shim mcp-stub --proxy 127.0.0.1:P --token T"
+        "usage: han shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args...\n       han shim mcp-stub --proxy 127.0.0.1:P --token T"
     );
     2
 }
@@ -193,7 +194,7 @@ pub fn main(args: Vec<String>) -> i32 {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("han-agent-shim: {e}");
+            eprintln!("han shim: {e}");
             return 1;
         }
     };
@@ -231,7 +232,7 @@ async fn run(args: Vec<String>) -> i32 {
             let listener = match TcpListener::bind(("127.0.0.1", port)).await {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("han-agent-shim: listen on 127.0.0.1:{port}: {e}");
+                    eprintln!("han shim: listen on 127.0.0.1:{port}: {e}");
                     return 1;
                 }
             };
@@ -251,7 +252,7 @@ async fn run(args: Vec<String>) -> i32 {
             match status {
                 Ok(s) => s.code().unwrap_or(1),
                 Err(e) => {
-                    eprintln!("han-agent-shim: start {program}: {e}");
+                    eprintln!("han shim: start {program}: {e}");
                     127
                 }
             }
@@ -266,7 +267,7 @@ async fn run(args: Vec<String>) -> i32 {
             match mcp_stub(proxy, &token).await {
                 Ok(()) => 0,
                 Err(e) => {
-                    eprintln!("han-agent-shim: mcp tunnel: {e}");
+                    eprintln!("han shim: mcp tunnel: {e}");
                     1
                 }
             }

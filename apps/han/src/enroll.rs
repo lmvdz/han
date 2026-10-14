@@ -14,8 +14,8 @@ use std::time::Duration;
 use han_node::NodeApi;
 use han_node::api::{CallResult, Command, NodeError, Query, Row, ViewEvent, Window};
 use han_node::rpc::RpcClient;
+use han_registry::HomeRef;
 
-use crate::home::HomeOpts;
 use crate::seqadmin::{self, Register};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
@@ -33,7 +33,7 @@ pub struct Enroll<'a> {
     /// The operator.
     pub operator: &'a str,
     /// The home, as the command line named it.
-    pub home: &'a HomeOpts,
+    pub home: Option<&'a HomeRef>,
     /// The home's data directory, when this machine runs the home (so its admin socket is reachable).
     pub home_data: Option<&'a Path>,
     /// The space to make the actor a member of.
@@ -82,9 +82,7 @@ pub async fn run(e: &Enroll<'_>) -> Res<Outcome> {
     let mut out = Outcome::default();
     let ticket = e
         .home
-        .home
-        .clone()
-        .unwrap_or_else(|| "<home ticket>".into());
+        .map_or_else(|| "<home ticket>".to_owned(), ToString::to_string);
 
     // 1. the profile
     let registered = match e.home_data {
@@ -265,23 +263,14 @@ pub enum Pending {
 pub async fn confirm(
     client: &RpcClient,
     actor: &str,
-    home: &HomeOpts,
+    home: Option<&HomeRef>,
     operator: &str,
     tries: u32,
 ) -> Result<bool, Pending> {
     let profile = format!("profile:{actor}");
-    let choice = home
-        .resolve(Some(actor))
-        .map_err(Pending::Other)?
-        .ok_or_else(|| {
-            Pending::Other("give --home <ticket>, or --home-node (and --home-server)".into())
-        })?;
-    crate::agent::pin(client, &choice)
-        .await
-        .map_err(|e| Pending::Other(e.to_string()))?;
     let _ = client
         .call(Command::SpaceFollow {
-            home: choice.home,
+            home: home.cloned(),
             space: profile.clone(),
         })
         .await;

@@ -7,15 +7,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use han_host::proxy::{AllowEntry, Proxy, ProxyConfig, ProxyHandle};
-use han_host::sandbox::{self, Limits, Preference, ProxyTarget, SandboxSpec};
+use han_host::sandbox::{self, Limits, Preference, ProxyTarget, SandboxSpec, ShimCommand};
 use han_host::toolchain::{self, ToolchainConfig};
 use han_node::api::SandboxBackend;
 use tokio::io::AsyncReadExt;
 
 const TOKEN: &str = "tok-TOOLS-AAAAAAAAAAAAAAAAAAA";
 
-fn shim_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim"))
+mod production_shim;
+
+fn shim_exe() -> ShimCommand {
+    production_shim::shim()
 }
 
 fn available(b: SandboxBackend) -> bool {
@@ -154,7 +156,7 @@ async fn run(
             wall_time: Some(Duration::from_secs(280)),
             ..Limits::default()
         },
-        shim: Some(shim_exe()),
+        shim: shim_exe(),
         inside_port: None,
     };
     let mut sb = sandbox::launch(spec)

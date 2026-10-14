@@ -5,66 +5,25 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::Args;
 use han_net::wellknown::Fetcher;
 use han_net::{HomeTicket, IrohOptions, IrohTransport};
-use han_node::api::{Command, HomeRef, NodeError};
+use han_node::api::{Command, NodeError};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyError, KeyStore, KeyringStore};
 use han_node::supervisor::NoSupervisor;
 use han_node::{Node, NodeApi, NodeConfig, NodeParts, WellKnownKeys};
+use han_registry::HomeRef;
 use han_seq::SystemClock;
 
 use crate::seq::relay_choice;
 
-/// Where the space's home is, as the supervisor passes it.
-#[derive(Args, Clone, Debug)]
-pub struct HomeArgs {
-    /// The home's ServerName (not needed when `--home-ticket` is given).
-    #[arg(long)]
-    pub home_server: Option<String>,
-    /// The home's node id (not needed when `--home-ticket` is given).
-    #[arg(long)]
-    pub home_node: Option<String>,
-    /// The home's direct addresses.
-    #[arg(long)]
-    pub home_addr: Vec<String>,
-    /// The home's relays.
-    #[arg(long)]
-    pub home_relay: Vec<String>,
-    /// A home ticket (`han1home.…`) to pin, for a home with no HTTPS well-known: the role's node then trusts
-    /// the home's node and receipt keys as the person's node does. The supervisor passes the one its node
-    /// pinned in the environment.
-    #[arg(long, env = "HAN_HOME_TICKET", hide_env_values = true)]
-    pub home_ticket: Option<String>,
-}
-
-impl HomeArgs {
-    /// The home as the node API takes it: from the flags, else from the ticket.
-    pub fn home_ref(&self) -> Result<HomeRef, String> {
-        if let (Some(server), Some(node)) = (&self.home_server, &self.home_node) {
-            return Ok(HomeRef {
-                server: server.clone(),
-                node: node.clone(),
-                addrs: self.home_addr.clone(),
-                relays: self.home_relay.clone(),
-            });
-        }
-        let ticket = self
-            .home_ticket
-            .as_deref()
-            .and_then(|t| HomeTicket::parse(t.trim()))
-            .ok_or("give --home-ticket, or --home-server and --home-node")?;
-        Ok(HomeRef {
-            server: ticket.server,
-            node: ticket.node.node,
-            addrs: ticket.node.addrs,
-            relays: ticket.node.relays,
-        })
-    }
-
-    /// The home's ServerName.
-    pub fn server(&self) -> Result<String, String> {
-        self.home_ref().map(|h| h.server)
+/// The ServerName of the home `home` names, for defaults that follow it (the executor of a space is
+/// `@exec:<server>`).
+pub fn server_of(home: &HomeRef) -> Result<String, String> {
+    match home {
+        HomeRef::Server(s) => Ok(s.clone()),
+        HomeRef::Ticket(t) => HomeTicket::parse(t.trim())
+            .map(|t| t.server)
+            .ok_or_else(|| "not a home ticket (han1home.…)".to_owned()),
     }
 }
 
@@ -136,7 +95,7 @@ pub async fn start(
     keys: &Path,
     data: &Path,
     relay: &str,
-    home: &HomeArgs,
+    home: &HomeRef,
     space: &str,
 ) -> Result<RoleNode, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(data)?;
@@ -159,15 +118,9 @@ pub async fn start(
         server_keys: Arc::new(WellKnownKeys::new(Fetcher::new())),
         supervisor: Arc::new(NoSupervisor),
     })?;
-    if let Some(ticket) = &home.home_ticket {
-        node.call(Command::HomePin {
-            ticket: ticket.trim().to_owned(),
-        })
-        .await?;
-    }
     match node
         .call(Command::SpaceFollow {
-            home: home.home_ref()?,
+            home: Some(home.clone()),
             space: space.to_owned(),
         })
         .await

@@ -32,7 +32,8 @@ pub struct World {
     pub clock: Arc<TestClock>,
     pub home: Arc<Home>,
     pub keys: Arc<StaticKeys>,
-    pub home_ref: HomeRef,
+    /// How a command names the home: by its ServerName, which the world's well-known document answers.
+    pub home_ref: Option<HomeRef>,
     /// Answers `/.well-known/han` for the home from memory (Z4: a ticket's node is confirmed there).
     pub fetcher: Fetcher,
     pub dir: std::path::PathBuf,
@@ -82,13 +83,7 @@ impl World {
         home.set_nodes(vec![pubkey(200)]);
         let keys = Arc::new(StaticKeys::new());
         keys.set(SERVER, home.server_keys());
-        let home_ref = HomeRef {
-            server: SERVER.into(),
-            node: pubkey(200),
-            addrs: vec![],
-            // The memory network ignores addresses; tickets need one to parse.
-            relays: vec!["https://mem.invalid".into()],
-        };
+        let home_ref = Some(HomeRef::Server(SERVER.into()));
         let fetcher = Fetcher::new().with_document(WellKnown {
             server: SERVER.into(),
             sequencer: vec![han_net::NodeAddr {

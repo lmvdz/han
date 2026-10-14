@@ -417,7 +417,7 @@ With `--os-user` the directory is `/var/lib/han-exec`, where the unit reads ever
 
 Put the App's PEM there as `han-exec` with mode 600 (`sudo -u han-exec install -m 600 /dev/stdin /var/lib/han-exec/github-app.pem < key.pem`); nothing else on the runner can read it.
 
-`exec.env` holds `HAN_SERVER`, `HAN_SPACE`, `HAN_RELAY` and `HAN_HOME_TICKET` (a ticket holds public keys and addresses, no secret). The unit is `integrations/runner/han-exec.service`:
+`exec.env` holds `HAN_SERVER`, `HAN_SPACE`, `HAN_RELAY` and `HAN_HOME` (a ticket holds public keys and addresses, no secret). The unit is `integrations/runner/han-exec.service`:
 
 ```ini
 [Unit]
@@ -429,7 +429,7 @@ Wants=network-online.target
 User=han-exec
 Group=han-exec
 EnvironmentFile=/var/lib/han-exec/exec.env
-ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home-ticket ${HAN_HOME_TICKET} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /var/lib/han-exec/exec.json --relay ${HAN_RELAY}
+ExecStart=/usr/local/bin/han exec --actor @exec:${HAN_SERVER} --space ${HAN_SPACE} --home ${HAN_HOME} --keys /var/lib/han-exec --data /var/lib/han-exec/state --config /var/lib/han-exec/exec.json --relay ${HAN_RELAY}
 KillSignal=SIGINT
 Restart=always
 RestartSec=5
@@ -455,7 +455,7 @@ SystemCallFilter=~@privileged @resources
 WantedBy=multi-user.target
 ```
 
-`AF_NETLINK` is what the QUIC endpoint needs to watch the network, the same as `han-seq` and `han-node`. When the key, profile, config and env are ready, an admin enables it: `sudo systemctl enable --now han-exec`. On a device with a desktop the same executor runs by hand: `han exec --actor @exec:<server> --space <space> --home-ticket <ticket> --keys <dir> --data <dir>/state --config <dir>/exec.json`.
+`AF_NETLINK` is what the QUIC endpoint needs to watch the network, the same as `han-seq` and `han-node`. When the key, profile, config and env are ready, an admin enables it: `sudo systemctl enable --now han-exec`. On a device with a desktop the same executor runs by hand: `han exec --actor @exec:<server> --space <space> --home <ticket> --keys <dir> --data <dir>/state --config <dir>/exec.json`.
 
 ## 10. GitHub App permissions for writes
 

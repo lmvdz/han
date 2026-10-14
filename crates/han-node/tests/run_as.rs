@@ -1,13 +1,13 @@
-//! A host as another OS user (SR-83): the supervisor leaves the arguments for the unit and starts it with
+//! A host as another OS user (SR-83): the supervisor leaves the spec for the unit and starts it with
 //! `systemctl`, with no privilege of its own. A fake `systemctl` stands in for the real one.
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt as _;
 
 use han_node::supervisor::{
-    ProcessSpawner, Role, RoleSpec, RoleStatus, RunAs, Supervisor, SupervisorError, spawn_file,
-    unit_of,
+    ProcessSpawner, RoleSpec, RoleStatus, Supervisor, SupervisorError, unit_of,
 };
+use han_registry::{HostSpec, RunAs, unit_spec_file};
 
 fn fake_systemctl(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("systemctl");
@@ -22,12 +22,21 @@ fn fake_systemctl(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
-fn spec(state: &std::path::Path, user: &str, env: Vec<(String, String)>) -> RoleSpec {
+fn host_spec(state: &std::path::Path) -> HostSpec {
+    serde_json::from_value(serde_json::json!({
+        "space": "s1:a",
+        "agent": "@coder:a",
+        "harness": {"name": "pi"},
+        "home": {"ticket": "han1home.xyz"},
+        "dirs": {"state": state, "keys": state, "login": state.join("claude-config")}
+    }))
+    .unwrap()
+}
+
+fn spec(state: &std::path::Path, user: &str) -> RoleSpec {
     RoleSpec {
-        role: Role::Host,
         name: "host-@coder:a#1".into(),
-        args: vec!["--agent".into(), "@coder:a".into()],
-        env,
+        spec: host_spec(state),
         run_as: Some(RunAs {
             os_user: user.into(),
             state_dir: state.to_path_buf(),
@@ -41,16 +50,12 @@ fn a_host_as_another_user_goes_through_its_unit() {
     let state = dir.join("state");
     std::fs::create_dir_all(&dir).unwrap();
     let spawner = ProcessSpawner::new("/nonexistent/han").with_systemctl(fake_systemctl(&dir));
-    let ticket = ("HAN_HOME_TICKET".to_owned(), "han1home.xyz".to_owned());
 
-    spawner
-        .start(spec(&state, "han-agent1", vec![ticket.clone()]))
-        .unwrap();
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(spawn_file(&state)).unwrap()).unwrap();
+    spawner.start(spec(&state, "han-agent1")).unwrap();
+    // the unit reads the spec the node left for it (`han host --spec <that file>`)
     assert_eq!(
-        doc["args"],
-        serde_json::json!(["--agent", "@coder:a", "--home-ticket", "han1home.xyz"])
+        HostSpec::read(&unit_spec_file(&state).to_string_lossy()).unwrap(),
+        host_spec(&state)
     );
     let log = std::fs::read_to_string(dir.join("calls.log")).unwrap();
     assert!(
@@ -64,7 +69,7 @@ fn a_host_as_another_user_goes_through_its_unit() {
     );
     // one role per OS user at a time
     assert!(matches!(
-        spawner.start(spec(&state, "han-agent1", vec![])),
+        spawner.start(spec(&state, "han-agent1")),
         Err(SupervisorError::Running(_))
     ));
     spawner.stop("host-@coder:a#1").unwrap();
@@ -78,20 +83,12 @@ fn a_host_as_another_user_goes_through_its_unit() {
         Err(SupervisorError::NotRunning(_))
     ));
 
-    // no unit for a name that is not a user name, and no environment the unit cannot carry
+    // no unit for a name that is not a user name
     for bad in ["Root", "a b", "-x", "../x", ""] {
         assert!(matches!(
-            spawner.start(spec(&state, bad, vec![])),
+            spawner.start(spec(&state, bad)),
             Err(SupervisorError::Spawn(_))
         ));
     }
-    assert!(matches!(
-        spawner.start(spec(
-            &state,
-            "han-agent1",
-            vec![("ANTHROPIC_API_KEY".into(), "k".into())]
-        )),
-        Err(SupervisorError::Spawn(_))
-    ));
     let _ = std::fs::remove_dir_all(dir);
 }

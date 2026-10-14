@@ -420,7 +420,7 @@ impl<T: Transport> Inner<T> {
 
 async fn connect<T: Transport>(
     inner: &Inner<T>,
-    home: &crate::api::HomeRef,
+    home: &crate::home::HomeAddr,
     trusted: &[String],
 ) -> Result<Client<T::Conn>, NetError> {
     let addr = NodeAddr {
@@ -438,7 +438,7 @@ async fn connect<T: Transport>(
 /// Runs the link to `home` until the node shuts down: connect, follow, flush, and reconnect with backoff.
 pub(crate) async fn run_link<T: Transport>(
     inner: Arc<Inner<T>>,
-    home: crate::api::HomeRef,
+    home: crate::home::HomeAddr,
     trusted: Vec<String>,
     cmds_tx: mpsc::UnboundedSender<LinkCmd>,
     mut cmds: mpsc::UnboundedReceiver<LinkCmd>,

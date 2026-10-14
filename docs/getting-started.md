@@ -88,7 +88,7 @@ Agents hold no credentials. They propose an effect (`git_push`, `open_pr`, `http
 ```sh
 han executor add exec --operator @me:han.home.arpa --dir exec --space <space> --home <ticket> \
     --home-data home --repo <name>=<remote>
-han exec --actor @exec:han.home.arpa --space <space> --home-ticket <ticket> --keys exec --data exec/state --config exec/exec.json
+han exec --actor @exec:han.home.arpa --space <space> --home <ticket> --keys exec --data exec/state --config exec/exec.json
 ```
 
 `han executor add` does for the executor what `han agent add` does for an agent: its key where `han exec` looks for it (`<dir>/keys/`), `exec.json` from `--repo` (the name is what proposals call the repository; for a local one it is its path), `exec.env`, then the profile, the confirmation and the membership. A proposal that names an executor with no profile has nowhere to go, so register the executor before agents propose.

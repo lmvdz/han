@@ -10,6 +10,7 @@ use han_core::json::{self, Value};
 use han_core::{SigningKey, base64url, grammar, ids};
 use han_net::client::args;
 use han_net::{Client, HomeTicket, InviteTicket, NodeAddr, Transport};
+use han_registry::{Launch, LaunchError, Registry};
 use han_seq::Clock;
 use han_seq::ServerKey;
 use han_seq::build::{EntrySpec, entry_id, sign_entry, space_policy};
@@ -17,15 +18,15 @@ use han_seq::time::format_time;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::agents::{AgentsFile, HarnessInstall};
 use crate::api::{
     BoxFuture, CallResult, Command, HomeRef, NodeApi, NodeError, Query, RoleInfo, ViewEvent,
     ViewStream,
 };
 use crate::db::{NodeDb, OutboxRow};
+use crate::home::HomeAddr;
 use crate::keys::{DEVICE_KEY, FileKeyStore, KeyStore};
 use crate::retry::{Disposition, Via, disposition, node_error as map_net_error, stored_error};
-use crate::supervisor::{Role, RoleSpec, RoleStatus, RunAs, Supervisor, SupervisorError};
+use crate::supervisor::{RoleSpec, RoleStatus, Supervisor, SupervisorError};
 use crate::sync::{LinkCmd, LinkHandle, ServerKeys, run_link};
 pub use crate::views::Freshness;
 use crate::views::{Engine, NodeInfo};
@@ -109,7 +110,7 @@ pub(crate) struct Inner<T: Transport> {
     pub pins: Mutex<HashMap<String, HomeTicket>>,
     key_store: Arc<dyn KeyStore>,
     supervisor: Arc<dyn Supervisor>,
-    links: Mutex<HashMap<String, (HomeRef, LinkHandle<T>)>>,
+    links: Mutex<HashMap<String, (HomeAddr, LinkHandle<T>)>>,
     space_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Outbox rows waiting out a backoff, by row id: the clock reading (ms) before which they are not tried.
     outbox_retry_at: Mutex<HashMap<u64, u64>>,
@@ -146,8 +147,8 @@ pub(crate) enum Outcome {
 const PIN_PREFIX: &str = "home-pin/";
 
 /// Where to dial the home a ticket names.
-fn home_of_ticket(t: &HomeTicket) -> HomeRef {
-    HomeRef {
+fn home_of_ticket(t: &HomeTicket) -> HomeAddr {
+    HomeAddr {
         server: t.server.clone(),
         node: t.node.node.clone(),
         addrs: t.node.addrs.clone(),
@@ -654,7 +655,7 @@ impl<T: Transport> Node<T> {
 
     // ───────────────────────── links ─────────────────────────
 
-    fn ensure_link(&self, home: &HomeRef, trusted: Vec<String>) {
+    fn ensure_link(&self, home: &HomeAddr, trusted: Vec<String>) {
         let mut links = self.inner.links.lock().unwrap_or_else(|p| p.into_inner());
         if links.contains_key(&home.server) {
             return;
@@ -682,7 +683,7 @@ impl<T: Transport> Node<T> {
         );
     }
 
-    fn home_ref(&self, server: &str) -> Option<HomeRef> {
+    fn home_ref(&self, server: &str) -> Option<HomeAddr> {
         self.inner
             .links
             .lock()
@@ -691,8 +692,84 @@ impl<T: Transport> Node<T> {
             .map(|(h, _)| h.clone())
     }
 
+    /// Pins the home a ticket names (ticket-pinned trust: its node and receipt keys are kept in `node.db` and
+    /// trusted as they stand), starts the link to it, and says where it is.
+    fn pin_home(&self, ticket: &str) -> Result<(HomeAddr, Vec<String>), NodeError> {
+        let inner = &self.inner;
+        let t = HomeTicket::parse(ticket.trim())
+            .ok_or_else(|| NodeError::invalid("not a home ticket"))?;
+        if t.node.addrs.is_empty() && t.node.relays.is_empty() {
+            return Err(NodeError::invalid("the ticket's node has no address"));
+        }
+        inner
+            .db
+            .set_config(&format!("{PIN_PREFIX}{}", t.server), &t.to_text())
+            .map_err(unavailable)?;
+        inner
+            .key_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&t.server);
+        let home = home_of_ticket(&t);
+        let trusted = vec![t.node.node.clone()];
+        inner
+            .pins
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(t.server.clone(), t);
+        self.ensure_link(&home, trusted.clone());
+        Ok((home, trusted))
+    }
+
+    /// Where to dial the home a command names, and which nodes may answer for it. A ticket is pinned; a
+    /// ServerName that is linked already is the link's; any other is looked up at its well-known. Without a
+    /// home, the server `default_server` stands in.
+    async fn resolve_home(
+        &self,
+        home: Option<&HomeRef>,
+        default_server: &str,
+    ) -> Result<(HomeAddr, Vec<String>), NodeError> {
+        let server = match home {
+            Some(HomeRef::Ticket(t)) => return self.pin_home(t),
+            Some(HomeRef::Server(s)) => s.as_str(),
+            None => default_server,
+        };
+        if !grammar::is_server_name(server) {
+            return Err(NodeError::invalid(format!(
+                "{server:?} is not a ServerName"
+            )));
+        }
+        if let Some(h) = self.home_ref(server) {
+            let trusted = vec![h.node.clone()];
+            return Ok((h, trusted));
+        }
+        let doc = self
+            .inner
+            .cfg
+            .fetcher
+            .wellknown(server)
+            .await
+            .map_err(|e| unavailable(format!("the home {server} cannot be found: {e}")))?;
+        let node = doc
+            .sequencer
+            .first()
+            .ok_or_else(|| NodeError::invalid(format!("{server} names no sequencer node")))?;
+        let addr = HomeAddr {
+            server: server.to_owned(),
+            node: node.node.clone(),
+            addrs: node.addrs.clone(),
+            relays: node.relays.clone(),
+        };
+        Ok((addr, doc.nodes()))
+    }
+
     /// Starts following `space`; false if it already is followed.
-    fn follow(&self, home: &HomeRef, trusted: Vec<String>, space: &str) -> Result<bool, NodeError> {
+    fn follow(
+        &self,
+        home: &HomeAddr,
+        trusted: Vec<String>,
+        space: &str,
+    ) -> Result<bool, NodeError> {
         let new = self.inner.db.add_follow(space, home).map_err(unavailable)?;
         if !new {
             return Ok(false);
@@ -932,11 +1009,10 @@ impl<T: Transport> Node<T> {
                         "visibility or join is not one of the policy's",
                     ));
                 }
-                if !grammar::is_server_name(&home.server) {
-                    return Err(NodeError::invalid("not a ServerName"));
-                }
+                let own = grammar::server_of(&inner.cfg.actor).unwrap_or_default();
+                let (home, trusted) = self.resolve_home(home.as_ref(), own).await?;
                 let space = format!("{}:{}", random_id(10), home.server);
-                self.follow(&home, vec![home.node.clone()], &space)?;
+                self.follow(&home, trusted, &space)?;
                 let created = self
                     .append(
                         &space,
@@ -962,7 +1038,7 @@ impl<T: Transport> Node<T> {
                 if inner.engine().has_space(&t.space) {
                     return Err(NodeError::conflict("the space is already followed"));
                 }
-                let home = HomeRef {
+                let home = HomeAddr {
                     server: t.server.clone(),
                     node: t.node.node.clone(),
                     addrs: t.node.addrs.clone(),
@@ -983,35 +1059,20 @@ impl<T: Transport> Node<T> {
                 Ok(CallResult::Space { space: t.space })
             }
             Command::HomePin { ticket } => {
-                let t = HomeTicket::parse(&ticket)
-                    .ok_or_else(|| NodeError::invalid("not a home ticket"))?;
-                if t.node.addrs.is_empty() && t.node.relays.is_empty() {
-                    return Err(NodeError::invalid("the ticket's node has no address"));
-                }
-                inner
-                    .db
-                    .set_config(&format!("{PIN_PREFIX}{}", t.server), &t.to_text())
-                    .map_err(unavailable)?;
-                inner
-                    .key_cache
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&t.server);
-                let home = home_of_ticket(&t);
-                let trusted = vec![t.node.node.clone()];
-                inner
-                    .pins
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(t.server.clone(), t);
-                self.ensure_link(&home, trusted);
+                self.pin_home(&ticket)?;
                 Ok(CallResult::Done)
             }
             Command::SpaceFollow { home, space } => {
                 if !grammar::is_space_id(&space) {
                     return Err(NodeError::invalid("not a SpaceId"));
                 }
-                if !self.follow(&home, vec![home.node.clone()], &space)? {
+                let (home, trusted) = self
+                    .resolve_home(
+                        home.as_ref(),
+                        grammar::server_of(&space).unwrap_or_default(),
+                    )
+                    .await?;
+                if !self.follow(&home, trusted, &space)? {
                     return Err(NodeError::conflict("the space is already followed"));
                 }
                 Ok(CallResult::Space { space })
@@ -1094,11 +1155,7 @@ impl<T: Transport> Node<T> {
                 )
                 .await
             }
-            Command::AgentCreate {
-                name,
-                server,
-                operator: _,
-            } => {
+            Command::AgentCreate { name, server } => {
                 let actor = format!("@{name}:{server}");
                 if !grammar::is_actor_id(&actor) || name.is_empty() {
                     return Err(NodeError::invalid("not an ActorId"));
@@ -1107,13 +1164,9 @@ impl<T: Transport> Node<T> {
                 // An agent that runs as another OS user keeps its key in its own state directory, where that
                 // user (and not the node's other keys) can read it.
                 let own = match &inner.cfg.data_dir {
-                    Some(dir) => {
-                        let file = AgentsFile::load(dir).map_err(NodeError::invalid)?;
-                        file.agent(&actor)
-                            .os_user
-                            .is_some()
-                            .then(|| file.keys_dir(dir, &actor).join("keys"))
-                    }
+                    Some(dir) => Registry::open(dir)
+                        .own_key_dir(&actor)
+                        .map_err(NodeError::invalid)?,
                     None => None,
                 };
                 let seed = match own {
@@ -1140,18 +1193,27 @@ impl<T: Transport> Node<T> {
                 harness,
                 repo,
                 issue,
+                home,
             } => {
                 self.require_followed(&space)?;
                 if !grammar::is_actor_id(&agent) {
                     return Err(NodeError::invalid("not an ActorId"));
                 }
-                let home = inner
+                let server = inner
                     .engine()
                     .home_of(&space)
-                    .and_then(|server| self.home_ref(&server))
                     .ok_or_else(|| NodeError::unavailable("no link to the space's home yet"))?;
-                // The agent's operator is the one its profile names (§4.3), never this node's actor.
+                // The agent's profile is where its operator is named. A home given with the command is how
+                // to reach it; the node follows the profile there if it does not yet.
                 let profile = format!("profile:{agent}");
+                if let Some(home) = &home
+                    && !inner.engine().has_space(&profile)
+                {
+                    let own = grammar::server_of(&agent).unwrap_or_default();
+                    let (addr, trusted) = self.resolve_home(Some(home), own).await?;
+                    self.follow(&addr, trusted, &profile)?;
+                }
+                // The agent's operator is the one its profile names (§4.3), never this node's actor.
                 let operator = {
                     let engine = inner.engine();
                     if !engine.has_space(&profile) {
@@ -1177,116 +1239,40 @@ impl<T: Transport> Node<T> {
                     Some(i) => format!("host-{agent}#{i}"),
                     None => format!("host-{agent}"),
                 };
-                let mut a = vec![
-                    "--space".to_owned(),
-                    space,
-                    "--agent".into(),
-                    agent.clone(),
-                    "--operator".into(),
-                    operator,
-                    "--home-server".into(),
-                    home.server.clone(),
-                    "--home-node".into(),
-                    home.node.clone(),
-                ];
-                for addr in &home.addrs {
-                    a.extend(["--home-addr".into(), addr.clone()]);
-                }
-                for relay in &home.relays {
-                    a.extend(["--home-relay".into(), relay.clone()]);
-                }
-                let mut run_as = None;
-                let mut harness_arg = harness.clone();
-                if let Some(dir) = &inner.cfg.data_dir {
-                    let file = AgentsFile::load(dir).map_err(NodeError::invalid)?;
-                    let state = file.state_dir(dir, &agent);
-                    a.extend([
-                        "--data".into(),
-                        state.to_string_lossy().into_owned(),
-                        "--keys".into(),
-                        file.keys_dir(dir, &agent).to_string_lossy().into_owned(),
-                        "--sandbox".into(),
-                        file.sandbox_of(&agent),
-                    ]);
-                    if file.agent(&agent).allow_advisory {
-                        a.push("--allow-advisory".into());
-                    }
-                    let tools = file.toolchain_spec(dir, &agent);
-                    if !tools.is_empty() {
-                        a.extend([
-                            "--toolchains".into(),
-                            serde_json::to_string(&tools)
-                                .map_err(|e| NodeError::invalid(e.to_string()))?,
-                        ]);
-                    }
-                    // The harness as `han agent setup-harness` installed it: node and adapter.
-                    let key = match harness.as_str() {
-                        "claude-code" => "claude",
-                        other => other,
-                    };
-                    // A driver file given as the harness is a path, not a record's name.
-                    let named = key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-                    let install = if named {
-                        HarnessInstall::load(dir, key).map_err(NodeError::invalid)?
-                    } else {
-                        None
-                    };
-                    match install {
-                        Some(h) => {
-                            a.extend([
-                                "--node".into(),
-                                h.node.to_string_lossy().into_owned(),
-                                "--adapter-dir".into(),
-                                h.adapter_dir.to_string_lossy().into_owned(),
-                            ]);
-                            if let Some(driver) = h.driver {
-                                harness_arg = driver.to_string_lossy().into_owned();
-                            }
-                        }
-                        None if matches!(key, "claude" | "pi") => {
-                            return Err(NodeError::unavailable(format!(
-                                "the {key} harness is not set up on this node: run `han agent setup-harness {key}`"
-                            )));
-                        }
-                        None => {}
-                    }
-                    if let Some(os_user) = file.agent(&agent).os_user {
-                        if !cfg!(target_os = "linux") {
-                            return Err(NodeError::unavailable(
-                                "running an agent as another OS user is for Linux runners",
-                            ));
-                        }
-                        run_as = Some(RunAs {
-                            os_user,
-                            state_dir: state,
-                        });
-                    }
-                }
-                a.extend(["--harness".into(), harness_arg]);
-                if let Some(r) = repo {
-                    a.extend(["--repo".into(), r]);
-                }
-                if let Some(i) = issue {
-                    a.extend(["--issue".into(), i]);
-                }
+                let data_dir = inner.cfg.data_dir.as_ref().ok_or_else(|| {
+                    NodeError::unavailable("this node has no data directory to launch agents from")
+                })?;
                 // A home joined by ticket has no well-known: the host's own node pins the same ticket.
-                let env = inner
+                let host_home = inner
                     .pins
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .get(&home.server)
-                    .map(|t| vec![("HAN_HOME_TICKET".to_owned(), t.to_text())])
-                    .unwrap_or_default();
+                    .get(&server)
+                    .map_or_else(
+                        || HomeRef::Server(server.clone()),
+                        |t| HomeRef::Ticket(t.to_text()),
+                    );
+                let resolved = Registry::open(data_dir)
+                    .resolve(&Launch {
+                        space,
+                        agent,
+                        operator,
+                        harness,
+                        repo,
+                        issue,
+                        home: host_home,
+                        executor: format!("@exec:{server}"),
+                    })
+                    .map_err(|e| match e {
+                        LaunchError::Invalid(m) => NodeError::invalid(m),
+                        LaunchError::Unavailable(m) => NodeError::unavailable(m),
+                    })?;
                 inner
                     .supervisor
                     .start(RoleSpec {
-                        role: Role::Host,
                         name,
-                        args: a,
-                        env,
-                        run_as,
+                        spec: resolved.spec,
+                        run_as: resolved.run_as,
                     })
                     .map_err(|e| match e {
                         SupervisorError::Running(_) => NodeError::conflict(e.to_string()),

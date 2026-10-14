@@ -25,6 +25,7 @@ use han_node::api::{BoxFuture, NodeApi};
 use han_vcs::Workspace;
 
 mod common;
+mod production_shim;
 use common::*;
 
 struct Bridge(Arc<dyn NodeApi>);
@@ -118,10 +119,8 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
             login_dir: Some(login),
             allow_hosts: Vec::new(),
             toolchains: Default::default(),
-            test_loopback_upstream: false,
-            test_roots: Vec::new(),
         },
-        shim: PathBuf::from(env!("CARGO_BIN_EXE_han-agent-shim")),
+        shim: production_shim::shim(),
         node,
         adapter_dir: adapter,
         model_key: None,
@@ -130,7 +129,7 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
     };
     let token = format!("live-token-{}", std::process::id());
     let bridge: Arc<dyn HostBridge> = Arc::new(Bridge(api));
-    let egress = Egress::start(&cfg, &bridge, &token, &workspace, &agent_dir, &temp)
+    let egress = Egress::start(&cfg, None, &bridge, &token, &workspace, &agent_dir, &temp)
         .await
         .expect("the proxy starts");
     let mut launched = egress

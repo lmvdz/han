@@ -1,0 +1,16 @@
+[package]
+name = "han-registry"
+description = "What a node tells the processes it launches, and what a machine knows about launching them: the HostSpec of a `han host`, the HomeRef that names a home, agents.json and the harness records."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ts-rs = "12"
+
+[lints]
+workspace = true
