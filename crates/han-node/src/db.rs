@@ -104,6 +104,8 @@ pub enum OutboxState {
     Sent,
     /// The home refused it for good.
     Rejected,
+    /// Delivery gave up after too many tries; `outbox_retry` queues it again.
+    Failed,
 }
 
 impl OutboxState {
@@ -112,6 +114,7 @@ impl OutboxState {
             OutboxState::Pending => "pending",
             OutboxState::Sent => "sent",
             OutboxState::Rejected => "rejected",
+            OutboxState::Failed => "failed",
         }
     }
 
@@ -119,6 +122,7 @@ impl OutboxState {
         match s {
             "sent" => OutboxState::Sent,
             "rejected" => OutboxState::Rejected,
+            "failed" => OutboxState::Failed,
             _ => OutboxState::Pending,
         }
     }
@@ -407,6 +411,32 @@ impl NodeDb {
         Ok(())
     }
 
+    /// Delivery gave up on the entry after too many tries; the last error stays with it.
+    pub fn outbox_failed(&self, id: u64, error: &str) -> Result<()> {
+        self.lock().execute(
+            "UPDATE outbox SET state = ?2, error = ?3 WHERE id = ?1",
+            params![
+                i64::try_from(id).unwrap_or(0),
+                OutboxState::Failed.name(),
+                error
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Queues a `failed` row again, with its tries counted from zero. False if there is no such failed row.
+    pub fn outbox_retry(&self, id: u64) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE outbox SET state = ?2, attempts = 0 WHERE id = ?1 AND state = ?3",
+            params![
+                i64::try_from(id).unwrap_or(0),
+                OutboxState::Pending.name(),
+                OutboxState::Failed.name()
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
     /// The format version recorded in the file.
     pub fn format(&self) -> Result<u32> {
         let v: String =
@@ -421,8 +451,12 @@ impl NodeDb {
 /// What the outbox knows of one row.
 #[derive(Clone, Debug)]
 pub struct OutboxInfo {
-    /// `pending`, `sent` or `rejected`.
+    /// `pending`, `sent`, `rejected` or `failed`.
     pub state: String,
+    /// The space.
+    pub space: String,
+    /// The entry's id.
+    pub entry_id: String,
     /// The receipt as JSON, once sent.
     pub receipt: Option<String>,
     /// The last error.
@@ -435,13 +469,15 @@ impl NodeDb {
         Ok(self
             .lock()
             .query_row(
-                "SELECT state, receipt, error FROM outbox WHERE id = ?1",
+                "SELECT state, receipt, error, space, entry_id FROM outbox WHERE id = ?1",
                 [i64::try_from(id).unwrap_or(0)],
                 |r| {
                     Ok(OutboxInfo {
                         state: r.get(0)?,
                         receipt: r.get(1)?,
                         error: r.get(2)?,
+                        space: r.get(3)?,
+                        entry_id: r.get(4)?,
                     })
                 },
             )

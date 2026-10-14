@@ -267,6 +267,14 @@ impl Shared {
         let _ = self.signals.send(s);
     }
 
+    /// Who must approve, as text.
+    fn waiting_for(&self) -> String {
+        self.cfg
+            .operator
+            .clone()
+            .unwrap_or_else(|| "an approver".into())
+    }
+
     /// The plan of a proposal, built by the host (never by the agent): git pushes carry the committed
     /// changeset and its digest, which the executor checks before landing.
     fn plan_for(&self, req: &ProposeRequest) -> Result<Value, String> {
@@ -349,6 +357,57 @@ impl Shared {
     }
 }
 
+/// How long a `propose` tool call waits for the home to accept a queued proposal before it answers "queued".
+const PROPOSE_WAIT: Duration = Duration::from_secs(10);
+
+/// How often the outbox entry of a queued proposal is looked at.
+const OUTBOX_POLL: Duration = Duration::from_millis(500);
+
+/// What became of an outbox entry.
+enum Fate {
+    /// The home ordered it.
+    Sent,
+    /// The home refused it, or delivery gave up; why.
+    Refused(String),
+    /// Still waiting.
+    Pending,
+}
+
+/// Follows outbox entry `outbox_id` until it is sent, refused or failed, or `wait` is over (or the session's
+/// status channel is closed).
+async fn follow_outbox(sh: &Shared, outbox_id: u64, wait: Duration) -> Fate {
+    let start = tokio::time::Instant::now();
+    loop {
+        let q = Query::Outbox {
+            space: Some(sh.cfg.space.clone()),
+            window: Window {
+                cursor: Some(format!("{:012}", outbox_id.saturating_sub(1))),
+                limit: 1,
+                ..Window::default()
+            },
+        };
+        if let Ok(rows) = snapshot(sh.api.as_ref(), q).await {
+            for r in rows {
+                if let Row::Outbox(o) = r
+                    && o.outbox_id == outbox_id
+                {
+                    match o.state.as_str() {
+                        "sent" => return Fate::Sent,
+                        "rejected" | "failed" => {
+                            return Fate::Refused(o.error.unwrap_or_else(|| o.state.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if sh.signals.is_closed() || start.elapsed() >= wait {
+            return Fate::Pending;
+        }
+        tokio::time::sleep(OUTBOX_POLL).await;
+    }
+}
+
 struct Bridge(Arc<Shared>);
 
 impl HostBridge for Bridge {
@@ -382,6 +441,44 @@ impl HostBridge for Bridge {
                 })
                 .await;
             match r {
+                Ok(CallResult::Queued { id, outbox_id, .. }) => {
+                    sh.proposals
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .push(id.clone());
+                    sh.signal(Signal::Summary(req.summary.clone()));
+                    // Not waiting for approval yet: the home has not accepted the proposal. Follow its
+                    // outbox entry for a little, so a quick answer is the tool's answer.
+                    sh.signal(Signal::ProposalQueued);
+                    match follow_outbox(sh, outbox_id, PROPOSE_WAIT).await {
+                        Fate::Sent => {
+                            sh.signal(Signal::WaitingApproval);
+                            ProposeAnswer::Proposed {
+                                id,
+                                waiting_for: sh.waiting_for(),
+                            }
+                        }
+                        Fate::Refused(why) => {
+                            sh.signal(Signal::ProposalRefused(why.clone()));
+                            ProposeAnswer::Refused {
+                                reason: format!("the home did not accept the proposal: {why}"),
+                            }
+                        }
+                        Fate::Pending => {
+                            let watched = Arc::clone(sh);
+                            tokio::spawn(async move {
+                                match follow_outbox(&watched, outbox_id, Duration::MAX).await {
+                                    Fate::Sent => watched.signal(Signal::WaitingApproval),
+                                    Fate::Refused(why) => {
+                                        watched.signal(Signal::ProposalRefused(why));
+                                    }
+                                    Fate::Pending => {}
+                                }
+                            });
+                            ProposeAnswer::Queued { id }
+                        }
+                    }
+                }
                 Ok(r) => match receipt_id(&r) {
                     Some(id) => {
                         sh.proposals
@@ -392,11 +489,7 @@ impl HostBridge for Bridge {
                         sh.signal(Signal::WaitingApproval);
                         ProposeAnswer::Proposed {
                             id,
-                            waiting_for: sh
-                                .cfg
-                                .operator
-                                .clone()
-                                .unwrap_or_else(|| "an approver".into()),
+                            waiting_for: sh.waiting_for(),
                         }
                     }
                     None => ProposeAnswer::Refused {

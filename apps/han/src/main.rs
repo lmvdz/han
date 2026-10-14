@@ -13,6 +13,7 @@ mod home;
 mod host;
 mod keys;
 mod node;
+mod outbox;
 mod rolenode;
 mod seq;
 mod seqadmin;
@@ -50,6 +51,8 @@ enum Cmd {
     Task(task::TaskArgs),
     /// Pair a new device into this person's profile, or revoke one, through the running node.
     Device(device::DeviceArgs),
+    /// List the entries signed here and their way to the home, or retry a failed one, through the running node.
+    Outbox(outbox::OutboxArgs),
     /// Run a home: the sequencer of one server on a QUIC endpoint.
     #[command(args_conflicts_with_subcommands = true)]
     Seq(Box<seq::SeqArgs>),
@@ -156,6 +159,7 @@ async fn run(cli: Cli) {
         Cmd::Space(a) => space::run(a).await,
         Cmd::Task(a) => task::run(a).await,
         Cmd::Device(a) => device::run(a).await,
+        Cmd::Outbox(a) => outbox::run(a).await,
         Cmd::Seq(a) => seq::run(*a).await,
         Cmd::Ticket(a) => seq::ticket(&a),
         Cmd::Dial(a) => dial::run(a).await,

@@ -292,6 +292,12 @@ pub enum Command {
         #[ts(optional)]
         cost: Option<(String, u64)>,
     },
+    /// Queues an outbox entry that `failed` (delivery gave up) again and tries to send it at once. The answer
+    /// is that of the entry: its receipt, its refusal, or `Queued`.
+    OutboxRetry {
+        /// The outbox id (`Queued` and the `Outbox` view carry it).
+        outbox_id: u64,
+    },
     /// Replaces the space's policy (`policy.set`); an owner's command.
     PolicySet {
         /// The space.
@@ -347,6 +353,7 @@ impl Command {
             | Command::BlobFetch { .. }
             | Command::EffectApprove { .. }
             | Command::EffectCancel { .. }
+            | Command::OutboxRetry { .. }
             | Command::PolicySet { .. } => CommandClass::Face,
             Command::TaskCreate { .. }
             | Command::TaskUpdate { .. }

@@ -86,6 +86,11 @@ pub enum Signal {
     Tokens(Tokens),
     /// A proposal waits for approval.
     WaitingApproval,
+    /// A proposal is signed but the home has not accepted it yet (it sits in the node's outbox); nobody can
+    /// approve it until it does.
+    ProposalQueued,
+    /// The home refused a proposal, or delivery gave up; the reason is shown.
+    ProposalRefused(String),
     /// The proposal was decided or ran; back to work.
     Resumed,
     /// The turn ended normally.
@@ -95,6 +100,9 @@ pub enum Signal {
     /// The work is finished.
     Done,
 }
+
+/// The step shown while a proposal waits in the node's outbox.
+pub const QUEUED_STEP: &str = "queued: waiting for the home to accept the proposal";
 
 /// Folds signals into the status of one session.
 #[derive(Clone, Debug)]
@@ -190,16 +198,32 @@ impl StatusDeriver {
             Signal::Summary(s) => b.summary = Some(bound(&s, MAX_SUMMARY)),
             Signal::Tokens(t) => b.tokens = Some(t),
             Signal::WaitingApproval => b.state = SessionState::WaitingApproval,
+            Signal::ProposalQueued => {
+                b.state = SessionState::Blocked;
+                b.step = QUEUED_STEP.into();
+            }
+            Signal::ProposalRefused(why) => {
+                b.state = SessionState::Blocked;
+                b.step = bound(&format!("proposal refused: {why}"), MAX_STEP);
+            }
             Signal::Resumed => b.state = SessionState::Working,
             Signal::TurnEnded => {
-                if b.state != SessionState::WaitingApproval {
+                // A proposal that waits (for the home, or for an approver) or was refused keeps the state and,
+                // when it is not an approval wait, its step: they say more than "waiting for input".
+                if !matches!(
+                    b.state,
+                    SessionState::WaitingApproval | SessionState::Blocked
+                ) {
                     b.state = SessionState::Idle;
                 }
                 b.tool = None;
-                b.step = match self.last_message.take() {
+                let step = match self.last_message.take() {
                     Some(m) => waiting_step(&m),
                     None => "waiting for input".into(),
                 };
+                if b.state != SessionState::Blocked {
+                    b.step = step;
+                }
             }
             Signal::Failed(why) => {
                 b.state = SessionState::Failed;
@@ -389,6 +413,22 @@ branch should I
         assert_eq!(s.state(), SessionState::WaitingApproval);
         s.apply(Signal::Resumed);
         assert_eq!(s.state(), SessionState::Working);
+    }
+
+    #[test]
+    fn a_queued_proposal_is_not_waiting_approval_and_a_refusal_shows_its_reason() {
+        let mut s = d();
+        s.apply(Signal::TurnStarted { step: "w".into() });
+        s.apply(Signal::ProposalQueued);
+        s.apply(Signal::TurnEnded);
+        assert_ne!(s.state(), SessionState::WaitingApproval);
+        assert_eq!(s.snapshot("t").step, QUEUED_STEP);
+        s.apply(Signal::WaitingApproval);
+        assert_eq!(s.state(), SessionState::WaitingApproval);
+        s.apply(Signal::ProposalRefused("@exec:h has no profile".into()));
+        s.apply(Signal::TurnEnded);
+        assert_eq!(s.state(), SessionState::Blocked);
+        assert!(s.snapshot("t").step.contains("has no profile"));
     }
 
     #[test]

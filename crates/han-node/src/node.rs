@@ -48,6 +48,10 @@ pub struct NodeConfig {
     pub retry: Duration,
     /// How often a link looks for entries in the outbox to send.
     pub flush_every: Duration,
+    /// How many tries the home may answer with a retry-later error before an outbox entry is marked `failed`.
+    pub outbox_max_attempts: u32,
+    /// The wait after the first such try; it doubles with each try, up to 60 times this (five minutes).
+    pub outbox_backoff: Duration,
     /// How often the node moves the views' clock when it runs by itself.
     pub tick_every: Duration,
     /// Fetches `/.well-known/han`, to confirm a ticket's node before it is dialed (Z4).
@@ -66,6 +70,8 @@ impl NodeConfig {
             connect_wait: Duration::from_secs(3),
             retry: Duration::from_secs(1),
             flush_every: Duration::from_secs(5),
+            outbox_max_attempts: 12,
+            outbox_backoff: Duration::from_secs(5),
             tick_every: Duration::from_secs(5),
             fetcher: han_net::wellknown::Fetcher::new(),
         }
@@ -104,6 +110,8 @@ pub(crate) struct Inner<T: Transport> {
     supervisor: Arc<dyn Supervisor>,
     links: Mutex<HashMap<String, (HomeRef, LinkHandle<T>)>>,
     space_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Outbox rows waiting out a backoff, by row id: the clock reading (ms) before which they are not tried.
+    outbox_retry_at: Mutex<HashMap<u64, u64>>,
     ticker: Mutex<Option<JoinHandle<()>>>,
     /// The work timelines of watched sessions, fed by their `han.timeline/1` items.
     pub timelines: Arc<crate::timeline::StreamTimelines>,
@@ -297,6 +305,9 @@ impl<T: Transport> Inner<T> {
                     "rejected" => Some(Outcome::Rejected(NodeError::denied(
                         row.error.unwrap_or_default(),
                     ))),
+                    "failed" => Some(Outcome::Rejected(NodeError::unavailable(
+                        row.error.unwrap_or_default(),
+                    ))),
                     _ => Some(Outcome::Offline),
                 },
                 _ => Some(Outcome::Offline),
@@ -305,6 +316,57 @@ impl<T: Transport> Inner<T> {
         mine
     }
 
+    /// Notes a try of `row` that reached no verdict. Returns the error to hand the caller if the entry has now
+    /// used up its tries (it is `failed`; the line moves on, which is what `rejected` does too), else sets the
+    /// wait before the next try. Only answers from the home count: a link that is down never gets here.
+    fn defer_row(&self, row: &OutboxRow, err: &NodeError, counts: bool) -> Option<NodeError> {
+        let _ = self.db.outbox_attempt(row.id, &err.to_string());
+        let attempts = row.attempts.saturating_add(1);
+        if counts && attempts >= self.cfg.outbox_max_attempts {
+            let why = format!("gave up after {attempts} tries: {err}");
+            let _ = self.db.outbox_failed(row.id, &why);
+            self.outbox_retry_at
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&row.id);
+            let kind = row.entry["kind"].as_str().unwrap_or("entry");
+            self.engine().note_error(
+                &format!("outbox #{} {kind} in {}: {why}", row.id, row.space),
+                &NodeError::unavailable(why.clone()),
+            );
+            return Some(NodeError::unavailable(why));
+        }
+        let base = u64::try_from(self.cfg.outbox_backoff.as_millis()).unwrap_or(u64::MAX);
+        let cap = base.saturating_mul(60);
+        let mut wait = base
+            .saturating_mul(1u64 << attempts.saturating_sub(1).min(16))
+            .min(cap);
+        if let NodeError::Unavailable {
+            retry_after_ms: Some(ms),
+            ..
+        } = err
+        {
+            wait = wait.max((*ms).min(cap));
+        }
+        self.outbox_retry_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(row.id, self.clock.now_ms().saturating_add(wait));
+        None
+    }
+
+    /// Whether `row` is still waiting out a backoff.
+    fn backing_off(&self, row: &OutboxRow) -> bool {
+        self.outbox_retry_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&row.id)
+            .is_some_and(|at| *at > self.clock.now_ms())
+    }
+
+    /// Sends `rows` of one space in order. A row the home keeps answering "later" holds the rows behind it
+    /// (R-07: finish what is stored before appending anything new to the space) until it is sent, refused or
+    /// `failed`; rows of other spaces are not held, each space having its own line.
     async fn send_rows(
         &self,
         server: &str,
@@ -314,6 +376,12 @@ impl<T: Transport> Inner<T> {
     ) -> Option<Outcome> {
         let mut mine = None;
         for row in rows {
+            if self.backing_off(&row) {
+                if want == Some(row.id) || mine.is_none() {
+                    mine = Some(Outcome::Offline);
+                }
+                break;
+            }
             let result = client.append(&row.entry, row.content.as_ref()).await;
             match result {
                 Ok(receipt) => {
@@ -329,6 +397,10 @@ impl<T: Transport> Inner<T> {
                     if let Err(e) = self.db.outbox_sent(row.id, &text) {
                         tracing::warn!("node.db: {e}");
                     }
+                    self.outbox_retry_at
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(&row.id);
                     if want == Some(row.id) {
                         mine = Some(Outcome::Sent(receipt));
                     }
@@ -341,7 +413,13 @@ impl<T: Transport> Inner<T> {
                             mine = Some(Outcome::Rejected(err));
                         }
                     } else {
-                        let _ = self.db.outbox_attempt(row.id, &err.to_string());
+                        let counts = matches!(e, han_net::NetError::Remote(_));
+                        if let Some(given_up) = self.defer_row(&row, &err, counts) {
+                            if want == Some(row.id) {
+                                mine = Some(Outcome::Rejected(given_up));
+                            }
+                            continue;
+                        }
                         if want == Some(row.id) || mine.is_none() {
                             mine = Some(Outcome::Offline);
                         }
@@ -429,6 +507,7 @@ impl<T: Transport> Node<T> {
             supervisor,
             links: Mutex::new(HashMap::new()),
             space_locks: Mutex::new(HashMap::new()),
+            outbox_retry_at: Mutex::new(HashMap::new()),
             ticker: Mutex::new(None),
             auto_admit: Mutex::new(HashMap::new()),
         });
@@ -1540,6 +1619,43 @@ impl<T: Transport> Node<T> {
                     .map_err(|e| NodeError::invalid(format!("body: {e}")))?;
                 let n = self.publish_item(&space, &session, &name, body).await?;
                 Ok(CallResult::Status { n })
+            }
+            Command::OutboxRetry { outbox_id } => {
+                let info = inner
+                    .db
+                    .outbox_get(outbox_id)
+                    .map_err(unavailable)?
+                    .ok_or_else(|| NodeError::not_found("no such outbox entry"))?;
+                if info.state != "failed" {
+                    return Err(NodeError::conflict(format!(
+                        "the entry is {}, not failed",
+                        info.state
+                    )));
+                }
+                inner.db.outbox_retry(outbox_id).map_err(unavailable)?;
+                inner
+                    .outbox_retry_at
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(&outbox_id);
+                inner.refresh_outbox(&info.space);
+                match inner
+                    .flush_space(&info.space, Some(outbox_id), inner.cfg.connect_wait)
+                    .await
+                {
+                    Some(Outcome::Sent(r)) => Ok(CallResult::Receipt {
+                        space: r.space,
+                        seq: r.seq,
+                        id: r.id,
+                        time: r.time,
+                    }),
+                    Some(Outcome::Rejected(e)) => Err(e),
+                    _ => Ok(CallResult::Queued {
+                        outbox_id,
+                        space: info.space,
+                        id: info.entry_id,
+                    }),
+                }
             }
             Command::EffectCancel { space, proposal } => {
                 let found = inner.engine().plan_digest(&space, &proposal);

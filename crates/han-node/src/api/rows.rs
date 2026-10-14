@@ -783,7 +783,7 @@ pub struct OutboxRow {
     pub entry_id: String,
     /// The entry's kind.
     pub kind: String,
-    /// `pending`, `sent` or `rejected`.
+    /// `pending`, `sent`, `rejected` or `failed` (gave up after too many tries; `OutboxRetry` queues it again).
     pub state: String,
     /// Delivery attempts so far.
     pub attempts: u32,

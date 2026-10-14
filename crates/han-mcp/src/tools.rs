@@ -215,6 +215,14 @@ impl HanTools {
                     Some(json!({"status": "proposed", "id": id, "waiting_for": waiting_for}));
                 r
             }
+            ProposeAnswer::Queued { id } => {
+                let text = format!(
+                    "Queued as {id}: the home has not accepted the proposal yet, so nobody can approve it yet. It has not run. Do not propose it again; if the home refuses it, the session status says why."
+                );
+                let mut r = CallToolResult::success(vec![ContentBlock::text(text)]);
+                r.structured_content = Some(json!({"status": "queued", "id": id}));
+                r
+            }
             ProposeAnswer::Refused { reason } => {
                 let mut r =
                     CallToolResult::error(vec![ContentBlock::text(format!("Refused: {reason}"))]);
