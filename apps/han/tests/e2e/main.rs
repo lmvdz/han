@@ -611,6 +611,62 @@ async fn a_spent_budget_refuses_the_next_model_call_and_the_board_says_why() {
     );
 }
 
+/// Bug: a host proposed with `cost: None`, so a budgeted space always denied the proposal for having no cost.
+/// The cost is the proxy's measurement: after a paid model call the proposal carries it (in the space's
+/// unit), and a cost the agent claims is refused by the tool and never used. The proposal then gets past the
+/// cost check and meets the next rule: an agent in a budgeted space spends from a budgeted task (the dev
+/// stack's issue task has none). The exact amount is checked by the host's unit tests.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn a_proposal_after_a_priced_model_call_carries_the_measured_cost() {
+    let work = std::env::temp_dir().join(format!("han-e2e-cost-{}", std::process::id()));
+    let model = model::FakeModel::start(&work, 4, 6).await;
+    let ca = model.ca_file.to_string_lossy().into_owned();
+    let s = Stack::up(
+        "model-propose",
+        &[
+            "--budget",
+            "USD-cent=100",
+            "--model-url",
+            &model.url,
+            "--model-ca",
+            &ca,
+        ],
+    );
+    let c = s.client().await;
+    s.start_agent();
+    let row = s
+        .board_until(&c, "the model call to be counted", 120, |b| {
+            b.tokens.is_some_and(|t| t.cost == 10)
+        })
+        .await;
+    assert_eq!(row.budget.expect("the budget").spent, 10);
+    let results = || {
+        s.agent_log()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["event"] == "mcp_result")
+            .map(|v| v["result"].to_string())
+            .collect::<Vec<_>>()
+    };
+    until("both proposals to be answered", 120, || async {
+        results().len() >= 2
+    })
+    .await;
+    let answers = results();
+    // the cost the agent claimed is refused by the tool, before the home sees it
+    assert!(answers[0].contains("no `cost`"), "{answers:?}");
+    // the other proposal carries the measured cost, so the home's first complaint is no longer the cost
+    assert!(
+        !answers[1].contains("cost in the space's unit required"),
+        "{answers:?}"
+    );
+    assert!(
+        answers[1].contains("agents spend only from a budgeted task"),
+        "{answers:?}"
+    );
+}
+
 /// Bug: a budget that cannot be enforced was invisible. With no price table for the space's unit nothing is
 /// reserved, and the status says so instead of staying silent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
