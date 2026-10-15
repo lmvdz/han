@@ -422,7 +422,13 @@ mod linux {
                 ),
             );
         }
-        for unit in ["han-seq", "han-node"] {
+        let mut units: Vec<String> = ["han-seq", "han-node", "han-exec"]
+            .map(str::to_owned)
+            .into();
+        units.extend(active_agent_units());
+        for unit in &units {
+            let unit = unit.as_str();
+            let agent = unit.starts_with("han-agent@");
             let active = Command::new("systemctl")
                 .args(["is-active", unit])
                 .output()
@@ -432,9 +438,21 @@ mod linux {
             }
             let stale = unit_binary_replaced(unit);
             let needs = stale || (unit == "han-node" && group_added);
+            // An agent unit's cgroup holds its sandboxed agent while a session runs: restarting then would
+            // kill it mid-session, so such a unit is reported, and restarted once idle.
+            let busy = agent && needs && unit_is_busy(unit);
             if !needs {
                 c.say("unchanged:", &format!("{unit} is running current code"));
+            } else if busy {
+                warnings = true;
+                c.say(
+                    "busy:",
+                    &format!(
+                        "{unit} runs a replaced binary and has a session running; not restarted (restart it when the session ends: systemctl restart {unit})"
+                    ),
+                );
             } else if restart_stale && !dry {
+                let since = std::time::SystemTime::now();
                 c.cmd(
                     "systemctl",
                     &["restart", unit],
@@ -449,7 +467,7 @@ mod linux {
                 )?;
                 // systemd has started the unit, which is not the same as it serving: the next command of a
                 // script would find no socket yet.
-                wait_ready(unit).await?;
+                wait_ready(unit, since).await?;
                 c.say("restarted:", &format!("{unit} (ready)"));
             } else {
                 warnings = true;
@@ -466,8 +484,35 @@ mod linux {
     }
 
     /// Waits until the restarted `unit` serves: han-seq on its admin socket, han-node on a status call.
-    async fn wait_ready(unit: &str) -> Res<()> {
+    async fn wait_ready(unit: &str, since: std::time::SystemTime) -> Res<()> {
         let timeout = crate::seqadmin::READY_TIMEOUT;
+        if let Some(name) = unit.strip_prefix("han-agent@") {
+            // The host rewrites its admission file when it starts; a file older than the restart is the last run's.
+            let file = han_registry::unit_admission_file(&Path::new(AGENTS_ROOT).join(name));
+            return Ok(crate::seqadmin::wait_until(
+                &format!(
+                    "{unit}: its host did not write {} after the restart, so it",
+                    file.display()
+                ),
+                timeout,
+                || admitted_since(&file, since),
+            )
+            .await?);
+        }
+        if unit == "han-exec" {
+            return Ok(crate::seqadmin::wait_until(
+                &format!("{unit}: systemd does not report it active, so it"),
+                timeout,
+                || async {
+                    if unit_active(unit) {
+                        Ok(())
+                    } else {
+                        Err("not active")
+                    }
+                },
+            )
+            .await?);
+        }
         if unit == "han-seq" {
             let data = Path::new(NODE_DATA).join("seq");
             return Ok(crate::seqadmin::wait_ready(&data, timeout).await?);
@@ -479,6 +524,81 @@ mod linux {
             || node_answers(&endpoint),
         )
         .await?)
+    }
+
+    /// Whether the host's admission file at `file` was written after `since` and admits the agent.
+    async fn admitted_since(file: &Path, since: std::time::SystemTime) -> Result<(), String> {
+        let fresh = std::fs::metadata(file)
+            .and_then(|m| m.modified())
+            .map_err(|e| e.to_string())?
+            >= since;
+        if !fresh {
+            return Err("the admission file is from before the restart".into());
+        }
+        let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+        if text.contains("\"Admitted\"") {
+            Ok(())
+        } else {
+            Err(format!("the host did not admit the agent: {}", text.trim()))
+        }
+    }
+
+    fn unit_active(unit: &str) -> bool {
+        Command::new("systemctl")
+            .args(["is-active", unit])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
+    }
+
+    /// The `han-agent@<user>.service` units that are active.
+    fn active_agent_units() -> Vec<String> {
+        let out = Command::new("systemctl")
+            .args([
+                "list-units",
+                "han-agent@*",
+                "--type=service",
+                "--state=active",
+                "--plain",
+                "--no-legend",
+            ])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        parse_agent_units(&out)
+    }
+
+    /// The unit names in `systemctl list-units --plain --no-legend` output that are agent units.
+    fn parse_agent_units(listing: &str) -> Vec<String> {
+        listing
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|u| u.starts_with("han-agent@") && u.ends_with(".service"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Whether the unit has a session running: processes in its cgroup besides its main process (the host).
+    fn unit_is_busy(unit: &str) -> bool {
+        let show = |prop: &str| {
+            Command::new("systemctl")
+                .args(["show", "-p", prop, "--value", unit])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_default()
+        };
+        let (main, cgroup) = (show("MainPID"), show("ControlGroup"));
+        let procs = std::fs::read_to_string(format!("/sys/fs/cgroup{cgroup}/cgroup.procs"))
+            .unwrap_or_default();
+        // Cannot tell: treat as busy rather than kill a session.
+        cgroup.is_empty() || has_other_processes(&procs, &main)
+    }
+
+    /// Whether `cgroup_procs` lists a pid other than `main`.
+    fn has_other_processes(cgroup_procs: &str, main: &str) -> bool {
+        cgroup_procs
+            .lines()
+            .map(str::trim)
+            .any(|p| !p.is_empty() && p != main)
     }
 
     /// Whether the node at `endpoint` answers a status call.
@@ -693,5 +813,52 @@ mod linux {
             )?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn agent_units_are_found_in_a_listing() {
+            let listing =
+                "han-agent@han-agent1.service loaded active running HAN agent host as han-agent1
+                           han-exec.service loaded active running x
+                           han-agent@a.service loaded active running y
+";
+            assert_eq!(
+                parse_agent_units(listing),
+                ["han-agent@han-agent1.service", "han-agent@a.service"]
+            );
+        }
+
+        #[test]
+        fn a_unit_with_more_than_its_host_runs_a_session() {
+            assert!(!has_other_processes(
+                "42
+", "42"
+            ));
+            assert!(!has_other_processes("", "42"));
+            assert!(has_other_processes(
+                "42
+77
+", "42"
+            ));
+        }
+
+        #[tokio::test]
+        async fn an_admission_file_from_before_the_restart_is_not_ready() {
+            let dir = std::env::temp_dir().join(format!("han-adm-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join("admission.json");
+            std::fs::write(&file, r#"{"state":"Admitted"}"#).unwrap();
+            let before = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+            let after = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+            assert!(admitted_since(&file, before).await.is_ok());
+            assert!(admitted_since(&file, after).await.is_err());
+            std::fs::write(&file, r#"{"state":"Refused"}"#).unwrap();
+            assert!(admitted_since(&file, before).await.is_err());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

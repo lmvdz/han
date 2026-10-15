@@ -350,3 +350,86 @@ async fn an_os_user_agents_sandbox_is_checked_by_its_host_not_by_the_node() {
     })
     .await;
 }
+
+/// The `-p` properties of the installed `han-agent@` unit's [Service] section that confine a process (not the
+/// command, user or paths), with `%i` filled in.
+fn confinement_properties(unit: &str, instance: &str) -> Vec<String> {
+    unit.lines()
+        .map(str::trim)
+        .skip_while(|l| *l != "[Service]")
+        .skip(1)
+        .filter(|l| !l.starts_with('#') && l.contains('='))
+        .filter(|l| {
+            ![
+                "ExecStart=",
+                "Environment=",
+                "WorkingDirectory=",
+                "User=",
+                "Group=",
+                "KillSignal=",
+                "Restart=",
+            ]
+            .iter()
+            .any(|p| l.starts_with(p))
+        })
+        .map(|l| l.replace("%i", instance))
+        .collect()
+}
+
+/// The host's admission probe runs bubblewrap with the launch's own argv, so under the unit's real directives
+/// (taken from the installed `han-agent@.service`) it must admit. With `ProtectKernelTunables=yes` in the unit
+/// the probe, like the launch, failed with "bwrap: Can't mount proc on /newroot/proc: Operation not permitted".
+/// Needs bubblewrap in the container.
+#[test]
+#[ignore = "end to end, as root in a systemd container: run with --ignored and HAN_E2E_OS_USERS=1"]
+fn the_host_admits_its_sandbox_under_the_agent_units_directives() {
+    if std::env::var_os("HAN_E2E_OS_USERS").is_none() || !cfg!(target_os = "linux") {
+        eprintln!("skipped: needs HAN_E2E_OS_USERS=1, Linux, root and systemd");
+        return;
+    }
+    han(&["runner", "setup", "--agents", "1"]);
+    let unit = std::fs::read_to_string("/etc/systemd/system/han-agent@.service").unwrap();
+    let state = format!("/var/lib/han-agents/{AGENT_USER}");
+    let spawn = format!("{state}/spawn");
+    std::fs::create_dir_all(&spawn).unwrap();
+    let spec = serde_json::json!({
+        "space": "s1:han.example",
+        "agent": "@coder:han.example",
+        "harness": {"name": "fake"},
+        "home": {"server": "han.example"},
+        "sandbox": {"backend": "bwrap"},
+        "dirs": {"state": state, "keys": format!("{state}/keys"), "login": format!("{state}/login")},
+    });
+    std::fs::write(format!("{spawn}/host.json"), spec.to_string()).unwrap();
+    let _ = std::fs::remove_file(format!("{spawn}/admission.json"));
+    sh(
+        "chown",
+        &["-R", &format!("{AGENT_USER}:{AGENT_USER}"), &state],
+    );
+    let mut args: Vec<String> = ["--wait", "--collect", "--pipe", "-p", "RuntimeMaxSec=30"]
+        .map(String::from)
+        .into();
+    for p in [format!("User={AGENT_USER}"), format!("Group={AGENT_USER}")]
+        .into_iter()
+        .chain(confinement_properties(&unit, AGENT_USER))
+    {
+        args.extend(["-p".into(), p]);
+    }
+    args.extend([
+        "-p".into(),
+        format!("WorkingDirectory={state}"),
+        "/usr/local/bin/han".into(),
+        "host".into(),
+        "--spec".into(),
+        format!("{spawn}/host.json"),
+    ]);
+    // The host goes on to fail later (no node to talk to); only what it wrote at its start matters.
+    let out = Command::new("systemd-run").args(&args).output().unwrap();
+    let admission = std::fs::read_to_string(format!("{spawn}/admission.json")).unwrap_or_default();
+    assert!(
+        admission.contains("Admitted"),
+        "admission: {admission}\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

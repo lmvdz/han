@@ -16,7 +16,10 @@ ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/han-agents/%i
 PrivateTmp=yes
-ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+# No ProtectKernelTunables (nor ProtectProc or ProcSubset): systemd would bind read-only mounts over parts
+# of /proc, and the kernel then refuses bubblewrap a fresh proc mount in its user namespace ("bwrap: Can't
+# mount proc on /newroot/proc: Operation not permitted"). bwrap mounts its own /proc, so the agent's view of
+# the kernel tunables is bwrap's, not this unit's. han-host checks the real launch under these directives.
 # no RestrictNamespaces: bubblewrap inside needs user namespaces
