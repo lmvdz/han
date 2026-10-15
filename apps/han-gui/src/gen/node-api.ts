@@ -1575,6 +1575,11 @@ ask?: string,
  */
 open: boolean, 
 /**
+ * How it was closed: the final state that closed it (`done`, `failed`, `declined`, `cancelled`; a
+ * `task.cancel` counts as `cancelled`). Absent while open.
+ */
+closed_as?: string, 
+/**
  * P-15: the agents whose guarding the task carries, fixed when it was created: its parent's list, then
  * the guards of its author. An assignee that accepts the task answers to their guards.
  */

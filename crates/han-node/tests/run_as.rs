@@ -30,6 +30,7 @@ fn host_spec(state: &std::path::Path) -> HostSpec {
         "agent": "@coder:a",
         "harness": {"name": "pi"},
         "home": {"ticket": "han1home.xyz"},
+        "work": {"issue": "1"},
         "dirs": {"state": state, "keys": state, "login": state.join("claude-config")}
     }))
     .unwrap()
@@ -135,4 +136,127 @@ fn a_host_that_refuses_its_sandbox_is_the_starts_error_and_a_problem() {
         "{problems:?}"
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Bug: after the node restarted (`han runner setup --restart-stale`) it knew nothing of the units it had
+/// started, so `agent stop` said "is not running" while `han-agent@han-agent1` went on. The new node takes the
+/// running units back at start, and stop, status and the problems see them again.
+#[test]
+fn a_restarted_node_takes_back_the_unit_that_is_still_running() {
+    let dir = std::env::temp_dir().join(format!("han-run-as-adopt-{}", std::process::id()));
+    let (state, state2) = (dir.join("state"), dir.join("state2"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let new_spawner = || {
+        ProcessSpawner::new("/nonexistent/han")
+            .with_systemctl(fake_systemctl(&dir))
+            .with_admission_wait(std::time::Duration::ZERO)
+    };
+    let first = new_spawner();
+    first.start(spec(&state, "han-agent1")).unwrap();
+    // the node restarts: its spawner is new, the unit is not
+    drop(first);
+    let second = new_spawner();
+    assert!(second.status().is_empty(), "a new spawner knows nothing");
+    assert!(matches!(
+        second.stop("host-@coder:a#1"),
+        Err(SupervisorError::NotRunning(_))
+    ));
+
+    let run_as = |user: &str, state: &std::path::Path| RunAs {
+        os_user: user.into(),
+        state_dir: state.to_path_buf(),
+    };
+    // han-agent2 has a unit that is not running: not taken
+    let adopted = second.adopt(&[
+        ("@coder:a".into(), run_as("han-agent1", &state)),
+        ("@other:a".into(), run_as("han-agent2", &state2)),
+    ]);
+    assert_eq!(adopted, ["host-@coder:a#1"]);
+    assert_eq!(
+        second.status(),
+        vec![("host-@coder:a#1".to_owned(), RoleStatus::Running)]
+    );
+    // adopting twice changes nothing
+    assert!(
+        second
+            .adopt(&[("@coder:a".into(), run_as("han-agent1", &state))])
+            .is_empty()
+    );
+    // it is a running host to start (one per OS user) and to stop
+    assert!(matches!(
+        second.start(spec(&state, "han-agent1")),
+        Err(SupervisorError::Running(_))
+    ));
+    second.stop("host-@coder:a#1").unwrap();
+    assert!(
+        std::fs::read_to_string(dir.join("calls.log"))
+            .unwrap()
+            .contains("stop han-agent@han-agent1.service")
+    );
+    assert!(second.status().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A unit that runs with no spawn file the node can read is still taken, under the agent's name.
+#[test]
+fn a_unit_with_no_readable_spec_is_taken_under_the_agents_name() {
+    let dir = std::env::temp_dir().join(format!("han-run-as-adopt2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("active-han-agent@han-agent1.service"), "").unwrap();
+    let spawner = ProcessSpawner::new("/nonexistent/han").with_systemctl(fake_systemctl(&dir));
+    let adopted = spawner.adopt(&[(
+        "@coder:a".into(),
+        RunAs {
+            os_user: "han-agent1".into(),
+            state_dir: dir.join("nothing-here"),
+        },
+    )]);
+    assert_eq!(adopted, ["host-@coder:a"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn role_names_round_trip_and_the_exit_watch_waits_out_its_grace() {
+    use han_node::supervisor::{ExitWatch, host_name, parse_host_name};
+    for (agent, issue, task) in [
+        ("@a:h", Some("github:o/r#1"), None),
+        ("@a:h", None, Some("abc")),
+        ("@a:h", None, None),
+    ] {
+        let name = host_name(agent, issue, task);
+        assert_eq!(
+            parse_host_name(&name),
+            Some((agent, issue.or(task))),
+            "{name}"
+        );
+    }
+    assert_eq!(parse_host_name("nope"), None);
+
+    let run = |s| vec![("host-@a:h".to_owned(), s)];
+    let mut w = ExitWatch::default();
+    // a role that was never seen running is not an exit
+    assert!(w.observe(&run(RoleStatus::Exited(None)), 0, 0).is_empty());
+    assert!(w.observe(&run(RoleStatus::Running), 10, 100).is_empty());
+    // the exit stands for 100 ms before it is reported, once
+    assert!(
+        w.observe(&run(RoleStatus::Exited(None)), 20, 100)
+            .is_empty()
+    );
+    assert!(
+        w.observe(&run(RoleStatus::Exited(None)), 119, 100)
+            .is_empty()
+    );
+    assert_eq!(
+        w.observe(&run(RoleStatus::Exited(None)), 120, 100),
+        ["host-@a:h"]
+    );
+    assert!(
+        w.observe(&run(RoleStatus::Exited(None)), 500, 100)
+            .is_empty()
+    );
+    // started again under the same name, then stopped on purpose (no longer listed)
+    assert!(w.observe(&run(RoleStatus::Running), 600, 100).is_empty());
+    w.stopped("host-@a:h", 700);
+    assert!(w.observe(&[], 750, 100).is_empty());
+    assert_eq!(w.observe(&[], 800, 100), ["host-@a:h"]);
 }

@@ -1843,6 +1843,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

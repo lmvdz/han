@@ -1,6 +1,6 @@
 //! `han runner setup`: the root-level part of a shared runner (docs/runner.md), Linux only, and the only `han`
 //! command that needs root. It makes the OS users, the agents directory, installs the `han-agent@` template
-//! unit, the executor unit (left disabled), the polkit rule and the node's drop-in. Everything else
+//! unit, the executor and `han-github` units (left disabled), the polkit rule and the node's drop-in. Everything else
 //! (`han home`, `han agent add`, `han executor add`) runs without root.
 //!
 //! `han runner setup --toolchain rust` also provisions the shared Rust toolchain of docs/runner.md 7.2 (`/opt/rust`,
@@ -110,10 +110,13 @@ mod linux {
 
     const AGENT_UNIT: &str = include_str!("../../../integrations/runner/han-agent@.service");
     const EXEC_UNIT: &str = include_str!("../../../integrations/runner/han-exec.service");
+    const GITHUB_UNIT: &str = include_str!("../../../integrations/runner/han-github.service");
     const POLKIT_RULE: &str = include_str!("../../../integrations/runner/50-han-agent.rules");
     const AGENTS_ROOT: &str = "/var/lib/han-agents";
     const NODE_DATA: &str = "/var/lib/han";
     const EXEC_DIR: &str = "/var/lib/han-exec";
+    /// Where `han-github` finds its config and the read-only App's key (docs/runner.md 10).
+    const GITHUB_DIR: &str = "/var/lib/han/github";
 
     /// The shared Rust toolchain asked for.
     pub struct Rust {
@@ -416,6 +419,10 @@ mod linux {
             c.dir(&format!("{EXEC_DIR}{sub}"), Some(exec_user), 0o700)?;
         }
 
+        // han-github reaches the node through its owner-only socket, so it runs as the node's user; its config and
+        // the read-only App's key sit in a directory only that user can read.
+        c.dir(GITHUB_DIR, Some(node_user), 0o700)?;
+
         println!("agents");
         c.dir(AGENTS_ROOT, None, 0o755)?;
         let mut group_added = false;
@@ -461,6 +468,7 @@ mod linux {
         println!("units");
         c.reload |= c.file("/etc/systemd/system/han-agent@.service", AGENT_UNIT, 0o644)?;
         c.reload |= c.file("/etc/systemd/system/han-exec.service", EXEC_UNIT, 0o644)?;
+        c.reload |= c.file("/etc/systemd/system/han-github.service", GITHUB_UNIT, 0o644)?;
         c.file(
             "/etc/polkit-1/rules.d/50-han-agent.rules",
             POLKIT_RULE,
@@ -492,6 +500,19 @@ mod linux {
             ),
         );
 
+        let configured = Path::new(GITHUB_DIR).join("han-github.toml").exists();
+        c.say(
+            "note:",
+            &format!(
+                "han-github.service is installed, disabled, and {}; configure it as in docs/runner.md 10, then: systemctl enable --now han-github",
+                if configured {
+                    "has a config"
+                } else {
+                    "has no config yet"
+                }
+            ),
+        );
+
         if let Some(r) = rust {
             rust_toolchain(&mut c, r, node_user)?;
         }
@@ -507,7 +528,7 @@ mod linux {
                 ),
             );
         }
-        let mut units: Vec<String> = ["han-seq", "han-node", "han-exec"]
+        let mut units: Vec<String> = ["han-seq", "han-node", "han-exec", "han-github"]
             .map(str::to_owned)
             .into();
         units.extend(active_agent_units());
@@ -584,7 +605,7 @@ mod linux {
             )
             .await?);
         }
-        if unit == "han-exec" {
+        if unit == "han-exec" || unit == "han-github" {
             return Ok(crate::seqadmin::wait_until(
                 &format!("{unit}: systemd does not report it active, so it"),
                 timeout,

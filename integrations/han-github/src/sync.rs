@@ -4,9 +4,10 @@
 //! The process is an actor over the node API ([`NodeApi`], the same trait the JSON-RPC client implements). It
 //! opens one session per repository (titled `github:owner/repo`) and publishes its items on that session's
 //! stream, which only the session's actor may do (T-07). It creates a task only for an open issue with the
-//! trigger label (or on a human's request) and only when no task with that `external` exists; it never
-//! assigns a session to anything. An agent that takes the issue makes its own signed task. It cancels a task it
-//! made when the issue is closed or loses the label before anyone accepted the task.
+//! trigger label (or on a human's request) and only when it has no open task (see [`needs_task`] for which
+//! closed tasks do not count); it never assigns a session to anything. An agent that takes the issue makes its
+//! own signed task. It cancels a task it made when the issue is closed or loses the label before anyone
+//! accepted the task.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -33,6 +34,10 @@ const MAX_LABELS: usize = 20;
 /// Longest issue body carried in a task's ask, in bytes (the ask may be 32 KiB; the body is untrusted text and
 /// the agent needs the gist, not a novel).
 pub const MAX_BODY_BYTES: usize = 4096;
+
+/// The most tasks that may end without landing (failed, declined, cancelled) before an issue waits for a person
+/// instead of getting yet another one.
+pub const MAX_ATTEMPTS: usize = 3;
 
 /// How long to wait for a view's first snapshot.
 const VIEW_TIMEOUT: Duration = Duration::from_secs(5);
@@ -160,8 +165,11 @@ impl<S: Source> Syncer<S> {
             let cond = if page_no == 0 { etag.as_deref() } else { None };
             match self.source.get(repo, &path, cond).await? {
                 Fetched::NotModified => {
+                    // Nothing changed on GitHub, but a task may have closed since the last poll.
+                    let tasks = self.reconcile(repo).await?;
                     return Ok(Tick {
                         not_modified: true,
+                        tasks,
                         ..Tick::default()
                     });
                 }
@@ -209,11 +217,9 @@ impl<S: Source> Syncer<S> {
             }
         }
 
-        let candidates: Vec<&Issue> = changed
-            .iter()
-            .filter(|i| i.state == "open" && i.labels.contains(&self.label))
-            .collect();
-        let tasks = self.suggest(repo, &candidates).await?;
+        // Every known agent-ready issue, not only the changed ones: a task that closed since the last poll
+        // leaves its issue unchanged.
+        let tasks = self.reconcile(repo).await?;
         let stale: Vec<String> = changed
             .iter()
             .filter(|i| i.state != "open" || !i.labels.contains(&self.label))
@@ -237,14 +243,20 @@ impl<S: Source> Syncer<S> {
     }
 
     /// Asks for a task on `reference` (`github:owner/repo#N`) because a human did. Returns the task's id, or
-    /// `None` when the reference already has one.
+    /// `None` when the reference already has an open task. A person overrides the wait that a landed task or
+    /// [`MAX_ATTEMPTS`] failures put on the poll.
     pub async fn request(
         &mut self,
         reference: &str,
         title: &str,
     ) -> Result<Option<String>, SyncError> {
-        let existing = self.task_externals().await?;
-        if existing.contains(reference) || self.requested.contains(reference) {
+        let rows = self.task_rows().await?;
+        self.forget_seen(&rows);
+        if rows
+            .iter()
+            .any(|t| t.open && t.external.as_deref() == Some(reference))
+            || self.requested.contains(reference)
+        {
             return Ok(None);
         }
         let id = self.create_task(reference, title, None).await?;
@@ -311,19 +323,28 @@ impl<S: Source> Syncer<S> {
         Ok(me)
     }
 
-    async fn suggest(
-        &mut self,
-        repo: &str,
-        candidates: &[&Issue],
-    ) -> Result<Vec<String>, SyncError> {
-        if candidates.is_empty() || self.to.is_empty() {
+    /// Makes a task for each known issue that is open, has the trigger label and needs one.
+    async fn reconcile(&mut self, repo: &str) -> Result<Vec<String>, SyncError> {
+        if self.to.is_empty() {
             return Ok(Vec::new());
         }
-        let existing = self.task_externals().await?;
+        let mut candidates: Vec<Issue> = self.repos[repo]
+            .known
+            .values()
+            .filter(|i| i.state == "open" && i.labels.contains(&self.label))
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Most recently updated first, as GitHub lists them.
+        candidates.sort_by(|a, b| (&b.updated_at, b.number).cmp(&(&a.updated_at, a.number)));
+        let rows = self.task_rows().await?;
+        self.forget_seen(&rows);
         let mut made = Vec::new();
-        for issue in candidates {
+        for issue in &candidates {
             let reference = format!("github:{repo}#{}", issue.number);
-            if existing.contains(&reference) || self.requested.contains(&reference) {
+            if self.requested.contains(&reference) || !needs_task(&rows, &reference) {
                 continue;
             }
             self.create_task(&reference, &issue.title, Some(&issue.body))
@@ -331,6 +352,16 @@ impl<S: Source> Syncer<S> {
             made.push(reference);
         }
         Ok(made)
+    }
+
+    /// Drops the references the Tasks view now shows from `requested`: that set only covers the lag of the
+    /// view, and a reference that stays in it would never get a second task after its first one closed.
+    fn forget_seen(&mut self, rows: &[TaskRow]) {
+        self.requested.retain(|r| {
+            !rows
+                .iter()
+                .any(|t| t.external.as_deref() == Some(r.as_str()))
+        });
     }
 
     async fn create_task(
@@ -394,16 +425,6 @@ impl<S: Source> Syncer<S> {
         }
     }
 
-    /// Every `external` of the space's tasks, open or not.
-    async fn task_externals(&self) -> Result<HashSet<String>, SyncError> {
-        Ok(self
-            .task_rows()
-            .await?
-            .into_iter()
-            .filter_map(|t| t.external)
-            .collect())
-    }
-
     /// The space's tasks, open or not.
     async fn task_rows(&self) -> Result<Vec<TaskRow>, SyncError> {
         let mut out = Vec::new();
@@ -439,6 +460,29 @@ impl<S: Source> Syncer<S> {
         }
         Ok(out)
     }
+}
+
+/// Whether an open, agent-ready issue with the tasks `rows` needs a new task. The rule:
+///
+/// * a task for the reference is open: no (somebody has it);
+/// * a task for it closed as `done` while the issue is still open: no, that waits for a person (the work was
+///   reported finished, so whether the issue is really settled is theirs to say; `han-github request` makes a
+///   new task on purpose);
+/// * [`MAX_ATTEMPTS`] tasks ended without landing: no, a person looks at why before another try;
+/// * otherwise yes. This is the case of a task that failed, was declined or cancelled, or was closed by an
+///   owner whose assignee's session died, and it also covers a closure the node reports without a state.
+pub fn needs_task(rows: &[TaskRow], reference: &str) -> bool {
+    let mine: Vec<&TaskRow> = rows
+        .iter()
+        .filter(|t| t.external.as_deref() == Some(reference))
+        .collect();
+    if mine.iter().any(|t| t.open) {
+        return false;
+    }
+    if mine.iter().any(|t| t.closed_as.as_deref() == Some("done")) {
+        return false;
+    }
+    mine.len() < MAX_ATTEMPTS
 }
 
 /// The body of a `github.issue/1` item (see the README).

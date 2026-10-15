@@ -146,6 +146,9 @@ pub struct SessionEnd {
     pub task: Option<String>,
     /// The final state.
     pub state: SessionState,
+    /// Why the session failed (`state` is `Failed`): the first failure it met. The status the node shows and
+    /// the host's log say the same.
+    pub reason: Option<String>,
     /// Proposals made.
     pub proposals: Vec<String>,
 }
@@ -269,6 +272,8 @@ struct Shared {
     budget: OnceLock<crate::glue::SessionBudget>,
     /// How much of the measured spend earlier proposals already carried, in the budget's unit.
     charged: Mutex<u64>,
+    /// The first reason a turn failed, which the session's last status keeps.
+    failure: Mutex<Option<String>>,
 }
 
 /// The cost a proposal carries: what the proxy measured since the last proposal, in the budget's unit
@@ -285,6 +290,15 @@ fn measured_cost(
 }
 
 impl Shared {
+    /// Records why the session failed (the first reason stands) and signals it.
+    fn fail(&self, why: String) {
+        self.failure
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_or_insert_with(|| why.clone());
+        self.signal(Signal::Failed(why));
+    }
+
     /// Queues a signal for the publisher (masked first, see [`Shared::apply`]). After [`Shared::close_signals`]
     /// it is dropped.
     fn signal(&self, s: Signal) {
@@ -936,10 +950,24 @@ pub async fn run_session(
     let result = run_opened(&cfg, &deps, &session, task.clone(), &mut stop).await;
 
     // The final update when work stops (R-24), whatever happened.
-    let state = match &result {
-        Ok(s) => *s,
-        Err(_) => SessionState::Failed,
+    let (state, reason) = match &result {
+        Ok((s, why)) => (*s, why.clone()),
+        Err(e) => (SessionState::Failed, Some(e.to_string())),
     };
+    if state == SessionState::Failed {
+        tracing::warn!(
+            session = %session,
+            "session failed: {}",
+            reason.as_deref().unwrap_or("no reason given")
+        );
+    }
+    if result.is_err() {
+        // The run broke off before its status publisher could say so: without this the session closes with
+        // no state of its own and the board shows it as done.
+        if let Some(why) = &reason {
+            publish_failed(&cfg, &deps, &session, why).await;
+        }
+    }
     if let Some(cmd) = duty.as_mut().and_then(|d| {
         d.finish(if state == SessionState::Failed {
             "failed"
@@ -956,14 +984,42 @@ pub async fn run_session(
         })
         .await;
     match result {
-        Ok(state) => Ok(SessionEnd {
+        Ok(_) => Ok(SessionEnd {
             session,
             task: task.map(|t| t.0),
             state,
+            reason,
             proposals: Vec::new(),
         }),
         Err(e) => Err(e),
     }
+}
+
+/// Publishes a last `failed` status that names `why`, for a run that ended in an error before the status
+/// publisher took over. Text is masked like every other status text (SR-52).
+async fn publish_failed(cfg: &HostConfig, deps: &HostDeps, session: &str, why: &str) {
+    let masker = Arc::new(Masker::new(cfg.model_key.iter().cloned().collect()));
+    let api = MaskedApi::new(deps.api.clone(), masker);
+    let mut deriver = StatusDeriver::new(
+        session,
+        &cfg.agent,
+        &cfg.driver.harness,
+        None,
+        cfg.issue.clone(),
+        Some(cfg.repo.name.clone()),
+        None,
+        Sandbox {
+            backend: han_node::api::SandboxBackend::None,
+            fidelity: han_node::api::Fidelity::Advisory,
+        },
+    );
+    deriver.apply(Signal::Failed(why.to_owned()));
+    let _ = api
+        .call(Command::StatusPublish {
+            space: cfg.space.clone(),
+            status: Box::new(deriver.snapshot(&now_text())),
+        })
+        .await;
 }
 
 /// The session's budget, narrowed to the budget of the task it works when that is smaller (P-05: an agent's
@@ -1050,7 +1106,7 @@ async fn run_opened(
     session: &str,
     task: Option<TaskInfo>,
     stop: &mut watch::Receiver<bool>,
-) -> Result<SessionState, HostError> {
+) -> Result<(SessionState, Option<String>), HostError> {
     let api = deps.api.clone();
     let narrowed;
     let cfg = match narrowed_budget(cfg, api.as_ref(), task.as_ref().map(|t| t.0.as_str())).await {
@@ -1135,6 +1191,7 @@ async fn run_opened(
         proposals: Mutex::new(Vec::new()),
         budget: OnceLock::new(),
         charged: Mutex::new(0),
+        failure: Mutex::new(None),
     });
 
     let env = crate::glue::Egress::start(
@@ -1413,11 +1470,20 @@ async fn run_opened(
     } else {
         SessionState::Done
     };
-    shared.signal(if final_state == SessionState::Failed {
-        Signal::Failed("the session stopped".into())
+    let reason = if final_state == SessionState::Failed {
+        // The status already says why (the turn's failure): the end keeps that reason.
+        let why = shared
+            .failure
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .unwrap_or_else(|| "the session stopped".into());
+        shared.signal(Signal::Failed(why.clone()));
+        Some(why)
     } else {
-        Signal::Done
-    });
+        shared.signal(Signal::Done);
+        None
+    };
     drop(mirror);
     if let Some(w) = usage_watch {
         w.abort();
@@ -1436,7 +1502,7 @@ async fn run_opened(
             publisher.abort();
         }
     }
-    Ok(final_state)
+    Ok((final_state, reason))
 }
 
 fn shared_bridge(shared: &Arc<Shared>) -> Arc<dyn HostBridge> {
@@ -1495,7 +1561,7 @@ async fn turn(
                 let why = end
                     .provider_error
                     .unwrap_or_else(|| "the turn ended with no output and no tool calls".into());
-                shared.signal(Signal::Failed(why));
+                shared.fail(why);
                 return Ok(SessionState::Failed);
             }
             refresh_files(shared).await;
@@ -1503,7 +1569,7 @@ async fn turn(
             Ok(SessionState::Idle)
         }
         Err(e) => {
-            shared.signal(Signal::Failed(e.to_string()));
+            shared.fail(e.to_string());
             Ok(SessionState::Failed)
         }
     }
@@ -1744,6 +1810,7 @@ mod tests {
                     external: None,
                     ask: None,
                     open: true,
+                    closed_as: None,
                     guarded_for: Vec::new(),
                     accepted: Vec::new(),
                     budget: self.0.map(|(unit, amount)| han_node::api::TaskBudget {

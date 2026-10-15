@@ -203,6 +203,30 @@ async fn the_agents_output_appears_as_session_items() {
     );
 }
 
+/// Bug: a host that was killed (SIGTERM, a stop timeout) never closed its session, and the board went on showing
+/// it `idle` until silence made it stale. The node sees the host go and marks the session ended: `failed`, with
+/// the reason "host exited".
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn a_killed_host_leaves_its_session_ended_with_the_reason_not_idle() {
+    let s = Stack::up("simple", &[]);
+    let c = s.client().await;
+    s.start_agent();
+    let before = s
+        .board_until(&c, "the first turn to finish", 120, idle)
+        .await;
+    s.kill_host();
+    let after = s
+        .board_until(&c, "the session to be marked ended", 120, |b| {
+            b.state != SessionState::Idle
+        })
+        .await;
+    assert_eq!(after.session, before.session);
+    assert_eq!(after.state, SessionState::Failed, "{after:?}");
+    assert_eq!(after.state_reason.as_deref(), Some("host exited"));
+}
+
 /// Bug: the task's issue text did not reach the agent. It arrives as a data block after the instruction, not
 /// inside it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

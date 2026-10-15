@@ -63,6 +63,10 @@ pub(crate) struct SessionInfo {
     pub opened: String,
     pub task: Option<String>,
     pub closed: bool,
+    /// This node saw the host of the session exit while the session was open, and says why it is over. Not in
+    /// the log (the host's key signs the session's entries, not the node's): it is this device's reading, and
+    /// a `session.close` that arrives later wins.
+    pub ended: Option<String>,
     pub status: Option<StatusBody>,
     /// Its steering inputs, oldest first.
     pub inputs: Vec<InputInfo>,
@@ -229,6 +233,8 @@ pub(crate) struct TaskInfo {
     pub accepted: Vec<String>,
     /// Its budget (P-05): unit and amount.
     pub budget: Option<(String, u64)>,
+    /// The final state that closed it (`done`, `failed`, `declined`, `cancelled`); `None` while open.
+    pub closed_as: Option<&'static str>,
 }
 
 /// A `session.input` as its session's host reads it.
@@ -723,6 +729,7 @@ impl SpaceModel {
                         guarded_for,
                         accepted,
                         budget: t.budget.map(|b| (b.unit, b.amount)),
+                        closed_as: None,
                         seq,
                         ask: rec
                             .content
@@ -745,12 +752,18 @@ impl SpaceModel {
                         } else {
                             t.accepted.clear();
                         }
+                        if t.open {
+                            t.closed_as = u.state.final_name();
+                        }
                         t.open = false;
                     }
                 }
             }
             Body::TaskCancel(c) => {
                 if let Some(t) = self.tasks.get_mut(&c.task) {
+                    if t.open {
+                        t.closed_as = Some("cancelled");
+                    }
                     t.open = false;
                 }
             }
@@ -772,6 +785,7 @@ impl SpaceModel {
                         opened: rec.receipt.time.clone(),
                         task: s.task,
                         closed: false,
+                        ended: None,
                         status: None,
                         inputs: Vec::new(),
                         last_item_ms: now.ms,
@@ -1062,6 +1076,9 @@ impl SpaceModel {
         if claimed.is_terminal() {
             return claimed;
         }
+        if s.ended.is_some() {
+            return SessionState::Failed;
+        }
         let silent = now.ms.saturating_sub(s.last_item_ms);
         if silent >= self.fresh.failed_ms {
             SessionState::Failed
@@ -1087,6 +1104,20 @@ impl SpaceModel {
         match self.derived_state(s, now) {
             SessionState::Failed => {
                 let claimed_terminal = st.is_some_and(|x| x.state.is_terminal());
+                if !s.closed
+                    && !claimed_terminal
+                    && let Some(why) = &s.ended
+                {
+                    return Some(why.clone());
+                }
+                // A host that failed says so in the step ("failed: <why>"); the summary may be about something else
+                // (for example the sandbox note), so the failure comes first.
+                if let Some(x) = st
+                    && x.state == SessionState::Failed
+                    && x.step.starts_with("failed")
+                {
+                    return Some(x.step.clone());
+                }
                 let silent = now.ms.saturating_sub(s.last_item_ms) >= self.fresh.failed_ms;
                 if !s.closed && !claimed_terminal && silent {
                     Some(format!("no status for {}", span(self.fresh.failed_ms)))
@@ -1097,6 +1128,27 @@ impl SpaceModel {
             SessionState::Blocked => said(),
             _ => None,
         }
+    }
+
+    /// The host of `agent` exited (`work`: the issue or task it was started on, if the role's name says) without
+    /// closing its sessions: marks the open ones that are not over as ended for `reason`. True if any changed.
+    pub fn host_exited(&mut self, agent: &str, work: Option<&str>, reason: &str) -> bool {
+        let mut changed = false;
+        for s in self.sessions.values_mut() {
+            let works = work.is_none_or(|w| {
+                s.task.as_deref() == Some(w)
+                    || s.status.as_ref().and_then(|st| st.issue.as_deref()) == Some(w)
+            });
+            let over = s.status.as_ref().is_some_and(|st| st.state.is_terminal());
+            if s.actor == agent && !s.closed && !over && works && s.ended.is_none() {
+                s.ended = Some(reason.to_owned());
+                changed = true;
+            }
+        }
+        if changed {
+            self.bump();
+        }
+        changed
     }
 
     fn live(&self, s: &SessionInfo, now: &Now) -> bool {
@@ -2098,6 +2150,7 @@ impl SpaceModel {
                         external: t.external.clone(),
                         ask: t.ask.clone(),
                         open: t.open,
+                        closed_as: t.closed_as.map(str::to_owned),
                         guarded_for: t.guarded_for.clone(),
                         accepted: t.accepted.clone(),
                         budget: t
