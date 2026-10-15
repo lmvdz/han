@@ -137,7 +137,7 @@ pub(crate) fn blob_refs(kind: &str, content: Option<&Value>) -> Vec<BlobRef> {
         .unwrap_or_default();
     let extra = match kind {
         "effect.propose" => content.get("plan").and_then(|p| p.get("argsBlob")),
-        "effect.outcome" | "effect.resolve" => content.get("evidence"),
+        "effect.cancel" | "effect.outcome" | "effect.resolve" => content.get("evidence"),
         _ => None,
     };
     out.extend(extra.and_then(parse_blobref));

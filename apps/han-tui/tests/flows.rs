@@ -232,7 +232,9 @@ async fn cancelling_asks_first_and_starts_on_keep() {
         api.calls(),
         vec![Command::EffectCancel {
             space: "team".into(),
-            proposal: "p1".into()
+            proposal: "p1".into(),
+            reason: None,
+            evidence: None
         }]
     );
 }

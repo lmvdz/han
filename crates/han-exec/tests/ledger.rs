@@ -81,6 +81,7 @@ fn a_lanes_instruction_is_journalled_with_the_claim_and_survives_a_reopen() {
         onto: "a".repeat(40),
         commit: "b".repeat(40),
         repository: dir.path().join("landing.git"),
+        evidence: None,
     };
     {
         let l = Ledger::open(&path).unwrap();

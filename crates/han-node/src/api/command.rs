@@ -7,6 +7,18 @@ use super::rows::StatusBody;
 
 pub use han_registry::HomeRef;
 
+/// A reference to a blob already uploaded (`BlobPut` answers with one), as the `evidence` of an
+/// `effect.outcome` or `effect.cancel`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct EvidenceRef {
+    /// `sha256` of the bytes, lowercase hex.
+    pub hash: String,
+    /// The size in bytes.
+    pub size: u64,
+    /// The media type.
+    pub media_type: String,
+}
+
 /// Something a face asks of the device. Commands that write the log end as a receipt (or are queued in the
 /// outbox when the home cannot be reached); the verdict of Policy comes back as a [`super::NodeError`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -275,12 +287,21 @@ pub enum Command {
         #[ts(optional)]
         note: Option<String>,
     },
-    /// Cancels a proposed effect.
+    /// Cancels a proposed effect. The effect's executor may cancel it too while it is `open` (round 33,
+    /// P-07a): it refuses an effect for good, and says why.
     EffectCancel {
         /// The space.
         space: String,
         /// The proposal's entry id.
         proposal: String,
+        /// Why (content `reason`, at most 1,024 bytes).
+        #[serde(default)]
+        #[ts(optional)]
+        reason: Option<String>,
+        /// The proof, a blob already uploaded (content `evidence`, readable under G-01).
+        #[serde(default)]
+        #[ts(optional)]
+        evidence: Option<EvidenceRef>,
     },
     /// Proposes an effect (`effect.propose`): the only way an agent's work reaches the world. The node
     /// computes `planDigest = sha256(JCS(plan))` and puts the plan in the content.
@@ -333,6 +354,10 @@ pub enum Command {
         #[serde(default)]
         #[ts(optional)]
         cost: Option<(String, u64)>,
+        /// What the attempt showed, a blob already uploaded (content `evidence`, readable under G-01).
+        #[serde(default)]
+        #[ts(optional)]
+        evidence: Option<EvidenceRef>,
     },
     /// Queues an outbox entry that `failed` (delivery gave up) again and tries to send it at once. The answer
     /// is that of the entry: its receipt, its refusal, or `Queued`.

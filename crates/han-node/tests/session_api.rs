@@ -732,6 +732,8 @@ async fn the_node_status_lists_recent_errors_and_open_views() {
         .call(Command::EffectCancel {
             space: "nope:a.localhost".into(),
             proposal: "x".into(),
+            reason: None,
+            evidence: None,
         })
         .await
         .unwrap_err();

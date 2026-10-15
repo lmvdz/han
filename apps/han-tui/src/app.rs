@@ -1293,6 +1293,8 @@ impl App {
                         Command::EffectCancel {
                             space: row.space,
                             proposal: row.proposal,
+                            reason: None,
+                            evidence: None,
                         },
                     )]
                 }

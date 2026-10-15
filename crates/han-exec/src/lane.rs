@@ -59,7 +59,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use han_node::api::{CallResult, Command, EffectRow};
+use han_node::api::{CallResult, Command, EffectRow, EvidenceRef, NodeError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -182,6 +182,12 @@ struct Change {
     not_started: u32,
     #[serde(default)]
     retry_after: i64,
+    /// When the change became stalled (wall seconds), while it is.
+    #[serde(default)]
+    stalled_since: Option<i64>,
+    /// The rejection has not reached the log yet: the executor's `effect.cancel` is still to be sent.
+    #[serde(default)]
+    cancel_pending: bool,
     /// The record as last written (not itself written).
     #[serde(skip)]
     saved: String,
@@ -229,6 +235,18 @@ pub struct Lane {
     checks: Arc<dyn Checks>,
     wall: Arc<dyn Wall>,
     mem: Mutex<Mem>,
+}
+
+/// The longest `reason` an `effect.cancel` takes (UTF-8 bytes, architecture.md P-07a).
+const MAX_REASON_BYTES: usize = 1024;
+
+/// A `BlobRef` as the node API takes it.
+fn evidence_ref(r: &Value) -> Option<EvidenceRef> {
+    Some(EvidenceRef {
+        hash: r.get("hash")?.as_str()?.to_owned(),
+        size: r.get("size")?.as_u64()?,
+        media_type: r.get("type")?.as_str()?.to_owned(),
+    })
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -389,7 +407,8 @@ impl Lane {
             c.seq += 1;
             self.put(c)?;
         }
-        self.publish(c).await
+        self.publish(c).await?;
+        self.send_cancel(c).await
     }
 
     async fn publish(&self, c: &mut Change) -> Result<(), ExecError> {
@@ -574,6 +593,7 @@ impl Lane {
         c.entered = now;
         c.problem = None;
         c.stalled = None;
+        c.stalled_since = None;
         c.position = None;
         c.retry_after = 0;
         self.checkpoint(c).await
@@ -600,7 +620,81 @@ impl Lane {
             c.conflict = None;
         }
         lock(&self.mem).last_poll.remove(&c.proposal);
+        c.cancel_pending = true;
         self.enter(c, State::Rejected, now).await
+    }
+
+    /// Ends a rejected change's effect in the log: the executor's own `effect.cancel` (P-07a) with the
+    /// reason and the proof (the conflict record, or the checks that failed). It waits while the node is
+    /// unavailable and is dropped when the log refuses it (the effect is no longer open, or no longer ours):
+    /// the lane's record is final either way.
+    async fn send_cancel(&self, c: &mut Change) -> Result<(), ExecError> {
+        if !c.cancel_pending || c.state != State::Rejected {
+            return Ok(());
+        }
+        if c.conflict.is_none()
+            && let Some(text) = c.conflict_json.clone()
+        {
+            match self.upload(&c.space, &text).await {
+                Some(r) => c.conflict = Some(r),
+                None => return Ok(()),
+            }
+        }
+        if c.evidence.is_none()
+            && let Some(text) = c.evidence_json.clone()
+        {
+            match self.upload(&c.space, &text).await {
+                Some(r) => c.evidence = Some(r),
+                None => return Ok(()),
+            }
+        }
+        let proof = c
+            .conflict
+            .as_ref()
+            .or(c.evidence.as_ref())
+            .and_then(evidence_ref);
+        let mut reason = format!(
+            "{}: {}",
+            c.reason.as_deref().unwrap_or("rejected"),
+            c.detail.as_deref().unwrap_or("")
+        );
+        if reason.len() > MAX_REASON_BYTES {
+            let mut end = MAX_REASON_BYTES;
+            while !reason.is_char_boundary(end) {
+                end -= 1;
+            }
+            reason.truncate(end);
+        }
+        let sent = self
+            .exec
+            .node()
+            .call(Command::EffectCancel {
+                space: c.space.clone(),
+                proposal: c.proposal.clone(),
+                reason: Some(reason),
+                evidence: proof,
+            })
+            .await;
+        match sent {
+            Err(NodeError::Unavailable { .. }) => {
+                tracing::warn!(proposal = %c.proposal, "lane: the cancel is not sent yet; retrying");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(proposal = %c.proposal, "lane: the cancel was refused: {e}");
+            }
+            Ok(_) => {}
+        }
+        c.cancel_pending = false;
+        self.put(c)
+    }
+
+    /// Whether a change in `testing` that is stalled and past its deadline steps aside, so that the changes
+    /// behind it go on. It keeps its place in the log and its checks; it holds the slot again if it unstalls.
+    fn yielding(&self, c: &Change, now: i64) -> bool {
+        c.state == State::Testing
+            && c.stalled.is_some()
+            && self.deadline_of(c).is_some_and(|d| now > d)
     }
 
     /// Back to the queue, to be prepared again on the ref's new tip.
@@ -730,6 +824,7 @@ impl Lane {
             if c.published < c.seq {
                 self.publish(c).await?;
             }
+            self.send_cancel(c).await?;
         }
         self.lane_items(&all, now).await;
         Ok(rep)
@@ -787,6 +882,8 @@ impl Lane {
                 reruns: 0,
                 not_started: 0,
                 retry_after: 0,
+                stalled_since: None,
+                cancel_pending: false,
                 saved: String::new(),
             };
             if let Err(why) = info {
@@ -875,9 +972,10 @@ impl Lane {
                 Deps::Ready => {}
             }
             position += 1;
-            let slot_taken = idxs
-                .iter()
-                .any(|&j| matches!(all[j].state, State::Testing | State::Landing));
+            let slot_taken = idxs.iter().any(|&j| {
+                matches!(all[j].state, State::Testing | State::Landing)
+                    && !self.yielding(&all[j], now)
+            });
             if slot_taken || blocked {
                 c.position = Some(position);
                 c.detail = Some(if slot_taken {
@@ -975,6 +1073,25 @@ impl Lane {
         {
             tracing::warn!(proposal = %c.proposal, why = %why, "lane: stalled");
             rep.stalled.push((c.proposal.clone(), why.clone()));
+        }
+        if c.stalled.is_none() {
+            c.stalled_since = None;
+        } else if c.stalled_since.is_none() {
+            c.stalled_since = Some(now);
+        }
+        // A head that stays stalled is not kept forever: it has stepped aside (see `yielding`) and is rejected
+        // after the hard bound, unless it unstalls first.
+        if c.state == State::Testing
+            && let (Some(since), Some(repo)) = (c.stalled_since, self.exec.config().repo(&c.repo))
+            && now.saturating_sub(since)
+                >= i64::try_from(repo.deadlines.stall_secs).unwrap_or(i64::MAX)
+        {
+            let detail = format!(
+                "stalled for {} s: {}",
+                now - since,
+                c.stalled.as_deref().unwrap_or("")
+            );
+            return self.reject(c, "timeout", &detail, None, None, now).await;
         }
         self.checkpoint(c).await
     }
@@ -1326,6 +1443,19 @@ impl Lane {
             c.evidence_json = Some(text);
             c.evidence = None;
         }
+        // The checks that justify the landing go up first, so that the outcome can carry them (G-01).
+        if c.evidence.is_none()
+            && let Some(text) = c.evidence_json.clone()
+        {
+            match self.upload(&c.space, &text).await {
+                Some(r) => c.evidence = Some(r),
+                None => {
+                    c.problem = Some("the checks evidence could not be uploaded".into());
+                    return Ok(());
+                }
+            }
+        }
+        let proof = c.evidence.as_ref().and_then(evidence_ref);
         c.detail = None;
         self.enter(c, State::Landing, now).await?;
         lock(&self.mem).rows_stale = true;
@@ -1337,6 +1467,7 @@ impl Lane {
                     onto: p.onto.clone(),
                     commit: p.commit.clone(),
                     repository: PathBuf::from(&p.repository),
+                    evidence: proof,
                 },
             )
             .await?;

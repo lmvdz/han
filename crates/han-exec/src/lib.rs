@@ -161,6 +161,10 @@ pub struct LaneInstruction {
     /// A repository of the executor's own that holds `onto` and `commit` (and the plan's `base..to`), as
     /// the lane's squash-rebase left it. Never the agent's workspace.
     pub repository: std::path::PathBuf,
+    /// The checks that justified the landing, a blob the lane already uploaded: the attempt's
+    /// `effect.outcome` carries it as `evidence`, so a reader of the log finds it under G-01.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<han_node::api::EvidenceRef>,
 }
 
 /// A plan's `argsBlob` (a `BlobRef`): the bytes an action needs beyond `args`, carried by the space.
@@ -345,6 +349,10 @@ pub struct Deadlines {
     /// `landed`: the full suite's timeout plus 30 minutes; default 3600.
     #[serde(default = "default_landed_secs")]
     pub landed_secs: u64,
+    /// A change in `testing` that stays stalled this long is rejected (`timeout`); default 86400 (24 h). Past its
+    /// deadline a stalled change already steps aside for the changes behind it.
+    #[serde(default = "default_stall_secs")]
+    pub stall_secs: u64,
 }
 
 fn default_queued_secs() -> u64 {
@@ -359,6 +367,10 @@ fn default_landed_secs() -> u64 {
     3600
 }
 
+fn default_stall_secs() -> u64 {
+    86_400
+}
+
 impl Default for Deadlines {
     fn default() -> Self {
         Deadlines {
@@ -366,6 +378,7 @@ impl Default for Deadlines {
             testing_secs: default_testing_secs(),
             landing_secs: None,
             landed_secs: default_landed_secs(),
+            stall_secs: default_stall_secs(),
         }
     }
 }

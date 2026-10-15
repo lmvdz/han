@@ -55,6 +55,20 @@ actor: string, };
 
 export type HomeRef = { "ticket": string } | { "server": string };
 
+export type EvidenceRef = { 
+/**
+ * `sha256` of the bytes, lowercase hex.
+ */
+hash: string, 
+/**
+ * The size in bytes.
+ */
+size: number, 
+/**
+ * The media type.
+ */
+media_type: string, };
+
 export type Command = { "type": "space_create", 
 /**
  * The home that will sequence it (default: the home of this device's actor).
@@ -338,7 +352,15 @@ space: string,
 /**
  * The proposal's entry id.
  */
-proposal: string, } | { "type": "effect_propose", 
+proposal: string, 
+/**
+ * Why (content `reason`, at most 1,024 bytes).
+ */
+reason?: string, 
+/**
+ * The proof, a blob already uploaded (content `evidence`, readable under G-01).
+ */
+evidence?: EvidenceRef, } | { "type": "effect_propose", 
 /**
  * The space.
  */
@@ -402,7 +424,11 @@ started: string,
 /**
  * What it cost, with `started: yes` only.
  */
-cost?: [string, number], } | { "type": "outbox_retry", 
+cost?: [string, number], 
+/**
+ * What the attempt showed, a blob already uploaded (content `evidence`, readable under G-01).
+ */
+evidence?: EvidenceRef, } | { "type": "outbox_retry", 
 /**
  * The outbox id (`Queued` and the `Outbox` view carry it).
  */

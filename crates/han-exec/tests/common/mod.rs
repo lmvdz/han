@@ -294,6 +294,25 @@ impl FakeNode {
                     time: String::new(),
                 })
             }
+            Command::EffectCancel { proposal, .. } => {
+                // P-07a: the executor may cancel its own effect while it is open.
+                let r = st
+                    .rows
+                    .iter_mut()
+                    .find(|r| &r.proposal == proposal)
+                    .ok_or_else(|| NodeError::not_found("proposal"))?;
+                if r.phase != "open" {
+                    return Err(NodeError::conflict("the proposal is no longer open"));
+                }
+                r.phase = "done".into();
+                Self::bump(&mut st);
+                Ok(CallResult::Receipt {
+                    space: SPACE.into(),
+                    seq: st.head,
+                    id: format!("x{}", st.head),
+                    time: String::new(),
+                })
+            }
             Command::BlobFetch {
                 hash, media_type, ..
             } => {

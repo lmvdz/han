@@ -3,6 +3,8 @@
 
 use ts_rs::{Config, TS};
 
+use super::command::EvidenceRef;
+
 use super::{
     ActorKind, AdmissionRow, AgentText, ApprovalRow, BoardRow, BoardTotals, BudgetStatus,
     CallResult, ChangeSummaryRow, ClaimKind, Command, CostRow, DeviceRow, DeviceState, DiffOp,
@@ -36,6 +38,7 @@ pub fn typescript() -> String {
         NodeError,
         Pending,
         HomeRef,
+        EvidenceRef,
         Command,
         CallResult,
         Filter,

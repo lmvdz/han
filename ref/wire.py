@@ -153,12 +153,13 @@ def _plan(v):
 CONTENT = {   # kind → {field: (validator, required)};  None = the kind has no content
     "space.create": {"name": (_str(256), True)},
     "member.set": None, "policy.set": None, "key.add": None, "key.revoke": None, "task.cancel": None,
-    "effect.claim": None, "effect.cancel": None, "space.move": None,
+    "effect.claim": None, "space.move": None,
     "message": {"text": (_str(32768), True), "blobs": (_blobs, False), "links": (_links, False)},
     "task": {"ask": (_str(32768), True), "blobs": (_blobs, False), "links": (_links, False)},
     "task.update": {"text": (_str(32768), False), "blobs": (_blobs, False)},
     "effect.propose": {"plan": (_plan, True)},
     "effect.approve": {"note": (_str(4096), False)},
+    "effect.cancel": {"reason": (_str(1024), False), "evidence": (_blobref, False)},
     "effect.outcome": {"evidence": (_blobref, False)},
     "effect.resolve": {"evidence": (_blobref, True)},
     "checkpoint": {"blobs": (_blobs, True)},
@@ -259,7 +260,7 @@ def wrong_home_proof(records: list[dict], r: dict, server_keys: dict) -> bool:
     return verify_receipt(r, server_keys) and home_at(records, r["seq"]) not in (None, r["home"])
 
 # ── blob references (G-01): every BlobRef position, per kind; `blobs` is generic for every kind ──
-BLOB_PATHS = {"effect.propose": [("plan", "argsBlob")], "effect.outcome": [("evidence",)], "effect.resolve": [("evidence",)]}
+BLOB_PATHS = {"effect.propose": [("plan", "argsBlob")], "effect.cancel": [("evidence",)], "effect.outcome": [("evidence",)], "effect.resolve": [("evidence",)]}
 
 def blob_refs(kind: str, content) -> list[dict]:
     if not isinstance(content, dict): return []

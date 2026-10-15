@@ -19,8 +19,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    BoxFuture, CallResult, Command, HomeRef, NodeApi, NodeError, Pending, Query, RoleInfo,
-    ViewEvent, ViewStream,
+    BoxFuture, CallResult, Command, EvidenceRef, HomeRef, NodeApi, NodeError, Pending, Query,
+    RoleInfo, ViewEvent, ViewStream,
 };
 use crate::db::{NodeDb, OutboxRow};
 use crate::home::HomeAddr;
@@ -229,6 +229,33 @@ fn s(t: &str) -> Value {
 
 fn int(n: u64) -> Value {
     Value::Int(i64::try_from(n.min(han_core::json::MAX_SAFE_INT as u64)).unwrap_or(i64::MAX))
+}
+
+/// The `evidence` content member: a `BlobRef`.
+fn evidence_ref(e: &EvidenceRef) -> Value {
+    obj([
+        ("hash", s(&e.hash)),
+        ("size", int(e.size)),
+        ("type", s(&e.media_type)),
+    ])
+}
+
+/// The content of an `effect.cancel`: `reason` (at most 1,024 bytes) and `evidence`, both optional.
+fn cancel_content(
+    reason: Option<&str>,
+    evidence: Option<&EvidenceRef>,
+) -> Result<Option<Value>, NodeError> {
+    let mut content = BTreeMap::new();
+    if let Some(r) = reason {
+        if r.len() > 1024 {
+            return Err(NodeError::invalid("a reason is at most 1024 bytes"));
+        }
+        content.insert("reason".to_owned(), s(r));
+    }
+    if let Some(e) = evidence {
+        content.insert("evidence".to_owned(), evidence_ref(e));
+    }
+    Ok((!content.is_empty()).then_some(Value::Object(content)))
 }
 
 fn strs(items: &[String]) -> Value {
@@ -1903,6 +1930,7 @@ impl<T: Transport> Node<T> {
                 result,
                 started,
                 cost,
+                evidence,
             } => {
                 let mut body = vec![
                     ("claim", s(&claim)),
@@ -1916,7 +1944,9 @@ impl<T: Transport> Node<T> {
                     &space,
                     "effect.outcome",
                     Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
-                    None,
+                    evidence
+                        .as_ref()
+                        .map(|e| obj([("evidence", evidence_ref(e))])),
                 )
                 .await
             }
@@ -1977,7 +2007,12 @@ impl<T: Transport> Node<T> {
                     }),
                 }
             }
-            Command::EffectCancel { space, proposal } => {
+            Command::EffectCancel {
+                space,
+                proposal,
+                reason,
+                evidence,
+            } => {
                 let found = inner.engine().plan_digest(&space, &proposal);
                 match found {
                     None => return Err(NodeError::not_found("no such proposal")),
@@ -1990,7 +2025,7 @@ impl<T: Transport> Node<T> {
                     &space,
                     "effect.cancel",
                     obj([("proposal", s(&proposal))]),
-                    None,
+                    cancel_content(reason.as_deref(), evidence.as_ref())?,
                 )
                 .await
             }
