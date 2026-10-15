@@ -83,19 +83,7 @@ impl GitPush {
         plan: &Value,
         ctx: &ActionCtx,
     ) -> Result<Option<han_vcs::RemoteAuth>, String> {
-        let repo = ctx
-            .config
-            .repo(crate::plan_target(plan))
-            .ok_or("unknown repository")?;
-        let Some(gh) = &repo.github else {
-            return Ok(None);
-        };
-        let minter = ctx.github.as_ref().ok_or("no GitHub App is configured")?;
-        let token = minter.token(gh, &[("contents", "write")]).await?;
-        Ok(Some(han_vcs::RemoteAuth::new(
-            "x-access-token",
-            token.expose(),
-        )))
+        super::write_auth(plan, ctx).await
     }
 }
 

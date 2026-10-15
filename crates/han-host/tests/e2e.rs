@@ -62,6 +62,7 @@ fn exec_config(remote: &Path) -> ExecConfig {
         }],
         http_hosts: Vec::new(),
         branch_prefixes: vec!["han/".into()],
+        landing_refs: Vec::new(),
         github: None,
         test_allow_private_http: false,
     }

@@ -1943,6 +1943,21 @@ impl Vcs for GitVcs {
         Ok(self.three_way(dir, &s, None, &ours, &theirs)?.1)
     }
 
+    fn parents(&self, dir: &Path, commit: &str) -> Result<Vec<String>> {
+        let commit = self.commit_of(dir, commit)?;
+        let out = self
+            .git(Some(dir))?
+            .args(["rev-list", "--parents", "-n", "1", "--end-of-options"])
+            .arg(&commit)
+            .text()?;
+        Ok(out
+            .split_whitespace()
+            .skip(1)
+            .map(str::to_owned)
+            .filter(|p| is_hex_id(p))
+            .collect())
+    }
+
     fn delta(&self, dir: &Path, base: &str, head: &str) -> Result<Delta> {
         self.delta_between(dir, base, head)
     }
