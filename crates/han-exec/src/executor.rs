@@ -137,6 +137,7 @@ impl Executor {
             scratch,
             github: self.cfg.github.clone(),
             args_blob: None,
+            lane: None,
         }
     }
 

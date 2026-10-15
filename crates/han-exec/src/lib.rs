@@ -1,7 +1,7 @@
 //! `han-exec`: the executor (PLAN §5 Action, §6.7; spec architecture.md §4.5 X-01…X-12). The only process
 //! that touches the world, and the only holder of the credentials actions need.
 //!
-//! * [`Action`]: one kind of effect (`git_push`, `open_pr`, `http_request`), desired-state, with a closed plan
+//! * [`Action`]: one kind of effect (`git_push`, `vcs.land`, `open_pr`, `http_request`), desired-state, with a closed plan
 //!   schema checked before claiming and again before launching (X-09, SR-70).
 //! * [`ledger::Ledger`]: the SQLite launch journal keyed by [`IdempotencyKey`] (X-02…X-06, SR-68). "Unknown"
 //!   is never success; invocation ids (attempt numbers) are never reused.
@@ -130,6 +130,29 @@ pub struct ActionCtx {
     /// before the action sees them (`None` when the plan has none, or after a restart, where only `lookup`
     /// runs).
     pub args_blob: Option<Arc<Vec<u8>>>,
+    /// The landing lane's instruction for this attempt (see [`LaneInstruction`]); `None` for every effect
+    /// that is not claimed by a lane, and for `lookup` after a restart until the lane persists it.
+    pub lane: Option<LaneInstruction>,
+}
+
+/// What a landing lane tells `vcs.land` at claim time, outside the plan (the plan is fixed at approval, the
+/// lane's rebase happens after it).
+///
+/// The executor attaches it to [`ActionCtx::lane`] when a lane claims the effect, after the lane has
+/// squash-rebased the approved change onto the target ref's tip and tested exactly that commit. The lane
+/// signs its evidence over the same values (PR 3), so the claim, the evidence and the push name one commit.
+/// It is data, not authority: `vcs.land` re-checks all of it against the plan before the ref moves, and
+/// refuses to run without it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LaneInstruction {
+    /// The tip of the target ref the lane tested on: the value the ref must have for the move to happen.
+    pub onto: String,
+    /// The squashed commit the lane tested, a single commit directly on `onto`.
+    pub commit: String,
+    /// A repository of the executor's own that holds `onto` and `commit` (and the plan's `base..to`), as
+    /// the lane's squash-rebase left it. Never the agent's workspace.
+    pub repository: std::path::PathBuf,
 }
 
 /// A plan's `argsBlob` (a `BlobRef`): the bytes an action needs beyond `args`, carried by the space.
@@ -181,6 +204,11 @@ pub struct ExecConfig {
     /// Branch prefixes a push may move (default `han/`). A ref outside them is out of scope.
     #[serde(default = "default_prefixes")]
     pub branch_prefixes: Vec<String>,
+    /// The full refs `vcs.land` may move, listed explicitly (for example `refs/heads/main`); separate from
+    /// `branch_prefixes`, which only `git_push` and `open_pr` use. Default empty: nothing lands until a ref
+    /// is configured. They apply to every repository in `repos`.
+    #[serde(default)]
+    pub landing_refs: Vec<String>,
     /// The GitHub App, when GitHub actions are configured.
     #[serde(default)]
     pub github: Option<GithubApp>,

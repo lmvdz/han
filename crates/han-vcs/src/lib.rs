@@ -601,6 +601,16 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// The parents of `commit` in the repository at `dir`, in order (empty for a root commit). A landing
+    /// executor checks with it that the commit it moves a ref to sits directly on the tip it was tested on.
+    fn parents(&self, dir: &Path, commit: &str) -> Result<Vec<String>> {
+        let _ = (dir, commit);
+        Err(VcsError::Invalid(format!(
+            "{} lists no commit parents",
+            self.name()
+        )))
+    }
+
     /// The [`Delta`] from `base` to `head`, both commits of the repository at `dir`.
     ///
     /// Entries come from a tree-to-tree comparison (no content or similarity heuristics of the backend).
