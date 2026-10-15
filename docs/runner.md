@@ -387,6 +387,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - logins: whether an agent that uses Claude Code has one (as `han agent login --check` does, without reading it);
 - the device's presence setting: approvals that need a person but a backend with no check (or `pkcheck` missing);
 - the Rust toolchain the sandboxes get: enabled but not installed, or a `--repo` whose `rust-toolchain.toml` pins a toolchain that is not installed;
+- the executor (`/var/lib/han-exec`, or `--exec-dir`): `exec.json` names repositories but has no `github` block, or the write App's key file is missing or not mode 600 (the fix is the `han executor add … --github-app … --github-installation … --github-key …` of 9);
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).
 
 `--json` prints the report for scripts. The schema is `han-doctor/1`, and fields are only added, never renamed or removed, within it:
@@ -455,19 +456,15 @@ sudo -u han-exec han executor add exec --operator <you> --os-user han-exec --spa
 
 With `--os-user` the directory is `/var/lib/han-exec`, where the unit reads everything: `keys/` (the executor's key, at `keys/agent-exec-<server>.key`: the one place `han exec --keys /var/lib/han-exec` looks), `state/`, `exec.json` and `exec.env`. `han executor add` then registers the profile (here, if `--home-data` names this machine's home; otherwise it prints `han home register …` for the home's admin), has the operator confirm it, and makes it a member of the space. Where the operator is somebody else it prints the exact `han actor confirm @exec:<server> --operator <you> --home <ticket>` to run on their device. Run it again afterwards: it resumes and ends with `ready:`.
 
-`exec.json` (it names repositories and the App's key path, never a key) is what `--repo <name>=<remote>` edits. For a GitHub App add the `github` block by hand (§10):
+`exec.json` (it names repositories and the App's key path, never a key) is what `--repo <name>=<remote>` edits. A `--repo` named `github:<owner>/<repo>` also gets `"github": "<owner>/<repo>"`. The write GitHub App (§10) is set with three more flags of the same command, which write the `github` block (`app_id`, `installation_id`, `private_key`) and install the key:
 
-```json
-{
-  "repos": [
-    {"name": "github:<owner>/<repo>", "remote": "https://github.com/<owner>/<repo>.git", "github": "<owner>/<repo>"}
-  ],
-  "branch_prefixes": ["han/"],
-  "github": {"app_id": 5309257, "installation_id": <installation>, "private_key": "/var/lib/han-exec/github-app.pem"}
-}
+```sh
+sudo -u han-exec han executor add exec --operator <you> --os-user han-exec \
+    --github-app <write-app-id> --github-installation <installation-id> --github-key <path-to-pem> \
+    --repo github:<owner>/<repo>=https://github.com/<owner>/<repo>.git
 ```
 
-Put the App's PEM there as `han-exec` with mode 600 (`sudo -u han-exec install -m 600 /dev/stdin /var/lib/han-exec/github-app.pem < key.pem`); nothing else on the runner can read it.
+The flags go together. The command copies the PEM to `/var/lib/han-exec/github-app.pem` with mode 600, owned by the executor's OS user, and never prints it. It refuses a source key that is readable by group or others (`chmod 600` it first), a file whose first line is not a PEM private key header, and, when `--read-app <id>` (or `HAN_GITHUB_READ_APP`) names the read App `han-github` uses, a `--github-app` equal to it. A second run with the same inputs prints `unchanged:`. Delete the source key once it is installed. `han doctor` reports a missing `github` block, a missing key file or a key with the wrong mode.
 
 `exec.env` holds `HAN_SERVER`, `HAN_SPACE`, `HAN_RELAY` and `HAN_HOME` (a ticket holds public keys and addresses, no secret). The unit is `integrations/runner/han-exec.service`:
 
@@ -514,8 +511,8 @@ WantedBy=multi-user.target
 There are two Apps, and the key of each is held by one process only (PLAN 6.7, SR-49).
 
 * **The read App** is what `han-github` uses, configured as its own `[app]` in `han-github.toml`, with
-  **Issues: read** and **Metadata: read** only. The user's current App (id 5309257) is exactly this and is already
-  used by `han-github`. `han-github` has no `han-exec` code and cannot mint a write token.
+  **Issues: read** and **Metadata: read** only. Its id is what `han executor add --read-app <id>`
+  refuses as the executor's `--github-app`. `han-github` has no `han-exec` code and cannot mint a write token.
 * **The write App** is a *second* App, to be created later, whose key only `han-exec` holds (below). Do not
   point `han-github` at it, and do not give the executor the read App.
 

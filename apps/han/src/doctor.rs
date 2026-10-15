@@ -37,6 +37,9 @@ pub struct DoctorArgs {
     /// A repository whose `rust-toolchain.toml` the sandboxes' Rust must have installed (repeatable).
     #[arg(long = "repo")]
     repos: Vec<PathBuf>,
+    /// The executor's directory, if it is not `/var/lib/han-exec` (Linux; checked when `exec.json` is there).
+    #[arg(long)]
+    exec_dir: Option<PathBuf>,
 }
 
 /// One thing that is wrong.
@@ -153,6 +156,20 @@ pub struct StaleFact {
     pub data: String,
 }
 
+/// The executor's GitHub App setup.
+#[derive(Clone, Debug)]
+pub struct ExecutorFacts {
+    pub dir: PathBuf,
+    /// `exec.json` names repositories.
+    pub has_repos: bool,
+    /// The `github` block: `(app id, installation id, key path)`.
+    pub github: Option<(u64, u64, PathBuf)>,
+    /// The key file exists.
+    pub key_exists: bool,
+    /// The key file's permission bits (Unix).
+    pub key_mode: Option<u32>,
+}
+
 /// Everything [`analyze`] looks at.
 #[derive(Clone, Debug)]
 pub struct Facts {
@@ -171,6 +188,8 @@ pub struct Facts {
     pub presence: Option<Result<PresenceFacts, String>>,
     pub toolchain: ToolchainFacts,
     pub stale: Vec<StaleFact>,
+    /// `None` when there is no executor on this machine.
+    pub executor: Option<ExecutorFacts>,
 }
 
 // ───────────────────────── analysis ─────────────────────────
@@ -225,6 +244,9 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     if let Some(p) = &f.presence {
         presence_findings(p, &data, f.linux, &mut out);
     }
+    if let Some(e) = &f.executor {
+        executor_findings(e, &mut out);
+    }
     for s in &f.stale {
         out.push(finding(
             "process.stale-binary",
@@ -242,6 +264,82 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
         ));
     }
     out
+}
+
+fn executor_findings(e: &ExecutorFacts, out: &mut Vec<Finding>) {
+    let subject = e.dir.to_string_lossy().into_owned();
+    let (app, inst, key) = match &e.github {
+        Some((a, i, k)) => (
+            a.to_string(),
+            i.to_string(),
+            k.to_string_lossy().into_owned(),
+        ),
+        None => ("<app-id>".into(), "<installation-id>".into(), String::new()),
+    };
+    let fix = format!(
+        "han executor add <name> --operator <operator> --dir {} --github-app {app} --github-installation {inst} --github-key <path-to-pem>",
+        q(&subject)
+    );
+    let Some(_) = &e.github else {
+        if e.has_repos {
+            out.push(finding(
+                "executor.github.missing",
+                subject,
+                "exec.json names repositories but has no `github` block, so the executor has no write GitHub App and cannot push or open pull requests",
+                fix,
+            ));
+        }
+        return;
+    };
+    if !e.key_exists {
+        out.push(finding(
+            "executor.github.key-missing",
+            subject,
+            format!("the write App's private key {key} does not exist"),
+            fix,
+        ));
+    } else if e.key_mode.is_some_and(|m| m != 0o600) {
+        out.push(finding(
+            "executor.github.key-mode",
+            subject,
+            format!(
+                "the write App's private key {key} has mode {:03o}, not 600",
+                e.key_mode.unwrap_or_default()
+            ),
+            fix,
+        ));
+    }
+}
+
+/// Reads the executor's directory, when there is one.
+fn executor_facts(dir: Option<&Path>) -> Option<ExecutorFacts> {
+    let dir = match dir {
+        Some(d) => d.to_path_buf(),
+        None if cfg!(target_os = "linux") => PathBuf::from(crate::executor::RUNNER_DIR),
+        None => return None,
+    };
+    let cfg: han_exec::ExecConfig =
+        serde_json::from_slice(&std::fs::read(dir.join("exec.json")).ok()?).ok()?;
+    let github = cfg
+        .github
+        .map(|g| (g.app_id, g.installation_id, PathBuf::from(g.private_key)));
+    let meta = github
+        .as_ref()
+        .and_then(|(_, _, k)| std::fs::metadata(k).ok());
+    #[cfg(unix)]
+    let key_mode = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.as_ref().map(|m| m.permissions().mode() & 0o777)
+    };
+    #[cfg(not(unix))]
+    let key_mode = None;
+    Some(ExecutorFacts {
+        dir,
+        has_repos: !cfg.repos.is_empty(),
+        key_exists: meta.is_some(),
+        key_mode,
+        github,
+    })
 }
 
 fn node_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
@@ -756,7 +854,12 @@ fn stale_processes() -> Vec<StaleFact> {
 }
 
 /// Reads the machine.
-pub async fn gather(data: &Path, endpoint: &str, repos: &[PathBuf]) -> Facts {
+pub async fn gather(
+    data: &Path,
+    endpoint: &str,
+    repos: &[PathBuf],
+    exec_dir: Option<&Path>,
+) -> Facts {
     let linux = cfg!(target_os = "linux");
     let node = node_facts(endpoint).await;
     let agents = AgentsFile::load(data);
@@ -805,6 +908,7 @@ pub async fn gather(data: &Path, endpoint: &str, repos: &[PathBuf]) -> Facts {
         presence: presence_facts(data),
         toolchain,
         stale: stale_processes(),
+        executor: executor_facts(exec_dir),
     }
 }
 
@@ -841,7 +945,7 @@ pub async fn run(args: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
         .endpoint
         .clone()
         .unwrap_or_else(|| default_endpoint(&args.data));
-    let facts = gather(&args.data, &endpoint, &args.repos).await;
+    let facts = gather(&args.data, &endpoint, &args.repos, args.exec_dir.as_deref()).await;
     let r = report(&args.data, analyze(&facts));
     if args.json {
         println!("{}", serde_json::to_string_pretty(&r)?);
@@ -874,6 +978,7 @@ mod tests {
             presence: None,
             toolchain: ToolchainFacts::default(),
             stale: Vec::new(),
+            executor: None,
         }
     }
 
@@ -1165,6 +1270,55 @@ mod tests {
         assert_eq!(x.id, "process.stale-binary");
         assert_eq!(x.fix, "sudo systemctl restart han-seq");
         assert!(x.cause.contains("/srv/home"));
+    }
+
+    fn exec_facts() -> ExecutorFacts {
+        ExecutorFacts {
+            dir: PathBuf::from("/x"),
+            has_repos: true,
+            github: Some((7, 8, PathBuf::from("/x/github-app.pem"))),
+            key_exists: true,
+            key_mode: Some(0o600),
+        }
+    }
+
+    #[test]
+    fn an_executor_with_repos_and_no_github_block_is_reported_with_the_flags() {
+        let mut f = healthy();
+        let mut e = exec_facts();
+        e.github = None;
+        f.executor = Some(e);
+        let x = only(&f);
+        assert_eq!(x.id, "executor.github.missing");
+        for flag in ["--github-app", "--github-installation", "--github-key"] {
+            assert!(x.fix.contains(flag), "{}", x.fix);
+        }
+        // no repos, nothing to write to
+        let mut e = exec_facts();
+        e.github = None;
+        e.has_repos = false;
+        f.executor = Some(e);
+        assert!(analyze(&f).is_empty());
+    }
+
+    #[test]
+    fn a_missing_or_loose_executor_key_is_reported() {
+        let mut f = healthy();
+        f.executor = Some(exec_facts());
+        assert!(analyze(&f).is_empty());
+        let mut e = exec_facts();
+        e.key_exists = false;
+        e.key_mode = None;
+        f.executor = Some(e);
+        let x = only(&f);
+        assert_eq!(x.id, "executor.github.key-missing");
+        assert!(x.fix.contains("--github-key") && x.fix.contains("--github-app 7"));
+        let mut e = exec_facts();
+        e.key_mode = Some(0o644);
+        f.executor = Some(e);
+        let x = only(&f);
+        assert_eq!(x.id, "executor.github.key-mode");
+        assert!(x.cause.contains("644"));
     }
 
     #[test]
