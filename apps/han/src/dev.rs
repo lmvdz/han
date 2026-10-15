@@ -12,7 +12,11 @@
 //! The live-Claude variant (`--harness claude`) installs the pinned Claude adapter and needs a login
 //! (`han agent login`); it is for people, not for CI.
 
+mod gh;
+mod git;
 mod github;
+mod prs;
+mod prune;
 
 use std::collections::BTreeMap;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
@@ -86,6 +90,10 @@ enum DevCmd {
         #[arg(long, default_value = "han-dev")]
         dir: PathBuf,
     },
+    /// Watches open auto-merge pull requests and reports the ones that need a decision.
+    Prs(prs::PrsArgs),
+    /// Removes the worktrees and branches of merged or closed pull requests, keeping anything unlanded.
+    Prune(prune::PruneArgs),
     /// Says what runs.
     Status {
         /// The directory `up` made.
@@ -200,6 +208,8 @@ pub async fn run(args: DevArgs) -> Res<()> {
         DevCmd::Stop { service, dir } => stop(&abs(&dir), &service).await,
         DevCmd::Start { service, dir } => start(&abs(&dir), &service).await,
         DevCmd::Status { dir } => status(&abs(&dir)),
+        DevCmd::Prs(a) => prs::run(a),
+        DevCmd::Prune(a) => prune::run(a),
         DevCmd::FakeGithub { addr, issues } => github::serve(addr, issues).await,
     }
 }
