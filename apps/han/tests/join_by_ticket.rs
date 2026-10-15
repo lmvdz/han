@@ -85,6 +85,13 @@ fn han(args: &[&str]) -> String {
 }
 
 fn node(data: &Path, home: &[&str]) -> Daemon {
+    // Nobody sits at the machine that runs the tests: the node does not ask for a presence check before it
+    // lets this connection govern (it reads the setting at each use).
+    std::fs::create_dir_all(data).unwrap();
+    han_node::db::NodeDb::open(&data.join("node.db"))
+        .unwrap()
+        .set_config(han_node::presence::REQUIRE_KEY, "")
+        .unwrap();
     let data = data.to_str().unwrap();
     let mut args = vec![
         "node",

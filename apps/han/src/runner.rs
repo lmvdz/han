@@ -211,6 +211,75 @@ mod linux {
             )
         }
 
+        /// A directory that `owner` (root) owns and nobody else may write, made if it is missing. A symlink, a
+        /// file, or a directory of another user or open to writes is refused: whoever planted it could choose
+        /// what root's marker inside it says.
+        fn root_dir(&mut self, path: &str, owner: u32) -> Res<()> {
+            use std::os::unix::fs::MetadataExt as _;
+            match std::fs::symlink_metadata(path) {
+                Ok(m) => {
+                    if m.file_type().is_symlink()
+                        || !m.is_dir()
+                        || m.uid() != owner
+                        || m.mode() & 0o022 != 0
+                    {
+                        return Err(format!(
+                            "{path} is not a plain directory owned by root that nobody else can write (a symlink, a file, or another user's): remove it and run this again"
+                        )
+                        .into());
+                    }
+                    self.say("unchanged:", path);
+                    Ok(())
+                }
+                Err(_) => self.cmd(
+                    "install",
+                    &["-d", "-o", "root", "-m", "755", path],
+                    &format!("made {path}"),
+                ),
+            }
+        }
+
+        /// Writes `dir/name` as `owner`'s alone: refuses a marker that is a symlink, not a plain file, or
+        /// another user's, and writes a new file (never through a link) in `dir`, which `root_dir` vouched for,
+        /// then renames it over the old one.
+        fn root_marker(&mut self, dir: &Path, name: &str, content: &str, owner: u32) -> Res<()> {
+            use std::io::Write as _;
+            use std::os::unix::fs::MetadataExt as _;
+            let path = dir.join(name);
+            if let Ok(m) = std::fs::symlink_metadata(&path) {
+                if m.file_type().is_symlink() || !m.is_file() || m.uid() != owner {
+                    return Err(format!(
+                        "{} is not a plain file owned by root (a symlink or another user's): remove it and run this again",
+                        path.display()
+                    )
+                    .into());
+                }
+                if std::fs::read_to_string(&path).is_ok_and(|c| c == content)
+                    && m.mode() & 0o7777 == 0o644
+                {
+                    self.say("unchanged:", &path.display().to_string());
+                    return Ok(());
+                }
+            }
+            if self.dry {
+                self.say("would:", &format!("write {}", path.display()));
+                return Ok(());
+            }
+            let tmp = dir.join(format!(".{name}.tmp"));
+            let _ = std::fs::remove_file(&tmp);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .open(&tmp)?;
+            f.write_all(content.as_bytes())?;
+            drop(f);
+            std::fs::rename(&tmp, &path)?;
+            self.changed = true;
+            self.say("changed:", &format!("wrote {}", path.display()));
+            Ok(())
+        }
+
         /// Writes a file when its content or mode differs.
         fn file(&mut self, path: &str, content: &str, mode: u32) -> Res<bool> {
             let same = std::fs::read_to_string(path).is_ok_and(|c| c == content)
@@ -309,6 +378,22 @@ mod linux {
             )?;
         }
         c.dir(NODE_DATA, Some(node_user), 0o700)?;
+        // Nobody sits at the runner's node to answer a presence prompt, so root says it is headless: no unlock
+        // for governing and steering, no approvals. The marker is root's alone (a process of the node's user
+        // cannot write it), which is what makes it the authority (SR-108).
+        c.root_dir("/etc/han", 0)?;
+        c.root_dir(han_node::presence::HEADLESS_DIR, 0)?;
+        c.root_marker(
+            Path::new(han_node::presence::HEADLESS_DIR),
+            &han_node::presence::seal_name(Path::new(&format!("{NODE_DATA}/node"))),
+            &format!(
+                "# han runner setup: the node with data in {NODE_DATA}/node is headless (no person sits at it).
+                 # It asks for no presence check to govern or steer, and it never approves.
+                 # Only root can write this file; remove it to make the node a person's again.
+"
+            ),
+            0,
+        )?;
 
         if user_exists(exec_user) {
             c.say("unchanged:", &format!("user {exec_user}"));
@@ -818,6 +903,69 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn ctx() -> Ctx {
+            Ctx {
+                dry: false,
+                changed: false,
+                reload: false,
+            }
+        }
+
+        #[test]
+        fn a_planted_symlink_is_refused_for_root_s_headless_marker() {
+            use std::os::unix::fs::MetadataExt as _;
+            let base = std::env::temp_dir().join(format!("han-marker-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            let dir = base.join("headless.d");
+            std::fs::create_dir_all(&dir).unwrap();
+            // the user running the test stands in for root
+            let me = std::fs::metadata(&dir).unwrap().uid();
+            let victim = base.join("victim");
+            std::fs::write(&victim, "keep").unwrap();
+            // a marker that is a symlink to a file is refused, and the file is not written through
+            std::os::unix::fs::symlink(&victim, dir.join("node")).unwrap();
+            let e = ctx()
+                .root_marker(
+                    &dir,
+                    "node",
+                    "headless
+",
+                    me,
+                )
+                .unwrap_err();
+            assert!(e.to_string().contains("not a plain file"), "{e}");
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+            // so is a symlink where the directory should be
+            let link = base.join("link.d");
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            let e = ctx().root_dir(link.to_str().unwrap(), me).unwrap_err();
+            assert!(e.to_string().contains("not a plain directory"), "{e}");
+            // and a directory another user owns
+            let e = ctx()
+                .root_dir(dir.to_str().unwrap(), me.wrapping_add(1))
+                .unwrap_err();
+            assert!(e.to_string().contains("not a plain directory"), "{e}");
+            // a planted temp name does not redirect the write, and a plain marker is written and kept
+            std::fs::remove_file(dir.join("node")).unwrap();
+            std::os::unix::fs::symlink(&victim, dir.join(".node.tmp")).unwrap();
+            ctx()
+                .root_marker(
+                    &dir,
+                    "node",
+                    "headless
+",
+                    me,
+                )
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(dir.join("node")).unwrap(),
+                "headless
+"
+            );
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+            let _ = std::fs::remove_dir_all(&base);
+        }
 
         #[test]
         fn agent_units_are_found_in_a_listing() {

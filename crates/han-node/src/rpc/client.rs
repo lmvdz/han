@@ -28,11 +28,40 @@ pub struct RpcClient {
     /// Set when the connection has ended: later calls and views fail at once instead of waiting for an
     /// answer that cannot come.
     gone: Arc<AtomicBool>,
+    /// Whether a refusal with `presence_required` makes the client ask the device to unlock the connection
+    /// and send the command again (a face does; a probe of the lock does not).
+    unlocks: bool,
+    /// One unlock at a time from this client: concurrent calls that were refused wait for the first one's
+    /// answer instead of each asking the person.
+    unlocking: tokio::sync::Mutex<()>,
 }
 
 impl RpcClient {
-    /// Connects to the daemon at `endpoint` (see [`super::default_endpoint`]).
+    /// Connects to the daemon at `endpoint` (see [`super::default_endpoint`]), as a face does: when the node
+    /// answers `presence_required` to a command that governs or steers, the client asks the device to unlock
+    /// this connection (the person confirms there) and sends the command again. A command costs a person
+    /// one confirmation per unlock window, and a refusal of the confirmation is the command's error.
     pub async fn connect(endpoint: &str) -> io::Result<RpcClient> {
+        Self::open(endpoint, true).await
+    }
+
+    /// Like [`RpcClient::connect`], but never asks for the unlock: a command that needs a person gets
+    /// `presence_required`, as it does for any process that opens the pipe and cannot be at the device.
+    pub async fn connect_locked(endpoint: &str) -> io::Result<RpcClient> {
+        Self::open(endpoint, false).await
+    }
+
+    /// Asks the device to confirm a person for this connection, and returns how long the unlock lasts. The
+    /// answer comes when the person has answered the device's prompt.
+    pub async fn unlock(&self) -> Result<std::time::Duration, NodeError> {
+        let v = self.request("unlock", Value::Null).await?;
+        let ms = v["window_ms"]
+            .as_u64()
+            .ok_or_else(|| NodeError::unavailable("rpc: bad unlock result"))?;
+        Ok(std::time::Duration::from_millis(ms))
+    }
+
+    async fn open(endpoint: &str, unlocks: bool) -> io::Result<RpcClient> {
         let stream = Stream::connect(local_name(endpoint)?).await?;
         let (recv, mut send) = stream.split();
         let (writer, mut out) = mpsc::unbounded_channel::<String>();
@@ -83,6 +112,8 @@ impl RpcClient {
             pending,
             subs,
             gone: gone_flag,
+            unlocks,
+            unlocking: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -164,8 +195,17 @@ impl NodeApi for RpcClient {
         Box::pin(async move {
             let params =
                 serde_json::to_value(&cmd).map_err(|e| NodeError::invalid(e.to_string()))?;
-            let result = self.request("call", params).await?;
-            serde_json::from_value(result)
+            let mut result = self.request("call", params.clone()).await;
+            if self.unlocks && matches!(result, Err(NodeError::PresenceRequired { .. })) {
+                let _one = self.unlocking.lock().await;
+                // another call may have unlocked the connection while this one waited
+                result = self.request("call", params.clone()).await;
+                if matches!(result, Err(NodeError::PresenceRequired { .. })) {
+                    self.unlock().await?;
+                    result = self.request("call", params).await;
+                }
+            }
+            serde_json::from_value(result?)
                 .map_err(|e| NodeError::unavailable(format!("rpc: bad result: {e}")))
         })
     }

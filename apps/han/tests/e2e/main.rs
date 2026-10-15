@@ -484,6 +484,12 @@ async fn joining_by_ticket_and_the_operators_confirm_use_only_the_setup_commands
     assert!(old.contains("registered"), "{old}");
 
     // Bob's node joins by ticket
+    // nobody sits at the machine that runs the tests to confirm Bob's joining
+    std::fs::create_dir_all(&bob_data).unwrap();
+    han_node::db::NodeDb::open(&std::path::Path::new(&bob_data).join("node.db"))
+        .unwrap()
+        .set_config(han_node::presence::REQUIRE_KEY, "")
+        .unwrap();
     let log = std::fs::File::create(s.dir.join("logs").join("bob.log")).unwrap();
     let mut node = std::process::Command::new(stack::HAN)
         .args([
@@ -846,4 +852,151 @@ async fn an_executor_cannot_approve_or_govern() {
     assert!(!out.contains("claim:"), "an executor may claim: {out}");
     assert!(out.contains("own: reached the node"), "{out}");
     s.dev(&["start", "exec"]);
+}
+
+/// Bug class: any process of the person's OS user could open the node's face pipe and govern or steer as the
+/// person. A connection now starts locked for members, policy, invites, devices and steering, and the node's
+/// presence check (here the `test-allow` backend, which exists only in `conformance` builds) unlocks it. With
+/// no check on the device, a plain local client and the CLI are refused with the typed error and nothing
+/// changes; with one, the CLI and a face client govern and steer, and the loop goes on.
+#[cfg(feature = "conformance")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored --features conformance (the nightly full workflow does)"]
+async fn a_local_process_cannot_govern_or_steer_until_a_person_confirms() {
+    use han_node::NodeError;
+    let s = Stack::up("simple", &[]);
+    let c = s.client().await;
+    s.start_agent();
+    let before = s
+        .board_until(&c, "the first turn to finish", 120, idle)
+        .await;
+    let data = s.person_data().to_string_lossy().into_owned();
+    let member = |s: &Stack| {
+        run(&[
+            "space",
+            "member",
+            &s.space(),
+            &s.agent(),
+            "member",
+            "--data",
+            &data,
+        ])
+    };
+    let steer = Command::SessionInput {
+        space: s.space(),
+        session: before.session.clone(),
+        text: "Please go on.".into(),
+    };
+
+    // a device that requires a person and has no way to ask one: nothing governs or steers
+    s.presence("all", "none");
+    let endpoint = han_node::rpc::default_endpoint(&s.person_data());
+    let plain = han_node::rpc::RpcClient::connect_locked(&endpoint)
+        .await
+        .unwrap();
+    for cmd in [
+        steer.clone(),
+        Command::MemberSet {
+            space: s.space(),
+            actor: s.agent(),
+            role: "member".into(),
+        },
+        Command::PolicySet {
+            space: s.space(),
+            policy: "{}".into(),
+        },
+        Command::Invite {
+            space: s.space(),
+            ttl_secs: None,
+            expires_at: None,
+            auto_admit: false,
+        },
+        Command::DeviceOffer,
+        // pinning a home by the ticket of a command is `HomePin` by another door
+        Command::SpaceFollow {
+            home: Some(han_node::api::HomeRef::Ticket("han1home.x".into())),
+            space: s.space(),
+        },
+        Command::AgentStart {
+            space: s.space(),
+            agent: s.agent(),
+            harness: None,
+            repo: None,
+            issue: None,
+            home: None,
+        },
+    ] {
+        let e = plain.call(cmd.clone()).await.unwrap_err();
+        assert!(
+            matches!(e, NodeError::PresenceRequired { .. }),
+            "{cmd:?}: {e:?}"
+        );
+    }
+    assert!(
+        s.board_row(&plain).await.is_some(),
+        "reads work on a locked connection"
+    );
+    let (ok, _, err) = member(&s);
+    assert!(
+        !ok && err.contains("not unlocked") && err.contains("no presence check"),
+        "the CLI is refused: {err}"
+    );
+    // the CLI's refusal spaced the next prompt out; the refusal says how long, and this waits exactly that
+    let refused = loop {
+        match c.call(steer.clone()).await.unwrap_err() {
+            NodeError::Unavailable {
+                retry_after_ms: Some(ms),
+                ..
+            } => tokio::time::sleep(Duration::from_millis(ms)).await,
+            e => break e,
+        }
+    };
+    assert!(
+        matches!(&refused, NodeError::Denied { message } if message.starts_with("not unlocked: ")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        s.agent_events().iter().filter(|e| *e == "prompt").count(),
+        1,
+        "the agent was not steered"
+    );
+
+    // the person is there: the CLI asks once and the face client unlocks on its first steering input; a
+    // second plain connection still gets nothing from either
+    s.presence("all", "test-allow");
+    // The refusals above space the next prompt out, on the node and on connection `c`. The refusal says how
+    // long (`retry_after_ms`), and each wait here is exactly that.
+    let probe = han_node::rpc::RpcClient::connect_locked(&endpoint)
+        .await
+        .unwrap();
+    while let Err(NodeError::Unavailable {
+        retry_after_ms: Some(ms),
+        ..
+    }) = probe.unlock().await
+    {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
+    let (ok, _, err) = member(&s);
+    assert!(ok, "the CLI governs after a confirmation: {err}");
+    loop {
+        match c.call(steer.clone()).await {
+            Err(NodeError::Unavailable {
+                retry_after_ms: Some(ms),
+                ..
+            }) => tokio::time::sleep(Duration::from_millis(ms)).await,
+            r => {
+                r.expect("the steering input is accepted after a confirmation");
+                break;
+            }
+        }
+    }
+    until("the agent's second turn", 90, || async {
+        s.agent_events().iter().filter(|e| *e == "prompt").count() >= 2
+    })
+    .await;
+    let e = plain
+        .call(Command::DeviceOffer)
+        .await
+        .expect_err("another connection stays locked");
+    assert!(matches!(e, NodeError::PresenceRequired { .. }), "{e:?}");
 }

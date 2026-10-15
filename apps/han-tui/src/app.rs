@@ -433,8 +433,15 @@ impl App {
                 });
                 let Some(row) = row else { return Vec::new() };
                 let first = self.me.is_none();
+                let headless = row.headless;
                 self.me = Some(row.actor.clone());
                 self.node = Some(row);
+                if first && headless {
+                    self.say(
+                        Tone::Info,
+                        "This node is headless (a service node): it asks for no person to govern or steer and it never approves.",
+                    );
+                }
                 if first {
                     let me = self.me.clone().unwrap_or_default();
                     return vec![self.sub(

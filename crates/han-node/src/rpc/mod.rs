@@ -26,7 +26,10 @@ use crate::api::NodeError;
 
 pub use client::RpcClient;
 #[cfg(feature = "runtime")]
-pub use server::{NodeServers, RpcServer, listen_local, serve, serve_as, serve_roles};
+pub use server::{
+    NodeServers, RpcServer, ServerClock, listen_local, serve, serve_as, serve_roles,
+    serve_with_clock,
+};
 
 /// The longest message, in bytes, either side accepts.
 pub const MAX_LINE: usize = 4 * 1024 * 1024;

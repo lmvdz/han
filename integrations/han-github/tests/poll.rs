@@ -99,6 +99,7 @@ impl NodeApi for Node {
                 resyncs: 0,
                 recent_errors: vec![],
                 problems: vec![],
+                headless: false,
             })],
             other => panic!("unexpected view {other:?}"),
         };

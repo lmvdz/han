@@ -58,6 +58,8 @@ pub struct NodeInfo {
     pub roles: Vec<RoleInfo>,
     /// What stops roles from starting on this machine (the supervisor's).
     pub problems: Vec<String>,
+    /// Root made the node headless: nobody sits at it (`presence::headless_marker`).
+    pub headless: bool,
 }
 
 /// Where a session's work timeline comes from. han-timeline backs it in M4; until then [`NoTimeline`] says
@@ -727,6 +729,7 @@ impl Engine {
                 resyncs: self.resyncs,
                 recent_errors: self.errors.iter().cloned().collect(),
                 problems: self.problems(),
+                headless: self.info.headless,
             }),
         )
     }

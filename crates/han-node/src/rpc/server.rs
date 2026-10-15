@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{Stream, prelude::*};
@@ -48,6 +50,37 @@ pub fn serve_as(
     endpoint: &str,
     class: ConnectionClass,
 ) -> io::Result<RpcServer> {
+    serve_with_clock(api, endpoint, class, Arc::default())
+}
+
+/// The time a server counts unlock windows by: the real time, plus whatever [`ServerClock::advance`] added.
+/// A seam for the process that embeds the server (a test that must not sleep through a window): it only moves
+/// time forward, which ends unlocks sooner and never extends one, and nothing on the pipe can reach it.
+#[derive(Default)]
+pub struct ServerClock {
+    skew_ms: std::sync::atomic::AtomicU64,
+}
+
+impl ServerClock {
+    /// Moves this server's time forward by `by`.
+    pub fn advance(&self, by: Duration) {
+        let ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
+        self.skew_ms.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    fn now(&self) -> (Instant, SystemTime) {
+        let skew = Duration::from_millis(self.skew_ms.load(Ordering::SeqCst));
+        (Instant::now() + skew, SystemTime::now() + skew)
+    }
+}
+
+/// Like [`serve_as`], counting unlock windows by `clock`.
+pub fn serve_with_clock(
+    api: Arc<dyn NodeApi>,
+    endpoint: &str,
+    class: ConnectionClass,
+    clock: Arc<ServerClock>,
+) -> io::Result<RpcServer> {
     let options = ListenerOptions::new().name(local_name(endpoint)?);
     let options = restrict(options)?;
     let listener = options.create_tokio()?;
@@ -58,7 +91,12 @@ pub fn serve_as(
             match listener.accept().await {
                 Ok(conn) => {
                     while conns.try_join_next().is_some() {}
-                    conns.spawn(connection(conn, Arc::clone(&api), class));
+                    conns.spawn(connection(
+                        conn,
+                        Arc::clone(&api),
+                        class,
+                        Arc::clone(&clock),
+                    ));
                 }
                 Err(e) => {
                     tracing::warn!("rpc accept: {e}");
@@ -192,7 +230,127 @@ fn protocol_error(code: i64, message: &str) -> ErrorObject {
     }
 }
 
-async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass) {
+/// The lock of one face connection. It belongs to the connection: another connection to the same pipe starts
+/// locked and needs its own check.
+struct Lock {
+    clock: Arc<ServerClock>,
+    /// When the person's unlock ends, by the monotonic clock and by the wall clock; the unlock holds only
+    /// while both say it has not ended, so neither a suspend nor a clock change can stretch it.
+    until: Mutex<Option<(Instant, SystemTime)>>,
+    /// An unlock waits for the person.
+    pending: AtomicBool,
+    /// Spacing after refused unlocks on this connection.
+    backoff: Mutex<crate::presence::Backoff>,
+}
+
+impl Lock {
+    fn new(clock: Arc<ServerClock>) -> Self {
+        Lock {
+            clock,
+            until: Mutex::default(),
+            pending: AtomicBool::new(false),
+            backoff: Mutex::default(),
+        }
+    }
+
+    /// How long the unlock still holds, if it does.
+    fn remaining(&self) -> Option<Duration> {
+        let (mono, wall) = (*self.until.lock().unwrap_or_else(|e| e.into_inner()))?;
+        let (now_mono, now_wall) = self.clock.now();
+        let by_mono = mono.checked_duration_since(now_mono)?;
+        let by_wall = wall.duration_since(now_wall).ok()?;
+        Some(by_mono.min(by_wall)).filter(|d| !d.is_zero())
+    }
+}
+
+/// Clears `pending` when the unlock ends, however it ends (a closed connection aborts it).
+struct Pending<'a>(&'a AtomicBool);
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Whether `cmd` may go to the node now: a face connection sends a command that governs or steers only while
+/// it is unlocked and only if the node requires a person for it.
+fn gate(api: &dyn NodeApi, lock: &Lock, cmd: &Command) -> Result<(), NodeError> {
+    if !cmd.needs_presence() || !api.presence_required()? {
+        return Ok(());
+    }
+    if lock.remaining().is_some() {
+        return Ok(());
+    }
+    Err(NodeError::presence_required(
+        "this connection has not confirmed a person on the device, or the confirmation ran out",
+    ))
+}
+
+/// What the prompt may say about the peer: its process name (where the system tells) and pid.
+fn describe_peer(conn: &Stream) -> Option<String> {
+    let pid = conn.peer_creds().ok()?.pid()?;
+    #[cfg(target_os = "linux")]
+    if let Ok(name) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+        return Some(format!("{} (pid {pid})", name.trim()));
+    }
+    Some(format!("process {pid}"))
+}
+
+/// One `unlock` request on a face connection.
+async fn unlock(
+    api: Arc<dyn NodeApi>,
+    lock: Arc<Lock>,
+    client: Option<String>,
+) -> Result<Value, ErrorObject> {
+    let reply = |window: Duration| Ok(json!({ "window_ms": window.as_millis() as u64 }));
+    // already unlocked: nothing to ask
+    if let Some(left) = lock.remaining() {
+        return reply(left);
+    }
+    if lock.pending.swap(true, Ordering::SeqCst) {
+        let e = NodeError::conflict("an unlock already waits for a person on this connection");
+        return Err(ErrorObject::node(&e));
+    }
+    let _pending = Pending(&lock.pending);
+    let wait = lock
+        .backoff
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .wait();
+    if let Some(wait) = wait {
+        return Err(ErrorObject::node(&crate::presence::spaced_out(wait)));
+    }
+    match api.confirm_unlock(client).await {
+        Ok(window) => {
+            lock.backoff
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .allowed();
+            *lock.until.lock().unwrap_or_else(|e| e.into_inner()) = Some({
+                let (mono, wall) = lock.clock.now();
+                (mono + window, wall + window)
+            });
+            reply(window)
+        }
+        Err(e) => {
+            if matches!(e, NodeError::Denied { .. }) {
+                lock.backoff
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .refused();
+            }
+            Err(ErrorObject::node(&e))
+        }
+    }
+}
+
+async fn connection(
+    conn: Stream,
+    api: Arc<dyn NodeApi>,
+    class: ConnectionClass,
+    clock: Arc<ServerClock>,
+) {
+    let client = describe_peer(&conn);
     let (recv, mut send) = conn.split();
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
     // Every task of the connection is owned by it: when the connection is aborted (the server dropped) or
@@ -209,6 +367,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
     }));
     let mut calls = JoinSet::new();
     let views: Views = Arc::default();
+    let lock = Arc::new(Lock::new(clock));
     let mut reader = BufReader::new(recv);
     let mut buf = Vec::new();
     loop {
@@ -241,6 +400,12 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
                     let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
                 }
                 Ok(cmd) => {
+                    if class == ConnectionClass::Face
+                        && let Err(e) = gate(&*api, &lock, &cmd)
+                    {
+                        let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
+                        continue;
+                    }
                     let (api, out) = (Arc::clone(&api), out.clone());
                     while calls.try_join_next().is_some() {}
                     calls.spawn(async move {
@@ -262,6 +427,21 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
                     let _ = out.send(respond(&id, Err(err)));
                 }
             },
+            Some("unlock") if class != ConnectionClass::Face => {
+                let e = NodeError::denied(format!("a {class:?} connection cannot unlock"));
+                let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
+            }
+            Some("unlock") => {
+                let (api, out, lock, client) = (
+                    Arc::clone(&api),
+                    out.clone(),
+                    Arc::clone(&lock),
+                    client.clone(),
+                );
+                calls.spawn(async move {
+                    let _ = out.send(respond(&id, unlock(api, lock, client).await));
+                });
+            }
             Some("view") => match (id.as_u64(), serde_json::from_value::<Query>(params)) {
                 (Some(sub), Ok(query)) => {
                     let _ = out.send(respond(&id, Ok(json!({ "sub": sub }))));
