@@ -59,6 +59,9 @@ pub struct NodeConfig {
     pub outbox_backoff: Duration,
     /// How often the node moves the views' clock when it runs by itself.
     pub tick_every: Duration,
+    /// How long an exited host's open session waits for its own `session.close` before the node marks it ended
+    /// ("host exited").
+    pub exit_grace: Duration,
     /// Fetches `/.well-known/han`, to confirm a ticket's node before it is dialed (Z4).
     pub fetcher: han_net::wellknown::Fetcher,
     /// The human-presence check approvals wait for. Absent, the node builds the backend `presence.backend`
@@ -91,6 +94,7 @@ impl NodeConfig {
             outbox_max_attempts: 12,
             outbox_backoff: Duration::from_secs(5),
             tick_every: Duration::from_secs(5),
+            exit_grace: Duration::from_secs(10),
             fetcher: han_net::wellknown::Fetcher::new(),
             presence: None,
             presence_timeout: crate::presence::DEFAULT_TIMEOUT,
@@ -142,6 +146,8 @@ pub(crate) struct Inner<T: Transport> {
     /// Outbox rows waiting out a backoff, by row id: the clock reading (ms) before which they are not tried.
     outbox_retry_at: Mutex<HashMap<u64, u64>>,
     ticker: Mutex<Option<JoinHandle<()>>>,
+    /// Which hosts exited, to mark the sessions they left open.
+    exits: Mutex<crate::supervisor::ExitWatch>,
     /// The work timelines of watched sessions, fed by their `han.timeline/1` items.
     pub timelines: Arc<crate::timeline::StreamTimelines>,
     /// Spaces whose invite asked for `auto_admit`, and until when (wall seconds).
@@ -597,6 +603,7 @@ impl<T: Transport> Node<T> {
             space_locks: Mutex::new(HashMap::new()),
             outbox_retry_at: Mutex::new(HashMap::new()),
             ticker: Mutex::new(None),
+            exits: Mutex::new(crate::supervisor::ExitWatch::default()),
             auto_admit: Mutex::new(HashMap::new()),
             prompter: presence::Prompter::new(),
             presence_settings,
@@ -678,9 +685,25 @@ impl<T: Transport> Node<T> {
     /// `tick_every`; a simulation calls it after moving its clock).
     pub fn tick(&self) {
         let inner = &self.inner;
-        let roles: Vec<RoleInfo> = inner
-            .supervisor
-            .status()
+        let status = inner.supervisor.status();
+        // A host that exited without closing its session leaves it open: say it ended.
+        let exited = inner
+            .exits
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .observe(
+                &status,
+                inner.clock.steady_ms(),
+                u64::try_from(inner.cfg.exit_grace.as_millis()).unwrap_or(u64::MAX),
+            );
+        for name in exited {
+            if let Some((agent, work)) = crate::supervisor::parse_host_name(&name) {
+                inner
+                    .engine()
+                    .host_exited(agent, work, crate::supervisor::HOST_EXITED);
+            }
+        }
+        let roles: Vec<RoleInfo> = status
             .into_iter()
             .map(|(name, st)| RoleInfo {
                 name,
@@ -1408,11 +1431,7 @@ impl<T: Transport> Node<T> {
                         }
                     }
                 };
-                let name = match (&issue, &task) {
-                    (Some(i), _) => format!("host-{agent}#{i}"),
-                    (None, Some(t)) => format!("host-{agent}#{t}"),
-                    (None, None) => format!("host-{agent}"),
-                };
+                let name = crate::supervisor::host_name(&agent, issue.as_deref(), task.as_deref());
                 let data_dir = inner.cfg.data_dir.as_ref().ok_or_else(|| {
                     NodeError::unavailable("this node has no data directory to launch agents from")
                 })?;
@@ -1480,6 +1499,12 @@ impl<T: Transport> Node<T> {
                         SupervisorError::NotRunning(_) => NodeError::not_found(e.to_string()),
                         other => NodeError::unavailable(other.to_string()),
                     })?;
+                    // A host stopped mid-turn may not get to close its session.
+                    inner
+                        .exits
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .stopped(&n, inner.clock.steady_ms());
                 }
                 Ok(CallResult::Done)
             }

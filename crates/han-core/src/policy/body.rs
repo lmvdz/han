@@ -111,6 +111,17 @@ pub enum TaskState {
 }
 
 impl TaskState {
+    /// The wire name of a final state (`None` for the others).
+    pub fn final_name(self) -> Option<&'static str> {
+        match self {
+            TaskState::Done => Some("done"),
+            TaskState::Failed => Some("failed"),
+            TaskState::Declined => Some("declined"),
+            TaskState::Cancelled => Some("cancelled"),
+            _ => None,
+        }
+    }
+
     /// Done, failed, declined or cancelled.
     pub fn is_final(self) -> bool {
         matches!(

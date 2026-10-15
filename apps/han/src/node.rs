@@ -17,7 +17,7 @@ use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore, KeyringStore};
 use han_node::rpc::{default_endpoint, role_endpoint, serve_roles};
 use han_node::supervisor::ProcessSpawner;
 use han_node::{Node, NodeConfig, NodeParts, WellKnownKeys};
-use han_registry::HomeRef;
+use han_registry::{AgentsFile, HomeRef, RunAs};
 use han_seq::SystemClock;
 
 use crate::gate::GatedSpawner;
@@ -287,6 +287,25 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// The agents of `agents.json` that run as another OS user, with where their unit's spawn file is.
+fn os_user_agents(data: &std::path::Path) -> Vec<(String, RunAs)> {
+    let Ok(file) = AgentsFile::load(data) else {
+        return Vec::new();
+    };
+    file.agents
+        .iter()
+        .filter_map(|(actor, a)| {
+            Some((
+                actor.clone(),
+                RunAs {
+                    os_user: a.os_user.clone()?,
+                    state_dir: file.state_dir(data, actor),
+                },
+            ))
+        })
+        .collect()
+}
+
 async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     let actor = args.actor()?.to_owned();
     let actor = actor.as_str();
@@ -309,6 +328,12 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = NodeConfig::new(actor);
     config.key_id = args.key_id;
     config.data_dir = Some(args.data.clone());
+    let spawner = ProcessSpawner::new(std::env::current_exe()?)
+        .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host));
+    // Hosts in `han-agent@` units outlive this node: take back the ones still running.
+    for name in spawner.adopt(&os_user_agents(&args.data)) {
+        println!("adopted {name} (its unit was already running)");
+    }
     let node = Node::start(NodeParts {
         config,
         transport: transport.clone(),
@@ -317,11 +342,7 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         server_keys: Arc::new(WellKnownKeys::new(Fetcher::new())),
         // Hosts are told the host endpoint and no other (SR-107).
         // and are started only where the agent's sandbox works (the gate says why not).
-        supervisor: Arc::new(GatedSpawner::new(
-            ProcessSpawner::new(std::env::current_exe()?)
-                .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host)),
-            ShimCommand::of_current_exe()?,
-        )),
+        supervisor: Arc::new(GatedSpawner::new(spawner, ShimCommand::of_current_exe()?)),
     })?;
 
     // A home named by ticket is kept in the data directory, so a restart needs no flag.

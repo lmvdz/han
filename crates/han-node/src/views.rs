@@ -420,6 +420,19 @@ impl Engine {
         self.publish();
     }
 
+    /// The host of `agent` exited while its sessions were open (see `SpaceModel::host_exited`). True if any
+    /// session changed.
+    pub fn host_exited(&mut self, agent: &str, work: Option<&str>, reason: &str) -> bool {
+        let mut changed = false;
+        for m in self.spaces.values_mut() {
+            changed |= m.host_exited(agent, work, reason);
+        }
+        if changed {
+            self.publish();
+        }
+        changed
+    }
+
     /// Sets what the `NodeStatus` view shows besides the spaces.
     pub fn set_node_info(&mut self, info: NodeInfo) {
         if self.info != info {

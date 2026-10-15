@@ -229,6 +229,18 @@ impl Stack {
         run(&args)
     }
 
+    /// Kills the agent's host outright (SIGKILL: no chance to close its session), as a stop timeout or the OOM
+    /// killer would.
+    #[cfg(unix)]
+    pub fn kill_host(&self) {
+        let pattern = format!("host --spec {}", self.dir.display());
+        let status = Command::new("pkill")
+            .args(["-KILL", "-f", &pattern])
+            .status()
+            .expect("pkill runs");
+        assert!(status.success(), "no host process matched {pattern:?}");
+    }
+
     /// The id of the open task for the stack's issue.
     pub async fn issue_task(&self, client: &RpcClient) -> String {
         let issue = self.get("issue");

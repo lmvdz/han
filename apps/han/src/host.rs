@@ -198,7 +198,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
     tokio::pin!(runner);
     let end = tokio::select! {
         r = &mut runner => r,
-        _ = tokio::signal::ctrl_c() => {
+        _ = stop_signal() => {
             let _ = stop.send(true);
             runner.await
         }
@@ -206,6 +206,29 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
     role.node.shutdown();
     role.transport.shutdown().await;
     let end = end?;
-    println!("session {} ended {:?}", end.session, end.state);
+    match &end.reason {
+        Some(why) => {
+            println!("session {} ended {:?}: {why}", end.session, end.state);
+        }
+        None => println!("session {} ended {:?}", end.session, end.state),
+    }
     Ok(())
+}
+
+/// Resolves when the host is asked to stop: Ctrl-C (SIGINT, what the units send), or SIGTERM from a plain `kill`
+/// or a container runtime. Either way the session is closed on the way out; a host that is killed outright
+/// (SIGKILL, a stop timeout) cannot, and the node marks its session ended instead.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
