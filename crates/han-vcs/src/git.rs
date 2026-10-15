@@ -2009,6 +2009,24 @@ impl Vcs for GitVcs {
         self.delta_between(dir, base, head)
     }
 
+    fn diff_text(&self, dir: &Path, base: &str, head: &str) -> Result<String> {
+        let base = self.commit_of(dir, base)?;
+        let head = self.commit_of(dir, head)?;
+        let out = self
+            .git(Some(dir))?
+            .arg("diff")
+            .args([
+                "--no-color",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+            ])
+            .args(["--src-prefix=a/", "--dst-prefix=b/", "--end-of-options"])
+            .args([&base, &head])
+            .run()?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
     fn path_disjoint(&self, dir: &Path, delta: &Delta, new_base: &str) -> Result<PathDisjoint> {
         self.path_disjoint_of(dir, delta, new_base)
     }

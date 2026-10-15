@@ -2046,6 +2046,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "han-review"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "han-core",
+ "han-vcs",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "han-seq"
 version = "0.1.0"
 dependencies = [

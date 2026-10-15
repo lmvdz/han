@@ -641,6 +641,17 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// The unified text diff from `base` to `head`, both commits of the repository at `dir`: no colour, no
+    /// renames, no external diff or text conversion, so any implementation reads the same bytes. Binary files
+    /// appear as a one-line notice. A reviewer reads it; nothing is applied from it.
+    fn diff_text(&self, dir: &Path, base: &str, head: &str) -> Result<String> {
+        let _ = (dir, base, head);
+        Err(VcsError::Invalid(format!(
+            "{} makes no text diffs",
+            self.name()
+        )))
+    }
+
     /// Whether `delta` applies to `new_base` unchanged (R33 §1), and the paths that say otherwise.
     fn path_disjoint(&self, dir: &Path, delta: &Delta, new_base: &str) -> Result<PathDisjoint> {
         let _ = (dir, delta, new_base);
