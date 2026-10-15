@@ -421,14 +421,15 @@ impl Command {
             | Command::EffectApprove { .. }
             | Command::EffectCancel { .. }
             | Command::OutboxRetry { .. }
-            | Command::PolicySet { .. } => CommandClass::Face,
+            | Command::PolicySet { .. }
+            // Steering is a face command: `<endpoint>-host` signs as the node's actor, so a command there
+            // could steer as the person. An agent's own in-process node (`ClassApi`) may send it, and the
+            // policy decides (session rights, guarding).
+            | Command::SessionInput { .. } => CommandClass::Face,
             Command::TaskCreate { .. }
             | Command::TaskUpdate { .. }
             | Command::SessionOpen { .. }
             | Command::SessionClose { .. }
-            // an agent may steer another session as the policy allows (session rights, guarding); a face
-            // connection is locked for it until a person is present
-            | Command::SessionInput { .. }
             | Command::StatusPublish { .. }
             | Command::StreamPublish { .. }
             | Command::LeaseSet { .. }
@@ -464,6 +465,7 @@ impl Command {
             // Tasks stay open to a face connection on purpose: a task is data, not a prompt (SR-54), and the
             // policy decides who may create or cancel one.
             Command::SpaceAwait { .. }
+            | Command::SessionAwait { .. }
             | Command::AgentStop { .. }
             | Command::TaskCreate { .. }
             | Command::TaskUpdate { .. }

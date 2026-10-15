@@ -50,6 +50,37 @@ pub fn serve_as(
     endpoint: &str,
     class: ConnectionClass,
 ) -> io::Result<RpcServer> {
+    serve_with_clock(api, endpoint, class, Arc::default())
+}
+
+/// The time a server counts unlock windows by: the real time, plus whatever [`ServerClock::advance`] added.
+/// A seam for the process that embeds the server (a test that must not sleep through a window): it only moves
+/// time forward, which ends unlocks sooner and never extends one, and nothing on the pipe can reach it.
+#[derive(Default)]
+pub struct ServerClock {
+    skew_ms: std::sync::atomic::AtomicU64,
+}
+
+impl ServerClock {
+    /// Moves this server's time forward by `by`.
+    pub fn advance(&self, by: Duration) {
+        let ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
+        self.skew_ms.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    fn now(&self) -> (Instant, SystemTime) {
+        let skew = Duration::from_millis(self.skew_ms.load(Ordering::SeqCst));
+        (Instant::now() + skew, SystemTime::now() + skew)
+    }
+}
+
+/// Like [`serve_as`], counting unlock windows by `clock`.
+pub fn serve_with_clock(
+    api: Arc<dyn NodeApi>,
+    endpoint: &str,
+    class: ConnectionClass,
+    clock: Arc<ServerClock>,
+) -> io::Result<RpcServer> {
     let options = ListenerOptions::new().name(local_name(endpoint)?);
     let options = restrict(options)?;
     let listener = options.create_tokio()?;
@@ -60,7 +91,12 @@ pub fn serve_as(
             match listener.accept().await {
                 Ok(conn) => {
                     while conns.try_join_next().is_some() {}
-                    conns.spawn(connection(conn, Arc::clone(&api), class));
+                    conns.spawn(connection(
+                        conn,
+                        Arc::clone(&api),
+                        class,
+                        Arc::clone(&clock),
+                    ));
                 }
                 Err(e) => {
                     tracing::warn!("rpc accept: {e}");
@@ -196,8 +232,8 @@ fn protocol_error(code: i64, message: &str) -> ErrorObject {
 
 /// The lock of one face connection. It belongs to the connection: another connection to the same pipe starts
 /// locked and needs its own check.
-#[derive(Default)]
 struct Lock {
+    clock: Arc<ServerClock>,
     /// When the person's unlock ends, by the monotonic clock and by the wall clock; the unlock holds only
     /// while both say it has not ended, so neither a suspend nor a clock change can stretch it.
     until: Mutex<Option<(Instant, SystemTime)>>,
@@ -208,11 +244,21 @@ struct Lock {
 }
 
 impl Lock {
+    fn new(clock: Arc<ServerClock>) -> Self {
+        Lock {
+            clock,
+            until: Mutex::default(),
+            pending: AtomicBool::new(false),
+            backoff: Mutex::default(),
+        }
+    }
+
     /// How long the unlock still holds, if it does.
     fn remaining(&self) -> Option<Duration> {
         let (mono, wall) = (*self.until.lock().unwrap_or_else(|e| e.into_inner()))?;
-        let by_mono = mono.checked_duration_since(Instant::now())?;
-        let by_wall = wall.duration_since(SystemTime::now()).ok()?;
+        let (now_mono, now_wall) = self.clock.now();
+        let by_mono = mono.checked_duration_since(now_mono)?;
+        let by_wall = wall.duration_since(now_wall).ok()?;
         Some(by_mono.min(by_wall)).filter(|d| !d.is_zero())
     }
 }
@@ -280,8 +326,10 @@ async fn unlock(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .allowed();
-            *lock.until.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some((Instant::now() + window, SystemTime::now() + window));
+            *lock.until.lock().unwrap_or_else(|e| e.into_inner()) = Some({
+                let (mono, wall) = lock.clock.now();
+                (mono + window, wall + window)
+            });
             reply(window)
         }
         Err(e) => {
@@ -296,7 +344,12 @@ async fn unlock(
     }
 }
 
-async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass) {
+async fn connection(
+    conn: Stream,
+    api: Arc<dyn NodeApi>,
+    class: ConnectionClass,
+    clock: Arc<ServerClock>,
+) {
     let client = describe_peer(&conn);
     let (recv, mut send) = conn.split();
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
@@ -314,7 +367,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
     }));
     let mut calls = JoinSet::new();
     let views: Views = Arc::default();
-    let lock: Arc<Lock> = Arc::default();
+    let lock = Arc::new(Lock::new(clock));
     let mut reader = BufReader::new(recv);
     let mut buf = Vec::new();
     loop {

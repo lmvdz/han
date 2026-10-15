@@ -134,10 +134,10 @@ pub const HEADLESS_DIR: &str = "/etc/han/headless.d";
 /// that name in `dir`. A service node has nobody at it to answer a prompt, so the operating system's boundary,
 /// who can run as the service user, is the authority there; the marker is what says so. The marker, its folder
 /// and that folder's parent must belong to `owner` (root) and be writable by no one else, so a process of the
-/// service user cannot make a node headless, or make it a person's again; only root can. Not available off
-/// Unix: a node there is a person's.
+/// service user cannot make a node headless, or make it a person's again; only root can. Only Linux has
+/// headless nodes (the runner is a Linux service): a node elsewhere is a person's.
 pub fn headless_marker(dir: &std::path::Path, name: &str, owner: u32) -> bool {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::MetadataExt as _;
         let ok = |p: &std::path::Path| {
@@ -146,7 +146,7 @@ pub fn headless_marker(dir: &std::path::Path, name: &str, owner: u32) -> bool {
         let marker = dir.join(name);
         ok(dir) && dir.parent().is_none_or(ok) && ok(&marker)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
         let _ = (dir, name, owner);
         false
@@ -223,10 +223,19 @@ pub fn load(db: &NodeDb, seal: Option<(&dyn KeyStore, &str)>) -> Settings {
     let Some((keys, name)) = seal else {
         return parsed();
     };
+    // A seal row means the settings were sealed once: a key that is gone or cannot be read then is not a
+    // first start, and must not make the db trusted again.
+    let sealed_before = db.config(SEAL_KEY).ok().flatten().is_some();
     match keys.load(name) {
+        Err(e) if sealed_before => strict(format!(
+            "the seal key cannot be read ({e}) and the settings were sealed"
+        )),
         Err(e) => {
             tracing::warn!("presence settings are not sealed: {e}");
             parsed()
+        }
+        Ok(None) if sealed_before => {
+            strict("the seal key is gone and the settings were sealed".into())
         }
         Ok(None) => {
             let sealed = keys
@@ -751,6 +760,53 @@ mod tests {
         assert_eq!(
             (now.require, now.unlock),
             (Require::All, Duration::from_secs(60))
+        );
+    }
+
+    /// A key store that cannot be read.
+    struct Broken;
+
+    impl KeyStore for Broken {
+        fn load(&self, _: &str) -> Result<Option<[u8; 32]>, crate::keys::KeyError> {
+            Err(crate::keys::KeyError("locked".into()))
+        }
+
+        fn store(&self, _: &str, _: [u8; 32]) -> Result<(), crate::keys::KeyError> {
+            Err(crate::keys::KeyError("locked".into()))
+        }
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_seal_key_after_a_seal_is_not_a_first_start() {
+        let (db, keys) = (NodeDb::in_memory().unwrap(), keys("gone"));
+        let seal = Some((&keys as &dyn KeyStore, "presence-seal-test"));
+        db.set_config(REQUIRE_KEY, "effect.cancel").unwrap();
+        assert_eq!(
+            load(&db, seal).require,
+            Require::Kinds(vec!["effect.cancel".into()])
+        );
+        // the key is deleted and the db is edited: the strictest, and no new seal is made
+        let sealed = db.config(SEAL_KEY).unwrap();
+        let file = std::env::temp_dir()
+            .join(format!("han-seal-{}-gone", std::process::id()))
+            .join("presence-seal-test.key");
+        std::fs::remove_file(file).unwrap();
+        db.set_config(REQUIRE_KEY, "").unwrap();
+        assert_eq!(load(&db, seal), Settings::default());
+        assert_eq!(db.config(SEAL_KEY).unwrap(), sealed, "nothing was resealed");
+        assert!(
+            keys.load("presence-seal-test").unwrap().is_none(),
+            "no new key either"
+        );
+        // a key store that errors is the same
+        let broken = Some((&Broken as &dyn KeyStore, "x"));
+        assert_eq!(load(&db, broken), Settings::default());
+        // with no seal at all (a first start), an unreadable store leaves the db as it is
+        let fresh = NodeDb::in_memory().unwrap();
+        fresh.set_config(REQUIRE_KEY, "effect.cancel").unwrap();
+        assert_eq!(
+            load(&fresh, broken).require,
+            Require::Kinds(vec!["effect.cancel".into()])
         );
     }
 

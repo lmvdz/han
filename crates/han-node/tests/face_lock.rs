@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use common::{World, call, space_of};
 use han_node::api::{
-    Command, CommandClass, ConnectionClass, HomeRef, NodeApi, NodeError, Query, ViewEvent, Window,
+    Command, ConnectionClass, HomeRef, NodeApi, NodeError, Query, ViewEvent, Window,
 };
-use han_node::rpc::{RpcClient, default_endpoint, serve_as};
+use han_node::rpc::{RpcClient, ServerClock, default_endpoint, serve_as, serve_with_clock};
 use han_node::{Node, presence};
 use han_presence::PresenceError;
 use han_presence::testing::Scripted;
@@ -119,6 +119,8 @@ struct Stage {
     _alice: N,
     space: String,
     face: String,
+    /// The time the face server counts unlock windows by.
+    clock: Arc<ServerClock>,
     _servers: Vec<han_node::rpc::RpcServer>,
 }
 
@@ -155,8 +157,15 @@ async fn stage_with(
     std::fs::create_dir_all(&dir).unwrap();
     let face = default_endpoint(&dir);
     let api: Arc<dyn NodeApi> = Arc::new(alice.clone());
+    let clock = Arc::new(ServerClock::default());
     let servers = vec![
-        serve_as(Arc::clone(&api), &face, ConnectionClass::Face).unwrap(),
+        serve_with_clock(
+            Arc::clone(&api),
+            &face,
+            ConnectionClass::Face,
+            Arc::clone(&clock),
+        )
+        .unwrap(),
         serve_as(api, &format!("{face}-host"), ConnectionClass::Host).unwrap(),
     ];
     Stage {
@@ -164,6 +173,7 @@ async fn stage_with(
         _alice: alice,
         space,
         face,
+        clock,
         _servers: servers,
     }
 }
@@ -291,7 +301,7 @@ async fn an_unlock_is_for_one_connection_and_for_the_window() {
     assert!(presence_required(&b.call(set_bob(&s)).await));
     assert_eq!(script.prompts().len(), 1, "B was not asked or let through");
     // the window ends: A is locked again
-    tokio::time::sleep(Duration::from_millis(1700)).await;
+    s.clock.advance(Duration::from_millis(1600));
     assert!(presence_required(&a.call(set_bob(&s)).await));
 }
 
@@ -360,25 +370,30 @@ async fn approvals_ask_per_action_and_hosts_cannot_unlock() {
     let e = host.unlock().await.unwrap_err();
     assert!(matches!(e, NodeError::Denied { .. }), "{e:?}");
     for (name, cmd) in locked_commands(&s.space) {
-        let by_class = cmd.class() == CommandClass::Face;
+        // the host endpoint signs as the person, so it refuses steering like every other face command
         let e = host.call(cmd).await.unwrap_err();
-        // an agent may steer another session as the policy allows, so that command reaches the node (and
-        // the policy) from a host connection; every other one is refused by class
-        assert_eq!(
+        assert!(
             matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
-            by_class,
             "{name}: {e:?}"
         );
-        assert!(!presence_required(&Err(e)), "{name}");
     }
-    assert_eq!(
-        Command::SessionInput {
-            space: s.space.clone(),
-            session: "x".into(),
-            text: "x".into()
-        }
-        .class(),
-        CommandClass::Agent
+    // an agent's own node in process may still send input to a session, and the node (the policy) decides
+    let own = han_node::ClassApi::new(Arc::new(s._alice.clone()), ConnectionClass::Host);
+    let steer = Command::SessionInput {
+        space: s.space.clone(),
+        session: "nothing".into(),
+        text: "go".into(),
+    };
+    let e = own.call(steer.clone()).await.unwrap_err();
+    assert!(
+        !matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
+        "in process it reaches the node: {e:?}"
+    );
+    let exec = han_node::ClassApi::new(Arc::new(s._alice.clone()), ConnectionClass::Executor);
+    let e = exec.call(steer).await.unwrap_err();
+    assert!(
+        matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
+        "{e:?}"
     );
     assert!(script.prompts().is_empty());
 }
@@ -413,13 +428,27 @@ async fn a_second_unlock_is_refused_while_one_waits_and_an_unlocked_connection_i
 {
     let script = Scripted::new();
     let s = stage(script.clone(), None).await;
-    // the person takes a while to answer
-    script.during(|| std::thread::sleep(Duration::from_millis(500)));
+    // the person takes as long as the test likes: the prompt tells the test it is open, then waits to be
+    // released
+    let (open_tx, open_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let (open_tx, release_rx) = (
+        std::sync::Mutex::new(open_tx),
+        std::sync::Mutex::new(release_rx),
+    );
+    script.during(move || {
+        open_tx.lock().unwrap().send(()).unwrap();
+        release_rx.lock().unwrap().recv().unwrap();
+    });
     script.allow();
     let a = RpcClient::connect_locked(&s.face).await.unwrap();
     let (first, second) = tokio::join!(a.unlock(), async {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        a.unlock().await
+        tokio::task::spawn_blocking(move || open_rx.recv().unwrap())
+            .await
+            .unwrap();
+        let second = a.unlock().await;
+        release_tx.send(()).unwrap();
+        second
     });
     first.expect("the person confirmed");
     assert!(
@@ -466,7 +495,7 @@ async fn a_running_node_ignores_an_edit_of_its_db() {
 /// A service node set up like the runner's (`han runner setup`): root's marker names its data folder. Nobody
 /// sits at it, so a prompt would never be answered: it has no unlock, and it never approves. A person's node
 /// next to it still locks. Needs a Unix file owner to stand in for root.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_headless_service_node_starts_agents_without_a_prompt_and_a_persons_node_still_locks() {
     use std::os::unix::fs::MetadataExt as _;
