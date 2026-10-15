@@ -84,27 +84,6 @@ jobs:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: >
           cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
-          -E 'not (binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem))'
-
-  test-slow:
-    needs: scope
-    if: needs.scope.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Rust toolchain (from rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-nextest@0.9.148
-      - name: Rust tests (the slowest binaries)
-        env:
-          PACKAGES: ${{ needs.scope.outputs.packages }}
-        run: >
-          cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
-          -E 'binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem)'
 
   # nextest does not run doc-tests, so `cargo test --doc` does, in its own job (it recompiles the dependencies for rustdoc).
   doc-tests:
@@ -149,7 +128,7 @@ jobs:
 
   # The one required check. A skipped job counts as passed; a failed or cancelled one does not.
   quick:
-    needs: [scope, lint, test, test-slow, doc-tests, spec]
+    needs: [scope, lint, test, doc-tests, spec]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
