@@ -6,7 +6,7 @@
   keygen [--out PATH]                       space create SP [--name N] [--policy FILE] [--set FIELD=JSON]…
   member set SP ACTOR ROLE                  message SP TEXT [--to ACTOR]…
   task SP ASK --to ACTOR… [--deadline T]    propose SP --executor A --plan FILE [--repeatable] [--cost UNIT=N]
-  approve SP PROPOSAL [--note T]            cancel SP ID [--task | --reason T --evidence FILE]
+  approve SP PROPOSAL [--note T] [--evidence FILE --evidence-kind K --evidence-over D]   cancel SP ID [--task | --reason T --evidence FILE]
   session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session close SP SESSION
   agent unguard SP AGENT                    (the guard ends the agent's choice of guarding; it frees nothing already recorded)
   watch SP SESSION [--count N]              read SP [--after N] [--follow] [--json]        status SP
@@ -90,6 +90,7 @@ async def cmd_propose(c, a):
     if a.cost: unit, _, n = a.cost.partition("="); body["cost"] = {"unit": unit, "amount": int(n)}
     if a.task: body["task"] = await resolve(c, a.space, a.task)
     if a.expires: body["expiresAt"] = a.expires
+    if plan["action"] == "vcs.land" and isinstance((plan.get("args") or {}).get("change"), dict): body["change"] = plan["args"]["change"]   # P-17, X-13: the body carries the plan's args.change, copied
     await put(c, "effect.propose", a.space, body, {"plan": plan})
 
 async def cmd_approve(c, a):
@@ -103,8 +104,13 @@ async def cmd_approve(c, a):
     if plan is None: return die("the plan is not available (redacted?); not approving")
     if hashlib.sha256(P.jcs(plan)).hexdigest() != digest: return die("the plan does not match its planDigest; not approving")
     out(f"approving {pid[:8]} by {rec['entry']['author']} (executor {rec['entry']['body']['executor']}), plan {digest[:12]}:\n{json.dumps(plan, indent=2)}")
-    await put(c, "effect.approve", a.space, {"proposal": pid, "planDigest": digest} | ({"expiresAt": a.expires} if a.expires else {}),
-              {"note": a.note} if a.note else None)
+    body = {"proposal": pid, "planDigest": digest} | ({"expiresAt": a.expires} if a.expires else {})
+    content = {"note": a.note} if a.note else {}
+    if a.evidence or a.evidence_kind or a.evidence_over:                  # P-17, G-01: the record the approval rests on: kind and digest in the body, the record's blob in the content
+        if not (a.evidence and a.evidence_kind and a.evidence_over): return die("--evidence FILE, --evidence-kind and --evidence-over go together (P-17)")
+        body["evidence"] = {"kind": a.evidence_kind, "over": a.evidence_over}
+        content["evidence"] = await c.blob_put(open(a.evidence, "rb").read())
+    await put(c, "effect.approve", a.space, body, content or None)
 
 async def cmd_cancel(c, a):
     tid = await resolve(c, a.space, a.id)
@@ -220,7 +226,8 @@ def parser() -> argparse.ArgumentParser:
     cmd("task", cmd_task, "space", "ask", ("--to", {"action": "append", "required": True}), ("--deadline", {}), ("--parent", {}), ("--budget", {"metavar": "UNIT=N"}))
     cmd("propose", cmd_propose, "space", ("--executor", {"required": True}), ("--plan", {"required": True, "help": "JSON file {action, target, args?}"}),
         ("--repeatable", {"action": "store_true"}), ("--cost", {"metavar": "UNIT=N"}), ("--task", {}), ("--expires", {}))
-    cmd("approve", cmd_approve, "space", "proposal", ("--note", {}), ("--expires", {}))
+    cmd("approve", cmd_approve, "space", "proposal", ("--note", {}), ("--expires", {}), ("--evidence", {"metavar": "FILE", "help": "upload FILE as the evidence record (P-17)"}),
+        ("--evidence-kind", {"help": "the record's kind, for example han.review/1"}), ("--evidence-over", {"help": "the delta digest the record is over"}))
     cmd("cancel", cmd_cancel, "space", "id", ("--task", {"action": "store_true", "help": "ID is a task (task.cancel), not an effect"}),
         ("--reason", {"help": "why (at most 1,024 bytes)"}), ("--evidence", {"metavar": "FILE", "help": "upload FILE as the evidence blob"}))
     ss = sub.add_parser("session").add_subparsers(dest="action", required=True)

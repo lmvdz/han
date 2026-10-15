@@ -78,8 +78,8 @@ export interface Bodies {
   "task": { to: ActorId[]; budget?: Budget; parent?: EntryId; deadline?: Time; external?: string };   // external: a reference outside HAN, such as an issue's address; printable ASCII without spaces, 1–1024 chars; opaque to Policy (§5)
   "task.update": { task: EntryId; state: TaskState };
   "task.cancel": { task: EntryId };
-  "effect.propose": { executor: ActorId; action: string; planDigest: Hex; cost?: Budget; repeatable: boolean; task?: EntryId; expiresAt?: Time };
-  "effect.approve": { proposal: EntryId; planDigest: Hex; expiresAt?: Time };
+  "effect.propose": { executor: ActorId; action: string; planDigest: Hex; cost?: Budget; repeatable: boolean; task?: EntryId; expiresAt?: Time; change?: Change };   // change (round 33, P-17): a vcs.land's summary, the plan's args.change copied; only for action "vcs.land"
+  "effect.approve": { proposal: EntryId; planDigest: Hex; expiresAt?: Time; evidence?: ApprovalEvidence };   // evidence (round 33, P-17): the record the approval rests on; the record's BlobRef is in the content
   "effect.claim": { proposal: EntryId; attempt: number; instance: KeyId; window: number };   // window must equal policy.launchWindow (E5, X-03)
   "effect.cancel": { proposal: EntryId };
   "effect.outcome": { claim: EntryId; result: EffectResult; started: Started; cost?: Budget };
@@ -104,7 +104,7 @@ export interface Contents {
   "task.update": { text?: string; blobs?: BlobRef[] };
   "task.cancel": null;
   "effect.propose": { plan: Plan };
-  "effect.approve": { note?: string };
+  "effect.approve": { note?: string; evidence?: BlobRef };   // evidence: the record the body's `evidence` names (round 33, G-01)
   "effect.claim": null;
   "effect.cancel": { reason?: string; evidence?: BlobRef };
   "effect.outcome": { evidence?: BlobRef };
@@ -127,6 +127,19 @@ export type SteerMode = "auto" | "guarded";
 export type ExtensionKind = `${string}.${string}`;
 export interface Plan { action: string; target: string; args?: Json; argsBlob?: BlobRef }   // target ≤ 1024 bytes; sha256(JCS(plan)) = planDigest
 // Only this shape is normative. What target and args mean belongs to the action and its executor. Informative, from the reference executor:
+// (semantic gates, P-17, round 33: the types follow)
+export interface Change { repo: string; deltaDigest: Hex; total: number; files: ChangeFile[]; truncated?: true }   // at most MAX_CHANGE_FILES files in ascending order of the UTF-8 bytes of path; its JCS at most MAX_CHANGE_BYTES
+export interface ChangeFile { path: string; kind: "add" | "modify" | "delete" | "rename"; lines: number; fromPath?: string }
+export interface ApprovalEvidence { kind: string /* [a-z0-9][a-z0-9./_-]{0,63} */; over: Hex /* the delta digest */ }
+export interface ApprovalRule {
+  action: string; approvers: ("owner" | "member" | "guest" | ActorId | "@path-owner")[];
+  minTier?: 0 | 1 | 2 | 3; maxTier?: 0 | 1 | 2 | 3; humans?: boolean; evidence?: string; needs?: 1 | 2 | 3;
+}
+export interface GatesDoc {
+  small: number; large: number;
+  paths: { glob: string; class: "docs" | "tests" | "generated" | "code" | "sensitive" | "critical"; repo?: string }[];
+  owners: { glob: string; owners: ActorId[]; repo?: string }[];
+}
 //   file.write  target = path relative to the executor's sandbox; args = { content: string }
 //   http.post   target = URL; args = the JSON body
 // An executor refuses (never claims) a plan it can't run or check (X-09).
@@ -138,7 +151,7 @@ export interface PolicyDoc {
   join: "invite" | "open" | "closed";                   // P-03
   membersMayInvite: boolean;
   allowAgents: "any" | "with-operator" | "none";
-  approvals: { action: string; approvers: ("owner" | "member" | "guest" | ActorId)[] }[];   // P-08; first match wins; "*" = any action
+  approvals: ApprovalRule[];                             // P-08; the first rule whose action matches and whose tier predicate holds wins; "*" = any action
   separateApprover: boolean;
   budget: Budget | null;                                 // one budget, one unit, per space (P-06); null = costs unlimited
   maxDelegationDepth: number;                            // P-05; default 4
@@ -147,6 +160,7 @@ export interface PolicyDoc {
   extensionsMinRole: "guest" | "member" | "owner";       // lowest role that may append extension kinds (§5)
   sessions: { watch: SessionLevel; read: SessionLevel; steer: SessionLevel; modes: SteerMode[]; forceGuarded?: boolean };   // P-15: minimum roles (read, steer no wider than watch); modes limit what session.open may use, nothing else; forceGuarded (default false): every non-human actor (whatever actorKind other than human it has) is guarded for the operator in the profile pinned for each entry, session or not
   servers: { deny: ServerName[] };
+  gates?: GatesDoc;                                      // P-17 (round 33); absent = no tiers
 }
 
 export type SessionLevel = "owner" | "member" | "guest" | "nobody";
@@ -186,13 +200,15 @@ export interface SpaceState {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
+      gate?: { tier: 0 | 1 | 2 | 3; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[] };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates
       guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then guards(proposer), then guards(executor) at the proposal (Z1); fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
-      approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
+      approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId; evidence?: ApprovalEvidence }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
       claims: {
         id: EntryId; attempt: number; instance: KeyId; time: Time;
         window: number;                             // the launchWindow in force when the claim was ordered (pinned for X-04, P-09)
         approval?: EntryId;                         // the approval this claim consumed (E3): the first usable candidate, never one whose author is guarded at the claim
+        coApprovals?: EntryId[];                    // the further approvals it consumed when the rule needs more than one (P-17: two at tier 3), after `approval`
         guardApprovals?: EntryId[];                 // the guards' approvals it consumed (P-15)
         reserved?: Budget; source?: ["task", EntryId] | ["space", null]; settled: boolean;   // P-06 reservation; settled on every claim (§6.1)
         outcome?: EffectResult; started?: Started;
@@ -238,6 +254,10 @@ export interface PolicyConstants {
   MAX_UNCONSUMED_APPROVALS: 36;   // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 by authors that are never guards (one more returned by a not-started outcome; an approval's fold keeps only countable ones besides the guards'), plus one per possible guard (MAX_GUARDED_FOR; operators never change)
   MAX_APPROVALS: 55;           // derived, never checked (P-08): MAX_OPEN_APPROVALS + 1 + 2 × MAX_GUARDED_FOR, each guard holding one unconsumed and one consumed approval
   ROLE_INTERVALS: 64;          // role intervals kept per actor (P-02)
+  MAX_CHANGE_FILES: 64;        // files a change summary lists (P-17)
+  MAX_CHANGE_BYTES: 12288;     // the JCS of a change summary (P-17)
+  MAX_GATE_RULES: 64;          // path-class rules, and path-owner rules, per policy (P-17)
+  MAX_PATH_OWNERS: 16;         // path owners an effect keeps (P-17)
 }
 /** The maps of a state page, in the order of the cursor and of the fill (§3 state, H3). Every one is cut: a page holds at most Limits.maxStateItems items of each, and the reply as a frame
  *  at most Limits.maxFrameBytes. Only the scalar members and `policy` repeat on every page; every item of a paged map is sent on exactly one page. "profile.keys" is the `keys` map of `profile`. */

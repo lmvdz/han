@@ -61,6 +61,26 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     rec = [json.loads(l) for l in (await han(env, "bob", "read", S, "--json")).splitlines()][-1]
     assert rec["entry"]["kind"] == "effect.cancel" and rec["content"]["reason"] == "cannot run this"
     assert json.loads(await (await env.client("bob")).blob_get(rec["content"]["evidence"], S)) == {"why": "the checks failed"}
+    # P-17, G-01: a landing's body carries the plan's args.change; the machine reviewer's approval counts at tier 0 only with
+    # evidence of the kind the rule names, over the delta digest; the record is a blob the content names
+    S2 = "gt:a.localhost"
+    env.actor("rev", "agent", operator="@ana:a.localhost")
+    rules = '[{"action": "vcs.land", "maxTier": 1, "approvers": ["member", "owner"], "evidence": "han.review/1"}, {"action": "vcs.land", "approvers": ["owner"]}]'
+    gates = '{"small": 20, "large": 500, "paths": [{"glob": "docs/**", "class": "docs"}], "owners": []}'
+    await han(env, "ana", "space", "create", S2, "--set", f"approvals={rules}", "--set", f"gates={gates}")
+    for who in ("bob", "exec", "rev"): await han(env, "ana", "member", "set", S2, f"@{who}:a.localhost", "member")
+    over = "d5" * 32
+    change = {"repo": "github:o/r", "deltaDigest": over, "total": 1, "files": [{"path": "docs/a.md", "kind": "modify", "lines": 3}]}
+    land = tmp_path / "land.json"; land.write_text(json.dumps({"action": "vcs.land", "target": "github:o/r", "args": {"ref": "refs/heads/main", "change": change}}))
+    lid = last_id(await han(env, "bob", "propose", S2, "--executor", "@exec:a.localhost", "--plan", str(land)))
+    rec = [json.loads(l) for l in (await han(env, "bob", "read", S2, "--json")).splitlines()][-1]
+    assert rec["entry"]["body"]["change"] == change                                   # copied from the plan
+    review = tmp_path / "review.json"; review.write_text('{"schema": "han.review/1", "verdict": "approve"}')
+    assert (await han(env, "rev", "approve", S2, lid[:10], ok=False))[0] == 1          # no evidence: denied
+    code, _, err = await han(env, "rev", "approve", S2, lid[:10], "--evidence", str(review), ok=False)
+    assert code == 1 and "go together" in err                                          # the three evidence flags are one record
+    assert (await han(env, "rev", "approve", S2, lid[:10], "--evidence", str(review), "--evidence-kind", "han.review/1", "--evidence-over", over)).startswith("approving")
+    assert f"{lid[:8]} open" in await han(env, "ana", "status", S2) and "approvals 1" in await han(env, "ana", "status", S2)
 
 async def test_task_and_read_json(env):
     """6.3, 3: `task` assigns work with an ask, `read --json` prints the records as JSON lines."""
