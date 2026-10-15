@@ -175,6 +175,7 @@ impl Outcome {
 }
 
 /// What to prune and where; shared with `han dev prs`, which prunes after a merge.
+#[derive(Clone)]
 pub struct Config {
     /// The main checkout: never removed.
     pub main: PathBuf,

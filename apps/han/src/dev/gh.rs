@@ -68,16 +68,33 @@ pub struct OpenPr {
     pub pending: usize,
     /// Names of checks that failed, were cancelled or timed out.
     pub failed: Vec<String>,
+    /// How auto-merge will merge: `SQUASH`, `MERGE` or `REBASE` (empty when GitHub did not say).
+    pub merge_method: String,
+}
+
+/// The `gh pr merge` flag of an auto-merge method, if it is one GitHub knows.
+pub fn merge_flag(method: &str) -> Option<&'static str> {
+    match method {
+        "SQUASH" => Some("--squash"),
+        "MERGE" => Some("--merge"),
+        "REBASE" => Some("--rebase"),
+        _ => None,
+    }
 }
 
 /// The GitHub calls of the two commands.
 pub trait Github {
     /// The open pull requests with auto-merge enabled, in one query.
     fn auto_merge_prs(&self, repo: &str) -> Res<Vec<OpenPr>>;
-    /// The state of one pull request.
-    fn pr_state(&self, repo: &str, number: u64) -> Res<PrState>;
+    /// The state of one pull request, and its head branch.
+    fn pr_state(&self, repo: &str, number: u64) -> Res<(PrState, String)>;
     /// Merges the base into the pull request's branch.
     fn update_branch(&self, repo: &str, number: u64) -> Res<()>;
+    /// Switches auto-merge off. Callers re-enable it at once; this is never the end of an action.
+    fn disable_auto_merge(&self, repo: &str, number: u64) -> Res<()>;
+    /// Switches auto-merge on with `method` (`SQUASH`, `MERGE` or `REBASE`). GitHub still applies branch
+    /// protection: this never merges.
+    fn enable_auto_merge(&self, repo: &str, number: u64, method: &str) -> Res<()>;
     /// Every pull request of the repository, newest first.
     fn pr_records(&self, repo: &str) -> Res<Vec<PrRecord>>;
 }
@@ -104,7 +121,7 @@ impl GhCli {
 }
 
 const QUERY: &str = "query($o:String!,$n:String!){repository(owner:$o,name:$n){pullRequests(states:OPEN,last:50){nodes{
-  number autoMergeRequest{enabledAt} mergeable mergeStateStatus
+  number autoMergeRequest{enabledAt mergeMethod} mergeable mergeStateStatus
   commits(last:1){nodes{commit{committedDate pushedDate statusCheckRollup{state contexts(first:50){nodes{
     __typename ...on CheckRun{name status conclusion} ...on StatusContext{context state}}}}}}}}}}}";
 
@@ -124,7 +141,7 @@ impl Github for GhCli {
         parse_auto_merge_prs(&serde_json::from_str(&text)?)
     }
 
-    fn pr_state(&self, repo: &str, number: u64) -> Res<PrState> {
+    fn pr_state(&self, repo: &str, number: u64) -> Res<(PrState, String)> {
         let text = Self::run(&[
             "pr",
             "view",
@@ -132,15 +149,30 @@ impl Github for GhCli {
             "--repo",
             repo,
             "--json",
-            "state",
+            "state,headRefName",
         ])?;
         let v: Value = serde_json::from_str(&text)?;
         let state = v["state"].as_str().unwrap_or_default();
-        PrState::parse(state).ok_or_else(|| format!("unexpected state {state:?}").into())
+        let state = PrState::parse(state).ok_or_else(|| format!("unexpected state {state:?}"))?;
+        Ok((
+            state,
+            v["headRefName"].as_str().unwrap_or_default().to_owned(),
+        ))
     }
 
     fn update_branch(&self, repo: &str, number: u64) -> Res<()> {
         Self::run(&["pr", "update-branch", &number.to_string(), "--repo", repo]).map(|_| ())
+    }
+
+    fn disable_auto_merge(&self, repo: &str, number: u64) -> Res<()> {
+        let n = number.to_string();
+        Self::run(&["pr", "merge", &n, "--repo", repo, "--disable-auto"]).map(|_| ())
+    }
+
+    fn enable_auto_merge(&self, repo: &str, number: u64, method: &str) -> Res<()> {
+        let flag = merge_flag(method).ok_or_else(|| format!("unknown merge method {method:?}"))?;
+        let n = number.to_string();
+        Self::run(&["pr", "merge", &n, "--repo", repo, "--auto", flag]).map(|_| ())
     }
 
     fn pr_records(&self, repo: &str) -> Res<Vec<PrRecord>> {
@@ -251,6 +283,10 @@ pub fn parse_auto_merge_prs(reply: &Value) -> Res<Vec<OpenPr>> {
             running,
             pending,
             failed,
+            merge_method: node["autoMergeRequest"]["mergeMethod"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
         });
     }
     Ok(out)
@@ -290,12 +326,18 @@ pub mod fake {
     pub struct FakeGh {
         /// One answer per `auto_merge_prs` call; the last one repeats.
         pub rounds: Mutex<VecDeque<Result<Vec<OpenPr>, String>>>,
-        /// What `pr_state` says.
+        /// What `pr_state` says; the head branch is `branch-N` unless `branches` has it.
         pub states: Mutex<BTreeMap<u64, PrState>>,
+        /// Head branches by pull request number.
+        pub branches: Mutex<BTreeMap<u64, String>>,
         /// Pull requests `update_branch` is called for.
         pub updated: Mutex<Vec<u64>>,
         /// Whether `update_branch` fails.
         pub update_fails: bool,
+        /// The calls to `disable_auto_merge` and `enable_auto_merge`, as `off #n` and `on #n METHOD`.
+        pub toggled: Mutex<Vec<String>>,
+        /// Whether `enable_auto_merge` fails.
+        pub enable_fails: bool,
         /// What `pr_records` says.
         pub records: Vec<PrRecord>,
     }
@@ -311,15 +353,33 @@ pub mod fake {
             next.map_err(Into::into)
         }
 
-        fn pr_state(&self, _: &str, number: u64) -> Res<PrState> {
+        fn pr_state(&self, _: &str, number: u64) -> Res<(PrState, String)> {
             let s = self.states.lock().unwrap().get(&number).copied();
-            s.ok_or_else(|| "not found".into())
+            let b = self.branches.lock().unwrap().get(&number).cloned();
+            let state = s.ok_or("not found")?;
+            Ok((state, b.unwrap_or_else(|| format!("branch-{number}"))))
         }
 
         fn update_branch(&self, _: &str, number: u64) -> Res<()> {
             self.updated.lock().unwrap().push(number);
             if self.update_fails {
                 return Err("cannot update".into());
+            }
+            Ok(())
+        }
+
+        fn disable_auto_merge(&self, _: &str, number: u64) -> Res<()> {
+            self.toggled.lock().unwrap().push(format!("off #{number}"));
+            Ok(())
+        }
+
+        fn enable_auto_merge(&self, _: &str, number: u64, method: &str) -> Res<()> {
+            self.toggled
+                .lock()
+                .unwrap()
+                .push(format!("on #{number} {method}"));
+            if self.enable_fails {
+                return Err("enable refused".into());
             }
             Ok(())
         }
@@ -362,7 +422,7 @@ mod tests {
         let reply: Value = serde_json::from_str(
             r#"{"data":{"repository":{"pullRequests":{"nodes":[
               {"number":1,"autoMergeRequest":null,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","commits":{"nodes":[]}},
-              {"number":2,"autoMergeRequest":{"enabledAt":"x"},"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED",
+              {"number":2,"autoMergeRequest":{"enabledAt":"x","mergeMethod":"SQUASH"},"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED",
                "commits":{"nodes":[{"commit":{"committedDate":"2026-01-01T00:00:00Z","pushedDate":"2026-01-01T00:01:00Z",
                  "statusCheckRollup":{"state":"PENDING","contexts":{"nodes":[
                    {"__typename":"CheckRun","name":"build","status":"IN_PROGRESS","conclusion":null},
@@ -384,6 +444,10 @@ mod tests {
         // no pushedDate: the commit date; no checks at all
         assert_eq!(prs[1].pushed, parse_iso("2026-01-01T00:00:00Z").unwrap());
         assert_eq!(prs[1].mergeable, "CONFLICTING");
+        assert_eq!(prs[0].merge_method, "SQUASH");
+        assert_eq!(prs[1].merge_method, "");
+        assert_eq!(merge_flag("REBASE"), Some("--rebase"));
+        assert_eq!(merge_flag(""), None);
         assert_eq!(
             (prs[1].running, prs[1].pending, prs[1].failed.len()),
             (0, 0, 0)
