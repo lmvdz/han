@@ -187,9 +187,9 @@ Resolving: `start` is 0; `end` is the length; `(c, left)` is the number of visib
 **TL-48 Shape of `text.edit`.** `deletes` ranges MUST be non-empty and MUST NOT overlap one another; `inserts` MUST be non-empty strings, and no two inserts of one op may name the same anchor. At least one of `deletes` and `inserts` MUST be non-empty. The deletes apply first, then the inserts in index order. The same rules apply to each text change of a merge op (TL-73), except that a change with `create: true` may be empty (an imported empty text).
 
 **TL-49 Edits from an older view.** The following acceptance criteria clarify TL-17 and TL-47:
-1. Planning an edit against a version `v` MUST interpret positions, lengths and range bounds in the visible text at `v` (TL-40), even when the replica holds later or concurrent ops; holding those ops MUST NOT change the planned edit.
+1. An implementation that plans edits at a selected version `v` MUST interpret positions, lengths and range bounds in the visible text at `v` (TL-40); for the same edit input at `v`, the recorded operation MUST be the same whatever other operations the replica holds.
 2. When that edit is recorded with parent version `v`, integration MUST preserve its named characters and anchor as defined by TL-42–44, including when a concurrent edit has deleted the anchor; concurrent inserted characters outside its named delete ranges MUST survive unless hidden by TL-45 or TL-52.
-3. A character reference absent from the op's parent state MUST be rejected (`invalid_op`) even when the receiver holds that character through another concurrent op, except for the earlier inserts of the same op allowed by TL-42.
+3. This criterion restates TL-17 for character references in text edits: a character reference absent from the op's parent state MUST be rejected (`invalid_op`) even when the receiver holds that character through another concurrent op, except for the earlier inserts of the same op allowed by TL-42.
 
 ## 9. Seals (session transcripts only)
 
@@ -229,9 +229,9 @@ Implementations MAY expose the digest to compare replicas cheaply; vectors pin i
 
 **TL-63 Log.** The ops of closure(`v`) in ascending op id order are a valid causal order (TL-04); an implementation that lists a history SHOULD use it.
 
-**TL-64 Historical reads and recorded reversals.** Reading an earlier version and editing the present have distinct observable effects:
-1. Materialising a version or navigating to a checkpoint MUST NOT add an op, change any timeline head or change the sync inventory; subsequent reads of other versions MUST still return their TL-60 states.
-2. Reversing an edit on a timeline is an ordinary new edit subject to the existing validity and seal rules (TL-17, TL-47, TL-53); it MUST NOT remove earlier ops or replace the timeline head with an earlier version.
+**TL-64 Historical reads and deletion of earlier insertions.** Reading an earlier version and editing the present have distinct observable effects:
+1. Materialising a version or navigating to a checkpoint MUST NOT add an op, change any timeline head or change the sync inventory; the state at each selected version MUST be unchanged after interleaved reads.
+2. An edit that deletes characters an earlier edit inserted on a timeline is an ordinary new edit subject to the existing validity and seal rules (TL-17, TL-47, TL-53); it MUST NOT remove earlier ops or replace the timeline head with an earlier version.
 3. A new edit that deletes an earlier insertion MUST leave concurrent insertions outside its named delete ranges subject to normal visibility (TL-44–45, TL-52), including insertions anchored on the characters it deletes; materialising the version before that new edit MUST still show the earlier insertion.
 
 ## 11. Merges
