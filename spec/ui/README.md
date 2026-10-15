@@ -24,6 +24,18 @@ Read data.md first, for the data model, then shell.md, for the frame and the sha
 
 tui-session.md and attention.md are the terminal specs here. They apply to `apps/han-tui`, which a Team B session may extend from them alone. Their acceptance criteria run on ratatui's TestBackend through the TUI's test harness, not in a browser. Their node API needs are listed in tui-session.md §10 (P-1…P-15) and attention.md §11 (AN-1…AN-12). attention.md's node rules (who needs to act, ranking, marks, notices) apply to the GUI too.
 
+## GUI and TUI UX priorities: workspace first, task drill-down second
+
+HAN's broader shared-workspace experience has priority: people and agents, live activity across sessions and tasks, relationships and dependencies, attention, permissions and policy. Tasks are one level of that experience; they do not define HAN's scope or replace the broader navigation and views.
+
+Within that workspace, a coherent task-to-result experience is a secondary UX priority for both the GUI and the TUI. Drilling into a task should make its request, progress, participating agents and sessions, blockers, questions, approvals, changes and result evidence easy to follow. The view should answer what is happening, what needs the viewer's attention, and what result can be assessed, with links back to the surrounding work.
+
+A task might be presented as Requested → Working → Needs attention → Ready to review → Landed, where applicable. This is an illustrative journey, not a new protocol state machine or a requirement that every task produces code or lands a change. Preserve the node's authoritative states, distinguish reported progress from verified outcomes, and show failed, cancelled or uncertain outcomes honestly.
+
+Result review should bring together the relevant diff, test results, logs, screenshots or recordings when available, and remaining concerns. Approvals should appear with the exact plan or change they authorize. This task-level polish follows the broader workspace priorities above; it must retain context and navigation across tasks, sessions and spaces. This note establishes design direction without adding acceptance criteria or new node API contracts.
+
+Each interface should express this journey in its own idiom. The TUI should support keyboard-driven task drill-down, readable progress and result summaries, and navigation to related sessions, approvals, diffs and evidence. Visual evidence can be offered as labelled links or an explicit open action where the terminal cannot display it. Both interfaces should preserve the same meaning for task progress, authority and outcomes without requiring identical layouts.
+
 ## Shared conventions
 
 - **Keywords:** MUST, SHOULD and MAY are as in RFC 2119. A numbered rule (`BRD-12`, `SES-4`, `DAT-15`…) is normative. Prose around it explains.
