@@ -2,7 +2,7 @@
 import type { ActorId, Decision, Entry, EntryId, GuardInput, LogRecord, PolicyCtx, PolicyDoc, SpaceState, Seq } from "./han.js";
 import {
   isActorId, isAction, isHex, isInt, isKeyId, isKind, isNonce, isPublicKey, isServerName, isSig, isSpaceId, isTime, isUnit,
-  isProfileSpace, profileActorOf, serverOf, spaceServer, jcs, utf8len, jsonInts, isExtensionKind,
+  isProfileSpace, profileActorOf, serverOf, spaceServer, jcs, utf8len, jsonInts, isExtensionKind, sha256,
 } from "./wire.js";
 
 type A = any;
@@ -33,8 +33,8 @@ function badBudget(b: A): string | null {
   return null;
 }
 export function badPolicyDoc(p: A): string | null {
-  const e = closed(p, ["visibility", "join", "membersMayInvite", "allowAgents", "approvals", "separateApprover", "budget", "maxDelegationDepth",
-    "minDurability", "launchWindow", "extensionsMinRole", "sessions", "servers"]);
+  let e = closed(p, ["visibility", "join", "membersMayInvite", "allowAgents", "approvals", "separateApprover", "budget", "maxDelegationDepth",
+    "minDurability", "launchWindow", "extensionsMinRole", "sessions", "servers"], ["gates"]);
   if (e) return "policy: " + e;
   if (!["members", "public"].includes(p.visibility)) return "policy.visibility";
   if (!["invite", "open", "closed"].includes(p.join)) return "policy.join";
@@ -42,10 +42,15 @@ export function badPolicyDoc(p: A): string | null {
   if (!["any", "with-operator", "none"].includes(p.allowAgents)) return "policy.allowAgents";
   if (!Array.isArray(p.approvals) || p.approvals.length > 64) return "policy.approvals";
   for (const r of p.approvals) {
-    const e2 = closed(r, ["action", "approvers"]); if (e2) return "approval rule: " + e2;
+    const e2 = closed(r, ["action", "approvers"], ["minTier", "maxTier", "humans", "evidence", "needs"]); if (e2) return "approval rule: " + e2;
     if (!isAction(r.action, true)) return "approval rule action";
     if (!Array.isArray(r.approvers) || r.approvers.length === 0) return "approvers";
-    for (const a of r.approvers) if (!(["owner", "member", "guest"].includes(a) || isActorId(a))) return "approver";
+    for (const a of r.approvers) if (!(["owner", "member", "guest", PATH_OWNER].includes(a) || isActorId(a))) return "approver";
+    for (const k of ["minTier", "maxTier"]) if (k in r && !(isInt(r[k]) && r[k] <= 3)) return "approval rule " + k;
+    if ("minTier" in r && "maxTier" in r && r.minTier > r.maxTier) return "approval rule minTier above maxTier";
+    if ("humans" in r && typeof r.humans !== "boolean") return "approval rule humans";
+    if ("evidence" in r && !(typeof r.evidence === "string" && reEvidenceKind.test(r.evidence))) return "approval rule evidence";
+    if ("needs" in r && !(isInt(r.needs) && r.needs >= 1 && r.needs <= 3)) return "approval rule needs";
   }
   if (typeof p.separateApprover !== "boolean") return "policy.separateApprover";
   if (p.budget !== null) { const e3 = badBudget(p.budget); if (e3) return e3; }
@@ -60,7 +65,153 @@ export function badPolicyDoc(p: A): string | null {
   if ("forceGuarded" in p.sessions && typeof p.sessions.forceGuarded !== "boolean") return "policy.sessions.forceGuarded";
   const sv = closed(p.servers, ["deny"]); if (sv) return "policy.servers: " + sv;
   if (!Array.isArray(p.servers.deny) || p.servers.deny.length > 256 || !p.servers.deny.every(isServerName)) return "policy.servers.deny";
+  if ("gates" in p && (e = badGates(p.gates))) return e;
   return null;
+}
+
+// ───────────────────────── P-17 gates: schemas, globs, tiers ─────────────────────────
+const PATH_OWNER = "@path-owner";
+const reEvidenceKind = /^[a-z0-9][a-z0-9./_-]{0,63}$/;
+const reGlobChars = /^[A-Za-z0-9._/*?@+=,~:-]+$/;
+const rePrintable = /^[!-~]{1,128}$/;
+const MAX_CHANGE_FILES = 64, MAX_CHANGE_BYTES = 12288, MAX_GATE_RULES = 64, MAX_PATH_OWNERS = 16;   // han.ts PolicyConstants
+const PATH_CLASSES = ["docs", "tests", "generated", "code", "sensitive", "critical"];
+const CLASS_TIER: Record<string, number> = { docs: 0, tests: 0, generated: 0, code: 1, sensitive: 2, critical: 3 };
+function badGlob(g: A): string | null {
+  if (typeof g !== "string" || g.length < 1 || g.length > 256 || !reGlobChars.test(g)) return "glob";
+  let stars = 0;
+  for (const seg of g.split("/")) {
+    if (seg === "" || seg === "." || seg === "..") return "glob segment";
+    if (seg === "**") { if (++stars > 4) return "glob has more than four **"; }
+    else if (seg.includes("**")) return "glob ** inside a segment";
+  }
+  return null;
+}
+function badGates(g: A): string | null {
+  let e = closed(g, ["small", "large", "paths", "owners"]); if (e) return "gates: " + e;
+  if (!isInt(g.small) || !isInt(g.large) || g.small > g.large) return "gates.small/large";
+  if (!Array.isArray(g.paths) || g.paths.length > MAX_GATE_RULES) return "gates.paths";
+  for (const r of g.paths) {
+    if ((e = closed(r, ["glob", "class"], ["repo"]))) return "path rule: " + e;
+    if ((e = badGlob(r.glob))) return e;
+    if (!PATH_CLASSES.includes(r.class)) return "path rule class";
+    if ("repo" in r && !(typeof r.repo === "string" && rePrintable.test(r.repo))) return "path rule repo";
+  }
+  if (!Array.isArray(g.owners) || g.owners.length > MAX_GATE_RULES) return "gates.owners";
+  for (const r of g.owners) {
+    if ((e = closed(r, ["glob", "owners"], ["repo"]))) return "owner rule: " + e;
+    if ((e = badGlob(r.glob))) return e;
+    if (!Array.isArray(r.owners) || r.owners.length < 1 || r.owners.length > 8 || !r.owners.every(isActorId) || new Set(r.owners).size !== r.owners.length) return "owner rule owners";
+    if ("repo" in r && !(typeof r.repo === "string" && rePrintable.test(r.repo))) return "owner rule repo";
+  }
+  return null;
+}
+/** One glob segment against one path segment: `*` is a run of characters (maybe none), `?` one character, over Unicode scalar values. */
+function segMatch(pat: string[], s: string[]): boolean {
+  const m = pat.length, n = s.length;
+  const t: boolean[][] = Array.from({ length: m + 1 }, () => new Array<boolean>(n + 1).fill(false));
+  t[0][0] = true;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 0; j <= n; j++) {
+      if (pat[i - 1] === "*") t[i][j] = t[i - 1][j] || (j > 0 && t[i][j - 1]);
+      else t[i][j] = j > 0 && t[i - 1][j - 1] && (pat[i - 1] === "?" || pat[i - 1] === s[j - 1]);
+    }
+  }
+  return t[m][n];
+}
+/** A glob matches a whole path, anchored and case-sensitive; a `**` segment is zero or more whole path segments. */
+function globMatch(glob: string, path: string): boolean {
+  const gs = glob.split("/"), ps = path.split("/");
+  const memo = new Map<number, boolean>();
+  const go = (i: number, j: number): boolean => {
+    const k = i * (ps.length + 1) + j;
+    const hit = memo.get(k); if (hit !== undefined) return hit;
+    let r: boolean;
+    if (i === gs.length) r = j === ps.length;
+    else if (gs[i] === "**") { r = false; for (let x = j; x <= ps.length && !r; x++) r = go(i + 1, x); }
+    else r = j < ps.length && segMatch(Array.from(gs[i]), Array.from(ps[j])) && go(i + 1, j + 1);
+    memo.set(k, r); return r;
+  };
+  return go(0, 0);
+}
+/** The built-in never-auto list (P-17): a path matching one is at least tier 2 whatever the rules say. */
+const NEVER_AUTO = [
+  ".github/**", ".gitlab/**", ".gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "azure-pipelines.yml",
+  ".han/**",
+  "**/Cargo.toml", "**/Cargo.lock", "**/package.json", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock", "**/bun.lockb", "**/go.mod", "**/go.sum",
+  "**/requirements*.txt", "**/pyproject.toml", "**/poetry.lock", "**/uv.lock", "**/Pipfile", "**/Pipfile.lock", "**/Gemfile", "**/Gemfile.lock", "**/pom.xml",
+  "**/build.gradle", "**/build.gradle.kts", "**/deny.toml", "**/rust-toolchain.toml",
+  "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.keystore", "**/id_rsa*", "**/id_ed25519*", "**/.secrets/**", "**/secrets/**",
+  "**/credentials", "**/credentials.*", "**/.netrc", "**/.npmrc", "**/.pypirc",
+  "**/CODEOWNERS", "**/sudoers", "**/sudoers.d/**", "**/.ssh/**",
+];
+function badChangePath(p: A): boolean {
+  if (typeof p !== "string") return true;
+  const n = utf8len(p);
+  if (n < 1 || n > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(p)) return true;
+  return p.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+}
+const byteCmp = (a: string, b: string) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+/** The shape of a change summary (P-17); null when it is one. */
+function badChange(c: A): string | null {
+  let e = closed(c, ["repo", "deltaDigest", "total", "files"], ["truncated"]); if (e) return "change: " + e;
+  if (typeof c.repo !== "string" || !rePrintable.test(c.repo)) return "change.repo";
+  if (!isHex(c.deltaDigest)) return "change.deltaDigest";
+  if (!isInt(c.total)) return "change.total";
+  if (!Array.isArray(c.files) || c.files.length > MAX_CHANGE_FILES) return "change.files";
+  let prev: string | undefined;
+  for (const f of c.files) {
+    if ((e = closed(f, ["path", "kind", "lines"], ["fromPath"]))) return "change file: " + e;
+    if (badChangePath(f.path)) return "change file path";
+    if (!["add", "modify", "delete", "rename"].includes(f.kind)) return "change file kind";
+    if (!isInt(f.lines)) return "change file lines";
+    if (f.kind === "rename") {
+      if (!("fromPath" in f) || badChangePath(f.fromPath) || f.fromPath === f.path) return "change file fromPath";
+    } else if ("fromPath" in f) return "change file fromPath on a " + f.kind;
+    if (prev !== undefined && byteCmp(prev, f.path) >= 0) return "change files not in ascending order of path";
+    prev = f.path;
+  }
+  if (c.total < c.files.length) return "change.total below the files listed";
+  if ("truncated" in c ? c.truncated !== true || c.total === c.files.length : c.total > c.files.length) return "change.truncated";
+  if (utf8len(jcs(c)) > MAX_CHANGE_BYTES) return "change too large";
+  return null;
+}
+const inRepo = (rule: A, repo: string) => rule.repo === undefined || rule.repo === repo;
+const pathsOf = (f: A): string[] => (f.fromPath !== undefined ? [f.path, f.fromPath] : [f.path]);
+/** P-17, the tier of a landing: the highest of the floor of every path (a rename's fromPath too), the size, and 3 for a summary that is missing or truncated. */
+function deriveTier(gates: A, change: A | undefined): number {
+  if (!change || change.truncated) return 3;
+  let tier = 0, lines = 0;
+  for (const f of change.files as A[]) {
+    lines += f.lines;
+    for (const path of pathsOf(f)) {
+      const rule = gates.paths.find((r: A) => inRepo(r, change.repo) && globMatch(r.glob, path));
+      let floor = rule ? CLASS_TIER[rule.class] : 1;
+      if (NEVER_AUTO.some((g) => globMatch(g, path))) floor = Math.max(floor, 2);
+      tier = Math.max(tier, floor);
+    }
+  }
+  if (lines > gates.large) tier = Math.max(tier, 2);
+  else if (lines > gates.small) tier = Math.max(tier, 1);
+  return tier;
+}
+/** P-17, the gate an effect.propose records, fixed then: only for a vcs.land in a policy with gates. */
+function deriveGate(s: SpaceState, ctx: PolicyCtx, proposer: string, b: A): A | undefined {
+  const gates = (s.policy as A).gates;
+  if (!gates || b.action !== "vcs.land") return undefined;
+  const change: A | undefined = b.change;
+  const gate: A = { tier: deriveTier(gates, change) };
+  if (change) { gate.deltaDigest = change.deltaDigest; gate.changeDigest = sha256(jcs(change)); }
+  const owners: string[] = [];
+  for (const f of (change?.files ?? []) as A[]) {
+    for (const path of pathsOf(f)) {
+      const rule = gates.owners.find((r: A) => inRepo(r, change.repo) && globMatch(r.glob, path));
+      if (rule) for (const o of rule.owners as string[]) if (!owners.includes(o)) owners.push(o);
+    }
+  }
+  if (owners.length === 0) { const g = guardStatus(s, ctx, proposer).guard; if (g !== undefined) owners.push(g); }
+  if (owners.length) gate.owners = owners.slice(0, MAX_PATH_OWNERS);
+  return gate;
 }
 const strict = (l: string) => ({ guest: 0, member: 1, owner: 2, nobody: 3 } as A)[l] as number;
 
@@ -111,15 +262,20 @@ export function badBody(kind: string, b: A): string | null {
       return isHex(b.task) && TASK_STATES.includes(b.state) ? null : "task.update fields";
     case "task.cancel": return (e = c(["task"])) ? e : isHex(b.task) ? null : "task";
     case "effect.propose":
-      if ((e = c(["executor", "action", "planDigest", "repeatable"], ["cost", "task", "expiresAt"]))) return e;
+      if ((e = c(["executor", "action", "planDigest", "repeatable"], ["cost", "task", "expiresAt", "change"]))) return e;
       if (!isActorId(b.executor) || !isAction(b.action) || !isHex(b.planDigest) || typeof b.repeatable !== "boolean") return "propose fields";
       if ("cost" in b && (e = badBudget(b.cost))) return e;
       if ("task" in b && !isHex(b.task)) return "task";
       if ("expiresAt" in b && !isTime(b.expiresAt)) return "expiresAt";
+      if ("change" in b && (e = badChange(b.change))) return e;
       return null;
     case "effect.approve":
-      if ((e = c(["proposal", "planDigest"], ["expiresAt"]))) return e;
+      if ((e = c(["proposal", "planDigest"], ["expiresAt", "evidence"]))) return e;
       if (!isHex(b.proposal) || !isHex(b.planDigest)) return "approve fields";
+      if ("evidence" in b) {
+        if ((e = closed(b.evidence, ["kind", "over"]))) return "evidence: " + e;
+        if (typeof b.evidence.kind !== "string" || !reEvidenceKind.test(b.evidence.kind) || !isHex(b.evidence.over)) return "evidence fields";
+      }
       return !("expiresAt" in b) || isTime(b.expiresAt) ? null : "expiresAt";
     case "effect.claim":
       if ((e = c(["proposal", "attempt", "instance", "window"]))) return e;
@@ -227,11 +383,29 @@ function authorKeyValid(s: SpaceState | undefined, ctx: PolicyCtx, e: A): boolea
   return keyValid(ctx, e.author, e.keyId);
 }
 const unexpired = (exp: string | undefined, time: string) => exp === undefined || exp > time;
-const ruleFor = (p: PolicyDoc, action: string) => p.approvals.find((r) => r.action === action || r.action === "*");
-function satisfiesRule(s: SpaceState, rule: A, actor: string): boolean {
-  if (!holds(s, actor)) return false;
-  const r = roleOf(s, actor);
-  return rule.approvers.some((x: string) => x === actor || x === r);
+/** P-17: a rule with minTier or maxTier applies only to an effect with a gate whose tier is within them. */
+const tierWithin = (r: A, gate: A | undefined): boolean =>
+  (r.minTier === undefined && r.maxTier === undefined) || (gate !== undefined && gate.tier >= (r.minTier ?? 0) && gate.tier <= (r.maxTier ?? 3));
+const OWNER_RULE = { action: "*", approvers: ["owner"] };
+/** P-08, P-17: the first rule whose action matches and whose tier predicate holds; a gated effect of tier 1 or more that none covers needs an owner. */
+const ruleFor = (p: PolicyDoc, ef: A): A | undefined =>
+  p.approvals.find((r: A) => (r.action === ef.action || r.action === "*") && tierWithin(r, ef.gate)) ?? (ef.gate && ef.gate.tier >= 1 ? OWNER_RULE : undefined);
+/** P-17, who counts: a role now that the rule names (a role, an ID, or @path-owner: an author in the effect's gate.owners) and, for a non-human author (by the kind
+ *  the approval recorded), a tier below 2, no `humans`, and the evidence the rule asks for, of that kind and over the effect's gate.deltaDigest. */
+function approvalCounts(s: SpaceState, ef: A, rule: A, author: string, kind: string, evidence: A | undefined): boolean {
+  if (!holds(s, author)) return false;
+  const r = roleOf(s, author);
+  if (!rule.approvers.some((x: string) => x === author || x === r || (x === PATH_OWNER && (ef.gate?.owners ?? []).includes(author)))) return false;
+  if (kind !== "human") {
+    if ((ef.gate?.tier ?? 0) >= 2 || rule.humans === true) return false;
+    if (rule.evidence !== undefined && !(evidence !== undefined && evidence.kind === rule.evidence && ef.gate?.deltaDigest !== undefined && evidence.over === ef.gate.deltaDigest)) return false;
+  }
+  return true;
+}
+/** P-17, how many approvals a claim consumes (E3): the rule's `needs`, at least 2 at tier 3; none if no approval is needed. */
+function needsOf(s: SpaceState, ef: A): number {
+  const rule = ruleFor(s.policy, ef);
+  return rule ? Math.max(rule.needs ?? 1, ef.gate?.tier === 3 ? 2 : 1) : 0;
 }
 const secs = (t: string) => Date.UTC(+t.slice(0, 4), +t.slice(5, 7) - 1, +t.slice(8, 10), +t.slice(11, 13), +t.slice(14, 16), +t.slice(17, 19)) / 1000;
 const abandonAfter = (window: number) => Math.floor((window * 101 + 98) / 99) + 2; // ⌈window·1.01/0.99⌉ + 2
@@ -348,9 +522,9 @@ export function sessionAccess(state: SpaceState, actor: string, session: EntryId
 
 // ───────────────────────── P-01 relevant actors ─────────────────────────
 function candidates(s: SpaceState, e: A, time: string): A[] {
-  const rule = ruleFor(s.policy, e.action);
+  const rule = ruleFor(s.policy, e);
   if (!rule) return [];
-  return e.approvals.filter((a: A) => openApproval(a, time) && satisfiesRule(s, rule, a.author) && !(s.policy.separateApprover && a.author === e.proposer));
+  return e.approvals.filter((a: A) => openApproval(a, time) && approvalCounts(s, e, rule, a.author, a.actorKind, a.evidence) && !(s.policy.separateApprover && a.author === e.proposer));
 }
 /** P-01, the actors an entry names, which `decide` needs pinned. */
 function namedActors(state: SpaceState | undefined, e: A): string[] {
@@ -368,7 +542,7 @@ function namedActors(state: SpaceState | undefined, e: A): string[] {
   return out;
 }
 /** P-01, the complete pin list given the profiles pinned so far (`ctx.profiles`): the named actors; for a claim then the guards (the operators in `ctx` of the
- *  proposer and executor) and the E3 candidates in order up to and including the first usable by the profiles in `ctx`: a valid key and an author not guarded at the claim (every one before it included, guarded ones too).
+ *  proposer and executor) and the E3 candidates in order up to and including the n-th usable by the profiles in `ctx` (n = the approvals the claim consumes, P-17): a valid key and an author not guarded at the claim (every one before it included, guarded ones too).
  *  The sequencer calls it again with what it fetched until it names nothing new: three calls at most. */
 /** E3: a candidate counts if its key is valid and its author is not guarded at the claim (a guarded agent's approval never counts, P-15). */
 function usable(s: SpaceState, ctx: PolicyCtx, x: A): boolean { return keyValid(ctx, x.author, x.keyId); }
@@ -380,7 +554,9 @@ export function relevantActors(state: SpaceState | undefined, entry: Entry, ctx:
   const ef = e.kind === "effect.claim" && state ? (state.effects as A)[e.body?.proposal] : undefined;
   if (ef) {
     for (const g of guardsOf(state!, ctx, ef)) add(g);
-    for (const a of candidates(state!, ef, ctx.time)) { add(a.author); if (usable(state!, ctx, a)) break; }
+    const need = needsOf(state!, ef);
+    let got = 0;
+    for (const a of candidates(state!, ef, ctx.time)) { add(a.author); if (usable(state!, ctx, a) && ++got >= need) break; }
   }
   return out as ActorId[];
 }
@@ -615,6 +791,7 @@ function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
     if (!task || !task.open || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
   }
   if (overBound(effectGuardedFor(s, ctx, a, b.executor, b.task), a, b.executor)) return deny("too many guarded tasks; close some");   // P-15: the bound is kept, never exceeded
+  if (b.change !== undefined && b.action !== "vcs.land") return inv("change on an action other than vcs.land");   // P-17
   return ok;
 }
 
@@ -625,26 +802,26 @@ function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   if (b.planDigest !== ef.planDigest) return inv("planDigest does not match");
   if (ef.phase !== "open" && ef.phase !== "claimed") return deny("phase does not take approvals");
   if (b.expiresAt !== undefined && !(b.expiresAt > ctx.time)) return deny("approval already expired");
-  const rule = ruleFor(s.policy, ef.action);
+  const rule = ruleFor(s.policy, ef);
   const guards = guardsOf(s, ctx, ef);
   if (!(guards.includes(a) && holds(s, a))) {   // a guard approves as a guard (P-15): no rule, no cap
-    if (!rule || !satisfiesRule(s, rule, a)) return deny("not an approver");
+    if (!rule || !approvalCounts(s, ef, rule, a, kindOf(ctx, a), b.evidence)) return deny("not an approver, or the approval could not count under the rule (P-17)");
     if (s.policy.separateApprover && a === ef.proposer) return deny("proposer cannot approve");
     if (candidates(s, ef, ctx.time).filter((x: A) => x.author !== a && !guards.includes(x.author)).length >= MAX_OPEN_APPROVALS) return deny("too many open approvals");
   }
   return ok;
 }
 
-type E3 = { ok: true; approval?: string; guardApprovals: string[] } | { ok: false; code: "invalid" | "denied"; why: string };
+type E3 = { ok: true; approval?: string; coApprovals: string[]; guardApprovals: string[] } | { ok: false; code: "invalid" | "denied"; why: string };
 function e3(s: SpaceState, ef: A, ctx: PolicyCtx): E3 {
-  const rule = ruleFor(s.policy, ef.action);
-  let approval: A;
+  const rule = ruleFor(s.policy, ef);
+  const picked: A[] = [], need = needsOf(s, ef);   // P-17: the first `need` usable candidates, by distinct authors
   if (rule) {
     for (const x of candidates(s, ef, ctx.time)) {
       if (!(ctx.profiles as A)?.[x.author]) return { ok: false, code: "invalid", why: "candidate has no pinned profile" };
-      if (usable(s, ctx, x)) { approval = x; break; }
+      if (usable(s, ctx, x) && !picked.some((y) => y.author === x.author)) { picked.push(x); if (picked.length >= need) break; }
     }
-    if (!approval) return { ok: false, code: "denied", why: "no valid approval" };
+    if (picked.length < need) return { ok: false, code: "denied", why: picked.length ? "fewer usable approvals than the rule needs" : "no valid approval" };
   }
   if (unboundedGuards(s, ctx, ef).length > 0) return { ok: false, code: "denied", why: "the proposer or executor took on guarding the proposal never counted: propose again" };   // Z1
   const guardApprovals: string[] = [];
@@ -661,7 +838,7 @@ function e3(s: SpaceState, ef: A, ctx: PolicyCtx): E3 {
     if (!found) return { ok: false, code: "denied", why: "a guard has not approved" };
     guardApprovals.push(found.id);
   }
-  return { ok: true, approval: approval?.id, guardApprovals };
+  return { ok: true, approval: picked[0]?.id, coApprovals: picked.slice(1).map((x) => x.id), guardApprovals };
 }
 
 function decideClaim(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
@@ -902,6 +1079,8 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       if (b.task !== undefined) ef.task = b.task;
       if (b.expiresAt !== undefined) ef.expiresAt = b.expiresAt;
       ef.guardedFor = effectGuardedFor(s, ctx, a, b.executor, b.task);   // P-15
+      const gate = deriveGate(s, ctx, a, b);   // P-17: fixed now, like guardedFor
+      if (gate) ef.gate = gate;
       (s.effects as A)[id] = ef;
       break;
     }
@@ -913,6 +1092,7 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       ef.approvals = ef.approvals.filter((x: A) => x.consumedBy || (x.author !== a && keep.includes(x)));
       const ap: A = { id, author: a, keyId: e.keyId, actorKind: kindOf(ctx, a) };
       if (b.expiresAt !== undefined) ap.expiresAt = b.expiresAt;
+      if (b.evidence !== undefined) ap.evidence = { kind: b.evidence.kind, over: b.evidence.over };
       ef.approvals.push(ap);
       dropExpired(ef, time);
       break;
@@ -930,8 +1110,9 @@ export function fold(state: SpaceState | undefined, record: LogRecord, ctx: Poli
       const claim: A = { id, attempt: b.attempt, instance: b.instance, time, window: b.window, settled: false };
       if (r.ok) {
         if (r.approval) claim.approval = r.approval;
+        if (r.coApprovals.length) claim.coApprovals = r.coApprovals;
         if (r.guardApprovals.length) claim.guardApprovals = r.guardApprovals;
-        const used = new Set([r.approval, ...r.guardApprovals]);
+        const used = new Set([r.approval, ...r.coApprovals, ...r.guardApprovals]);
         for (const x of ef.approvals) if (used.has(x.id)) x.consumedBy = id;
       }
       if (s.policy.budget && ef.cost) {

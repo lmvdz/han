@@ -233,7 +233,7 @@ export function validateContent(kind: string, content: any, body?: any): string 
       if (body && sha256(jcs(c.plan)) !== body.planDigest) return "planDigest mismatch";
       return null;
     });
-    case "effect.approve": return need([], ["note"], (c) => ("note" in c && !strMax(c.note, 4096)) ? "note" : null);
+    case "effect.approve": return need([], ["note", "evidence"], (c) => ("note" in c && !strMax(c.note, 4096)) ? "note" : ("evidence" in c && validBlobRef(c.evidence)) || null);
     case "effect.cancel": return need([], ["reason", "evidence"], (c) => ("reason" in c && !strMax(c.reason, 1024)) ? "reason" : ("evidence" in c && validBlobRef(c.evidence)) || null);
     case "effect.outcome": return need([], ["evidence"], (c) => ("evidence" in c && validBlobRef(c.evidence)) || null);
     case "effect.resolve": return need(["evidence"], [], (c) => validBlobRef(c.evidence));
