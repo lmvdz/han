@@ -15,7 +15,7 @@ fn fake_systemctl(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("systemctl");
     // `is-active` answers from a marker file the fake `start` creates and `stop` removes.
     let script = format!(
-        "#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1\" in\n  start) touch {mark} ;;\n  stop) rm -f {mark} ;;\n  is-active) if [ -f {mark} ]; then echo active; else echo inactive; exit 3; fi ;;\nesac\n",
+        "#!/bin/sh\necho \"$@\" >> {log}\nfor u; do :; done\ncase \"$1\" in\n  start) touch {mark}-$u ;;\n  stop) rm -f {mark}-$u ;;\n  is-active) if [ -f {mark}-$u ]; then echo active; else echo inactive; exit 3; fi ;;\nesac\n",
         log = dir.join("calls.log").display(),
         mark = dir.join("active").display()
     );
