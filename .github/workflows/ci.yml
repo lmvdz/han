@@ -65,7 +65,7 @@ jobs:
   # Also runs the timeline vectors, the han-net/han-seq wire vectors with the conformance feature (their self
   # dev-dependency), and apps/han/tests/test_mode_gate.rs (the default binary has no test mode, R9). The release
   # build of that check runs nightly in 'full'. Pull requests test only the affected crates and what depends on them.
-  # nextest does not run doc-tests, so `cargo test --doc` does. The five slowest test binaries run in `test-slow`.
+  # nextest does not run doc-tests: see `doc-tests`. The five slowest test binaries run in `test-slow`.
   test:
     needs: scope
     if: needs.scope.outputs.rust == 'true'
@@ -85,10 +85,6 @@ jobs:
         run: >
           cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
           -E 'not (binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem))'
-      - name: Doc-tests
-        env:
-          PACKAGES: ${{ needs.scope.outputs.packages }}
-        run: cargo test --doc ${PACKAGES:---workspace} --locked
 
   test-slow:
     needs: scope
@@ -109,6 +105,22 @@ jobs:
         run: >
           cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
           -E 'binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem)'
+
+  # nextest does not run doc-tests, so `cargo test --doc` does, in its own job (it recompiles the dependencies for rustdoc).
+  doc-tests:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Doc-tests
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: cargo test --doc ${PACKAGES:---workspace} --locked
 
   # The spec checks need no Rust: policy vectors, the three-way consistency of the entry kinds, and (when a Markdown file
   # changed, or on a push) that every <!--s:key--> count and status in the spec text still matches what the checks derive.
@@ -137,7 +149,7 @@ jobs:
 
   # The one required check. A skipped job counts as passed; a failed or cancelled one does not.
   quick:
-    needs: [scope, lint, test, test-slow, spec]
+    needs: [scope, lint, test, test-slow, doc-tests, spec]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
