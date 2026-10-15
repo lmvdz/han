@@ -1131,6 +1131,30 @@ impl<T: Transport> Node<T> {
                     )),
                 }
             }
+            Command::SessionAwait {
+                space,
+                session,
+                timeout_ms,
+            } => {
+                self.require_followed(&space)?;
+                let limit = timeout_ms.map_or(inner.cfg.sync_wait, |ms| {
+                    Duration::from_millis(ms).min(inner.cfg.sync_wait)
+                });
+                match self
+                    .wait_engine(limit, |e| {
+                        (e.session_actor(&space, &session).is_some()
+                            && e.is_session_watched(&space, &session))
+                        .then_some(())
+                    })
+                    .await
+                {
+                    Some(()) => Ok(CallResult::Done),
+                    None => Err(NodeError::pending(
+                        format!("session {session} of {space} is not known yet"),
+                        Pending::Session { space, session },
+                    )),
+                }
+            }
             Command::Invite {
                 space,
                 ttl_secs,
