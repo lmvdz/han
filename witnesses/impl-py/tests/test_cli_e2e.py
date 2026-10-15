@@ -47,22 +47,17 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     await han(env, "ana", "cancel", S, pid2)
     assert f"{pid2[:8]} cancelled" in await han(env, "ana", "status", S)
     assert "denied" in (await han(env, "bob", "member", "set", S, "@bob:a.localhost", "owner", ok=False))[2]
-
-async def test_executor_refuses_with_reason_and_evidence(env, tmp_path):
-    """P-07a, G-01: the executor cancels its own open effect with a reason and an evidence file; a bystander's cancel is denied;
-    the stored cancel carries both in its content and the blob is then readable by a member; a claimed effect refuses the executor."""
-    env.actor("ana"); env.actor("bob"); env.actor("exec", "service", operator="@ana:a.localhost")
-    await han(env, "ana", "space", "create", S)
-    for who in ("bob", "exec"): await han(env, "ana", "member", "set", S, f"@{who}:a.localhost", "member")
-    plan = tmp_path / "plan.json"; plan.write_text(json.dumps({"action": "fs.write", "target": "out/a.txt", "args": {"text": "hi"}}))
+    # P-07a, G-01: the executor refuses its own open effect with a reason and an evidence file; a bystander's cancel is denied;
+    # the stored cancel carries both in its content and the blob is then readable by a member
+    await han(env, "ana", "member", "set", S, "@exec:a.localhost", "member")
     ev = tmp_path / "why.json"; ev.write_text('{"why": "the checks failed"}')
-    pid = last_id(await han(env, "ana", "propose", S, "--executor", "@exec:a.localhost", "--plan", str(plan)))
-    code, _, err = await han(env, "bob", "cancel", S, pid[:10], "--reason", "no", ok=False)
+    pid3 = last_id(await han(env, "ana", "propose", S, "--executor", "@exec:a.localhost", "--plan", str(plan)))
+    code, _, err = await han(env, "bob", "cancel", S, pid3[:10], "--reason", "no", ok=False)
     assert code == 1 and "denied" in err
-    code, _, err = await han(env, "exec", "cancel", S, pid[:10], "--reason", "x" * 1025, ok=False)
+    code, _, err = await han(env, "exec", "cancel", S, pid3[:10], "--reason", "x" * 1025, ok=False)
     assert code == 1 and "1,024" in err
-    await han(env, "exec", "cancel", S, pid[:10], "--reason", "cannot run this", "--evidence", str(ev))
-    assert f"{pid[:8]} cancelled" in await han(env, "ana", "status", S)
+    await han(env, "exec", "cancel", S, pid3[:10], "--reason", "cannot run this", "--evidence", str(ev))
+    assert f"{pid3[:8]} cancelled" in await han(env, "ana", "status", S)
     rec = [json.loads(l) for l in (await han(env, "bob", "read", S, "--json")).splitlines()][-1]
     assert rec["entry"]["kind"] == "effect.cancel" and rec["content"]["reason"] == "cannot run this"
     assert json.loads(await (await env.client("bob")).blob_get(rec["content"]["evidence"], S)) == {"why": "the checks failed"}
