@@ -1,7 +1,9 @@
 //! Linux: bubblewrap. A new root with the system directories read-only, the listed paths bound, a private
 //! `/tmp`, and new user, pid, ipc, uts, cgroup and network namespaces. The network namespace has only `lo`;
 //! the in-sandbox shim forwards a loopback port to a unix socket bound in from the host, which this host
-//! bridges to the proxy. With no other interface, DNS fails.
+//! bridges to the proxy. With no other interface, DNS fails. A seccomp filter keeps the tree to AF_UNIX,
+//! AF_INET, AF_INET6 and AF_NETLINK sockets (the network namespace does not cover AF_VSOCK, which reaches the
+//! hypervisor on a VM host), and `--disable-userns` stops nested user namespaces where bwrap supports it.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -9,6 +11,7 @@ use std::time::Duration;
 
 use han_node::api::{Fidelity, SandboxBackend};
 
+use super::seccomp;
 use super::{
     BackendAvailability, SandboxError, SandboxInfo, SandboxSpec, Sandboxed, build_env,
     from_tokio_child, random_hex,
@@ -67,6 +70,27 @@ pub(super) fn probe() -> BackendAvailability {
             detail: format!("bwrap: {e}"),
         },
     }
+}
+
+/// Whether this bwrap accepts `--disable-userns` (0.8+) and can apply it here.
+fn supports_disable_userns(bwrap: &Path) -> bool {
+    std::process::Command::new(bwrap)
+        .args([
+            "--unshare-all",
+            "--unshare-user",
+            "--disable-userns",
+            "--die-with-parent",
+            "--ro-bind",
+            "/",
+            "/",
+            "true",
+        ])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn add_system(args: &mut Vec<String>) {
@@ -131,6 +155,28 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         "--cap-drop".into(),
         "ALL".into(),
     ];
+    if supports_disable_userns(&bwrap) {
+        // `--disable-userns` insists on an explicit `--unshare-user` (`--unshare-all` only tries one).
+        args.extend(["--unshare-user".into(), "--disable-userns".into()]);
+    } else {
+        gaps.push(
+            "nested user namespaces not blocked: this bwrap lacks a working --disable-userns (needs 0.8+)"
+                .into(),
+        );
+    }
+    // bwrap reads the filter from fd 3, which the `sh` wrapper below opens (the host forbids `unsafe`, so no
+    // `pre_exec` fd juggling). The file sits in the private socket directory.
+    let filter = seccomp::filter_bytes();
+    let filter_path = sock_dir.join("seccomp.bpf");
+    match &filter {
+        Some(bytes) => {
+            std::fs::write(&filter_path, bytes)?;
+            args.extend(["--seccomp".into(), "3".into()]);
+        }
+        None => gaps.push(
+            "socket families not restricted: no seccomp filter for this CPU architecture".into(),
+        ),
+    }
     add_system(&mut args);
     args.extend([
         "--proc".into(),
@@ -189,6 +235,22 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         (None, _) => (bwrap, Vec::new()),
     };
     full.extend(args);
+    let (program, full) = if filter.is_some() {
+        let mut wrapped = vec![
+            "-c".into(),
+            "exec 3<\"$1\" && shift && exec \"$@\"".into(),
+            "han-bwrap".into(),
+            filter_path.to_string_lossy().into_owned(),
+            program.to_string_lossy().into_owned(),
+        ];
+        wrapped.extend(full);
+        (
+            find("sh").unwrap_or_else(|| PathBuf::from("/bin/sh")),
+            wrapped,
+        )
+    } else {
+        (program, full)
+    };
     if spec.limits.processes.is_some() {
         gaps.push(
             "process-count cap not enforced: RLIMIT_NPROC counts every process of the user, so it is not set (SR-31)"

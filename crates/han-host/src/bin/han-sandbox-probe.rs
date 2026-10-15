@@ -123,6 +123,65 @@ fn proxy_route() -> Result<String, String> {
     }
 }
 
+/// Linux: the escapes a network namespace and a mount namespace do not cover.
+#[cfg(target_os = "linux")]
+mod linux {
+    use nix::sched::{CloneFlags, unshare};
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, VsockAddr, connect, socket};
+
+    /// AF_VSOCK reaches the hypervisor host on a VM.
+    pub fn vsock_socket() -> Result<String, String> {
+        socket(
+            AddressFamily::Vsock,
+            SockType::Stream,
+            SockFlag::empty(),
+            None,
+        )
+        .map(|_| "socket created".to_owned())
+        .map_err(|e| e.to_string())
+    }
+
+    /// Connects to the host (CID 2) and to the local CID (1); a failed connect is not enough, so the socket
+    /// has to exist first.
+    pub fn vsock_connect() -> Result<String, String> {
+        let fd = socket(
+            AddressFamily::Vsock,
+            SockType::Stream,
+            SockFlag::empty(),
+            None,
+        )
+        .map_err(|e| format!("socket: {e}"))?;
+        for cid in [2, 1] {
+            if connect(
+                std::os::fd::AsRawFd::as_raw_fd(&fd),
+                &VsockAddr::new(cid, 1),
+            )
+            .is_ok()
+            {
+                return Ok(format!("connected to cid {cid}"));
+            }
+        }
+        Err("connect failed".into())
+    }
+
+    pub fn packet_socket() -> Result<String, String> {
+        socket(
+            AddressFamily::Packet,
+            SockType::Raw,
+            SockFlag::empty(),
+            None,
+        )
+        .map(|_| "socket created".to_owned())
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn nested_userns() -> Result<String, String> {
+        unshare(CloneFlags::CLONE_NEWUSER)
+            .map(|()| "new user namespace".to_owned())
+            .map_err(|e| e.to_string())
+    }
+}
+
 fn run(spec: &Value, prefix: &str) {
     for p in strs(spec, "write") {
         let r = std::fs::write(&p, b"probe")
@@ -155,6 +214,13 @@ fn run(spec: &Value, prefix: &str) {
     }
     for n in strs(spec, "local") {
         emit(prefix, format!("local:{n}"), local(&n));
+    }
+    #[cfg(target_os = "linux")]
+    if spec.get("linux").and_then(Value::as_bool) == Some(true) {
+        emit(prefix, "vsock-socket".into(), linux::vsock_socket());
+        emit(prefix, "vsock-connect".into(), linux::vsock_connect());
+        emit(prefix, "packet-socket".into(), linux::packet_socket());
+        emit(prefix, "userns-unshare".into(), linux::nested_userns());
     }
     if let Some(c) = spec.get("canary").and_then(Value::as_str) {
         let found = std::env::vars()
