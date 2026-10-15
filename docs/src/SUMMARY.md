@@ -4,6 +4,7 @@
 
 - [Getting started](getting-started.md)
 - [Status](status.md)
+- [In-flight state](inflight-state.md)
 - [Goal](goal.md)
 - [Specification](core/architecture.md)
 - [Coverage of v0.4](core/coverage.md)

@@ -31,6 +31,8 @@ As of 2026-10-14. The plan, with every milestone's "done when", is in [PLAN.md Â
 Round 32 graded 76.5 ([review history](decisions/HISTORY.md)). Spec rounds are paused while the product is built. Queued for the next round:
 - semantic gates;
 - risk tiers for landing work;
+- the landing profile `han.land/1` ([study](https://github.com/lmvdz/han/blob/main/spec/decisions/studies/r33-land-profile.md));
+- deterministic in-flight state and `han_query` ([study](https://github.com/lmvdz/han/blob/main/spec/decisions/studies/r33-inflight-state.md), [fact catalog](inflight-state.md));
 - the open items of the round-32 review (AA1â€“AA5; the build already fixes AA2 and AA3).
 
 ## The dogfood
