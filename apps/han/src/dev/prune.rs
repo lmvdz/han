@@ -248,6 +248,14 @@ fn judge(
     if tip == rec.head || git.is_ancestor(tip, base) {
         return Ok(Verdict::Go);
     }
+    // `gh pr update-branch` puts a merge commit on GitHub only: the PR's head then contains the local tip, and
+    // the head may not exist here, so it is fetched once. A closed PR's head never landed.
+    if rec.state == PrState::Merged
+        && (git.is_ancestor(tip, &rec.head)
+            || (git.fetch_pr_head(rec.number).is_ok() && git.is_ancestor(tip, &rec.head)))
+    {
+        return Ok(Verdict::Go);
+    }
     // A squash merge never matches the PR's own commits by patch id, so only what came after the PR's head
     // is judged; a branch that was rewritten (the head is not an ancestor) is judged whole.
     let after = git.is_ancestor(&rec.head, tip).then_some(rec.head.as_str());
