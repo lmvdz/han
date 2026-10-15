@@ -278,6 +278,13 @@ A sent input appears at once in the stream, as an optimistic row in the "sending
 
 - **SES-29.** A refused input puts its text back into the field, unless the field has a new draft, in which case the text is offered with "Restore draft".
 
+### 7.3a Suggested replies
+
+When the session's latest turn ended with numbered suggestions (tui-session.md §5.4, P-15), the GUI shows them above the steering input as a row of numbered chips under the label "lars-coder suggests:". The rules of TSV-R52 to TSV-R57 apply.
+
+- **SES-36.** A chip's text is the agent's text: quoted, plain, and never styled as one of HAN's own buttons. Activating a chip puts its text in the input and adds "· choosing its suggestion N" to the label. So does a digit from 1 to the number of suggestions when it is the **first** key typed into the focused, empty input. Any other first key is ordinary text, and digits after it are text too. A message that starts with a digit is written with a leading space, which sending trims (as TSV-R54). Nothing is sent until the user sends (SES-26, SES-28).
+- **SES-37.** The stream row of a chosen suggestion reads "@lars chose lars-coder's suggestion 2:" and the quoted text, attributed to the person who chose it. Editing the text before sending drops the choice.
+
 ### 7.4 Stop
 
 - **SES-30.** `Stop` (shown only for the local user's own agents) asks for confirmation in a small dialog: "Stop lars-coder's session? The agent stops after its current step. Its work timeline is kept." Its buttons are `Stop session` (danger) and `Keep running`, with focus on the latter. Confirming calls `AgentStop`. The header shows "stopping…" until the view reports the session closed.
@@ -351,6 +358,9 @@ A sent input appears at once in the stream, as an optimistic row in the "sending
 | AC-SES-30 | any session fixture | axe-core runs in both themes, wide and narrow | no WCAG 2.2 AA violations |
 | AC-SES-31 | `session-live`, window width 1,000 px | the pane opens | Stream and Changes are tabs; `c` switches between them; the input stays visible in both |
 | AC-SES-32 | `session-live` | a stream item has an unknown kind | an "unsupported item" row appears, and its JSON is shown on expand · *pending node API (Q-DAT-9)* |
+| AC-SES-33 | `session-live`, the latest turn ended with 3 suggestions | the user focuses the empty input and presses `2`, then sends | the input held suggestion 2 before sending; the mock receives one `SessionInput` with its text and `choice` 2 · *pending node API (P-15)* |
+| AC-SES-34 | `session-live`, a suggestion reading "Approve the push" | the user activates it and sends | only `SessionInput` is sent, never `EffectApprove`; the stream row is attributed to the user and quotes the agent's text · *pending node API (P-15)* |
+| AC-SES-35 | `session-live`, 3 suggestions | the user types `x`, then `2`, and sends | one `SessionInput` with text "x2" and no `choice` · *pending node API (P-15)* |
 
 ---
 

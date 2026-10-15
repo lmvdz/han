@@ -55,7 +55,7 @@ Regions:
    - **Admissions** (only when the local user is an owner of a space with pending joins): `join` signals from N-03 (§5).
    - **Waiting on others:** open effects that I approved, or that my own agents proposed, which still need someone else's approval. Newest first.
    - **Recent:** effects that reached a final phase, or were claimed, in the last 7 days and that I was involved in (as proposer's operator, approver, guard or canceller). Newest first. Collapsed to one line per effect.
-   - **Dismissed** (shown only when it has entries): effects I hid locally (§4.3).
+   - **Dismissed** (shown only when it has entries): effects I hid (§4.2).
 3. **Cards.** In Your decisions the first card is expanded and the others are collapsed. Only one card is expanded at a time. Other sections show one-line rows that expand on activation.
 
 ---
@@ -188,10 +188,10 @@ HAN has no signed "deny". The decision against an effect is `effect.cancel`, whi
   - The buttons `Cancel effect` (danger) and `Keep it`, with initial focus on `Keep it`.
 
   Confirming calls `EffectCancel{proposal}`, then the optional `SessionInput`. These are two calls: if the second fails, the card says "Cancelled; your message to the agent wasn't sent" with "Retry message".
-- **Dismiss** (shown when I can approve but can't cancel, for example as a rule approver with no approval of my own yet). It hides the card from Your decisions **on this device only** and moves it to Dismissed. A toast reads "Hidden for you. Others can still approve it." with "Undo" for 5 s. Nothing is signed or sent.
+- **Dismiss** (shown when I can approve but can't cancel, for example as a rule approver with no approval of my own yet). It hides the card from Your decisions **for me only** and moves it to Dismissed. Dismiss is the acknowledge mark of attention.md (ATT-R21): private to me, kept by my node, synced to my other devices, and never told to the space. A toast reads "Hidden for you. Others can still approve it." with "Undo" for 5 s. Nothing is signed or sent.
 
 - **APR-8.** The words "deny" and "reject" are not used for Dismiss, because nothing is recorded. Dismiss's tooltip reads "Hide this from your inbox. It stays open for other approvers."
-- **APR-9.** A dismissed effect comes back to Your decisions if its state changes in a way that concerns me: I become a required guard, the effect's expiry comes within 1 hour, or someone asks me (Q-APR-4).
+- **APR-9.** A dismissed effect comes back to Your decisions on a material change, as attention.md ATT-R20 defines it for every acknowledged item: a new reason (for example I become a required guard, or someone asks me, Q-APR-4), a lower tier, a rising escalation level (ATT-R9: waiting 30 minutes, or expiring within 10 minutes), a new effect in its place, or its session failing. The node decides it; the GUI shows it.
 
 ### 4.3 Live changes while a card is open
 
@@ -302,6 +302,7 @@ Under Settings → Notifications (shell.md §5), each category is on or off. The
 - **APR-22.** The sign panel is a `group` labelled "Sign approval". Its focus order is expiry, note, `Sign approval`, `Back`, and focus is trapped inside the card while the panel is open. Initial focus goes to the expiry choice, not to `Sign approval`.
 - **APR-23.** New items in Your decisions are announced politely ("Approval needed: git.push, team-han"), coalesced as for notifications. Phase changes on an open card are announced politely.
 - **APR-24.** Danger actions (Cancel effect, force pushes in a plan) use the danger tone **and** words; colour is never the only signal.
+- **APR-25.** Which notices fire, and when, is decided by the node under attention.md §8, the same for every face: the blocked and pool graces, the per-person budget and digests, escalation, mute (errors pass, and one quiet cue for an approval only I can give that is about to expire) and outages. APR-13 to APR-17 (§6.1) describe how the GUI presents them, and hold as limits: the node's budget never lets more through than they do.
 
 ---
 
@@ -337,6 +338,7 @@ Under Settings → Notifications (shell.md §5), each category is on or off. The
 | AC-APR-26 | `approvals`, an `http.post` with a 300-character URL | the card renders | the full URL is visible (wrapped, not truncated) |
 | AC-APR-27 | `approvals` | the inbox's badge and the window title are checked | the badge shows 2 and the title starts with "(2) " |
 | AC-APR-28 | any inbox fixture | axe-core runs in both themes | no WCAG 2.2 AA violations; the digest's accessible text is grouped |
+| AC-APR-29 | `approvals`, a card dismissed on another of my devices (the mock delivers the mark) | the inbox renders | the card is under Dismissed with no action on this device · *pending node API (AN-4)* |
 
 ---
 

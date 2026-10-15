@@ -8,20 +8,21 @@ Licence: CC-BY-4.0, like the rest of `spec/`.
 
 | # | Document | Surface | Acceptance criteria | Open questions |
 |---|---|---|---|---|
-| 1 | [board.md](board.md) | the live board: person × agent × issue rows, grouping, filters, the overlap badge, stale and failed rows, keyboard navigation, windowed scrolling over `view(Board)` | 28 (AC-BRD-01…28); 13 pending | 7 |
-| 2 | [session.md](session.md) | the session pane: the live stream, tool-call rows, Conversation and Steps modes, the Record, the timeline scrubber driving the diff, the decision bar, steering input | 32 (AC-SES-01…32); 26 pending | 6 |
-| 3 | [approvals.md](approvals.md) | the approvals inbox: the approval card (plan, digest, gate, who must approve), sign and cancel flows, admissions, notifications | 28 (AC-APR-01…28); 8 pending | 8 |
+| 1 | [board.md](board.md) | the live board: person × agent × issue rows, grouping (with lifecycle), filters, the overlap badge, stale and failed rows, done-unseen, keyboard navigation, windowed scrolling over `view(Board)` | 31 (AC-BRD-01…31); 16 pending | 7 (1 answered) |
+| 2 | [session.md](session.md) | the session pane: the live stream, tool-call rows, Conversation and Steps modes, the Record, the timeline scrubber driving the diff, the decision bar, steering input, suggested replies | 35 (AC-SES-01…35); 29 pending | 6 |
+| 3 | [approvals.md](approvals.md) | the approvals inbox: the approval card (plan, digest, gate, who must approve), sign and cancel flows, admissions, notifications | 29 (AC-APR-01…29); 9 pending | 8 |
 | 4 | [diffs.md](diffs.md) | the diff and changed-files views on `@pierre/diffs` and `@pierre/trees`, push and merge previews, the pairwise overlap view | 23 (AC-DIF-01…23); 6 pending | 5 |
 | 5 | [shell.md](shell.md) | the app shell: the window, routes, the command palette, keybindings with when-clauses, settings, theming, startup, onboarding (identity, add a device, join by ticket, create and invite), devices, trust | 34 (AC-SHL-01…34); 5 pending | 7 |
 | 6 | [data.md](data.md) | the data layer contract: the Tauri bridge, the `HanClient` service, generated types with Schema decoding, view atoms, command lifecycle, loading and error states, persistence, the mock client and fixtures, lint checks, and requirements on the node API | 23 (AC-DAT-01…23); 6 pending | 20 |
-| 7 | [tui-session.md](tui-session.md) | the TUI's session view (`han tui`, Stream and Record tabs): the live transcript built from `Session` items, entries per item kind, folding, grouping, following and paging, the reader, steps mode, steering and approvals through the existing keys, untrusted-text rules, colour-off and narrow terminals, performance budgets | 52 (TSV-1…52); 12 pending | 4 |
-| | **Total** | | **220; 76 pending node API** | **57** (9 resolved and 8 partly resolved by PR #35) |
+| 7 | [tui-session.md](tui-session.md) | the TUI's session view (`han tui`, Stream and Record tabs): the live transcript built from `Session` items, entries per item kind, folding, grouping, following and paging, the reader, steps mode, steering and approvals through the existing keys, suggested replies, untrusted-text rules, colour-off and narrow terminals, performance budgets | 61 (TSV-1…61); 21 pending | 5 |
+| 8 | [attention.md](attention.md) | attention at network scale, for the TUI and every face: relevance by role, the ranked attention queue the node computes, the frame's attention count and the jump to the top item, lifecycle grouping with roll-ups and acknowledge, per-person marks (done-unseen, acknowledged, muted), the jump picker over the node's search, notices (cues, focus silence, graces, budgets, digests, mute, outages), freshness under load | 61 (ATT-1…58, with ATT-34a, 48a, 48b); 61 pending | 8 |
+| | **Total** | | **297; 153 pending node API** | **66** (9 resolved and 8 partly resolved by PR #35; Q-BRD-7 answered by attention.md) |
 
 "Pending" marks an acceptance criterion that depends on a node API item the M3 node (PR #35) doesn't provide yet. Each is labelled "pending node API (Q-…)" with the question it waits on. Until that item lands, Team B builds against a provisional type (data.md DAT-3) and runs the criterion against the mock. The criterion is final once the generated type replaces the provisional one.
 
 Read data.md first, for the data model, then shell.md, for the frame and the shared conventions, then the surfaces.
 
-tui-session.md is the one terminal spec here. It applies to `apps/han-tui`, which a Team B session may extend from it alone. Its acceptance criteria run on ratatui's TestBackend through the TUI's test harness, not in a browser. Its node API needs are listed in its own §10 (P-1…P-14).
+tui-session.md and attention.md are the terminal specs here. They apply to `apps/han-tui`, which a Team B session may extend from them alone. Their acceptance criteria run on ratatui's TestBackend through the TUI's test harness, not in a browser. Their node API needs are listed in tui-session.md §10 (P-1…P-15) and attention.md §11 (AN-1…AN-12). attention.md's node rules (who needs to act, ranking, marks, notices) apply to the GUI too.
 
 ## Shared conventions
 
@@ -77,13 +78,15 @@ tui-session.md is the one terminal spec here. It applies to `apps/han-tui`, whic
 - push and merge change sets (Q-DIF-2);
 - guard facts for the steering label (Q-SES-5);
 - digest verification, agent text and guard progress on approval cards (Q-APR-8);
-- identity creation and recovery (Q-SHL-7).
+- identity creation and recovery (Q-SHL-7);
+- the attention queue, lifecycle grouping, per-person marks, search, suggested replies and notices (attention.md AN-1…AN-12).
 
 **Policy and design questions:**
 - where the per-space stale thresholds live (Q-BRD-1);
 - withdrawing a queued approval (Q-APR-3);
 - the default approval expiry (Q-APR-5);
-- a `han:` URL scheme (Q-SHL-6).
+- a `han:` URL scheme (Q-SHL-6);
+- for a spec round: how per-person marks travel between one person's devices (Q-ATT-1), a chosen suggestion in the signed input (Q-ATT-2), covering for another person (Q-ATT-3), suggestions in `han.item/1` (Q-ATT-4), and sharing focus across devices (Q-ATT-6).
 
 ## Provenance
 
