@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use clap::Args;
 use han_exec::{ExecConfig, Executor, ExecutorConfig, NeedsApproval, SystemElapsed};
+use han_node::api::ConnectionClass;
 use han_registry::HomeRef;
 use han_vcs::GitVcs;
 
@@ -60,6 +61,7 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         &args.relay,
         &args.home,
         &args.space,
+        ConnectionClass::Executor,
     )
     .await?;
     let github = match &config.github {
@@ -77,7 +79,7 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
             state_dir: args.data.join("state"),
             stall_bound: Duration::from_secs(10),
         },
-        Arc::new(role.node.clone()),
+        role.api.clone(),
         Arc::new(SystemElapsed::new()),
     )?;
     let (stop, rx) = tokio::sync::watch::channel(false);

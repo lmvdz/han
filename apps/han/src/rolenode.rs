@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use han_net::wellknown::Fetcher;
 use han_net::{HomeTicket, IrohOptions, IrohTransport};
-use han_node::api::{Command, NodeError};
+use han_node::api::{ClassApi, Command, ConnectionClass, NodeError};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyError, KeyStore, KeyringStore};
 use han_node::supervisor::NoSupervisor;
 use han_node::{Node, NodeApi, NodeConfig, NodeParts, WellKnownKeys};
@@ -84,9 +84,13 @@ pub struct RoleNode {
     pub node: Node<IrohTransport>,
     /// Its endpoint.
     pub transport: IrohTransport,
+    /// What the role works through: the node, held to the role's class, so the role cannot approve or govern
+    /// (SR-06, SR-106). The node itself stays here, for starting and stopping.
+    pub api: Arc<dyn NodeApi>,
 }
 
-/// Starts a node for `actor` with key `key_name`, its data under `data`, and follows `space` at `home`.
+/// Starts a node for `actor` with key `key_name`, its data under `data`, and follows `space` at `home`. The
+/// role works through [`RoleNode::api`], which sends no command above `class`.
 #[allow(clippy::too_many_arguments)]
 pub async fn start(
     actor: &str,
@@ -97,6 +101,7 @@ pub async fn start(
     relay: &str,
     home: &HomeRef,
     space: &str,
+    class: ConnectionClass,
 ) -> Result<RoleNode, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(data)?;
     let store = key_store(keys, key_name)?;
@@ -129,7 +134,12 @@ pub async fn start(
         Err(e) => return Err(e.into()),
     }
     wait_live(&node, space).await?;
-    Ok(RoleNode { node, transport })
+    let api = Arc::new(ClassApi::new(Arc::new(node.clone()), class));
+    Ok(RoleNode {
+        node,
+        transport,
+        api,
+    })
 }
 
 /// How long a role waits for its first Live link before it fails.

@@ -15,7 +15,7 @@
 pub mod api;
 pub mod rpc;
 
-pub use api::{NodeApi, NodeError, ViewStream};
+pub use api::{ClassApi, NodeApi, NodeError, ViewStream};
 
 #[cfg(feature = "runtime")]
 pub mod db;

@@ -133,7 +133,7 @@ jobs:
       - name: Build every binary the stack runs (han, han-github, han-fake-agent)
         run: cargo build --workspace --bins --locked
       - name: End-to-end tests
-        run: cargo test -p han --test e2e --locked -- --ignored --test-threads=1 --nocapture
+        run: cargo test -p han --features conformance --test e2e --locked -- --ignored --test-threads=1 --nocapture
 
   # R15 end to end with real OS users (apps/han/tests/e2e/os_user.rs): `han runner setup` makes han-agent1 and
   # han-exec in a systemd container, an OS-user agent (the han-agent@ unit) proposes a git_push, and `han exec`

@@ -682,3 +682,75 @@ async fn a_budget_without_a_price_table_says_it_is_not_enforced() {
     assert_eq!(budget.text(), "budget: not enforced (no price table)");
     assert_eq!((budget.limit, budget.spent), (100, 0));
 }
+
+#[cfg(feature = "conformance")]
+/// Runs `han role-probe` as `role` with the keys in `keys`, and returns what it printed.
+fn probe(s: &Stack, role: &str, actor: &str, keys: &std::path::Path) -> String {
+    let data = s.dir.join(format!("probe-{role}"));
+    let (ok, out, err) = run(&[
+        "role-probe",
+        role,
+        "--actor",
+        actor,
+        "--keys",
+        &keys.to_string_lossy(),
+        "--data",
+        &data.to_string_lossy(),
+        "--space",
+        &s.space(),
+        "--home",
+        &s.ticket(),
+        "--relay",
+        "none",
+    ]);
+    assert!(ok, "the {role} role let a command through:\n{out}\n{err}");
+    out
+}
+
+/// Bug class: a host could approve or govern. The host's own node was handed to it whole, so nothing but the
+/// home's policy stood between an agent's host and `EffectApprove`, `PolicySet` or `MemberSet`. A host now
+/// works through its node held to the host class, which `han host` and the probe build the same way
+/// (`rolenode::start`): every command that approves, governs or claims is refused before it reaches the node,
+/// and the agent's own work still runs (the first turn finishes).
+#[cfg(feature = "conformance")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored --features conformance (the nightly full workflow does)"]
+async fn a_host_cannot_approve_or_govern_and_still_does_its_work() {
+    let s = Stack::up("simple", &[]);
+    let out = probe(&s, "host", &s.agent(), &s.person_data());
+    for name in [
+        "approve", "cancel", "member", "invite", "policy", "revoke", "claim",
+    ] {
+        assert!(
+            out.contains(&format!("{name}: refused by class")),
+            "{name}: {out}"
+        );
+    }
+    assert!(out.contains("own: reached the node"), "{out}");
+    // its normal work goes through the same wrapper
+    let c = s.client().await;
+    s.start_agent();
+    s.board_until(&c, "the first turn to finish", 120, idle)
+        .await;
+}
+
+/// Bug class: an executor could approve. It claims and reports, and nothing else: approvals, policy and
+/// membership are refused before the node sees them, and the approved push still lands once the executor is
+/// back (the executor's own work).
+#[cfg(feature = "conformance")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored --features conformance (the nightly full workflow does)"]
+async fn an_executor_cannot_approve_or_govern() {
+    let s = Stack::up("propose", &[]);
+    s.dev(&["stop", "exec"]);
+    let out = probe(&s, "exec", &s.executor(), &s.dir.join("exec"));
+    for name in ["approve", "cancel", "member", "invite", "policy", "revoke"] {
+        assert!(
+            out.contains(&format!("{name}: refused by class")),
+            "{name}: {out}"
+        );
+    }
+    assert!(!out.contains("claim:"), "an executor may claim: {out}");
+    assert!(out.contains("own: reached the node"), "{out}");
+    s.dev(&["start", "exec"]);
+}

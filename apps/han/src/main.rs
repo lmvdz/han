@@ -18,6 +18,8 @@ mod host;
 mod keys;
 mod node;
 mod rolenode;
+#[cfg(feature = "conformance")]
+mod roleprobe;
 mod runner;
 mod rusttool;
 mod seq;
@@ -91,6 +93,10 @@ enum Cmd {
     },
     /// Run the executor role: claim approved effects and run them (holds the credentials).
     Exec(exec::ExecArgs),
+    /// Try the commands that approve and govern as a host or an executor and show that its class refuses them.
+    #[cfg(feature = "conformance")]
+    #[command(hide = true)]
+    RoleProbe(roleprobe::ProbeArgs),
     /// Check a signed release manifest for a newer version. Never installs anything.
     Update(update::UpdateArgs),
     /// Print the public key (the node id) of a key file, creating the file if it does not exist.
@@ -143,6 +149,8 @@ async fn run(cli: Cli) {
         Cmd::Agent(a) => agent::run(a).await,
         Cmd::Exec(a) => exec::run(a).await,
         Cmd::Host(a) => host::run(*a).await,
+        #[cfg(feature = "conformance")]
+        Cmd::RoleProbe(a) => roleprobe::run(a).await,
         Cmd::Update(a) => update::run(a).await,
         Cmd::Shim { .. } => Ok(()),
         Cmd::Key { file } => keys::load_or_create(&file)
