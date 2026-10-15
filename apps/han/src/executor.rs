@@ -4,6 +4,9 @@
 //! stays disabled until an admin enables it.
 //!
 //! Safe to repeat: each step looks at what is there and the output says what changed.
+//!
+//! `han executor set` changes what the landing lane may do on one repository of `exec.json` (the refs it may
+//! move, the checks it gates on, its deadlines), so nobody edits the file by hand.
 
 use std::path::{Path, PathBuf};
 
@@ -79,6 +82,225 @@ enum ExecutorCmd {
         #[arg(long, env = "HAN_GITHUB_READ_APP")]
         read_app: Option<u64>,
     },
+    /// Sets how the landing lane treats one repository in the executor's `exec.json`; only what is given
+    /// changes. Needs no running node. Prints `changed:` or `unchanged:`.
+    Set {
+        /// The repository's name as plans call it, `github:owner/repo` (the `<name>` of `add --repo`).
+        repo: String,
+        /// The executor's directory (holds `exec.json`). Default: `/var/lib/han-exec` where `exec.json` is
+        /// there (Linux), else `han-exec`.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// The remote, to add the repository when `exec.json` does not have it yet.
+        #[arg(long)]
+        remote: Option<String>,
+        /// The full refs `vcs.land` may move here, comma separated (`refs/heads/main`); `""` for none, which
+        /// turns the landing lane off for the repository.
+        #[arg(long)]
+        landing_refs: Option<String>,
+        /// The checks that must be green on the commit before it lands (`fast`), comma separated.
+        #[arg(long)]
+        required: Option<String>,
+        /// The checks that must be green on the landed commit before it is `confirmed` (`full`), comma
+        /// separated; `""` for none (then `landed` counts as `confirmed`).
+        #[arg(long)]
+        full: Option<String>,
+        /// Seconds between two reads of the checks backend.
+        #[arg(long)]
+        poll_secs: Option<u64>,
+        /// Seconds a required check may be missing before the change is reported stalled.
+        #[arg(long)]
+        appear_secs: Option<u64>,
+        /// How many times a red required check is asked to run again before the change is rejected.
+        #[arg(long)]
+        rerun: Option<u32>,
+        /// Deadline of `queued`, in seconds.
+        #[arg(long)]
+        queued_secs: Option<u64>,
+        /// Deadline of `testing`, in seconds.
+        #[arg(long)]
+        testing_secs: Option<u64>,
+        /// Deadline of `landing`, in seconds (default: the claim's launch window).
+        #[arg(long)]
+        landing_secs: Option<u64>,
+        /// Deadline of `landed`, in seconds.
+        #[arg(long)]
+        landed_secs: Option<u64>,
+        /// How long a stalled change in `testing` waits before it is rejected, in seconds.
+        #[arg(long)]
+        stall_secs: Option<u64>,
+        /// The branch prefix the lane pushes the commits it tests to (default `han/lane/`).
+        #[arg(long)]
+        lane_branch_prefix: Option<String>,
+    },
+}
+
+/// What `han executor set` changes on a repository: what is `Some` is set, the rest stays.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LandingEdit {
+    pub remote: Option<String>,
+    pub landing_refs: Option<Vec<String>>,
+    pub required: Option<Vec<String>>,
+    pub full: Option<Vec<String>>,
+    pub poll_secs: Option<u64>,
+    pub appear_secs: Option<u64>,
+    pub rerun: Option<u32>,
+    pub queued_secs: Option<u64>,
+    pub testing_secs: Option<u64>,
+    pub landing_secs: Option<u64>,
+    pub landed_secs: Option<u64>,
+    pub stall_secs: Option<u64>,
+    pub lane_branch_prefix: Option<String>,
+}
+
+/// `a,b` as names; the empty string is no names.
+fn split_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A ref the lane may move: a full branch ref.
+fn valid_landing_ref(r: &str) -> bool {
+    r.strip_prefix("refs/heads/")
+        .is_some_and(|b| !b.is_empty() && !b.ends_with('/') && !b.contains(".."))
+}
+
+/// Applies `edit` to the repository `name` of `cfg`. Refuses a value the lane could not use before changing
+/// anything. Says whether `cfg` changed.
+fn apply_landing(cfg: &mut ExecConfig, name: &str, edit: &LandingEdit) -> Res<bool> {
+    for r in edit.landing_refs.iter().flatten() {
+        if !valid_landing_ref(r) {
+            return Err(format!(
+                "--landing-refs {r:?} is not a full branch ref (for example refs/heads/main)"
+            )
+            .into());
+        }
+    }
+    for (flag, list) in [("--required", &edit.required), ("--full", &edit.full)] {
+        if list
+            .iter()
+            .flatten()
+            .any(|c| c.contains(char::is_whitespace))
+        {
+            return Err(
+                format!("{flag}: check names are comma separated and hold no spaces").into(),
+            );
+        }
+    }
+    if edit
+        .lane_branch_prefix
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
+        return Err("--lane-branch-prefix is empty".into());
+    }
+    let before = cfg.repos.clone();
+    let idx = match cfg.repos.iter().position(|r| r.name == name) {
+        Some(i) => i,
+        None => {
+            let Some(remote) = &edit.remote else {
+                return Err(format!(
+                    "exec.json has no repository {name:?}: add it with `han executor add <name> --operator <operator> --repo {name}=<remote>`, or give --remote"
+                )
+                .into());
+            };
+            cfg.repos.push(RepoTarget {
+                github: github_slug(name)?,
+                ..RepoTarget::new(name, remote)
+            });
+            cfg.repos.len() - 1
+        }
+    };
+    let r = &mut cfg.repos[idx];
+    if let Some(remote) = &edit.remote {
+        r.remote.clone_from(remote);
+    }
+    if let Some(v) = &edit.landing_refs {
+        r.landing_refs.clone_from(v);
+    }
+    if let Some(v) = &edit.required {
+        r.checks.required.clone_from(v);
+    }
+    if let Some(v) = &edit.full {
+        r.checks.full.clone_from(v);
+    }
+    if let Some(v) = edit.poll_secs {
+        r.checks.poll_secs = v;
+    }
+    if let Some(v) = edit.appear_secs {
+        r.checks.appear_secs = v;
+    }
+    if let Some(v) = edit.rerun {
+        r.checks.rerun = v;
+    }
+    if let Some(v) = edit.queued_secs {
+        r.deadlines.queued_secs = v;
+    }
+    if let Some(v) = edit.testing_secs {
+        r.deadlines.testing_secs = v;
+    }
+    if let Some(v) = edit.landing_secs {
+        r.deadlines.landing_secs = Some(v);
+    }
+    if let Some(v) = edit.landed_secs {
+        r.deadlines.landed_secs = v;
+    }
+    if let Some(v) = edit.stall_secs {
+        r.deadlines.stall_secs = v;
+    }
+    if let Some(v) = &edit.lane_branch_prefix {
+        r.lane_branch_prefix.clone_from(v);
+    }
+    Ok(cfg.repos != before)
+}
+
+/// Where `han executor set` looks for `exec.json` when it is not told.
+fn default_dir() -> PathBuf {
+    let runner = PathBuf::from(RUNNER_DIR);
+    if cfg!(target_os = "linux") && runner.join("exec.json").exists() {
+        runner
+    } else {
+        PathBuf::from("han-exec")
+    }
+}
+
+/// `han executor set`: one repository's landing settings in `<dir>/exec.json`.
+fn set(dir: &Path, name: &str, edit: &LandingEdit) -> Res<String> {
+    if *edit == LandingEdit::default() {
+        return Err("nothing to set: give --landing-refs, --required, --full, a deadline or another option (see `han executor set --help`)".into());
+    }
+    let path = dir.join("exec.json");
+    let mut cfg: ExecConfig = match std::fs::read(&path) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && edit.remote.is_some() => {
+            serde_json::from_str(r#"{"repos": [], "branch_prefixes": ["han/"]}"#)?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "{} does not exist: set the executor up first with `han executor add <name> --operator <operator> --dir {} --repo {name}=<remote>`",
+                path.display(),
+                dir.display()
+            )
+            .into());
+        }
+        Err(e) => return Err(format!("{}: {e}", path.display()).into()),
+    };
+    let changed = apply_landing(&mut cfg, name, edit)?;
+    if changed {
+        write_text(&path, &serde_json::to_string_pretty(&cfg)?)?;
+    }
+    let r = cfg.repo(name).ok_or("the repository vanished")?;
+    Ok(format!(
+        "{}: {name} in {}\n  landing refs [{}], required [{}], full [{}]",
+        if changed { "changed" } else { "unchanged" },
+        path.display(),
+        r.landing_refs.join(", "),
+        r.checks.required.join(", "),
+        r.checks.full.join(", "),
+    ))
 }
 
 /// The key's name in the executor's directory.
@@ -184,6 +406,45 @@ fn github_slug(name: &str) -> Res<Option<String>> {
 }
 
 pub async fn run(args: ExecutorArgs) -> Res<()> {
+    let args = match args.cmd {
+        ExecutorCmd::Set {
+            repo,
+            dir,
+            remote,
+            landing_refs,
+            required,
+            full,
+            poll_secs,
+            appear_secs,
+            rerun,
+            queued_secs,
+            testing_secs,
+            landing_secs,
+            landed_secs,
+            stall_secs,
+            lane_branch_prefix,
+        } => {
+            let edit = LandingEdit {
+                remote,
+                landing_refs: landing_refs.as_deref().map(split_list),
+                required: required.as_deref().map(split_list),
+                full: full.as_deref().map(split_list),
+                poll_secs,
+                appear_secs,
+                rerun,
+                queued_secs,
+                testing_secs,
+                landing_secs,
+                landed_secs,
+                stall_secs,
+                lane_branch_prefix,
+            };
+            let dir = dir.unwrap_or_else(default_dir);
+            println!("{}", set(&dir, &repo, &edit)?);
+            return Ok(());
+        }
+        cmd => ExecutorArgs { cmd },
+    };
     let ExecutorCmd::Add {
         name,
         operator,
@@ -200,7 +461,10 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
         github_installation,
         github_key,
         read_app,
-    } = args.cmd;
+    } = args.cmd
+    else {
+        return Ok(());
+    };
     if github_app.is_some() && github_app == read_app {
         return Err(format!(
             "--github-app {} is the read App (the one `han-github` uses). The executor needs the separate write App:              the read App must never hold write permissions, and its key must stay with `han-github` (docs/runner.md §10)",
@@ -513,6 +777,131 @@ mod tests {
             );
             assert!(mode_600(&dest));
         }
+    }
+
+    fn exec_dir(repo: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = ExecConfig {
+            repos: vec![RepoTarget::new(repo, "https://github.com/o/r.git")],
+            ..serde_json::from_str(r#"{"repos": []}"#).unwrap()
+        };
+        std::fs::write(
+            d.path().join("exec.json"),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        d
+    }
+
+    #[test]
+    fn set_gives_a_repository_its_landing_config_and_repeats_as_unchanged() {
+        let d = exec_dir("github:o/r");
+        let edit = LandingEdit {
+            landing_refs: Some(split_list("refs/heads/main")),
+            required: Some(split_list("quick,lint")),
+            full: Some(split_list("full")),
+            landed_secs: Some(7200),
+            stall_secs: Some(600),
+            ..LandingEdit::default()
+        };
+        let first = set(d.path(), "github:o/r", &edit).unwrap();
+        assert!(first.starts_with("changed: github:o/r"), "{first}");
+        assert!(first.contains("refs/heads/main"), "{first}");
+        let again = set(d.path(), "github:o/r", &edit).unwrap();
+        assert!(again.starts_with("unchanged: "), "{again}");
+        let cfg: ExecConfig =
+            serde_json::from_slice(&std::fs::read(d.path().join("exec.json")).unwrap()).unwrap();
+        let r = cfg.repo("github:o/r").unwrap();
+        assert_eq!(r.landing_refs, ["refs/heads/main"]);
+        assert_eq!(r.checks.required, ["quick", "lint"]);
+        assert_eq!(r.checks.full, ["full"]);
+        assert_eq!(
+            (r.deadlines.landed_secs, r.deadlines.stall_secs),
+            (7200, 600)
+        );
+        // what is not given stays; `""` empties a list
+        let off = LandingEdit {
+            landing_refs: Some(split_list("")),
+            ..LandingEdit::default()
+        };
+        assert!(
+            set(d.path(), "github:o/r", &off)
+                .unwrap()
+                .starts_with("changed: ")
+        );
+        let cfg: ExecConfig =
+            serde_json::from_slice(&std::fs::read(d.path().join("exec.json")).unwrap()).unwrap();
+        let r = cfg.repo("github:o/r").unwrap();
+        assert!(r.landing_refs.is_empty());
+        assert_eq!(r.checks.full, ["full"]);
+    }
+
+    #[test]
+    fn set_refuses_what_the_lane_could_not_use_and_writes_nothing() {
+        let d = exec_dir("github:o/r");
+        let before = std::fs::read(d.path().join("exec.json")).unwrap();
+        let bad = |edit: LandingEdit| set(d.path(), "github:o/r", &edit).unwrap_err().to_string();
+        let e = bad(LandingEdit {
+            landing_refs: Some(split_list("main")),
+            ..LandingEdit::default()
+        });
+        assert!(e.contains("full branch ref"), "{e}");
+        assert!(
+            bad(LandingEdit {
+                required: Some(vec!["a b".into()]),
+                ..LandingEdit::default()
+            })
+            .contains("--required")
+        );
+        assert!(bad(LandingEdit::default()).contains("nothing to set"));
+        // an unknown repository is named, with the command that adds it
+        let e = set(
+            d.path(),
+            "github:o/other",
+            &LandingEdit {
+                rerun: Some(1),
+                ..LandingEdit::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("han executor add"), "{e}");
+        // no exec.json at all
+        let empty = tempfile::tempdir().unwrap();
+        let e = set(
+            empty.path(),
+            "github:o/r",
+            &LandingEdit {
+                rerun: Some(1),
+                ..LandingEdit::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("does not exist"), "{e}");
+        assert_eq!(std::fs::read(d.path().join("exec.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn set_adds_a_repository_given_its_remote() {
+        let empty = tempfile::tempdir().unwrap();
+        let edit = LandingEdit {
+            remote: Some("https://github.com/o/r.git".into()),
+            landing_refs: Some(split_list("refs/heads/main")),
+            ..LandingEdit::default()
+        };
+        assert!(
+            set(empty.path(), "github:o/r", &edit)
+                .unwrap()
+                .starts_with("changed: ")
+        );
+        let cfg: ExecConfig =
+            serde_json::from_slice(&std::fs::read(empty.path().join("exec.json")).unwrap())
+                .unwrap();
+        let r = cfg.repo("github:o/r").unwrap();
+        assert_eq!(r.github.as_deref(), Some("o/r"));
+        assert_eq!(r.landing_refs, ["refs/heads/main"]);
+        assert_eq!(cfg.branch_prefixes, ["han/"]);
     }
 
     #[test]

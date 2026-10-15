@@ -93,3 +93,93 @@ fn agent_set_prints_changed_then_unchanged_and_doctor_reads_what_it_wrote() {
     let t = text(&human.stdout);
     assert!(t.contains("cause:") && t.contains("fix:"), "{t}");
 }
+
+#[test]
+fn the_land_setup_is_made_by_commands_and_doctor_finds_what_is_missing() {
+    let d = tempfile::tempdir().unwrap();
+    let data = d.path().join("node").to_string_lossy().into_owned();
+    let exec = d.path().join("exec");
+    let exec_dir = exec.to_string_lossy().into_owned();
+    let ids = |extra: &[&str]| {
+        let mut a = vec!["doctor", "--json", "--data", &data, "--exec-dir", &exec_dir];
+        a.extend(extra);
+        let out = han(&a);
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap().to_owned())
+            .filter(|i| i.starts_with("land."))
+            .collect::<Vec<_>>()
+    };
+
+    // the executor has the repository and nothing to land on; the flow is off: nothing to say
+    let add = han(&[
+        "executor",
+        "set",
+        "github:o/r",
+        "--dir",
+        &exec_dir,
+        "--remote",
+        "https://github.com/o/r.git",
+        "--required",
+        "quick",
+    ]);
+    assert!(add.status.success(), "{}", text(&add.stderr));
+    assert!(ids(&[]).is_empty());
+
+    // turn the flow on for the repository: the executor does not list the ref yet
+    let on = han(&[
+        "agent",
+        "finish",
+        "s1:han.example",
+        "--repo",
+        "github:o/r",
+        "--data",
+        &data,
+        "land",
+        "--target-ref",
+        "refs/heads/main",
+        "--tier-rule",
+        "docs/**=0",
+    ]);
+    assert!(on.status.success(), "{}", text(&on.stderr));
+    assert!(text(&on.stdout).starts_with("changed: land on"));
+    assert_eq!(ids(&[]), ["land.executor.landing-ref"]);
+
+    // the fix doctor prints is a command; run it and the finding is gone
+    let fix = han(&[
+        "executor",
+        "set",
+        "github:o/r",
+        "--dir",
+        &exec_dir,
+        "--landing-refs",
+        "refs/heads/main",
+    ]);
+    assert!(fix.status.success(), "{}", text(&fix.stderr));
+    assert!(text(&fix.stdout).starts_with("changed: github:o/r"));
+    assert!(ids(&[]).is_empty());
+
+    // the node's file has it, in the shape the launch reads
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(d.path().join("node/agents.json")).unwrap()).unwrap();
+    let layer = &file["finish"]["s1:han.example"]["repos"]["github:o/r"];
+    assert_eq!(layer["enabled"], true);
+    assert_eq!(layer["targetRef"], "refs/heads/main");
+    assert_eq!(layer["tierRules"][0]["path"], "docs/**");
+
+    // off, then the default: nothing is checked again
+    let off = han(&[
+        "agent",
+        "finish",
+        "s1:han.example",
+        "--repo",
+        "github:o/r",
+        "--data",
+        &data,
+        "off",
+    ]);
+    assert!(text(&off.stdout).starts_with("changed: land off"));
+}

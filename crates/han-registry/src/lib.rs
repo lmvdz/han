@@ -14,8 +14,8 @@ mod launch;
 mod spec;
 
 pub use agents::{
-    AgentEdit, AgentSettings, AgentsFile, HarnessInstall, LOGIN_DIR, ToolchainSpec, safe_name,
-    valid_os_user,
+    AgentEdit, AgentSettings, AgentsFile, HarnessInstall, LOGIN_DIR, LandEdit, LandSetting,
+    SpaceFinish, ToolchainSpec, safe_name, valid_os_user,
 };
 pub use home::{HomeRef, TICKET_PREFIX};
 pub use launch::{Launch, LaunchError, PRICES_FILE, Registry, Resolved, RunAs};

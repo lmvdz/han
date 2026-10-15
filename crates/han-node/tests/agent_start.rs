@@ -165,7 +165,15 @@ async fn start_names_the_profiles_operator_and_passes_the_install() {
     }
     .save(&s.data)
     .unwrap();
-    std::fs::write(s.data.join("agents.json"), r#"{"sandbox":"bwrap"}"#).unwrap();
+    // the finish flow of the space and of this repository reaches the host's spec
+    std::fs::write(
+        s.data.join("agents.json"),
+        format!(
+            r#"{{"sandbox":"bwrap","finish":{{"{}":{{"land":{{"enabled":true,"targetRef":"refs/heads/main"}},"repos":{{"github:o/r":{{"settleSecs":90}}}}}}}}}}"#,
+            s.space
+        ),
+    )
+    .unwrap();
     // a home joined by ticket: the host gets the ticket in its environment
     let ticket = HomeTicket {
         server: "a.localhost".into(),
@@ -212,6 +220,9 @@ async fn start_names_the_profiles_operator_and_passes_the_install() {
     assert_eq!(h.work.issue.as_deref(), Some("github:o/r#1"));
     assert_eq!(h.work.task.as_deref(), Some(s.task.as_str()));
     assert_eq!(h.work.executor.as_deref(), Some("@exec:a.localhost"));
+    let land = h.work.finish.land.as_ref().expect("the land flow is on");
+    assert_eq!(land.target_ref.as_deref(), Some("refs/heads/main"));
+    assert_eq!(land.settle_secs, 90);
     assert_eq!(h.dirs.keys, s.data);
     assert!(
         h.dirs

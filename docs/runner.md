@@ -409,6 +409,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - the Rust toolchain the sandboxes get: enabled but not installed, or a `--repo` whose `rust-toolchain.toml` pins a toolchain that is not installed;
 - `han-github` (`/var/lib/han/github`, or `--github-dir`; checked when the directory exists): prints whether it is configured and running. A config without an `[app] private_key`, a missing key file, a key readable by group or others, or a configured service that is not running is a finding (`github.config-invalid`, `github.key-missing`, `github.key-mode`, `github.not-running`; `github.config-missing` when the service runs without a config). Unconfigured and disabled, as `han runner setup` leaves it, is not a problem;
 - the executor (`/var/lib/han-exec`, or `--exec-dir`): `exec.json` names repositories but has no `github` block, or the write App's key file is missing or not mode 600 (the fix is the `han executor add … --github-app … --github-installation … --github-key …` of 9);
+- the `land` finish flow, when `agents.json` turns it on (9.1): the executor has no such repository or does not list the target ref in `landing_refs`, has no required checks, or runs a full stage the flow says it does not have; the executor's lane session cannot be watched (the space's `sessions.watch`); with `--check-github-app`, the write App lacks Contents write, Checks read or Commit statuses read;
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).
 
 `--json` prints the report for scripts. The schema is `han-doctor/1`, and fields are only added, never renamed or removed, within it:
@@ -429,7 +430,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 }
 ```
 
-`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`, `github.config-invalid`, `github.config-missing`, `github.key-missing`, `github.key-mode`, `github.not-running`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it.
+`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`, `github.config-invalid`, `github.config-missing`, `github.key-missing`, `github.key-mode`, `github.not-running`, `land.executor.repo-missing`, `land.executor.landing-ref`, `land.checks.none`, `land.checks.full-stage`, `land.watch.denied`, `land.github.permissions`, `land.github.unreadable`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it.
 
 ### 8.2 By hand
 
@@ -527,6 +528,29 @@ WantedBy=multi-user.target
 
 `AF_NETLINK` is what the QUIC endpoint needs to watch the network, the same as `han-seq` and `han-node`. When the key, profile, config and env are ready, an admin enables it: `sudo systemctl enable --now han-exec`. On a device with a desktop the same executor runs by hand: `han exec --actor @exec:<server> --space <space> --home <ticket> --keys <dir> --data <dir>/state --config <dir>/exec.json`.
 
+### 9.1 The landing lane (`land`), end to end
+
+Landing has three settings, each set by a command, none by hand. The default is all off: an agent proposes `git_push` and `open_pr` as before.
+
+1. **The finish flow** (the node, `agents.json`, read at every session start; no restart). It is per space, with an optional override per repository, and the repository's layer sits over the space's:
+
+   ```sh
+   han agent finish <space> --repo github:<owner>/<repo> land --target-ref refs/heads/main        --tier-rule 'docs/**=0' --tier-rule 'crates/core/**=3' [--no-full-stage] [--settle-secs 600] --data <node data>
+   han agent finish <space> [--repo <repo>] off | reset | show
+   ```
+
+   It is the `work.finish.land` of the host spec: `finish.<space>.land` for the space, `finish.<space>.repos.<repo>` for a repository (`enabled`, `targetRef`, `tierRules`, `noFullStage`, `settleSecs`). A repository's tier rules come after the space's; every other field is the repository's if it sets one, else the space's. Only sessions started afterwards use it. `--tier-rule` is the informative tier only: Policy derives the real one.
+2. **The executor** (`exec.json`): the refs the lane may move, the checks it gates on and its deadlines, per repository:
+
+   ```sh
+   han executor set github:<owner>/<repo> --dir /var/lib/han-exec --landing-refs refs/heads/main        --required quick --full full [--rerun 1] [--landed-secs 7200] [--remote <url> adds the repository]
+   ```
+
+   `--landing-refs`, `--required` and `--full` take comma separated lists (`""` empties one). With no `landing_refs` nothing lands and no lane runs. The target ref of step 1 must be listed here.
+3. **The watch right.** The agent's host follows the lane through the `han.land lane` session that the executor opens in the space (one per space, opened when the lane first has something to say). There is no per-session grant in Policy: watching a session is the space's `sessions.watch` level (default `member`), judged against the watcher's role, and the agents `han agent add --space` makes are members. So nothing needs setting up unless an owner raised the level to `owner` or `nobody`; then an owner replaces the policy with `sessions.watch` at `member` (`han space policy <space> <file>`).
+
+`han doctor [--check-github-app]` checks the lot (`land.*` in 8.1) and prints the fix for each. The GitHub App check asks GitHub, with the App's JWT, what the installation may do (Contents write, Checks read, Commit statuses read; Checks write when a repository sets `rerun` above 0), so it is only done when asked.
+
 ## 10. GitHub App permissions for writes
 
 There are two Apps, and the key of each is held by one process only (PLAN 6.7, SR-49).
@@ -544,6 +568,8 @@ permissions** on the write App, for the repositories it is installed on:
 |---|---|---|
 | `git_push` | Contents | Read and write |
 | `open_pr` | Pull requests | Read and write |
+| `vcs.land` | Contents | Read and write |
+| landing lane (reads the checks of the commit it tests) | Checks, Commit statuses | Read-only (Checks: read and write when `rerun` is above 0) |
 | (both, automatic) | Metadata | Read-only |
 
 Nothing else: no `workflows`, no `administration`, no `issues` write. Changing App permissions makes GitHub ask
