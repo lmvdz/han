@@ -186,6 +186,11 @@ Resolving: `start` is 0; `end` is the length; `(c, left)` is the number of visib
 
 **TL-48 Shape of `text.edit`.** `deletes` ranges MUST be non-empty and MUST NOT overlap one another; `inserts` MUST be non-empty strings, and no two inserts of one op may name the same anchor. At least one of `deletes` and `inserts` MUST be non-empty. The deletes apply first, then the inserts in index order. The same rules apply to each text change of a merge op (TL-73), except that a change with `create: true` may be empty (an imported empty text).
 
+**TL-49 Edits from an older view.** The following acceptance criteria clarify TL-17 and TL-47:
+1. Planning an edit against a version `v` MUST interpret positions, lengths and range bounds in the visible text at `v` (TL-40), even when the replica holds later or concurrent ops; holding those ops MUST NOT change the planned edit.
+2. When that edit is recorded with parent version `v`, integration MUST preserve its named characters and anchor as defined by TL-42–44, including when a concurrent edit has deleted the anchor; concurrent inserted characters outside its named delete ranges MUST survive unless hidden by TL-45 or TL-52.
+3. A character reference absent from the op's parent state MUST be rejected (`invalid_op`) even when the receiver holds that character through another concurrent op, except for the earlier inserts of the same op allowed by TL-42.
+
 ## 9. Seals (session transcripts only)
 
 HAN requires that a session transcript record, for audit, exactly what an agent sent and what it received (PLAN.md §6.5): once a turn has happened, a reviewer must be able to rely on the transcript showing that text and nothing else, whatever edits other replicas make at the same time. A **seal** provides this. It applies to a range of a transcript and fixes it, from then on and in every replica, to the text its author had at that moment. This is a deliberate exception to the rule that no concurrent edit is lost, so it is confined to transcripts.
@@ -223,6 +228,11 @@ Implementations MAY expose the digest to compare replicas cheaply; vectors pin i
 **TL-62 Conflicts in a state.** A state reports: map keys in conflict (TL-36) and tree conflicts (TL-86). Registers and texts never report conflicts in a state; texts conflict only in merge plans (§11).
 
 **TL-63 Log.** The ops of closure(`v`) in ascending op id order are a valid causal order (TL-04); an implementation that lists a history SHOULD use it.
+
+**TL-64 Historical reads and recorded reversals.** Reading an earlier version and editing the present have distinct observable effects:
+1. Materialising a version or navigating to a checkpoint MUST NOT add an op, change any timeline head or change the sync inventory; subsequent reads of other versions MUST still return their TL-60 states.
+2. Reversing an edit on a timeline is an ordinary new edit subject to the existing validity and seal rules (TL-17, TL-47, TL-53); it MUST NOT remove earlier ops or replace the timeline head with an earlier version.
+3. A new edit that deletes an earlier insertion MUST leave concurrent insertions outside its named delete ranges subject to normal visibility (TL-44–45, TL-52), including insertions anchored on the characters it deletes; materialising the version before that new edit MUST still show the earlier insertion.
 
 ## 11. Merges
 
