@@ -955,13 +955,32 @@ async fn a_local_process_cannot_govern_or_steer_until_a_person_confirms() {
     // the person is there: the CLI asks once and the face client unlocks on its first steering input; a
     // second plain connection still gets nothing from either
     s.presence("all", "test-allow");
-    // the refusals above space the next prompt out (the node's and the client connection's), by up to 4 s
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    // The refusals above space the next prompt out, on the node and on connection `c`. The refusal says how
+    // long (`retry_after_ms`), and each wait here is exactly that.
+    let probe = han_node::rpc::RpcClient::connect_locked(&endpoint)
+        .await
+        .unwrap();
+    while let Err(NodeError::Unavailable {
+        retry_after_ms: Some(ms),
+        ..
+    }) = probe.unlock().await
+    {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
     let (ok, _, err) = member(&s);
     assert!(ok, "the CLI governs after a confirmation: {err}");
-    c.call(steer)
-        .await
-        .expect("the steering input is accepted after a confirmation");
+    loop {
+        match c.call(steer.clone()).await {
+            Err(NodeError::Unavailable {
+                retry_after_ms: Some(ms),
+                ..
+            }) => tokio::time::sleep(Duration::from_millis(ms)).await,
+            r => {
+                r.expect("the steering input is accepted after a confirmation");
+                break;
+            }
+        }
+    }
     until("the agent's second turn", 90, || async {
         s.agent_events().iter().filter(|e| *e == "prompt").count() >= 2
     })

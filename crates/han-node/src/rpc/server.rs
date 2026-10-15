@@ -272,12 +272,7 @@ async fn unlock(
         .unwrap_or_else(|e| e.into_inner())
         .wait();
     if let Some(wait) = wait {
-        let e = NodeError::denied(format!(
-            "{}an unlock was refused a moment ago; try again in {} s",
-            crate::presence::NOT_UNLOCKED,
-            wait.as_secs() + 1
-        ));
-        return Err(ErrorObject::node(&e));
+        return Err(ErrorObject::node(&crate::presence::spaced_out(wait)));
     }
     match api.confirm_unlock(client).await {
         Ok(window) => {

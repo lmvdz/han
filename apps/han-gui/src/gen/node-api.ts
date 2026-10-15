@@ -1797,7 +1797,13 @@ recent_errors: Array<ErrorNote>,
  * What is stuck right now, as sentences: a link whose setup does not fit its home, a space whose outbox
  * is held by an entry the home will not take ("space X blocked by outbox entry N: reason").
  */
-problems: Array<string>, };
+problems: Array<string>, 
+/**
+ * Root made this node headless (a service node): nobody sits at it, so it has no unlock for governing and
+ * steering and never approves; the operating system's boundary, who can run as its user, is the
+ * authority.
+ */
+headless: boolean, };
 
 export type TimelinePointRow = { 
 /**

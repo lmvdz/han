@@ -309,6 +309,25 @@ mod linux {
             )?;
         }
         c.dir(NODE_DATA, Some(node_user), 0o700)?;
+        // Nobody sits at the runner's node to answer a presence prompt, so root says it is headless: no unlock
+        // for governing and steering, no approvals. The marker is root's alone (a process of the node's user
+        // cannot write it), which is what makes it the authority (SR-108).
+        c.dir("/etc/han", None, 0o755)?;
+        c.dir(han_node::presence::HEADLESS_DIR, None, 0o755)?;
+        let marker = format!(
+            "{}/{}",
+            han_node::presence::HEADLESS_DIR,
+            han_node::presence::seal_name(Path::new(&format!("{NODE_DATA}/node")))
+        );
+        c.file(
+            &marker,
+            &format!(
+                "# han runner setup: the node with data in {NODE_DATA}/node is headless (no person sits at it).\n\
+                 # It asks for no presence check to govern or steer, and it never approves.\n\
+                 # Only root can write this file; remove it to make the node a person's again.\n"
+            ),
+            0o644,
+        )?;
 
         if user_exists(exec_user) {
             c.say("unchanged:", &format!("user {exec_user}"));

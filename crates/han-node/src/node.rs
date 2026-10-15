@@ -69,6 +69,10 @@ pub struct NodeConfig {
     /// How long one unlock of a face connection lasts. Absent, `presence.unlock_secs` in `node.db` says
     /// (ten minutes by default). Only tests and embedding apps set it.
     pub unlock_window: Option<Duration>,
+    /// Where root's headless markers are (`presence::HEADLESS_DIR` by default). Only tests set it.
+    pub headless_dir: Option<PathBuf>,
+    /// The user id that must own the marker (0, root, by default). Only tests set it.
+    pub headless_owner: u32,
 }
 
 impl NodeConfig {
@@ -91,6 +95,8 @@ impl NodeConfig {
             presence: None,
             presence_timeout: crate::presence::DEFAULT_TIMEOUT,
             unlock_window: None,
+            headless_dir: None,
+            headless_owner: 0,
         }
     }
 
@@ -147,6 +153,8 @@ pub(crate) struct Inner<T: Transport> {
     /// Test rigs only: read the settings from `node.db` at each use instead (`HAN_PRESENCE_LIVE=1`, in
     /// `conformance` builds), so a rig can change them while the node runs.
     presence_live: bool,
+    /// Root made this node headless: nobody sits at it, so it has no unlock and never approves.
+    presence_headless: bool,
 }
 
 /// The most a face may fetch or put of a blob through the node.
@@ -528,7 +536,15 @@ impl<T: Transport> Node<T> {
         // nothing to tamper with).
         let presence_live =
             cfg!(feature = "conformance") && std::env::var_os("HAN_PRESENCE_LIVE").is_some();
+        let presence_headless = config.data_dir.as_ref().is_some_and(|dir| {
+            let markers = config
+                .headless_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(presence::HEADLESS_DIR));
+            presence::headless_marker(&markers, &presence::seal_name(dir), config.headless_owner)
+        });
         let presence_settings = match &config.data_dir {
+            _ if presence_headless => presence::headless_settings(),
             Some(dir) if !presence_live => {
                 let name = presence::seal_name(dir);
                 presence::load(&db, Some((&*keys, name.as_str())))
@@ -544,6 +560,7 @@ impl<T: Transport> Node<T> {
             node_id,
             roles: Vec::new(),
             problems: Vec::new(),
+            headless: presence_headless,
         });
         engine.set_device_key(&config.key_id);
         let follows = db.follows().map_err(unavailable)?;
@@ -584,6 +601,7 @@ impl<T: Transport> Node<T> {
             prompter: presence::Prompter::new(),
             presence_settings,
             presence_live,
+            presence_headless,
         });
         let node = Node { inner };
         let pinned: Vec<HomeTicket> = node
@@ -616,7 +634,7 @@ impl<T: Transport> Node<T> {
 
     /// The presence settings in force: those the node started with.
     fn presence_now(&self) -> Result<presence::Settings, NodeError> {
-        if self.inner.presence_live {
+        if self.inner.presence_live && !self.inner.presence_headless {
             presence::read(&self.inner.db)
         } else {
             Ok(self.inner.presence_settings.clone())
@@ -677,6 +695,7 @@ impl<T: Transport> Node<T> {
             node_id: self.node_id(),
             roles,
             problems: inner.supervisor.problems(),
+            headless: inner.presence_headless,
         });
         engine.tick(inner.clock.steady_ms(), inner.now_secs());
     }

@@ -158,7 +158,9 @@ async fn presence(
     backend: Option<String>,
     unlock_secs: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use han_node::presence::{BackendChoice, Require, change, load, seal_name};
+    use han_node::presence::{
+        BackendChoice, HEADLESS_DIR, Require, change, headless_marker, load, seal_name,
+    };
     let require = require.map(|r| r.parse::<Require>()).transpose()?;
     let backend = backend.map(|b| b.parse::<BackendChoice>()).transpose()?;
     std::fs::create_dir_all(data)?;
@@ -172,6 +174,22 @@ async fn presence(
     let name = seal_name(data);
     let seal = Some((&*keys, name.as_str()));
     let changing = require.is_some() || backend.is_some() || unlock_secs.is_some();
+    // root made this node headless (`han runner setup`): its settings are not a person's to change here
+    let marker = std::path::Path::new(HEADLESS_DIR).join(&name);
+    if headless_marker(std::path::Path::new(HEADLESS_DIR), &name, 0) {
+        if changing {
+            return Err(format!(
+                "this node is headless: nobody sits at it, so its presence settings are root's. They come from {}; as root, `han runner setup` writes it and removing it makes the node a person's again",
+                marker.display()
+            )
+            .into());
+        }
+        println!(
+            "headless: nobody sits at this node. It asks for no person to govern or steer, and it never approves. The operating system's boundary (who can run as this node's user) is the authority; root's marker is {}",
+            marker.display()
+        );
+        return Ok(());
+    }
     if changing {
         println!("confirm on this device if asked…");
         tokio::task::block_in_place(|| {

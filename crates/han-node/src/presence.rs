@@ -127,6 +127,42 @@ pub fn read(db: &NodeDb) -> Result<Settings, NodeError> {
     })
 }
 
+/// Where root records which nodes are headless (`han runner setup` writes it).
+pub const HEADLESS_DIR: &str = "/etc/han/headless.d";
+
+/// Whether the node with the data folder `name` (see [`seal_name`]) is headless: root made a marker file of
+/// that name in `dir`. A service node has nobody at it to answer a prompt, so the operating system's boundary,
+/// who can run as the service user, is the authority there; the marker is what says so. The marker, its folder
+/// and that folder's parent must belong to `owner` (root) and be writable by no one else, so a process of the
+/// service user cannot make a node headless, or make it a person's again; only root can. Not available off
+/// Unix: a node there is a person's.
+pub fn headless_marker(dir: &std::path::Path, name: &str, owner: u32) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let ok = |p: &std::path::Path| {
+            std::fs::metadata(p).is_ok_and(|m| m.uid() == owner && m.mode() & 0o022 == 0)
+        };
+        let marker = dir.join(name);
+        ok(dir) && dir.parent().is_none_or(ok) && ok(&marker)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, name, owner);
+        false
+    }
+}
+
+/// The settings of a headless node: no unlock (nobody is there to give it), and no approval at all, because a
+/// service node never approves: the check is a backend that has none, so an approval is refused.
+pub fn headless_settings() -> Settings {
+    Settings {
+        require: Require::Kinds(vec![EFFECT_APPROVE.to_owned()]),
+        backend: BackendChoice::None,
+        unlock: DEFAULT_UNLOCK,
+    }
+}
+
 /// The `config` row holding the seal of the settings.
 pub const SEAL_KEY: &str = "presence.seal";
 
@@ -246,6 +282,23 @@ impl Backoff {
     /// A prompt was allowed.
     pub fn allowed(&mut self) {
         *self = Backoff::default();
+    }
+}
+
+/// The refusal of an unlock that comes too soon after refused ones: `unavailable`, with the time to wait
+/// (`retry_after_ms`), so a caller waits exactly that long instead of guessing.
+pub fn spaced_out(wait: Duration) -> NodeError {
+    NodeError::Unavailable {
+        message: format!(
+            "{NOT_UNLOCKED}an unlock was refused a moment ago; try again in {} s",
+            wait.as_secs() + 1
+        ),
+        retry_after_ms: Some(
+            u64::try_from(wait.as_millis())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        ),
+        pending: None,
     }
 }
 
@@ -480,10 +533,7 @@ impl Prompter {
                 .unwrap_or_else(|e| e.into_inner())
                 .wait();
             if let Some(wait) = wait {
-                return Err(NodeError::denied(format!(
-                    "{NOT_UNLOCKED}an unlock was refused a moment ago; try again in {} s",
-                    wait.as_secs() + 1
-                )));
+                return Err(spaced_out(wait));
             }
             break held;
         };

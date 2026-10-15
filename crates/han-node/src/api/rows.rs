@@ -960,6 +960,11 @@ pub struct NodeStatusRow {
     /// is held by an entry the home will not take ("space X blocked by outbox entry N: reason").
     #[serde(default)]
     pub problems: Vec<String>,
+    /// Root made this node headless (a service node): nobody sits at it, so it has no unlock for governing and
+    /// steering and never approves; the operating system's boundary, who can run as its user, is the
+    /// authority.
+    #[serde(default)]
+    pub headless: bool,
 }
 
 /// How many errors `NodeStatusRow::recent_errors` holds.

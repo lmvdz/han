@@ -123,9 +123,18 @@ struct Stage {
 }
 
 async fn stage(script: Arc<Scripted>, window: Option<Duration>) -> Stage {
+    stage_with(script, window, |_, _| {}).await
+}
+
+async fn stage_with(
+    script: Arc<Scripted>,
+    window: Option<Duration>,
+    tweak: impl FnOnce(&std::path::Path, &mut han_node::NodeConfig),
+) -> Stage {
     let world = World::new(&[(ALICE, 41), (BOB, 42)]);
     let data = world.dir.join("alice-data");
     let alice = world.node_with(ALICE, 41, |c| {
+        tweak(&data, c);
         c.data_dir = Some(data);
         c.set_presence(script);
         c.unlock_window = window;
@@ -319,6 +328,13 @@ async fn a_face_client_unlocks_when_it_is_refused_and_asks_once_per_window() {
             && message.contains("cancelled")),
         "{e:?}"
     );
+    // the refusal spaces the next prompt out, and says exactly how long to wait
+    let soon = RpcClient::connect_locked(&s.face).await.unwrap();
+    let e = soon.unlock().await.unwrap_err();
+    assert!(
+        matches!(e, NodeError::Unavailable { retry_after_ms: Some(ms), .. } if ms > 0 && ms <= 2001),
+        "{e:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -445,4 +461,94 @@ async fn a_running_node_ignores_an_edit_of_its_db() {
         "the node keeps the settings it started with"
     );
     assert!(script.prompts().is_empty());
+}
+
+/// A service node set up like the runner's (`han runner setup`): root's marker names its data folder. Nobody
+/// sits at it, so a prompt would never be answered: it has no unlock, and it never approves. A person's node
+/// next to it still locks. Needs a Unix file owner to stand in for root.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_headless_service_node_starts_agents_without_a_prompt_and_a_persons_node_still_locks() {
+    use std::os::unix::fs::MetadataExt as _;
+    let start = |agent: &str, space: &str| Command::AgentStart {
+        space: space.into(),
+        agent: agent.into(),
+        harness: None,
+        repo: None,
+        issue: None,
+        home: None,
+    };
+    let script = Scripted::new();
+    let markers = std::env::temp_dir().join(format!("han-headless-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&markers);
+    std::fs::create_dir_all(&markers).unwrap();
+    let owner = std::fs::metadata(&markers).unwrap().uid();
+    let headless = stage_with(script.clone(), None, |data, c| {
+        std::fs::write(
+            markers.join(presence::seal_name(data)),
+            "headless
+",
+        )
+        .unwrap();
+        c.headless_dir = Some(markers.clone());
+        c.headless_owner = owner;
+    })
+    .await;
+    let raw = RpcClient::connect_locked(&headless.face).await.unwrap();
+    let r = raw.call(start("@coder:a.localhost", &headless.space)).await;
+    assert!(
+        !presence_required(&r),
+        "a headless node does not lock agent starts: {r:?}"
+    );
+    raw.call(set_bob(&headless))
+        .await
+        .expect("governs without a prompt");
+    assert!(script.prompts().is_empty(), "nobody was asked");
+    // it never approves: the check is a backend that has none
+    let approve = raw
+        .call(Command::EffectApprove {
+            space: headless.space.clone(),
+            proposal: "nothing".into(),
+            expires_at: None,
+            note: None,
+        })
+        .await;
+    assert!(!presence_required(&approve), "{approve:?}");
+    // and it says so
+    let mut v = raw.view(Query::NodeStatus {
+        window: Window::default(),
+    });
+    let Some(ViewEvent::Snapshot { rows, .. }) = v.next().await else {
+        panic!("no snapshot")
+    };
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, han_node::api::Row::NodeStatus(n) if n.headless)),
+        "{rows:?}"
+    );
+
+    // a marker that is not owned by the right user (a process of the service user wrote it) does not count
+    let forged = stage_with(Scripted::new(), None, |data, c| {
+        std::fs::write(
+            markers.join(presence::seal_name(data)),
+            "headless
+",
+        )
+        .unwrap();
+        c.headless_dir = Some(markers.clone());
+        c.headless_owner = owner.wrapping_add(1);
+    })
+    .await;
+    let raw = RpcClient::connect_locked(&forged.face).await.unwrap();
+    assert!(presence_required(
+        &raw.call(start("@coder:a.localhost", &forged.space)).await
+    ));
+
+    // a person's node: no marker, so it locks
+    let person = stage(Scripted::new(), None).await;
+    let raw = RpcClient::connect_locked(&person.face).await.unwrap();
+    assert!(presence_required(
+        &raw.call(start("@coder:a.localhost", &person.space)).await
+    ));
+    let _ = std::fs::remove_dir_all(&markers);
 }
