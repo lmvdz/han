@@ -94,6 +94,7 @@ pub async fn run(args: RunnerArgs) -> Result<(), Box<dyn std::error::Error>> {
         rust.as_ref(),
         dry_run,
     )
+    .await
 }
 
 #[cfg(target_os = "linux")]
@@ -258,7 +259,7 @@ mod linux {
             })
     }
 
-    pub fn setup(
+    pub async fn setup(
         node_user: &str,
         exec_user: &str,
         agents: u32,
@@ -438,7 +439,7 @@ mod linux {
                     "systemctl",
                     &["restart", unit],
                     &format!(
-                        "restarted {unit} ({})",
+                        "restarting {unit} ({})",
                         if stale {
                             "replaced binary"
                         } else {
@@ -446,6 +447,10 @@ mod linux {
                         }
                     ),
                 )?;
+                // systemd has started the unit, which is not the same as it serving: the next command of a
+                // script would find no socket yet.
+                wait_ready(unit).await?;
+                c.say("restarted:", &format!("{unit} (ready)"));
             } else {
                 warnings = true;
                 c.say(
@@ -458,6 +463,45 @@ mod linux {
             }
         }
         finish(&c, warnings)
+    }
+
+    /// Waits until the restarted `unit` serves: han-seq on its admin socket, han-node on a status call.
+    async fn wait_ready(unit: &str) -> Res<()> {
+        let timeout = crate::seqadmin::READY_TIMEOUT;
+        if unit == "han-seq" {
+            let data = Path::new(NODE_DATA).join("seq");
+            return Ok(crate::seqadmin::wait_ready(&data, timeout).await?);
+        }
+        let endpoint = han_node::rpc::default_endpoint(&Path::new(NODE_DATA).join("node"));
+        Ok(crate::seqadmin::wait_until(
+            &format!("{unit}: nothing answered a status call at {endpoint}, so it"),
+            timeout,
+            || node_answers(&endpoint),
+        )
+        .await?)
+    }
+
+    /// Whether the node at `endpoint` answers a status call.
+    async fn node_answers(endpoint: &str) -> Result<(), String> {
+        use han_node::NodeApi as _;
+        use han_node::api::{Query, Row, ViewEvent, Window};
+        let client = han_node::rpc::RpcClient::connect(endpoint)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut view = client.view(Query::NodeStatus {
+            window: Window::default(),
+        });
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), view.next())
+            .await
+            .map_err(|_| "no answer to the status call".to_owned())?;
+        match first {
+            Some(ViewEvent::Snapshot { rows, .. })
+                if rows.iter().any(|r| matches!(r, Row::NodeStatus(_))) =>
+            {
+                Ok(())
+            }
+            _ => Err("the status call returned no node status".to_owned()),
+        }
     }
 
     /// The last line of the output.
