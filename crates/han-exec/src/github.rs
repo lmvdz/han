@@ -112,6 +112,22 @@ impl GithubMinter {
         &self.api_base
     }
 
+    /// A GitHub client whose installation token is scoped to `repo` (`owner/name`) and exactly `permissions`.
+    pub async fn client(
+        &self,
+        repo: &str,
+        permissions: &[(&str, &str)],
+    ) -> Result<octocrab::Octocrab, String> {
+        let token = self.token(repo, permissions).await?;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        octocrab::Octocrab::builder()
+            .base_uri(self.api_base())
+            .map_err(|_| "bad API base".to_string())?
+            .personal_token(token.expose().to_owned())
+            .build()
+            .map_err(|_| "building the GitHub client failed".to_string())
+    }
+
     /// An installation token for `repo` (`owner/name`) with exactly `permissions` (for example
     /// `[("contents", "write")]`).
     pub async fn token(&self, repo: &str, permissions: &[(&str, &str)]) -> Result<Secret, String> {

@@ -55,14 +55,12 @@ impl HostBridge for ScoutBridge {
 
 fn exec_config(remote: &Path) -> ExecConfig {
     ExecConfig {
-        repos: vec![RepoTarget {
-            name: "local:origin".into(),
-            remote: remote.to_string_lossy().into_owned(),
-            github: None,
-        }],
+        repos: vec![RepoTarget::new(
+            "local:origin",
+            remote.to_string_lossy().into_owned(),
+        )],
         http_hosts: Vec::new(),
         branch_prefixes: vec!["han/".into()],
-        landing_refs: Vec::new(),
         github: None,
         test_allow_private_http: false,
     }

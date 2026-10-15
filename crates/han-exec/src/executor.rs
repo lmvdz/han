@@ -11,6 +11,10 @@
 //! 5. run, journal the result, report `effect.outcome` (X-05), journal `reported`.
 //!
 //! After a restart nothing launches (X-06): [`Executor::recover`] reports what the journal holds.
+//!
+//! Actions that are [`Action::lane_only`] (`vcs.land`) are never claimed by this loop: the landing lane
+//! ([`crate::Lane`]) claims them at push time through [`Executor::claim_for_lane`], which is steps 3 to 5 with
+//! the lane's instruction journalled in step 3 and handed to the action in step 5.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,7 +27,10 @@ use serde_json::Value;
 
 use crate::gate::{GateDecision, GateInput};
 use crate::ledger::{Attempt, InstanceLock, Ledger, LedgerError, Report};
-use crate::{Action, ActionCtx, Elapsed, ExecConfig, Gate, IdempotencyKey, Outcome, PlanError};
+use crate::{
+    Action, ActionCtx, Elapsed, ExecConfig, Gate, IdempotencyKey, LaneInstruction, Outcome,
+    PlanError,
+};
 
 /// How the executor loop is set up.
 pub struct ExecutorConfig {
@@ -69,6 +76,47 @@ pub struct StepReport {
     pub refused: Vec<(String, String)>,
     /// Proposals waiting for an approval.
     pub waiting: Vec<String>,
+}
+
+/// How [`Executor::claim_for_lane`] ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaneClaim {
+    /// Not claimed: the plan, its changeset or its preflight was refused. `permanent` says that no later
+    /// attempt can pass (digest, schema, scope, changeset); otherwise the world could not be read, and a later
+    /// attempt may.
+    Refused {
+        /// Whether trying again is pointless.
+        permanent: bool,
+        /// Why.
+        why: String,
+    },
+    /// Not claimed: the gate still wants an approval.
+    NeedsApproval,
+    /// Not claimed: an attempt of this effect is still in flight, or the node's view lags the journal.
+    Busy,
+    /// The claim got no receipt (it is queued, or the reply was lost); the journal settles it.
+    Unacknowledged,
+    /// The home refused the claim.
+    ClaimRefused(String),
+    /// Claimed, but not launched (the plan check failed again, or the launch deadline passed): reported
+    /// `failed`/`no`, so the effect opens again.
+    NotLaunched(String),
+    /// Launched. The outcome is journalled and, when the node answered, reported; `report` is what was
+    /// reported.
+    Ran {
+        /// What the action returned.
+        outcome: Outcome,
+        /// The `(result, started)` journalled for `effect.outcome`.
+        report: Report,
+    },
+}
+
+/// What a claim ended with, inside the executor.
+enum Flow {
+    Unacknowledged,
+    ClaimRefused(String),
+    NotLaunched(String),
+    Ran(Outcome, Report),
 }
 
 #[derive(Default)]
@@ -124,6 +172,47 @@ impl Executor {
         self.cfg.actions.iter().find(|a| a.kind() == kind).cloned()
     }
 
+    /// The config the executor runs with.
+    pub fn config(&self) -> &Arc<ExecConfig> {
+        &self.cfg.config
+    }
+
+    /// The executor actor.
+    pub fn actor(&self) -> &str {
+        &self.cfg.actor
+    }
+
+    pub(crate) fn github(&self) -> Option<&Arc<crate::github::GithubMinter>> {
+        self.cfg.github.as_ref()
+    }
+
+    pub(crate) fn node(&self) -> &Arc<dyn NodeApi> {
+        &self.api
+    }
+
+    /// The context an action gets for `key`, without a lane instruction or the plan's blob.
+    pub(crate) fn plain_ctx(&self, key: &IdempotencyKey) -> ActionCtx {
+        self.ctx(key)
+    }
+
+    /// The action of a kind.
+    pub(crate) fn action_of(&self, kind: &str) -> Option<Arc<dyn Action>> {
+        self.action(kind)
+    }
+
+    /// The effects of this executor as the node shows them now (open, claimed and done).
+    pub async fn effects(&self) -> Result<Vec<EffectRow>, NodeError> {
+        self.snapshot().await
+    }
+
+    /// The context for an attempt read back from the journal: the lane's instruction is re-attached, so
+    /// `lookup` can answer for it after a restart.
+    fn ctx_for(&self, a: &Attempt) -> ActionCtx {
+        let mut ctx = self.ctx(&a.key);
+        ctx.lane = a.lane.clone();
+        ctx
+    }
+
     fn ctx(&self, key: &IdempotencyKey) -> ActionCtx {
         let scratch = self.cfg.state_dir.join("scratch").join(
             key.as_string()
@@ -144,7 +233,7 @@ impl Executor {
     /// The bytes of the plan's `argsBlob` from the space (the node checks their hash and size). A blob the
     /// home doesn't serve yet (the proposer's upload is still on its way) is a preflight failure, tried again
     /// at the next head.
-    async fn fetch_args_blob(
+    pub(crate) async fn fetch_args_blob(
         &self,
         space: &str,
         plan: &Value,
@@ -236,7 +325,7 @@ impl Executor {
                         serde_json::from_str::<Value>(&a.plan),
                     ) {
                         (Some(action), Ok(plan)) => {
-                            action.lookup(&plan, &a.key, &self.ctx(&a.key)).await
+                            action.lookup(&plan, &a.key, &self.ctx_for(&a)).await
                         }
                         _ => None,
                     };
@@ -410,6 +499,9 @@ impl Executor {
         let Some(action) = self.action(&row.action) else {
             return Ok(()); // X-11: not ours to run; never claimed
         };
+        if action.lane_only() {
+            return Ok(()); // the landing lane claims it, at push time, after its checks are green
+        }
         {
             let st = lock(&self.state);
             if st.bad_plans.contains_key(&row.proposal) {
@@ -481,19 +573,39 @@ impl Executor {
             self.refuse(row, &e, out);
             return Ok(());
         }
+        self.claim_and_run(row, action.as_ref(), &plan, &plan_text, &key, &ctx, out)
+            .await?;
+        Ok(())
+    }
+
+    /// Steps 3 to 5: claim (X-02, X-03), check again (X-09), launch within the deadline (X-04), report (X-05).
+    /// `ctx.lane`, when set, is journalled with the claim.
+    #[allow(clippy::too_many_arguments)]
+    async fn claim_and_run(
+        &self,
+        row: &EffectRow,
+        action: &dyn Action,
+        plan: &Value,
+        plan_text: &str,
+        key: &IdempotencyKey,
+        ctx: &ActionCtx,
+        out: &mut StepReport,
+    ) -> Result<Flow, ExecError> {
         // 3. Claim (X-02, X-03).
         let sent_ms = self.elapsed.now_ms();
         let window = row.launch_window;
-        match lock(&self.ledger).claiming(
-            &key,
+        let attempt = key.attempt;
+        match lock(&self.ledger).claiming_with(
+            key,
             &row.action,
-            &plan_text,
+            plan_text,
             self.elapsed.name(),
             sent_ms,
             window,
+            ctx.lane.as_ref(),
         ) {
             Ok(()) => {}
-            Err(LedgerError::Exists(_)) => return Ok(()),
+            Err(LedgerError::Exists(_)) => return Ok(Flow::Unacknowledged),
             Err(e) => return Err(e.into()),
         }
         let claim = self
@@ -509,42 +621,137 @@ impl Executor {
             Ok(CallResult::Receipt { id, .. }) => id,
             // Queued, or the reply was lost: no receipt in hand. The claim may still land; settle_stuck
             // reports it not started once the node shows it, or gives it up after its window.
-            Ok(_) | Err(NodeError::Unavailable { .. }) => return Ok(()),
+            Ok(_) | Err(NodeError::Unavailable { .. }) => return Ok(Flow::Unacknowledged),
             Err(e) => {
-                lock(&self.ledger).refused(&key, &format!("claim {}", e.code()))?;
+                let why = format!("claim {}", e.code());
+                lock(&self.ledger).refused(key, &why)?;
                 lock(&self.state)
                     .tried_at_head
                     .insert(row.proposal.clone(), row.head);
-                return Ok(());
+                return Ok(Flow::ClaimRefused(why));
             }
         };
-        lock(&self.ledger).claimed(&key, &claim_id)?;
+        lock(&self.ledger).claimed(key, &claim_id)?;
         out.claimed.push(row.proposal.clone());
         // 4. Check again, then launch (X-09, X-04).
-        if let Err(e) = action.preflight(&plan, &ctx).await {
-            lock(&self.ledger).result(&key, &Report::not_started(), &format!("plan check: {e}"))?;
+        if let Err(e) = action.preflight(plan, ctx).await {
+            let why = format!("plan check: {e}");
+            lock(&self.ledger).result(key, &Report::not_started(), &why)?;
             self.report_pending(&[], out).await?;
-            return Ok(());
+            return Ok(Flow::NotLaunched(why));
         }
-        lock(&self.ledger).launching(&key)?;
+        lock(&self.ledger).launching(key)?;
         let deadline_ms = window
             .saturating_sub(self.cfg.stall_bound.as_secs())
             .saturating_mul(1000);
         if self.elapsed.now_ms().saturating_sub(sent_ms) >= deadline_ms {
             {
                 let ledger = lock(&self.ledger);
-                ledger.expired(&key, "launch deadline passed (X-04)")?;
-                ledger.result(&key, &Report::not_started(), "expired")?;
+                ledger.expired(key, "launch deadline passed (X-04)")?;
+                ledger.result(key, &Report::not_started(), "expired")?;
             }
             self.report_pending(&[], out).await?;
-            return Ok(());
+            return Ok(Flow::NotLaunched("launch deadline passed (X-04)".into()));
         }
         out.launched.push(row.proposal.clone());
-        let outcome = action.run(&plan, &key, &ctx).await;
-        lock(&self.ledger).result(&key, &outcome.report(), outcome.detail())?;
+        let outcome = action.run(plan, key, ctx).await;
+        // A landing lane's lost compare-and-swap moved nothing: the ref is where it was, so it is reported
+        // not started, the effect opens again with its approvals (P-09), and the lane tries on the new tip.
+        let report = match &outcome {
+            Outcome::Failed {
+                started: true,
+                detail,
+            } if ctx.lane.is_some() && detail.starts_with(crate::actions::REF_MOVED) => {
+                Report::not_started()
+            }
+            other => other.report(),
+        };
+        lock(&self.ledger).result(key, &report, outcome.detail())?;
         // 5. Report.
         self.report_pending(&[], out).await?;
-        Ok(())
+        Ok(Flow::Ran(outcome, report))
+    }
+
+    /// Claims one effect for the landing lane (R33 §4 "Land"), at push time: the plan is checked as for any
+    /// claim, and `lane` is journalled with the claim's `claiming` entry and handed to the action as
+    /// [`ActionCtx::lane`]. After a restart [`Executor::recover`] re-attaches it for `lookup`.
+    pub async fn claim_for_lane(
+        &self,
+        row: &EffectRow,
+        lane: LaneInstruction,
+    ) -> Result<LaneClaim, ExecError> {
+        let Some(action) = self.action(&row.action) else {
+            return Ok(LaneClaim::Refused {
+                permanent: true,
+                why: format!("unsupported action {}", row.action),
+            });
+        };
+        let attempts = lock(&self.ledger).attempts_of(&row.space, &row.proposal)?;
+        if attempts.iter().any(|a| !a.is_final()) {
+            return Ok(LaneClaim::Busy);
+        }
+        let attempt = row.claims + 1;
+        let reusable = |a: &Attempt| a.state == "refused" && a.claim_id.is_none();
+        if attempts
+            .iter()
+            .any(|a| a.key.attempt > attempt || (a.key.attempt == attempt && !reusable(a)))
+        {
+            return Ok(LaneClaim::Busy);
+        }
+        let refused = |e: PlanError| LaneClaim::Refused {
+            permanent: !matches!(e, PlanError::Preflight(_)),
+            why: e.to_string(),
+        };
+        let (plan_text, plan) = match check_plan(row, action.as_ref(), &self.cfg.config) {
+            Ok(p) => p,
+            Err(e) => return Ok(refused(e)),
+        };
+        let decision = self.cfg.gate.decide(&GateInput {
+            action: row.action.clone(),
+            target: crate::plan_target(&plan).to_owned(),
+            changes: plan
+                .get("args")
+                .and_then(|a| a.get("changes"))
+                .and_then(|c| serde_json::from_value(c.clone()).ok()),
+            approvals: row.approvals.clone(),
+        });
+        if let GateDecision::NeedsApproval { .. } = decision {
+            return Ok(LaneClaim::NeedsApproval);
+        }
+        let key = IdempotencyKey {
+            space: row.space.clone(),
+            proposal: row.proposal.clone(),
+            attempt,
+        };
+        let mut ctx = self.ctx(&key);
+        ctx.lane = Some(lane);
+        match self.fetch_args_blob(&row.space, &plan).await {
+            Ok(b) => ctx.args_blob = b,
+            Err(e) => return Ok(refused(e)),
+        }
+        if let Err(e) = action.preflight(&plan, &ctx).await {
+            return Ok(refused(e));
+        }
+        let mut out = StepReport::default();
+        Ok(
+            match self
+                .claim_and_run(
+                    row,
+                    action.as_ref(),
+                    &plan,
+                    &plan_text,
+                    &key,
+                    &ctx,
+                    &mut out,
+                )
+                .await?
+            {
+                Flow::Unacknowledged => LaneClaim::Unacknowledged,
+                Flow::ClaimRefused(why) => LaneClaim::ClaimRefused(why),
+                Flow::NotLaunched(why) => LaneClaim::NotLaunched(why),
+                Flow::Ran(outcome, report) => LaneClaim::Ran { outcome, report },
+            },
+        )
     }
 
     // ───────────────────────── the loop ─────────────────────────
@@ -603,7 +810,7 @@ fn our_claim(row: Option<&EffectRow>, a: &Attempt) -> Option<String> {
 }
 
 /// The plan of a row: present, hashing to `planDigest` (X-09), and passing the action's checks (SR-70).
-fn check_plan(
+pub(crate) fn check_plan(
     row: &EffectRow,
     action: &dyn Action,
     config: &ExecConfig,

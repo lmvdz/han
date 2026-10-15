@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
-use han_exec::{ExecConfig, Executor, ExecutorConfig, NeedsApproval, SystemElapsed};
+use han_exec::checks::GithubChecks;
+use han_exec::{
+    ExecConfig, Executor, ExecutorConfig, Lane, NeedsApproval, SystemElapsed, SystemWall,
+};
 use han_node::api::ConnectionClass;
 use han_registry::HomeRef;
 use han_vcs::GitVcs;
@@ -68,7 +71,17 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         Some(app) => Some(Arc::new(han_exec::github::GithubMinter::from_app(app)?)),
         None => None,
     };
-    let exec = Executor::open(
+    // The landing lane runs only for a configuration that names landing refs (default: none) and reads its
+    // checks from GitHub.
+    let lane_checks = if Lane::configured(&config) {
+        let minter = github.clone().ok_or(
+            "landing_refs need a GitHub App in the configuration (the lane reads its checks there)",
+        )?;
+        Some(Arc::new(GithubChecks::new(minter)))
+    } else {
+        None
+    };
+    let exec = Arc::new(Executor::open(
         ExecutorConfig {
             actor: args.actor.clone(),
             actions: han_exec::actions::builtin(),
@@ -81,11 +94,19 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         role.api.clone(),
         Arc::new(SystemElapsed::new()),
-    )?;
+    )?);
+    let lane = lane_checks.map(|c| Lane::new(exec.clone(), c, Arc::new(SystemWall)));
     let (stop, rx) = tokio::sync::watch::channel(false);
-    let runner = async { exec.run(rx).await };
+    let runner = async { exec.run(rx.clone()).await };
+    let landing = async {
+        match &lane {
+            Some(l) => l.run(rx.clone()).await,
+            None => std::future::pending().await,
+        }
+    };
     tokio::select! {
         r = runner => r?,
+        () = landing => {}
         _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); }
     }
     role.node.shutdown();

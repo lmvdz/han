@@ -3,7 +3,7 @@
 //!
 //! Plan: `{action: "vcs.land", target: <repo name>, args: {ref, base, to, deltaDigest, tier, rebase,
 //! dependsOn?, rebaseOf?}, argsBlob}`:
-//! * `ref`: the full ref to move, one of [`crate::ExecConfig::landing_refs`] (default none);
+//! * `ref`: the full ref to move, one of the repository's [`crate::RepoTarget::landing_refs`] (default none);
 //! * `base`, `to`: the approved change is `base..to`; `deltaDigest` is its [`han_vcs::Delta`] digest, which
 //!   does not depend on the base. The approval binds the plan, so these are what a person approved;
 //! * `tier`: the risk tier 0 to 3, informative (Policy derives its own);
@@ -12,6 +12,8 @@
 //! * `dependsOn`: other proposals (`{repo, proposal}`) to land first; ordering is the lane's job, the plan
 //!   check refuses what is cyclic on its face (see [`depends_cycle`] for the lane's graph);
 //! * `rebaseOf`: the proposal this one re-proposes after a failed path-disjoint check;
+//! * `title`: the subject line of the commit the lane makes (the approval binds it); default a line naming
+//!   the change;
 //! * `argsBlob`: the commits `base..to` as a git bundle, imported as `git_push` does (R15).
 //!
 //! The lane's rebase happens after approval, so the executor gets it out of the plan: the claim context
@@ -19,7 +21,7 @@
 //! ref moves, `run` checks that `commit` is one commit on `onto`; that `delta(base, to)` is path-disjoint
 //! from `onto` (or `onto == base` for `rebase: "none"`); and that `delta(onto, commit)` is the approved
 //! `deltaDigest`. Then it moves `ref` from `onto` to `commit`, never forced. A lost compare-and-swap is
-//! `Failed { started: true }` with "moved" in the detail: the lane starts again from the new tip. The
+//! `Failed { started: true }` whose detail starts with [`REF_MOVED`]: the lane starts again from the new tip. The
 //! success detail records the landed base, commit and landed (`changeset_digest`) digest.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,6 +56,8 @@ struct Args {
     depends_on: Vec<Dep>,
     #[serde(default)]
     rebase_of: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +66,27 @@ enum Rebase {
     PathDisjoint,
     #[serde(rename = "none")]
     None,
+}
+
+/// What the detail of a lost compare-and-swap starts with: the ref is not where the lane tested, and nothing
+/// was forced. The landing lane starts again from the new tip.
+pub const REF_MOVED: &str = "ref moved";
+
+/// The commit subject of a plan: its `title`, or a line naming the change.
+pub fn commit_title(plan: &Value) -> String {
+    let a = args(plan).ok();
+    match a.as_ref().and_then(|a| a.title.as_deref()) {
+        Some(t) if !t.trim().is_empty() => t.trim().to_owned(),
+        _ => match a {
+            Some(a) => format!(
+                "land {}..{} on {}",
+                short(&a.base),
+                short(&a.to),
+                a.refname.strip_prefix("refs/heads/").unwrap_or(&a.refname)
+            ),
+            None => "land".into(),
+        },
+    }
 }
 
 fn args(plan: &Value) -> Result<Args, PlanError> {
@@ -216,9 +241,9 @@ impl Action for VcsLand {
     fn plan_check(&self, plan: &Value, config: &ExecConfig) -> Result<(), PlanError> {
         let a = args(plan)?;
         let target = crate::plan_target(plan);
-        if config.repo(target).is_none() {
-            return Err(PlanError::OutOfScope(format!("repository {target}")));
-        }
+        let repo = config
+            .repo(target)
+            .ok_or_else(|| PlanError::OutOfScope(format!("repository {target}")))?;
         let Some(branch) = a.refname.strip_prefix("refs/heads/") else {
             return Err(PlanError::Schema(format!(
                 "not a branch ref: {:?}",
@@ -226,7 +251,7 @@ impl Action for VcsLand {
             )));
         };
         check_branch(branch, &[String::new()])?;
-        if !config.landing_refs.contains(&a.refname) {
+        if !repo.landing_refs.contains(&a.refname) {
             return Err(PlanError::OutOfScope(format!(
                 "ref {} is not a landing ref",
                 a.refname
@@ -268,6 +293,13 @@ impl Action for VcsLand {
         if a.rebase_of.as_deref() == Some("") {
             return Err(PlanError::Schema("rebaseOf is empty".into()));
         }
+        if let Some(t) = &a.title
+            && (t.trim().is_empty() || t.len() > 256 || t.chars().any(char::is_control))
+        {
+            return Err(PlanError::Schema(
+                "a title of 1 to 256 bytes on one line".into(),
+            ));
+        }
         match crate::args_blob(plan)? {
             Some(b) if b.media_type == han_vcs::BUNDLE_MEDIA_TYPE => Ok(()),
             Some(_) => Err(PlanError::Schema(format!(
@@ -276,6 +308,10 @@ impl Action for VcsLand {
             ))),
             None => Err(PlanError::Schema("no argsBlob".into())),
         }
+    }
+
+    fn lane_only(&self) -> bool {
+        true
     }
 
     async fn preflight(&self, plan: &Value, ctx: &ActionCtx) -> Result<(), PlanError> {
@@ -336,7 +372,7 @@ impl Action for VcsLand {
             Ok(han_vcs::LandOutcome::Conflict { actual }) => Outcome::Failed {
                 started: true,
                 detail: format!(
-                    "{} moved: it is at {}, not the tested tip {}; nothing forced, retry from the new tip",
+                    "{REF_MOVED}: {} is at {}, not the tested tip {}; nothing forced, retry from the new tip",
                     spec.refname,
                     actual.as_deref().unwrap_or("(absent)"),
                     lane.onto

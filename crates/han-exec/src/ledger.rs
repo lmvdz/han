@@ -13,6 +13,10 @@
 //! | `reported` | `effect.outcome` was appended (or the home refused it as already settled) |
 //! | `refused` | the claim was refused, or never landed: there is nothing to report |
 //!
+//! A lane's claim also journals its [`LaneInstruction`] with `claiming`, before the claim's first send, so a
+//! restart can answer for `vcs.land` (X-06) from the journal alone. The same file holds the landing lane's
+//! per-change records (`lane_changes`) and its small key/value state (`meta`).
+//!
 //! The ledger never holds a credential: plans are stored as the proposal carried them, details are free text
 //! written by actions that never put a token in them.
 
@@ -23,7 +27,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
 use serde::{Deserialize, Serialize};
 
-use crate::IdempotencyKey;
+use crate::{IdempotencyKey, LaneInstruction};
 
 /// The journal's format version (in `PRAGMA user_version` via the migrations, and in `meta`).
 pub const FORMAT_VERSION: u32 = 1;
@@ -116,6 +120,8 @@ pub struct Attempt {
     pub report: Option<Report>,
     /// Free text from the last transition.
     pub detail: String,
+    /// The landing lane's instruction, when a lane claimed it: journalled with `claiming`.
+    pub lane: Option<LaneInstruction>,
 }
 
 impl Attempt {
@@ -126,8 +132,9 @@ impl Attempt {
 }
 
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(
-        "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+    Migrations::new(vec![
+        M::up(
+            "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
          INSERT INTO meta VALUES ('format', '1');
          CREATE TABLE attempts (
              key TEXT PRIMARY KEY,
@@ -151,7 +158,17 @@ fn migrations() -> Migrations<'static> {
              state TEXT NOT NULL,
              detail TEXT NOT NULL
          );",
-    )])
+        ),
+        M::up(
+            "ALTER TABLE attempts ADD COLUMN lane TEXT;
+             CREATE TABLE lane_changes (
+                 space TEXT NOT NULL,
+                 proposal TEXT NOT NULL,
+                 record TEXT NOT NULL,
+                 PRIMARY KEY (space, proposal)
+             );",
+        ),
+    ])
 }
 
 /// The journal.
@@ -201,12 +218,31 @@ impl Ledger {
         sent_ms: u64,
         window: u64,
     ) -> Result<(), LedgerError> {
+        self.claiming_with(key, action, plan, clock, sent_ms, window, None)
+    }
+
+    /// [`Ledger::claiming`], with the landing lane's instruction journalled in the same step.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claiming_with(
+        &self,
+        key: &IdempotencyKey,
+        action: &str,
+        plan: &str,
+        clock: &str,
+        sent_ms: u64,
+        window: u64,
+        lane: Option<&LaneInstruction>,
+    ) -> Result<(), LedgerError> {
         let k = key.as_string();
+        let lane = lane
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| LedgerError::Db(e.to_string()))?;
         let tx = self.conn.unchecked_transaction()?;
         let inserted = tx.execute(
             "INSERT OR IGNORE INTO attempts
-               (key, space, proposal, attempt, action, plan, state, clock, sent_ms, window)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'claiming', ?7, ?8, ?9)",
+               (key, space, proposal, attempt, action, plan, state, clock, sent_ms, window, lane)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'claiming', ?7, ?8, ?9, ?10)",
             params![
                 k,
                 key.space,
@@ -216,7 +252,8 @@ impl Ledger {
                 plan,
                 clock,
                 sent_ms as i64,
-                window as i64
+                window as i64,
+                lane
             ],
         )?;
         if inserted == 0 {
@@ -225,9 +262,9 @@ impl Ledger {
             // never both land, and the claim entry ids stay distinct.
             let again = tx.execute(
                 "UPDATE attempts SET state = 'claiming', action = ?2, plan = ?3, clock = ?4, sent_ms = ?5,
-                        window = ?6, report = NULL, detail = ''
+                        window = ?6, report = NULL, detail = '', lane = ?7
                  WHERE key = ?1 AND state = 'refused' AND claim_id IS NULL",
-                params![k, action, plan, clock, sent_ms as i64, window as i64],
+                params![k, action, plan, clock, sent_ms as i64, window as i64, lane],
             )?;
             if again == 0 {
                 return Err(LedgerError::Exists(k));
@@ -331,7 +368,7 @@ impl Ledger {
             .conn
             .query_row(
                 "SELECT space, proposal, attempt, action, plan, state, claim_id, clock, sent_ms, window,
-                        report, detail
+                        report, detail, lane
                  FROM attempts WHERE key = ?1",
                 params![key.as_string()],
                 row_to_attempt,
@@ -358,10 +395,48 @@ impl Ledger {
     fn select(&self, tail: &str, p: impl rusqlite::Params) -> Result<Vec<Attempt>, LedgerError> {
         let mut st = self.conn.prepare(&format!(
             "SELECT space, proposal, attempt, action, plan, state, claim_id, clock, sent_ms, window,
-                    report, detail
+                    report, detail, lane
              FROM attempts {tail}"
         ))?;
         let rows = st.query_map(p, row_to_attempt)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// A value of the lane's small key/value state.
+    pub fn meta_get(&self, key: &str) -> Result<Option<String>, LedgerError> {
+        Ok(self
+            .conn
+            .query_row("SELECT v FROM meta WHERE k = ?1", params![key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    /// Sets a value of the lane's small key/value state.
+    pub fn meta_put(&self, key: &str, value: &str) -> Result<(), LedgerError> {
+        self.conn.execute(
+            "INSERT INTO meta (k, v) VALUES (?1, ?2) ON CONFLICT (k) DO UPDATE SET v = ?2",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// The lane's record of one change (JSON text the lane owns), written durably.
+    pub fn lane_put(&self, space: &str, proposal: &str, record: &str) -> Result<(), LedgerError> {
+        self.conn.execute(
+            "INSERT INTO lane_changes (space, proposal, record) VALUES (?1, ?2, ?3)
+             ON CONFLICT (space, proposal) DO UPDATE SET record = ?3",
+            params![space, proposal, record],
+        )?;
+        Ok(())
+    }
+
+    /// Every change the lane keeps, as `(space, proposal, record)`.
+    pub fn lane_all(&self) -> Result<Vec<(String, String, String)>, LedgerError> {
+        let mut st = self
+            .conn
+            .prepare("SELECT space, proposal, record FROM lane_changes ORDER BY rowid")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
@@ -392,6 +467,9 @@ fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
         window: r.get::<_, i64>(9)? as u64,
         report: report.and_then(|s| serde_json::from_str(&s).ok()),
         detail: r.get(11)?,
+        lane: r
+            .get::<_, Option<String>>(12)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
     })
 }
 

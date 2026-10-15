@@ -1459,6 +1459,15 @@ cost?: [string, number],
  */
 expires_at?: string, 
 /**
+ * The seq of the entry that gave the open approvals their latest member: the order a landing lane
+ * takes changes in (R33 §4). Absent while nothing is approved.
+ */
+approved_seq?: number, 
+/**
+ * The receipt time of that entry: the time of the commit a landing lane makes.
+ */
+approved_at?: string, 
+/**
  * The seq of the proposal.
  */
 seq: number, 

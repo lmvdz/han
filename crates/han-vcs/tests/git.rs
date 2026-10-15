@@ -766,6 +766,74 @@ fn a_bundle_lands_from_an_executors_own_repository() {
     assert_eq!(git(&f.remote, &["rev-parse", &r]), head);
 }
 
+/// A landing lane squash-rebases onto the ref's tip, so the executor's own repository has to hold it.
+#[test]
+fn a_refs_tip_is_fetched_into_the_executors_repository() {
+    let f = fixture();
+    let exec = GitVcs::new(f.root.join("exec-store"));
+    let remote = f.source();
+    let (repo, tip) = exec
+        .fetch_ref(&remote, None, &refname("main"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo, exec.landing_for(&remote));
+    assert_eq!(tip, f.c1);
+    assert_eq!(
+        git(&repo, &["rev-parse", &format!("{tip}^{{commit}}")]),
+        tip
+    );
+    // A ref that does not exist is not an error.
+    assert!(
+        exec.fetch_ref(&remote, None, &refname("nope"))
+            .unwrap()
+            .is_none()
+    );
+    // The ref moves (even backwards, as a force-push would): the tip is the one fetched now.
+    let seed = f.root.join("seed");
+    write(
+        &seed.join("new.txt"),
+        "new
+",
+    );
+    git(&seed, &["add", "-A"]);
+    git(&seed, &["commit", "-q", "-m", "c2"]);
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            f.remote.to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    let c2 = git(&seed, &["rev-parse", "HEAD"]);
+    let (_, tip) = exec
+        .fetch_ref(&remote, None, &refname("main"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(tip, c2);
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            "-f",
+            f.remote.to_str().unwrap(),
+            &format!("{}:refs/heads/main", f.c1),
+        ],
+    );
+    let (_, tip) = exec
+        .fetch_ref(&remote, None, &refname("main"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(tip, f.c1);
+    // Not a full ref name.
+    assert!(matches!(
+        exec.fetch_ref(&remote, None, "main"),
+        Err(VcsError::Invalid(_))
+    ));
+}
+
 #[test]
 fn a_bundle_that_is_not_base_to_head_is_refused() {
     let f = fixture();
