@@ -7,7 +7,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use han_node::supervisor::{
     ProcessSpawner, RoleSpec, RoleStatus, Supervisor, SupervisorError, unit_of,
 };
-use han_registry::{HostSpec, RunAs, unit_spec_file};
+use han_registry::{
+    HostAdmission, HostSpec, RefusalKind, RunAs, unit_admission_file, unit_spec_file,
+};
 
 fn fake_systemctl(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("systemctl");
@@ -49,7 +51,9 @@ fn a_host_as_another_user_goes_through_its_unit() {
     let dir = std::env::temp_dir().join(format!("han-run-as-{}", std::process::id()));
     let state = dir.join("state");
     std::fs::create_dir_all(&dir).unwrap();
-    let spawner = ProcessSpawner::new("/nonexistent/han").with_systemctl(fake_systemctl(&dir));
+    let spawner = ProcessSpawner::new("/nonexistent/han")
+        .with_systemctl(fake_systemctl(&dir))
+        .with_admission_wait(std::time::Duration::ZERO);
 
     spawner.start(spec(&state, "han-agent1")).unwrap();
     // the unit reads the spec the node left for it (`han host --spec <that file>`)
@@ -90,5 +94,45 @@ fn a_host_as_another_user_goes_through_its_unit() {
             Err(SupervisorError::Spawn(_))
         ));
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The unit's host checks its sandbox where it runs and leaves the answer; a refusal is the start's error, shows
+/// in the problems, and a later start does not inherit it.
+#[test]
+fn a_host_that_refuses_its_sandbox_is_the_starts_error_and_a_problem() {
+    let dir = std::env::temp_dir().join(format!("han-run-as-refuse-{}", std::process::id()));
+    let state = dir.join("state");
+    std::fs::create_dir_all(&dir).unwrap();
+    let spawner = ProcessSpawner::new("/nonexistent/han")
+        .with_systemctl(fake_systemctl(&dir))
+        .with_admission_wait(std::time::Duration::from_secs(5));
+    // the fake unit "runs" the host at once: it leaves its word where the node looks
+    std::fs::create_dir_all(state.join("spawn")).unwrap();
+    let refused = HostAdmission::Refused {
+        kind: RefusalKind::SandboxUnavailable,
+        message: "sandbox backend unavailable: Bwrap: no namespaces".into(),
+    };
+    // the node clears an old answer before it starts: write it after, from a thread, as the host would
+    let file = unit_admission_file(&state);
+    let writer = std::thread::spawn({
+        let refused = refused.clone();
+        move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            refused.write(&file).unwrap();
+        }
+    });
+    let err = spawner.start(spec(&state, "han-agent1")).unwrap_err();
+    writer.join().unwrap();
+    assert!(
+        matches!(&err, SupervisorError::SandboxUnavailable(m) if m.contains("no namespaces")),
+        "{err:?}"
+    );
+    let problems = spawner.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("host-@coder:a#1") && problems[0].contains("no namespaces"),
+        "{problems:?}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -384,6 +384,8 @@ If neither works, MXC is unavailable on this build and HAN fails closed:
 
 `HAN_MXC_FORCE_UNAVAILABLE=loopback` makes the probe report this state without running the container; it can only refuse.
 
+**Where the sandbox is checked.** The check runs where the host will run, because the answer differs. A host that is the node's own child (an agent with no `osUser`; always the case on Windows) is probed in the node's process, so `han agent start` fails at once. An OS-user agent's host runs in `han-agent@<user>`, not in `han-node.service`, whose hardening (`RestrictNamespaces=yes`, `ProcSubset=pid`, `ProtectKernelTunables=yes`) makes bubblewrap fail there by design (`Can't read /proc/sys/kernel/overflowuid`). The node therefore does not probe for such an agent. `han host` probes at its own start, before it starts the agent, and leaves `<state>/spawn/admission.json` (`Admitted`, or `Refused` with `SandboxUnavailable` or `LoopbackBlocked` and the reason). `han agent start` waits a moment (5 s at most) for it: a refusal is the command's error, and it stays in `han node status` as `host-<agent>#<issue> refused to start (...)`, and so in `han doctor`. Nothing falls back to advisory on either path: advisory needs `--allow-advisory`. `HAN_BWRAP_FORCE_UNAVAILABLE=1` makes a process report bwrap as unusable, as the node's unit does; it can only refuse (the e2e tests use it).
+
 ## 8. Check it
 
 ### 8.1 `han doctor`
@@ -399,6 +401,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - logins: whether an agent that uses Claude Code has one (as `han agent login --check` does, without reading it);
 - the device's presence setting: approvals that need a person but a backend with no check (or `pkcheck` missing);
 - Windows: whether MXC can give a container a working loopback port (`sandbox.mxc.loopback`, see 7.3);
+- sandboxes: the decision `han agent start` makes, per agent (`sandbox.unavailable`), made where the host runs: an OS-user agent is left to its own host, whose refusal shows as a node problem (7.3);
 - the Rust toolchain the sandboxes get: enabled but not installed, or a `--repo` whose `rust-toolchain.toml` pins a toolchain that is not installed;
 - the executor (`/var/lib/han-exec`, or `--exec-dir`): `exec.json` names repositories but has no `github` block, or the write App's key file is missing or not mode 600 (the fix is the `han executor add … --github-app … --github-installation … --github-key …` of 9);
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).

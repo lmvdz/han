@@ -298,8 +298,8 @@ pub fn admit(
     }
 }
 
-/// Whether a session with the sandbox called `name` could start on this machine now: `Ok`, or the typed
-/// reason it could not. The node asks this before it starts an agent host.
+/// Whether a session with the sandbox called `name` could start in this process now: `Ok`, or the typed
+/// reason it could not. A host asks this at its own start; the node goes through [`admit_for`].
 pub fn gate(name: &str, allow_advisory: bool, shim: &ShimCommand) -> Result<(), SandboxError> {
     let pref = Preference::parse(name).map_err(SandboxError::Invalid)?;
     let available = if pref == Preference::None {
@@ -308,6 +308,38 @@ pub fn gate(name: &str, allow_advisory: bool, shim: &ShimCommand) -> Result<(), 
         probe(shim)
     };
     admit(pref, allow_advisory, &available).map(|_| ())
+}
+
+/// What [`admit_for`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admitted {
+    /// The backend was probed here and works (or the session asked for advisory mode and may have it).
+    Probed,
+    /// The host runs in another unit under another OS user, where the backend can behave differently (the
+    /// node's own unit forbids namespaces, the host's does not). Nothing was probed here: the host probes at
+    /// its own start and refuses there, typed, through its admission file.
+    DeferredToHost,
+}
+
+/// The admission decision for an agent, the one the node's start and `han doctor` both ask. The probe has to
+/// run where the host will: `host_in_own_unit` (an OS-user agent, started through `han-agent@`) defers it to
+/// the host; a host that is the node's own child is probed here (MXC on Windows must fail fast). What needs no
+/// probe is still decided here, so a bad name or advisory mode that is not allowed is refused at once.
+pub fn admit_for(
+    name: &str,
+    allow_advisory: bool,
+    host_in_own_unit: bool,
+    shim: &ShimCommand,
+) -> Result<Admitted, SandboxError> {
+    if !host_in_own_unit {
+        return gate(name, allow_advisory, shim).map(|()| Admitted::Probed);
+    }
+    let pref = Preference::parse(name).map_err(SandboxError::Invalid)?;
+    if pref == Preference::None {
+        admit(pref, allow_advisory, &[])?;
+        return Ok(Admitted::Probed);
+    }
+    Ok(Admitted::DeferredToHost)
 }
 
 /// A child's stdin.
@@ -596,6 +628,48 @@ mod tests {
 
     fn none() -> BackendAvailability {
         av(SandboxBackend::None, true, false)
+    }
+
+    fn dummy_shim() -> ShimCommand {
+        ShimCommand::new("han-not-run", ["shim"])
+    }
+
+    #[test]
+    fn an_os_user_host_is_probed_by_the_host_never_by_the_node() {
+        // Old gate: the node probed its own process whatever the host's unit allows, so bwrap (or MXC) the node
+        // cannot use refused an agent whose own unit can. Nothing here may probe: the shim is not runnable.
+        for name in ["auto", "bwrap", "mxc", ""] {
+            for allow in [false, true] {
+                assert_eq!(
+                    admit_for(name, allow, true, &dummy_shim()).unwrap(),
+                    Admitted::DeferredToHost,
+                    "{name}"
+                );
+            }
+        }
+        // what needs no probe is still refused now, and nothing becomes advisory unasked
+        assert!(matches!(
+            admit_for("none", false, true, &dummy_shim()),
+            Err(SandboxError::AdvisoryNotAllowed(_))
+        ));
+        assert_eq!(
+            admit_for("none", true, true, &dummy_shim()).unwrap(),
+            Admitted::Probed
+        );
+        assert!(matches!(
+            admit_for("chroot", true, true, &dummy_shim()),
+            Err(SandboxError::Invalid(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_same_user_host_is_probed_in_the_node() {
+        // bwrap does not exist on Windows: the in-process probe says so, where an OS-user host would defer.
+        assert!(matches!(
+            admit_for("bwrap", false, false, &dummy_shim()),
+            Err(SandboxError::Unavailable(_))
+        ));
     }
 
     #[test]

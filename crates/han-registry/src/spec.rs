@@ -253,9 +253,73 @@ pub fn unit_spec_file(state_dir: &Path) -> PathBuf {
     state_dir.join("spawn").join("host.json")
 }
 
+/// The file the unit's host leaves its admission in, next to [`unit_spec_file`].
+pub fn unit_admission_file(state_dir: &Path) -> PathBuf {
+    state_dir.join("spawn").join("admission.json")
+}
+
+/// Why a host refused to start its agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefusalKind {
+    /// The sandbox the agent is set to use cannot work where the host runs (or advisory mode is not allowed).
+    SandboxUnavailable,
+    /// MXC is there but gives a container no loopback port.
+    LoopbackBlocked,
+}
+
+/// What a host that runs as another OS user found when it checked its sandbox at its own start, in the
+/// place it runs. The node cannot check there (its own unit forbids namespaces), so the host tells it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state")]
+pub enum HostAdmission {
+    /// The sandbox works; the host goes on to start the agent.
+    Admitted,
+    /// It does not; the host exits without starting the agent.
+    Refused {
+        /// The typed reason.
+        kind: RefusalKind,
+        /// The reason in words, with what to do.
+        message: String,
+    },
+}
+
+impl HostAdmission {
+    /// Reads the file at `path`; `None` when it is not there or not an admission.
+    pub fn read(path: &Path) -> Option<HostAdmission> {
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
+
+    /// Writes it to `path`, readable by the node.
+    pub fn write(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::write(
+            path,
+            serde_json::to_vec(self).map_err(std::io::Error::other)?,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_admission_round_trips_and_sits_by_the_unit_spec() {
+        let dir = std::env::temp_dir().join(format!("han-admission-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("admission.json");
+        let refused = HostAdmission::Refused {
+            kind: RefusalKind::LoopbackBlocked,
+            message: "no".into(),
+        };
+        refused.write(&file).unwrap();
+        assert_eq!(HostAdmission::read(&file), Some(refused));
+        assert_eq!(HostAdmission::read(&dir.join("none.json")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            unit_admission_file(Path::new("/s")).parent(),
+            unit_spec_file(Path::new("/s")).parent()
+        );
+    }
 
     fn full() -> HostSpec {
         HostSpec {
