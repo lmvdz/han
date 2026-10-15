@@ -13,6 +13,14 @@ and rewrites the marked values in spec/core/architecture.md, README.md, spec/goa
   python ref/sync_docs.py             rewrite the docs
   python ref/sync_docs.py --check     change nothing; list every value that drifted and exit 1 (run_all.py runs this)
   python ref/sync_docs.py --facts     print the derived facts
+  python ref/sync_docs.py --check --allow-stale-results
+                                      as --check, but when a recorded run is stale (ref/RESULTS.md counts fewer wire vectors than list_tests.py finds, or
+                                      conformance/interop/RESULTS.md's newest run does not cover them, because a change added vectors and the frozen
+                                      witnesses have not been re-run yet) skip only the markers derived from that run (ref/RESULTS.md: vector, mutation,
+                                      fuzz, wire-scenario and step counts; interop: wv_latest_note), say so in a warning that names the file and the
+                                      skipped keys, and still check every marker derived from the current tree. Exit 0 if those match. CI uses it on
+                                      PRs and pushes to main; the nightly 'full' run keeps the strict --check, so the staleness stays visible there.
+                                      Any other failure (a row missing or not PASS, a mutation missed) is still an error.
 A value that cannot be derived (a needed row of RESULTS.md is missing or not PASS, a figure disagrees with another source) is an error, not a guess.
 So is a test the docs cite as `test_*.py::test_*` that witnesses/impl-py/tests does not have (R8): both modes fail and name it."""
 import glob, os, re, sys
@@ -29,6 +37,7 @@ DOCS = [os.path.join("spec", "core", "architecture.md"), "README.md", os.path.jo
 MARK = re.compile(r"<!--s:([a-z_0-9]+)-->(.*?)<!--/s-->", re.S)
 
 class Underivable(Exception): pass
+class Stale(Underivable): pass      # a recorded run is out of date with the tree (not broken): --allow-stale-results may skip what it feeds
 
 def read(*path): return open(os.path.join(ROOT, *path), encoding="utf-8").read()
 
@@ -114,7 +123,7 @@ def facts_results(F):
     num("Guard model mutations", r"(\d+)/(\d+) guard mutations")      # must be PASS; the counts come from the newest guard log (facts_models)
     m = num("Wire conformance vectors", r"(\d+) vectors, (\d+) steps, (\d+) receipts")
     F["wv_steps"], F["wv_receipts"] = int(m[2]), int(m[3])
-    if int(m[1]) != F["wv_n"]: raise Underivable(f"ref/RESULTS.md says {m[1]} wire vectors, list_tests.py finds {F['wv_n']}: RESULTS.md is stale, run python ref/run_all.py --quick")
+    if int(m[1]) != F["wv_n"]: raise Stale(f"ref/RESULTS.md says {m[1]} wire vectors, list_tests.py finds {F['wv_n']}: RESULTS.md is stale, run python ref/run_all.py --quick")
 
 # ── conformance/interop/RESULTS.md ──
 def facts_interop(F):
@@ -287,16 +296,30 @@ def facts_carrier(F):
     if rc or not m or m[1] != m[2]: raise Underivable(f"conformance/carrier-vectors: python ref/run_carrier_vectors.py does not pass: {last}")
     F["cv_files"], F["cv_cases"], F["cv_muts"] = int(m[2]), int(m[3]), len(RC.MUTATIONS)
 
-def derive():
+def derive(allow_stale=False, stale=None):
+    """The facts. With allow_stale, a Stale ref/RESULTS.md drops the facts it feeds; stale collects (source, message, dropped keys)."""
     F = {}
     names, vector_ids = facts_exist(F)
-    facts_interfaces(F); facts_results(F); facts_history(F); facts_interop(F); facts_models(F); facts_claims(F, names); facts_carrier(F)
+    facts_interfaces(F)
+    before = set(F)
+    try:
+        facts_results(F)
+    except Stale as ex:
+        if not allow_stale: raise
+        dropped = sorted(set(F) - before)
+        for k in dropped: del F[k]
+        stale.append(("ref/RESULTS.md", str(ex), dropped))
+    facts_history(F); facts_interop(F)
+    if allow_stale and not F["wv_latest_note"].startswith("These are"):      # the newest recorded interop run predates the vectors in the tree
+        del F["wv_latest_note"]
+        stale.append(("conformance/interop/RESULTS.md", "its newest recorded wire-vector run does not cover the vectors in the tree", ["wv_latest_note"]))
+    facts_models(F); facts_claims(F, names); facts_carrier(F)
     check_vector_names(read("spec", "core", "architecture.md"), vector_ids)
     check_test_names()
     return F
 
-def sync(F, check):
-    drift, unknown = [], []
+def sync(F, check, skip=()):
+    drift, unknown, skipped = [], [], []
     for doc in DOCS:
         path = os.path.join(ROOT, doc)
         text = open(path, encoding="utf-8", newline="").read()      # newline="": the docs keep their line endings
@@ -304,6 +327,8 @@ def sync(F, check):
         up = "" if up == "." else up + "/"
         def sub(m):
             k = m[1]
+            if k in skip:
+                skipped.append(f"{doc}: {k}"); return m[0]
             if k not in F:
                 unknown.append(f"{doc}: <!--s:{k}-->"); return m[0]
             new = str(F[k]).replace("](ref/", "](" + up + "ref/")
@@ -312,19 +337,28 @@ def sync(F, check):
         out = MARK.sub(sub, text)
         if out != text and not check:
             with open(path, "w", encoding="utf-8", newline="") as fh: fh.write(out)
-    return drift, unknown
+    return drift, unknown, skipped
 
 def main():
-    check, facts = "--check" in sys.argv, "--facts" in sys.argv
+    check, facts, allow_stale = "--check" in sys.argv, "--facts" in sys.argv, "--allow-stale-results" in sys.argv
+    if allow_stale and not check:
+        print("sync_docs: --allow-stale-results only goes with --check (rewriting from partial facts would leave stale values in the docs)")
+        return 1
+    stale = []
     try:
-        F = derive()
+        F = derive(allow_stale, stale)
     except Underivable as ex:
         print(f"sync_docs: cannot derive the facts: {ex}")
         return 1
     if facts:
         for k in sorted(F): print(f"{k} = {F[k]}")
         return 0
-    drift, unknown = sync(F, check)
+    skip = {k for _, _, ks in stale for k in ks}
+    drift, unknown, skipped = sync(F, check, skip)
+    for src, why, ks in stale:
+        print(f"WARNING sync_docs: {src} is stale ({why}); --allow-stale-results: skipping {sum(1 for sk in skipped if sk.rsplit(': ', 1)[1] in ks)} marker(s) derived from it ({', '.join(ks)}); every other marker is still checked")
+        for sk in skipped:
+            if sk.rsplit(": ", 1)[1] in ks: print(f"  skipped {sk}")
     for u in unknown: print(f"sync_docs: unknown marker {u}")
     if check:
         for d in drift: print(f"DRIFT {d}")
