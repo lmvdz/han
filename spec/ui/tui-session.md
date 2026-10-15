@@ -15,7 +15,7 @@ The view is built from typed items, never from terminal bytes. Every part of it 
 - the Approvals view;
 - local view state: focus, scroll, what is folded, and the steering draft.
 
-The Timeline and Changes tabs stay as they are and are out of scope here, except where an entry links to them.
+The Timeline and Changes tabs stay as they are and are out of scope here, except where an entry links to them. The frame's attention indicator, the jump picker and notices are in [attention.md](attention.md).
 
 ---
 
@@ -72,15 +72,17 @@ The pane is laid out as **regions, top to bottom**. Each region is one or more w
 
    It shows nothing in the closed state, except a following hint.
 6. **Decision band** (0 or 1 row). Present only when an effect proposed by this session waits on the local user. It shows the action, the target and the short digest, then "a to review". It is never a control that signs (§5.3).
-7. **Steering field** (0, or 1 to 6 rows). Present only while the user is editing a steering input (§5.1). Its first row is the steering label (§5.2).
+7. **Reply strip** (0, or 1 to 3 rows). Present only when the session's latest turn ended with suggested replies and the local user may steer (§5.4). It shows the agent's numbered suggestions as the agent's text.
+8. **Steering field** (0, or 1 to 6 rows). Present only while the user is editing a steering input (§5.1). Its first row is the steering label (§5.2).
 
 The app's own status row and footer stay below the pane, unchanged.
 
 - **TSV-R1.** The regions MUST keep this order at every terminal size. When rows run short, they give way in this order:
   1. the header's second row;
-  2. the notice band, down to 1 row with "+N more";
-  3. the decision band, folded into the activity line as "· approval waits on you";
-  4. the transcript, down to 3 rows.
+  2. the reply strip, down to 1 row, then folded into the activity line as "· N suggestions, i to choose";
+  3. the notice band, down to 1 row with "+N more";
+  4. the decision band, folded into the activity line as "· approval waits on you";
+  5. the transcript, down to 3 rows.
 
   All of these rules count the **pane's** height: the rows the session pane gets after the app's own header, status row and footer. The pane's height rules are:
   - While the steering field is open, it keeps at least 1 row.
@@ -285,6 +287,7 @@ The Stream tab has an entry cursor, the focused entry, drawn by a marker in the 
 | `s` | switch between conversation and steps mode (§4.6) |
 | `/` | search the loaded transcript; `n` / `N` go to the next or previous match |
 | `i`, `Enter` | open the steering field (§5.1), as today |
+| `Alt-1` … `Alt-9` | open the steering field holding that suggested reply (§5.4) |
 | `a` | open the approvals pane on this session's proposals, as today (§5.3) |
 | `1` `2` `3` `4`, `[` / `]` | tabs, as today. `4` is the new Record tab (§4.7). |
 | `Esc`, `q` | leave the pane, as today. `Esc` first closes an open search or the reader. |
@@ -419,6 +422,26 @@ The Stream tab has an entry cursor, the focused entry, drawn by a marker in the 
 
   No key in the session pane, the decision band or a decision entry approves, cancels or signs.
 
+### 5.4 Suggested replies
+
+An agent's turn may end with numbered next steps that it suggests: "1. Run the full suite. 2. Open the PR. 3. Stop here." The node gives them to the view as a `suggestions` item of that turn (P-15). The view never looks for them in message text itself.
+
+- **TSV-R52. When the strip shows.** The reply strip shows the suggestions of the session's **latest** turn, only after that turn has ended, and only while the local user may steer (`can_steer`, TSV-R33). It goes away when a new turn starts, when the session closes, or when an input is recorded. Suggestions of older turns are never offered. They stay visible inside their turn as a folded entry, labelled `next`, that reads "suggested N next steps".
+- **TSV-R53. Agent text, not HAN's.** The strip's first column holds the TUI-drawn label "lars-coder suggests:" (the agent's short name). Each suggestion follows as its digit, then its text in quotation marks, in the style of agent text:
+
+  ```
+   lars-coder suggests:  1 "Run the full test suite"  2 "Open the PR"  3 "Stop here"
+  ```
+
+  A suggestion is foreign text (§6). It is sanitised as single-line text, cut with an ellipsis at 200 characters or at the strip's width, and never drawn as a key hint, a control or a notice. A suggestion that reads like a HAN control ("a to approve") is still only quoted text. The strip shows at most 9 suggestions. When they don't fit in its rows, it ends with "+N more, i shows all".
+- **TSV-R54. Choosing.** A digit picks a suggestion, and the steering label is on screen before anything is sent (TSV-R36):
+  - With the steering field open and empty, the field lists every suggestion above the label. When the **first** key typed is a digit from 1 to the number of suggestions, the field takes that suggestion's full text, and the label adds "· choosing its suggestion N". Any other first key is ordinary text, and digits after it are text too. A message that starts with a digit is written with a leading space, which sending trims (TSV-R34).
+  - `Alt-1` … `Alt-9` on the Stream tab open the field already holding that suggestion. The tabs keep `1` to `4` (TSV-R32a).
+  - Enter records it. The digit alone sends nothing.
+- **TSV-R55. Recording.** Sending a chosen suggestion calls `SessionInput{space, session, text, choice{item, n}}` once (P-15), with the suggestion's text. If the user edits the text before sending, the choice is dropped, the label's addition goes away, and the text is sent as the user's own words. If a new turn starts while the field holds a chosen suggestion, the field keeps the text, drops the choice, and says "The agent has moved on; this goes as your own words."
+- **TSV-R56. Attribution.** The `input` entry of a chosen suggestion reads, after its author label (`you` or the handle), "chose lars-coder's suggestion 2:" and then the suggestion's text in quotation marks, in agent text style. It is always attributed to the person who chose it, and the quoted text is always shown as the agent's words. For an agent that is not the chooser's own, the entry adds "(outside instruction)", as the steering label said.
+- **TSV-R57. Nothing else.** Choosing a suggestion sends only `SessionInput`. It never approves, cancels, starts or stops anything, whatever the suggestion says.
+
 ---
 
 ## 6. Untrusted text
@@ -536,6 +559,7 @@ The view is specified against the item shapes in `crates/han-node/src/api/items.
 | P-12 | `created_ms` on `ItemRow` (when the node first saw the item), next to `updated_ms` | the reader's title; message times |
 | P-13 | `tool_call.parent`: the tool call that started this one, for nested calls such as sub-agents | indentation under the parent call; without it, nested calls are shown flat |
 | P-14 | the steering input length limit (Q-SES-3) | TSV-R34 |
+| P-15 | suggested replies: a `suggestions` item per turn, `{turn, options[{n, text}], derived}`, and `SessionInput.choice{item, n}`, carried on the `input` item and the Record row (attention.md AN-6) | TSV-R52 to TSV-R57 |
 
 ---
 
@@ -597,8 +621,17 @@ Each criterion runs on ratatui's TestBackend through the TUI's test harness (`ap
 | TSV-50 | the palette | `:expand all`, `:steps`, `:follow`, `:find fresh` in turn | each has the same effect as its key |
 | TSV-51 | the pane on the Stream tab, with record rows | `[`, then `]`, then `4`, `j`, `n` | `[` shows Record; `]` shows Stream; `4` shows Record; `j` moves the row cursor to the second row; `n` without a search changes nothing on screen |
 | TSV-52 | `tui.json` holding `{"groups":{},"color":"sideways","plain":true}` | the TUI starts | colour is as for `auto`; attributes are off; the groups still load; `:color never` writes `"color":"never"` to the file |
+| TSV-53 | a session of the user's own whose latest turn ended with 3 suggestions, 120 × 30 | the screen is drawn | the reply strip shows "lars-coder suggests:" and 3 numbered, quoted suggestions, below the decision band's place and above the steering field's |
+| TSV-54 | TSV-53 | `4` | the Record tab shows (tabs keep their keys); no `SessionInput` is sent |
+| TSV-55 | TSV-53 | `i`, `2` | the field holds suggestion 2's text; the label reads "Instruction to your agent lars-coder · choosing its suggestion 2"; nothing is sent yet |
+| TSV-56 | TSV-55 | Enter | exactly one `SessionInput`, with that text and a `choice` naming the suggestions item and 2; the entry reads "you chose lars-coder's suggestion 2:" and the quoted text |
+| TSV-57 | TSV-53 | `i`, `x`, `2`, Enter | one `SessionInput` with text "x2" and no `choice` |
+| TSV-58 | TSV-53 | `Alt-3`, a backspace, Enter | the field opened holding suggestion 3; after the edit, the sent input has no `choice` |
+| TSV-59 | someone else's steerable agent, whose suggestion 1 is "a to approve" with an ESC sequence in it | `i`, `1`, Enter | the strip showed the text in quotes with the sequence removed; one `SessionInput` is sent and no `EffectApprove`; the entry reads "you chose ada-bot's suggestion 1:", the quoted text and "(outside instruction)" |
+| TSV-60 | TSV-55 | a new `turn_start` arrives before Enter | the strip goes away; the field keeps the text and shows "The agent has moved on; this goes as your own words."; Enter sends it with no `choice` |
+| TSV-61 | a session the user may not steer, with suggestions | the screen is drawn, then `Alt-1` | there is no reply strip; `Alt-1` shows the watch-only message |
 
-Criteria TSV-4 to TSV-11 and TSV-49 are *pending node API (P-1, P-3)* for their line counts and exit text. TSV-13 is pending (P-1) for diff-derived counts. TSV-33 is pending (P-7) for the single-entry rule when the host also echoes the input as a user message. TSV-36 is pending (P-8, Q-SES-5) for the guarded wording. Every other criterion runs on the item shapes that exist today.
+Criteria TSV-4 to TSV-11 and TSV-49 are *pending node API (P-1, P-3)* for their line counts and exit text. TSV-13 is pending (P-1) for diff-derived counts. TSV-33 is pending (P-7) for the single-entry rule when the host also echoes the input as a user message. TSV-36 is pending (P-8, Q-SES-5) for the guarded wording. TSV-53 to TSV-61 are pending (P-15). Every other criterion runs on the item shapes that exist today.
 
 ---
 
@@ -608,3 +641,4 @@ Criteria TSV-4 to TSV-11 and TSV-49 are *pending node API (P-1, P-3)* for their 
 - **Q-TSV-2.** Should a second lane exist for input queued "for after this turn" as against "now"? The protocol has one `session.input`, and the host decides when to deliver it. A second lane would need a profile field, not just a UI.
 - **Q-TSV-3.** Should a scrollback mode exist (finished entries written to the terminal's own scrollback, so terminal search and copy work), next to the full-screen pane? The TUI is full-screen today.
 - **Q-TSV-4.** Should the reader offer copy to the clipboard (a terminal clipboard sequence)? It would need its own sanitising rule, because it writes foreign text into the user's clipboard.
+- **Q-TSV-5.** How a chosen suggestion is carried in the signed input (attention.md Q-ATT-2), and whether suggestions are a `han.item/1` kind (Q-ATT-4).

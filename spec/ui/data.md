@@ -340,6 +340,7 @@ Each error carries the node's reason text where there is one. A reason is render
 
 - **DAT-33.** A derived atom in the main window watches the `Approvals{me}` view and the current spaces' boards. It computes the set of items in Your decisions and Admissions, and the failures of the local user's own sessions. It compares that set with the persisted **seen set** (§8) and calls the `Notifier` service under approvals.md §6, honouring the settings. The Notifier is a Tauri notification plugin in production, and a recorder in tests.
 - **DAT-34.** "Seen" means it was on screen in the inbox, or it was notified. The seen set is bounded to the newest 2,000 ids and is persisted.
+- **DAT-34a.** Per-person marks (seen sessions, acknowledged and dismissed items, mutes) are not GUI state. They live on the person's node, private and synced across the person's devices (attention.md §6, AN-4). The GUI reads them from the node's views and writes them with the node's commands, and never keeps its own copy beyond the view atom. When AN-7 lands, the node's `Notices` view replaces the derived atom of DAT-33, and the seen set of DAT-34 goes away.
 
 ---
 
@@ -354,7 +355,8 @@ Each error carries the node's reason text where there is one. A reason is render
 | notification settings, seen set | settings file | permanent |
 | keybindings | `keybindings.json` (shell.md §4.1) | permanent |
 | last route per space; rail expanded | settings file | permanent |
-| steering drafts per session; diff collapse state; tree expansion; dismissed inbox items | memory (atoms) | until the app quits |
+| steering drafts per session; diff collapse state; tree expansion | memory (atoms) | until the app quits |
+| dismissed inbox items, seen sessions, acknowledgements, mutes | the person's node, never the GUI (DAT-34a, attention.md §6) | permanent, synced across the person's devices |
 | tickets, recovery keys, passphrases | never stored by the GUI | – |
 
 - **DAT-35.** The settings file lives in the app's config folder. It is read through the `Settings` service and decoded with a Schema. Each member that fails to decode falls back to its default on its own, so one bad value doesn't reset the rest. Writes are debounced by 300 ms, and the file is written atomically.
@@ -552,6 +554,6 @@ PR #35 also provides:
 
 ### 12.2 Still open
 
-Every Q-DAT item of the first list has an answer in 12.1. What is left sits in the surface specs.
+Every Q-DAT item of the first list has an answer in 12.1. What is left sits in the surface specs. The attention queue, lifecycle grouping, per-person marks, search, suggested replies and notices are listed as AN-1 to AN-12 in attention.md §11.
 
 The surface specs' own open questions (Q-BRD-*, Q-SES-*, Q-APR-*, Q-DIF-*, Q-SHL-*) list the remaining items.

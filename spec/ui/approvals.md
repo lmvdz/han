@@ -188,7 +188,7 @@ HAN has no signed "deny". The decision against an effect is `effect.cancel`, whi
   - The buttons `Cancel effect` (danger) and `Keep it`, with initial focus on `Keep it`.
 
   Confirming calls `EffectCancel{proposal}`, then the optional `SessionInput`. These are two calls: if the second fails, the card says "Cancelled; your message to the agent wasn't sent" with "Retry message".
-- **Dismiss** (shown when I can approve but can't cancel, for example as a rule approver with no approval of my own yet). It hides the card from Your decisions **on this device only** and moves it to Dismissed. A toast reads "Hidden for you. Others can still approve it." with "Undo" for 5 s. Nothing is signed or sent.
+- **Dismiss** (shown when I can approve but can't cancel, for example as a rule approver with no approval of my own yet). It hides the card from Your decisions **for me only** and moves it to Dismissed. Dismiss is the acknowledge mark of attention.md (ATT-R21): private to me, kept by my node, synced to my other devices, and never told to the space. A toast reads "Hidden for you. Others can still approve it." with "Undo" for 5 s. Nothing is signed or sent.
 
 - **APR-8.** The words "deny" and "reject" are not used for Dismiss, because nothing is recorded. Dismiss's tooltip reads "Hide this from your inbox. It stays open for other approvers."
 - **APR-9.** A dismissed effect comes back to Your decisions if its state changes in a way that concerns me: I become a required guard, the effect's expiry comes within 1 hour, or someone asks me (Q-APR-4).
@@ -254,6 +254,8 @@ Actions:
 - **APR-15.** At startup, items present in the first snapshot that the local user has not seen before (not in the seen set, data.md §8) produce **one** summary notification, "3 decisions are waiting for you". Items already seen produce none.
 - **APR-16.** Bursts are coalesced: when more than 3 notifications would fire within 10 s, a single "5 decisions are waiting for you" replaces them.
 - **APR-17.** No item notifies twice, except one reminder for an effect waiting on me whose `expiresAt` comes within 10 minutes, if the reminder setting is on.
+
+- **APR-25.** Which notices fire, and when, is decided by the node under attention.md §8, the same for every face: the blocked and pool graces, the per-person budget and digests, escalation, mute (errors pass) and outages. APR-13 to APR-17 describe how the GUI presents them, and hold as limits: the node's budget never lets more through than they do.
 
 ### 6.2 Content
 
@@ -337,6 +339,7 @@ Under Settings → Notifications (shell.md §5), each category is on or off. The
 | AC-APR-26 | `approvals`, an `http.post` with a 300-character URL | the card renders | the full URL is visible (wrapped, not truncated) |
 | AC-APR-27 | `approvals` | the inbox's badge and the window title are checked | the badge shows 2 and the title starts with "(2) " |
 | AC-APR-28 | any inbox fixture | axe-core runs in both themes | no WCAG 2.2 AA violations; the digest's accessible text is grouped |
+| AC-APR-29 | `approvals`, a card dismissed on another of my devices (the mock delivers the mark) | the inbox renders | the card is under Dismissed with no action on this device · *pending node API (AN-4)* |
 
 ---
 
