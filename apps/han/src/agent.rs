@@ -122,6 +122,10 @@ enum AgentCmd {
         /// The issue, `github:owner/repo#123`.
         #[arg(long)]
         issue: Option<String>,
+        /// The task to work. `--issue` alone finds the open task for the issue addressed to the agent (the
+        /// task carries the issue's text; with none, the start is refused).
+        #[arg(long)]
+        task: Option<String>,
         /// The agent's home: a home ticket (`han1home.…`) or a ServerName. The node follows the agent's profile
         /// there to find its operator.
         #[arg(long)]
@@ -308,6 +312,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             harness,
             repo,
             issue,
+            task,
             home,
         } => {
             // The agent's profile names its operator: have the node follow it and wait for it to sync.
@@ -331,6 +336,7 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                     harness,
                     repo,
                     issue,
+                    task,
                     home,
                 })
                 .await?;

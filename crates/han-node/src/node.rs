@@ -994,6 +994,46 @@ impl<T: Transport> Node<T> {
         }
     }
 
+    /// The task a session of `agent` works and its issue, from what `AgentStart` was given.
+    fn task_for_start(
+        &self,
+        space: &str,
+        agent: &str,
+        task: Option<String>,
+        issue: Option<String>,
+    ) -> Result<(Option<String>, Option<String>), NodeError> {
+        let engine = self.inner.engine();
+        match (task, issue) {
+            (Some(t), issue) => {
+                let (open, to, external) = engine
+                    .task_facts(space, &t)
+                    .ok_or_else(|| NodeError::not_found(format!("no task {t} in {space}")))?;
+                if !open {
+                    return Err(NodeError::conflict(format!("task {t} is closed")));
+                }
+                if !to.iter().any(|x| x == agent) {
+                    return Err(NodeError::invalid(format!(
+                        "task {t} is not addressed to {agent}"
+                    )));
+                }
+                if let (Some(i), Some(e)) = (&issue, &external)
+                    && i != e
+                {
+                    return Err(NodeError::invalid(format!("task {t} is for {e}, not {i}")));
+                }
+                Ok((Some(t), issue.or(external)))
+            }
+            (None, Some(i)) => match engine.open_task_for_issue(space, &i, agent) {
+                Some(t) => Ok((Some(t), Some(i))),
+                None => Err(NodeError::not_found(format!(
+                    "no open task for {i} addressed to {agent} carries the issue text; han-github creates \
+                     one for agent-ready issues (or pass --task)"
+                ))),
+            },
+            (None, None) => Ok((None, None)),
+        }
+    }
+
     fn require_followed(&self, space: &str) -> Result<(), NodeError> {
         if self.inner.engine().has_space(space) {
             Ok(())
@@ -1321,12 +1361,16 @@ impl<T: Transport> Node<T> {
                 harness,
                 repo,
                 issue,
+                task,
                 home,
             } => {
                 self.require_followed(&space)?;
                 if !grammar::is_actor_id(&agent) {
                     return Err(NodeError::invalid("not an ActorId"));
                 }
+                // The session works a task: its data block is the only way the issue's text reaches an agent
+                // that has no network. A start with an issue and no task for it is refused, with the reason.
+                let (task, issue) = self.task_for_start(&space, &agent, task, issue)?;
                 let server = inner
                     .engine()
                     .home_of(&space)
@@ -1364,9 +1408,10 @@ impl<T: Transport> Node<T> {
                         }
                     }
                 };
-                let name = match &issue {
-                    Some(i) => format!("host-{agent}#{i}"),
-                    None => format!("host-{agent}"),
+                let name = match (&issue, &task) {
+                    (Some(i), _) => format!("host-{agent}#{i}"),
+                    (None, Some(t)) => format!("host-{agent}#{t}"),
+                    (None, None) => format!("host-{agent}"),
                 };
                 let data_dir = inner.cfg.data_dir.as_ref().ok_or_else(|| {
                     NodeError::unavailable("this node has no data directory to launch agents from")
@@ -1390,6 +1435,7 @@ impl<T: Transport> Node<T> {
                         harness,
                         repo,
                         issue,
+                        task,
                         home: host_home,
                         executor: format!("@exec:{server}"),
                         budget,

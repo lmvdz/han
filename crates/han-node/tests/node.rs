@@ -130,6 +130,7 @@ async fn errors_are_the_closed_set() {
             harness: Some("pi".into()),
             repo: None,
             issue: None,
+            task: None,
             home: None,
         })
         .await
