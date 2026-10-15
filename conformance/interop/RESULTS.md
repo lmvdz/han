@@ -135,9 +135,9 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 
 ```json
 {"ev": "open", "conn": 0, "path": "/han", "upstreamPath": "/han"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"y6UvcaI1vHYmviQftB1lUKQJOVEVrq7vdZnD382dt7A\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-13T05:45:28Z\"}"}
-{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"TuvpFY5XbX5L2uZ5zERc1_iz2J_p79K2td9Gj8-TBHYmO_H5MtJZXfja5TJA1w-O_fu1JxvVgo9-IqW6Q77oCQ\", \"version\": 1}}"}
-{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-13T05:45:28Z\",\"knownHeads\":[]}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"challenge\":\"CEgVSmYSoA77kvm4SoB_yLkc5EMAFgkgiFg2cmFoDvI\",\"server\":\"a.localhost\",\"versions\":[1],\"time\":\"2026-10-15T20:34:46Z\"}"}
+{"ev": "frame", "conn": 0, "dir": "c2s", "data": "{\"id\": 1, \"call\": \"hello\", \"args\": {\"who\": \"@alice:a.localhost\", \"keyId\": \"k1\", \"proof\": \"oaEKk8RmZFiq1bnTIh2lNOGRHmoFsN_zDDAnb3TPm2W-iDsZhmLPYpBZt4ahDDM4mh9KtoOJU-6OuJ9WIVBeBA\", \"version\": 1}}"}
+{"ev": "frame", "conn": 0, "dir": "s2c", "data": "{\"id\":1,\"ok\":{\"limits\":{\"maxFrameBytes\":1310720,\"maxHeaderBytes\":16384,\"maxContentBytes\":65536,\"maxBlobBytes\":4294967296,\"maxBlobPartBytes\":786432,\"maxBlobRangeBytes\":786432,\"maxStreamItemBytes\":65536,\"maxFollows\":256,\"maxClockSkewSeconds\":60,\"maxStateItems\":1000},\"durability\":\"local\",\"time\":\"2026-10-15T20:34:46Z\",\"knownHeads\":[]}}"}
 ```
 
 ### 3.2 Probe divergences: exact frames
@@ -165,7 +165,7 @@ The README's client example dials `ws://127.0.0.1:PORT` (no path). The TS server
 TS executor started before the space exists, against the Python server (`exec-ts-py-early`; the same frames occur against the TS server). The executor's follow is answered `not_found` and it never asks again:
 
 ```
-< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-13T05:46:32Z"}
+< {"challenge": "<challenge>", "server": "a.localhost", "versions": [1], "time": "2026-10-15T20:37:01Z"}
 > {"id": 1, "call": "hello", "args": {"who": "@x:a.localhost", "keyId": "k1", "proof": "<proof>", "version": 1}}
 > {"id": 2, "call": "read", "args": {"space": "e1:a.localhost", "after": 0, "follow": true}}
 < {"id": 2, "error": {"code": "not_found", "message": "no such space"}}
@@ -175,7 +175,7 @@ TS executor started before the space exists, against the Python server (`exec-ts
 TS verifier on `profile:@alice:a.localhost` (Python server, server key id `h1`). The record is served and its receipt is valid; the entry signer `@:a.localhost` signed under `h1`, not `srv1` (in round 21 the TS verifier looked under `srv1` only and reported `seq 1: entry signature does not verify against the pinned key`, C21; it now uses the server's published keys, so the row passes):
 
 ```
-< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "mqomEBt01QdHMqYm-CcItO_owVRZti8U-gwCNg7VbRDV6uc0sh51hFOVFHY8vq8fsGTlkGOD5DT04ThcqrXzCw"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
+< {"id": 3, "item": {"type": "record", "record": {"entry": {"space": "profile:@alice:a.localhost", "kind": "space.create", "author": "@:a.localhost", "keyId": "h1", "sig": "BLbpFXSSDXzNDe1JA-btPv3axaUz39liMfVOhKJhuzjmIt-C_PKud1xmY9G7Mp-Y8Q_mVIB0PJVikotSV1r6CA"}, "receipt": {"seq": 1, "home": "a.localhost", "homeKey": "h1", "profiles": {"@:a.localhost": 0}}}}}
 ```
 
 ## 4. Root causes, ranked

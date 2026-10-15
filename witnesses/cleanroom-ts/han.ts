@@ -106,7 +106,7 @@ export interface Contents {
   "effect.propose": { plan: Plan };
   "effect.approve": { note?: string };
   "effect.claim": null;
-  "effect.cancel": null;
+  "effect.cancel": { reason?: string; evidence?: BlobRef };
   "effect.outcome": { evidence?: BlobRef };
   "effect.resolve": { evidence: BlobRef };
   "checkpoint": { blobs: BlobRef[] };

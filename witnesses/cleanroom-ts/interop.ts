@@ -134,6 +134,21 @@ async function e2e() {
     ok(!(await verifySpace(SP, bad2, deps)).ok, "verifier rejects a tampered receipt");
     const pv = await verifySpace("profile:" + fixer.id, await ada.client.records(await ada.client.read("profile:" + fixer.id, 0)), deps);
     ok(pv.ok, "profile space verifies: " + pv.faults.join("; "));
+    // P-07a, G-01: the executor refuses an open effect with a reason and an evidence blob; others may not, and a final effect refuses everyone
+    {
+      const xr = addPerson(w, "xr", "service", ops); await login(w, xr); await send(ops, `profile:${xr.id}`, "member.set", { actor: ops.id, role: "owner" }); await send(ada, SP, "member.set", { actor: xr.id, role: "member" });
+      const plan2 = planOf("file.write", "out/refused.txt"), p2 = await send(bob, SP, "effect.propose", { executor: xr.id, action: "file.write", planDigest: digestOf(plan2), repeatable: false }, { plan: plan2 });
+      ok(await code(send(eve, SP, "effect.cancel", { proposal: p2.id })) === "denied", "an outsider's cancel is denied");
+      const why = await xr.client.blobPut(Buffer.from('{"why":"cannot run"}', "utf8"), "application/json");
+      ok(await code(xr.client.blobGet(why, SP)) === "ok" && await code(bob.client.blobGet(why, SP)) === "not_found", "the blob is the uploader's own until something references it");
+      ok(await code(send(xr, SP, "effect.cancel", { proposal: p2.id }, { reason: "x".repeat(1025) })) === "invalid", "reason over 1,024 bytes is invalid");
+      ok(await code(send(xr, SP, "effect.cancel", { proposal: p2.id }, { evidence: { hash: "zz" } })) === "invalid", "a malformed evidence is invalid");
+      await send(xr, SP, "effect.cancel", { proposal: p2.id }, { reason: "cannot run this", evidence: why });
+      const ef2 = w.seq.stateOf(SP)!.effects[p2.id];
+      ok(ef2.phase === "cancelled" && ef2.cancelRequested === true, "the executor's cancel ends the open effect");
+      ok((await bob.client.blobGet(why, SP)).toString().includes("cannot run"), "a member reads the evidence once the cancel references it");
+      ok(await code(send(xr, SP, "effect.cancel", { proposal: p2.id })) === "denied", "a cancelled effect is final");
+    }
     await ex.stop();
   } finally { await stop(w); }
 }

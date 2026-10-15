@@ -6,7 +6,7 @@
   keygen [--out PATH]                       space create SP [--name N] [--policy FILE] [--set FIELD=JSON]…
   member set SP ACTOR ROLE                  message SP TEXT [--to ACTOR]…
   task SP ASK --to ACTOR… [--deadline T]    propose SP --executor A --plan FILE [--repeatable] [--cost UNIT=N]
-  approve SP PROPOSAL [--note T]            cancel SP ID [--task]
+  approve SP PROPOSAL [--note T]            cancel SP ID [--task | --reason T --evidence FILE]
   session open SP [--mode auto|guarded]     session steer SP SESSION TEXT      session close SP SESSION
   agent unguard SP AGENT                    (the guard ends the agent's choice of guarding; it frees nothing already recorded)
   watch SP SESSION [--count N]              read SP [--after N] [--follow] [--json]        status SP
@@ -108,7 +108,13 @@ async def cmd_approve(c, a):
 
 async def cmd_cancel(c, a):
     tid = await resolve(c, a.space, a.id)
-    await put(c, "task.cancel" if a.task else "effect.cancel", a.space, {"task": tid} if a.task else {"proposal": tid})
+    content = {}
+    if a.reason is not None:                                          # P-07a: both live in the content, any author of the cancel may give them
+        if len(a.reason.encode("utf-8")) > 1024: return die("--reason is more than 1,024 UTF-8 bytes (P-07a)")
+        content["reason"] = a.reason
+    if a.evidence: content["evidence"] = await c.blob_put(open(a.evidence, "rb").read())
+    if a.task and content: return die("--reason and --evidence are for an effect cancel (P-07a), not a task")
+    await put(c, "task.cancel" if a.task else "effect.cancel", a.space, {"task": tid} if a.task else {"proposal": tid}, content or None)
 
 async def cmd_session(c, a):
     if a.action == "open":
@@ -215,7 +221,8 @@ def parser() -> argparse.ArgumentParser:
     cmd("propose", cmd_propose, "space", ("--executor", {"required": True}), ("--plan", {"required": True, "help": "JSON file {action, target, args?}"}),
         ("--repeatable", {"action": "store_true"}), ("--cost", {"metavar": "UNIT=N"}), ("--task", {}), ("--expires", {}))
     cmd("approve", cmd_approve, "space", "proposal", ("--note", {}), ("--expires", {}))
-    cmd("cancel", cmd_cancel, "space", "id", ("--task", {"action": "store_true", "help": "ID is a task (task.cancel), not an effect"}))
+    cmd("cancel", cmd_cancel, "space", "id", ("--task", {"action": "store_true", "help": "ID is a task (task.cancel), not an effect"}),
+        ("--reason", {"help": "why (at most 1,024 bytes)"}), ("--evidence", {"metavar": "FILE", "help": "upload FILE as the evidence blob"}))
     ss = sub.add_parser("session").add_subparsers(dest="action", required=True)
     cmd("open", cmd_session, "space", ("--mode", {"choices": ["auto", "guarded"], "default": "auto"}), ("--task", {}), ("--title", {}), parent=ss)
     cmd("steer", cmd_session, "space", "session", "text", parent=ss)
