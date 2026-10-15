@@ -3,7 +3,7 @@
 //! | Backend | OS | Filesystem | Network | DNS | Limits |
 //! |---|---|---|---|---|---|
 //! | MXC ProcessContainer | Windows 11 (no admin) | rw = worktree and temp, ro = listed paths, everything else denied | egress denied except one container-local loopback port: the in-sandbox shim, which forwards to a per-session named pipe bridged to the proxy | **resolves** (the host DNS client answers; SR-27 gap) | wall time only |
-//! | bubblewrap | Linux | a new root: system dirs read-only, listed paths ro/rw, private `/tmp`, no home | a new network namespace with only `lo`: the shim forwards to a bind-mounted unix socket bridged to the proxy | blocked (no resolver reachable) | address space through `prlimit` if present; wall time |
+//! | bubblewrap | Linux | a new root: system dirs read-only, listed paths ro/rw, private `/tmp`, no home | a new network namespace with only `lo`: the shim forwards to a bind-mounted unix socket bridged to the proxy; a seccomp filter allows only AF_UNIX, AF_INET, AF_INET6 and AF_NETLINK sockets, so no AF_VSOCK (a VM host's hypervisor), AF_PACKET, bluetooth, CAN, TIPC or KCM; `--disable-userns` stops nested user namespaces (listed as a gap when bwrap lacks it) | blocked (no resolver reachable) | address space through `prlimit` if present; wall time |
 //! | none | any | advisory | advisory (proxy settings only) | advisory | wall time |
 //!
 //! The backend, its fidelity and every known gap are returned in [`SandboxInfo`] for the host to publish in
@@ -21,6 +21,8 @@
 mod bwrap;
 #[cfg(windows)]
 mod mxc;
+#[cfg(target_os = "linux")]
+mod seccomp;
 
 use std::io;
 use std::net::SocketAddr;

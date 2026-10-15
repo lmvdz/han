@@ -374,10 +374,19 @@ async fn bwrap_confines_the_tree() {
     extra["local"] = json!([s(&node_sock)]);
     net.push(format!("local:{}", s(&node_sock)));
     net.push("dns:example.com".into());
+    // Socket families the network namespace does not cover, and nested user namespaces.
+    extra["linux"] = json!(true);
+    net.extend(["vsock-socket", "vsock-connect", "packet-socket"].map(String::from));
     let (report, info) = run_probe(Preference::Bwrap, &f, &proxy, extra).await;
     assert_eq!(info.backend, SandboxBackend::Bwrap);
     assert_eq!(info.fidelity, Fidelity::Enforced);
     assert!(info.dns_blocked);
+    // `--disable-userns` needs bwrap 0.8+; without it the gap must be listed rather than the test skipped.
+    if info.gaps.iter().any(|g| g.contains("--disable-userns")) {
+        eprintln!("NOTE: bwrap lacks --disable-userns; nested userns not asserted");
+    } else {
+        net.push("userns-unshare".into());
+    }
     check(&report, &f, &info, &net);
 }
 
