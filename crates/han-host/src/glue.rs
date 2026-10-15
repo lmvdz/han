@@ -113,16 +113,6 @@ impl Launched {
     }
 }
 
-fn preference(name: &str) -> Result<Preference, String> {
-    Ok(match name {
-        "auto" | "" => Preference::Auto,
-        "mxc" => Preference::Mxc,
-        "bwrap" => Preference::Bwrap,
-        "none" => Preference::None,
-        other => return Err(format!("unknown sandbox {other}: auto, mxc, bwrap or none")),
-    })
-}
-
 /// What the sandbox must let an installed adapter read: the outermost `node_modules` above its package
 /// directory, where npm put its dependencies (and, for Claude Code, the `claude` executable the Agent SDK
 /// starts). Node resolves a package's imports through every `node_modules` above it, so the package directory
@@ -136,20 +126,24 @@ pub fn adapter_read_root(adapter_dir: &Path) -> PathBuf {
         .to_path_buf()
 }
 
-/// The backend `Auto` resolves to on this machine.
-fn resolve(p: Preference) -> Preference {
-    if p != Preference::Auto {
-        return p;
-    }
-    let available = sandbox::probe();
-    let has = |b: SandboxBackend| available.iter().any(|a| a.backend == b && a.available);
-    if cfg!(windows) && has(SandboxBackend::Mxc) {
-        Preference::Mxc
-    } else if cfg!(target_os = "linux") && has(SandboxBackend::Bwrap) {
-        Preference::Bwrap
-    } else {
-        Preference::None
-    }
+/// The backend `pref` gets on this machine, as a preference that names it, or why the session cannot start
+/// (SR-23): a named backend that does not work, MXC without a loopback port included, never becomes advisory.
+async fn resolve(
+    pref: Preference,
+    allow_advisory: bool,
+    shim: &sandbox::ShimCommand,
+) -> Result<Preference, String> {
+    let shim = shim.clone();
+    let available = tokio::task::spawn_blocking(move || sandbox::probe(&shim))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(
+        match sandbox::admit(pref, allow_advisory, &available).map_err(|e| e.to_string())? {
+            SandboxBackend::Mxc => Preference::Mxc,
+            SandboxBackend::Bwrap => Preference::Bwrap,
+            SandboxBackend::None => Preference::None,
+        },
+    )
 }
 
 impl Egress {
@@ -249,7 +243,12 @@ impl Egress {
         workspace: &Workspace,
         masker: Arc<Masker>,
     ) -> Result<Launched, String> {
-        let backend = resolve(preference(&cfg.sandbox.backend)?);
+        let backend = resolve(
+            Preference::parse(&cfg.sandbox.backend)?,
+            cfg.sandbox.allow_advisory,
+            &cfg.shim,
+        )
+        .await?;
         // Inside a sandbox the agent reaches the proxy through the shim's loopback port; without one, the
         // proxy's own port.
         let inside_port = match backend {

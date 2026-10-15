@@ -187,6 +187,9 @@ pub struct Facts {
     pub os_users: BTreeMap<String, bool>,
     pub presence: Option<Result<PresenceFacts, String>>,
     pub toolchain: ToolchainFacts,
+    /// Why MXC cannot give a container a loopback port on this machine (the sandbox self-test's finding), when
+    /// it cannot and some agent would use MXC.
+    pub mxc_loopback_blocked: Option<String>,
     pub stale: Vec<StaleFact>,
     /// `None` when there is no executor on this machine.
     pub executor: Option<ExecutorFacts>,
@@ -241,6 +244,7 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     node_findings(f, &data, &mut out);
     agent_findings(f, &data, &mut out);
     toolchain_findings(f, &data, &mut out);
+    sandbox_findings(f, &data, &mut out);
     if let Some(p) = &f.presence {
         presence_findings(p, &data, f.linux, &mut out);
     }
@@ -414,6 +418,10 @@ fn node_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
         if p.contains("misconfigured:") || p.contains("blocked by outbox entry") {
             continue;
         }
+        // said by the sandbox finding, with the fix
+        if f.mxc_loopback_blocked.is_some() && p.starts_with("sandbox mxc unavailable") {
+            continue;
+        }
         let actor = p
             .split_once("profile of ")
             .and_then(|(_, rest)| rest.split_whitespace().next())
@@ -565,6 +573,37 @@ fn agent_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
             _ => {}
         }
     }
+}
+
+/// MXC refuses a container its own loopback port on some Windows builds; an agent set to MXC then refuses to
+/// start, and one set to `auto` needs `--allow-advisory`.
+fn sandbox_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
+    let Some(why) = &f.mxc_loopback_blocked else {
+        return;
+    };
+    let affected: Vec<String> = match &f.agents {
+        Ok(file) => file
+            .agents
+            .keys()
+            .filter(|a| matches!(file.sandbox_of(a).as_str(), "mxc" | "auto"))
+            .cloned()
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    let who = if affected.is_empty() {
+        "no agent is set to it yet".to_owned()
+    } else {
+        format!("these agents will not start: {}", affected.join(", "))
+    };
+    out.push(finding(
+        "sandbox.mxc.loopback",
+        "mxc",
+        format!("{why}; {who}"),
+        format!(
+            "{}   # e.g. han agent set <agent> --sandbox bwrap --data {data}",
+            han_host::sandbox::LOOPBACK_FIX
+        ),
+    ));
 }
 
 fn toolchain_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
@@ -867,7 +906,20 @@ pub async fn gather(
     let mut logins = BTreeMap::new();
     let mut os_users = BTreeMap::new();
     let mut toolchain = ToolchainFacts::default();
+    let mut mxc_loopback_blocked = None;
     if let Ok(file) = &agents {
+        if cfg!(windows)
+            && file
+                .agents
+                .keys()
+                .any(|a| matches!(file.sandbox_of(a).as_str(), "mxc" | "auto"))
+            && let Ok(shim) = han_host::sandbox::ShimCommand::of_current_exe()
+        {
+            mxc_loopback_blocked = han_host::sandbox::probe(&shim)
+                .into_iter()
+                .find(|b| b.loopback_blocked)
+                .map(|b| b.detail);
+        }
         for (actor, a) in &file.agents {
             if let Some(u) = &a.os_user
                 && linux
@@ -907,6 +959,7 @@ pub async fn gather(
         os_users,
         presence: presence_facts(data),
         toolchain,
+        mxc_loopback_blocked,
         stale: stale_processes(),
         executor: executor_facts(exec_dir),
     }
@@ -977,6 +1030,7 @@ mod tests {
             os_users: BTreeMap::new(),
             presence: None,
             toolchain: ToolchainFacts::default(),
+            mxc_loopback_blocked: None,
             stale: Vec::new(),
             executor: None,
         }
@@ -1074,6 +1128,26 @@ mod tests {
         assert_eq!(all.len(), 2, "{all:#?}");
         assert_eq!(all[0].fix, "han outbox retry 7 --data /d");
         assert_eq!(all[1].fix, "han outbox list s2:x --data /d");
+    }
+
+    #[test]
+    fn a_blocked_mxc_loopback_is_one_finding_with_the_fix_and_the_agents_it_stops() {
+        let mut f = healthy();
+        f.agents =
+            agents(r#"{"agents":{"@a:x":{"sandbox":"mxc"},"@b:x":{"sandbox":"none"},"@c:x":{}}}"#);
+        f.mxc_loopback_blocked = Some("MXC blocks the in-sandbox loopback port (10013)".into());
+        f.node
+            .as_mut()
+            .unwrap()
+            .problems
+            .push("sandbox mxc unavailable: x; fix: y".into());
+        let all = analyze(&f);
+        assert_eq!(all.len(), 1, "{all:#?}");
+        assert_eq!(all[0].id, "sandbox.mxc.loopback");
+        assert!(all[0].cause.contains("10013"), "{}", all[0].cause);
+        assert!(all[0].cause.contains("@a:x, @c:x"), "{}", all[0].cause);
+        assert!(!all[0].cause.contains("@b:x"), "{}", all[0].cause);
+        assert!(all[0].fix.starts_with("use WSL2+bubblewrap when available, or run the agent on the runner, or `--allow-advisory` (not recommended)"));
     }
 
     #[test]

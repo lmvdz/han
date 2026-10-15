@@ -94,12 +94,17 @@ async fn a_session_streams_is_seen_and_its_push_lands_once_after_approval() {
 /// saying why, where neither is available.
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn the_story_holds_inside_the_os_sandbox() {
-    let available = han_host::sandbox::probe();
+    let available = han_host::sandbox::probe(&production_shim::shim());
     let Some(b) = available
         .iter()
         .find(|a| a.available && a.backend != han_node::api::SandboxBackend::None)
     else {
-        eprintln!("skipped: no OS sandbox here: {available:?}");
+        let why: Vec<String> = available
+            .iter()
+            .filter(|a| a.backend != han_node::api::SandboxBackend::None)
+            .map(|a| format!("{:?}: {}", a.backend, a.detail))
+            .collect();
+        eprintln!("SKIP: no usable OS sandbox here ({})", why.join("; "));
         return;
     };
     eprintln!("running inside {b:?}");

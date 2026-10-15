@@ -8,11 +8,17 @@
 //!   proxy's MCP tunnel (`CONNECT han-mcp.invalid:1` with the session token) and copies stdin to the tunnel
 //!   and the tunnel to stdout, so han-mcp itself runs outside the sandbox (SR-29).
 //!
+//! * `selftest`: binds a loopback port and connects to it, which is the one thing every sandbox session
+//!   needs inside (the listener above is how the agent reaches its tools). The sandbox probe runs it once
+//!   under the exact policy a launch uses; its exit code is [`SELFTEST_OK`], [`SELFTEST_BLOCKED`] or
+//!   [`SELFTEST_FAILED`].
+//!
 //! Usage (`han shim` calls [`main`]):
 //!
 //! ```text
 //! han shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args…
 //! han shim mcp-stub --proxy 127.0.0.1:P --token T
+//! han shim selftest --port P
 //! ```
 //!
 //! The sandboxes run the [`crate::sandbox::ShimCommand`] the host gives them, program and leading arguments
@@ -26,6 +32,44 @@ use std::path::PathBuf;
 use base64::Engine as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+/// `selftest` exit code: the loopback port works.
+pub const SELFTEST_OK: i32 = 0;
+/// `selftest` exit code: the OS refused the loopback bind or connect with `WSAEACCES` (10013), which is what
+/// current Windows builds do to every loopback connect inside an MXC container.
+pub const SELFTEST_BLOCKED: i32 = 20;
+/// `selftest` exit code: the loopback port failed some other way.
+pub const SELFTEST_FAILED: i32 = 21;
+
+const WSAEACCES: i32 = 10013;
+
+/// Binds a loopback port, connects to it and accepts the connection; the exit code of `han shim selftest`.
+pub async fn selftest(port: u16) -> i32 {
+    let step = |what: &str, e: io::Error| {
+        eprintln!("han shim selftest: {what} 127.0.0.1:{port}: {e}");
+        if e.raw_os_error() == Some(WSAEACCES) {
+            SELFTEST_BLOCKED
+        } else {
+            SELFTEST_FAILED
+        }
+    };
+    let listener = match TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(l) => l,
+        Err(e) => return step("bind", e),
+    };
+    let wait = std::time::Duration::from_secs(5);
+    let (accepted, connected) = tokio::join!(
+        tokio::time::timeout(wait, listener.accept()),
+        tokio::time::timeout(wait, TcpStream::connect(("127.0.0.1", port)))
+    );
+    match (connected, accepted) {
+        (Ok(Ok(_)), Ok(Ok(_))) => SELFTEST_OK,
+        (Ok(Err(e)), _) => step("connect", e),
+        (Err(_), _) => step("connect", io::ErrorKind::TimedOut.into()),
+        (_, Ok(Err(e))) => step("accept", e),
+        (_, Err(_)) => step("accept", io::ErrorKind::TimedOut.into()),
+    }
+}
 
 /// Where the shim forwards loopback connections.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,7 +224,8 @@ async fn mcp_stub(proxy: SocketAddr, token: &str) -> io::Result<()> {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: han shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args...\n       han shim mcp-stub --proxy 127.0.0.1:P --token T"
+        "usage: han shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args...\n       han shim mcp-stub --proxy 127.0.0.1:P --token T
+       han shim selftest --port P"
     );
     2
 }
@@ -256,6 +301,12 @@ async fn run(args: Vec<String>) -> i32 {
                     127
                 }
             }
+        }
+        "selftest" => {
+            let Some(port) = opt("--port").and_then(|p| p.parse::<u16>().ok()) else {
+                return usage();
+            };
+            selftest(port).await
         }
         "mcp-stub" => {
             let (Some(proxy), Some(token)) = (

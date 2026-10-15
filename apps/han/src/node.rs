@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Args, Subcommand};
+use han_host::sandbox::ShimCommand;
 use han_net::wellknown::Fetcher;
 use han_net::{IrohOptions, IrohTransport, Transport};
 use han_node::api::{Command, ConnectionClass, NodeApi};
@@ -19,6 +20,7 @@ use han_node::{Node, NodeConfig, NodeParts, WellKnownKeys};
 use han_registry::HomeRef;
 use han_seq::SystemClock;
 
+use crate::gate::GatedSpawner;
 use crate::seq::relay_choice;
 use crate::service;
 
@@ -273,10 +275,12 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         keys,
         server_keys: Arc::new(WellKnownKeys::new(Fetcher::new())),
         // Hosts are told the host endpoint and no other (SR-107).
-        supervisor: Arc::new(
+        // and are started only where the agent's sandbox works (the gate says why not).
+        supervisor: Arc::new(GatedSpawner::new(
             ProcessSpawner::new(std::env::current_exe()?)
                 .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host)),
-        ),
+            ShimCommand::of_current_exe()?,
+        )),
     })?;
 
     // A home named by ticket is kept in the data directory, so a restart needs no flag.

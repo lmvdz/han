@@ -74,6 +74,10 @@ pub enum SupervisorError {
     /// The process could not be started.
     #[error("spawn: {0}")]
     Spawn(String),
+    /// The sandbox the agent is set to use cannot work on this machine, so no host is started. The message
+    /// says why and what to do instead.
+    #[error("{0}")]
+    SandboxUnavailable(String),
 }
 
 /// How a role ended, or that it has not.
@@ -95,6 +99,11 @@ pub trait Supervisor: Send + Sync + 'static {
 
     /// The roles this supervisor has started, with how they stand.
     fn status(&self) -> Vec<(String, RoleStatus)>;
+
+    /// What stops roles from starting on this machine, one sentence each (shown in the node's status).
+    fn problems(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// A supervisor that runs nothing: every start fails as unavailable.

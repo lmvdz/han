@@ -4,43 +4,280 @@
 //! container may reach exactly one container-local loopback port, where the shim's `listen` runs; the shim
 //! forwards to `\\.\pipe\hanproxy-<session>-<random>`, which this host creates with a DACL for SYSTEM, the
 //! owner and ALL APPLICATION PACKAGES, and bridges to the proxy's TCP port.
+//!
+//! That port must work. Windows 11 Insider 26220 and later refuse every loopback connect from inside a
+//! container with 10013, so [`probe`] proves it first: it runs `han shim selftest` in one container under the
+//! policy [`container_request`] builds for a launch, and the backend is unavailable when the port does not
+//! work. Of the two policies ([`Policy`]) the strict one is tried first; the other, MXC's identity-less
+//! loopback proxy, sets `hostLoopback` and ingress to Allow but gives egress no rule, so the container reaches
+//! only the shim's port. `sandbox_probe` checks nothing can connect in. `hostLoopback = Allow` together with
+//! an egress allow rule is never used.
 
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use han_node::api::{Fidelity, SandboxBackend};
 use mxc_sdk::v1::configs::ProcessContainerConfig;
 use mxc_sdk::v1::policy::{
-    NetworkAction, NetworkEgressPolicy, NetworkPeerPolicy, NetworkPolicy, NetworkPortPolicy,
-    NetworkProtocol, NetworkRulePolicy, UiPolicy,
+    NetworkAction, NetworkEgressPolicy, NetworkIngressPolicy, NetworkPeerPolicy, NetworkPolicy,
+    NetworkPortPolicy, NetworkProtocol, NetworkRulePolicy, NetworkRuntimeConfig, UiPolicy,
 };
-use mxc_sdk::v1::{self, ContainerRequest, Containment, FilesystemPolicy};
+use mxc_sdk::v1::{self, ContainerRequest, Containment, FilesystemPolicy, WaitResult};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 
 use super::{
     BackendAvailability, ChildIn, ChildOut, SandboxError, SandboxInfo, SandboxSpec, Sandboxed,
-    build_env, name_part, random_hex,
+    ShimCommand, build_env, name_part, random_hex,
 };
+use crate::shim::{SELFTEST_BLOCKED, SELFTEST_OK};
 
-pub(super) fn probe() -> BackendAvailability {
-    match v1::probe(None) {
-        Ok(p) if p.error.is_none() && p.tier.is_some() => BackendAvailability {
-            backend: SandboxBackend::Mxc,
-            available: true,
-            detail: format!("tier {}", p.tier.unwrap_or("?")),
-        },
-        Ok(p) => BackendAvailability {
-            backend: SandboxBackend::Mxc,
-            available: false,
-            detail: p.error.unwrap_or_else(|| "no usable tier".into()),
-        },
-        Err(e) => BackendAvailability {
-            backend: SandboxBackend::Mxc,
-            available: false,
-            detail: format!("{e:?}").chars().take(300).collect(),
-        },
+/// `HAN_MXC_FORCE_UNAVAILABLE=loopback` makes the probe report the loopback port as blocked without running it.
+pub const FORCE_BLOCKED: &str = "HAN_MXC_FORCE_UNAVAILABLE";
+
+/// How long the self-test container may run before it counts as failed.
+const SELFTEST_MS: u32 = 15_000;
+
+/// What the MXC probe found for each shim, once per process: the self-test starts a container.
+static PROBED: Mutex<Vec<(ShimCommand, BackendAvailability, Policy)>> = Mutex::new(Vec::new());
+
+/// How the container reaches the shim's loopback port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Policy {
+    /// Egress denied except an allow rule for `127.0.0.1:port`. Works where the OS lets a container use
+    /// loopback; it is tried first because it opens nothing else.
+    Port,
+    /// MXC's identity-less loopback proxy (a documented development/testing mode): egress denied with no
+    /// rule, ingress and host loopback allowed, and the container's proxy set to the shim's port. The
+    /// container reaches only that port; `sandbox_probe` shows nothing connects in. Used on Windows builds
+    /// where `Port` fails with 10013.
+    Proxy,
+}
+
+pub(super) fn probe(shim: &ShimCommand) -> BackendAvailability {
+    probed(shim).0
+}
+
+/// The policy the self-test found working for `shim` (`Port` where nothing works).
+fn policy_of(shim: &ShimCommand) -> Policy {
+    probed(shim).1
+}
+
+fn probed(shim: &ShimCommand) -> (BackendAvailability, Policy) {
+    // Held across the self-test, so concurrent callers share one container.
+    let mut done = PROBED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, found, policy)) = done.iter().find(|(s, _, _)| s == shim) {
+        return (found.clone(), *policy);
+    }
+    let (found, policy) = probe_now(shim);
+    done.push((shim.clone(), found.clone(), policy));
+    (found, policy)
+}
+
+fn probe_now(shim: &ShimCommand) -> (BackendAvailability, Policy) {
+    let unavailable = |detail: String, loopback_blocked: bool| BackendAvailability {
+        backend: SandboxBackend::Mxc,
+        available: false,
+        detail,
+        loopback_blocked,
+    };
+    // A switch that can only refuse (an operator, or a test, standing in for a build with no loopback port).
+    if std::env::var(FORCE_BLOCKED).is_ok_and(|v| v == "loopback") {
+        let why = format!(
+            "MXC on this Windows build blocks the in-sandbox loopback port (10013); see docs/runner.md ({FORCE_BLOCKED}=loopback is set)"
+        );
+        return (unavailable(why, true), Policy::Port);
+    }
+    let tier = match v1::probe(None) {
+        Ok(p) if p.error.is_none() && p.tier.is_some() => p.tier.unwrap_or("?"),
+        Ok(p) => {
+            let why = p.error.unwrap_or_else(|| "no usable tier".into());
+            return (unavailable(why, false), Policy::Port);
+        }
+        Err(e) => {
+            let why = format!("{e:?}").chars().take(300).collect();
+            return (unavailable(why, false), Policy::Port);
+        }
+    };
+    let mut last = Ok(());
+    for policy in [Policy::Port, Policy::Proxy] {
+        last = self_test(shim, policy);
+        if last.is_ok() {
+            let found = BackendAvailability {
+                backend: SandboxBackend::Mxc,
+                available: true,
+                detail: format!("tier {tier}; in-sandbox loopback port works ({policy:?} policy)"),
+                loopback_blocked: false,
+            };
+            return (found, policy);
+        }
+    }
+    let found = match last {
+        Err(SelfTest::Blocked) => unavailable(
+            "MXC on this Windows build blocks the in-sandbox loopback port (10013); see docs/runner.md"
+                .into(),
+            true,
+        ),
+        Err(SelfTest::Failed(why)) => {
+            unavailable(format!("the in-sandbox loopback self-test failed: {why}"), false)
+        }
+        Ok(()) => unreachable!("a passing self-test returned above"),
+    };
+    (found, Policy::Port)
+}
+
+/// Why the self-test did not pass.
+enum SelfTest {
+    /// The OS refused the loopback port with 10013.
+    Blocked,
+    /// It failed another way.
+    Failed(String),
+}
+
+/// Runs `shim selftest` in one container under a launch's policy: the container binds a loopback port and
+/// connects to it.
+fn self_test(shim: &ShimCommand, policy: Policy) -> Result<(), SelfTest> {
+    let failed = |why: String| SelfTest::Failed(why.chars().take(300).collect());
+    let dir = std::env::temp_dir().join(format!(
+        "han-mxc-selftest-{}-{}",
+        std::process::id(),
+        random_hex(4)
+    ));
+    std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+    let run = || -> Result<(), SelfTest> {
+        let port = super::pick_inside_port().map_err(|e| failed(e.to_string()))?;
+        let mut cmd = vec![quote(&shim.program.to_string_lossy())];
+        cmd.extend(shim.prefix_args.iter().map(|a| quote(a)));
+        cmd.extend(["selftest".into(), "--port".into(), port.to_string()]);
+        let mut env = Vec::new();
+        let root = os_env(&mut env, &dir);
+        let mut ro = vec![root];
+        if let Some(d) = shim.program.parent() {
+            ro.push(d.to_string_lossy().into_owned());
+        }
+        let req = container_request(
+            policy,
+            None,
+            cmd.join(" "),
+            vec![dir.to_string_lossy().into_owned()],
+            ro,
+            Some(port),
+            SELFTEST_MS,
+            dir.to_string_lossy().into_owned(),
+            env,
+        );
+        let proc = v1::spawn(req, Default::default()).map_err(|e| failed(format!("mxc: {e:?}")))?;
+        let out = proc
+            .wait_with_output()
+            .map_err(|e| failed(format!("wait: {e}")))?;
+        match out.outcome {
+            WaitResult::Exited(c) if c == SELFTEST_OK => Ok(()),
+            WaitResult::Exited(c) if c == SELFTEST_BLOCKED => Err(SelfTest::Blocked),
+            WaitResult::Exited(c) => Err(failed(format!(
+                "exit {c}: {}{}",
+                String::from_utf8_lossy(&out.stderr).trim(),
+                String::from_utf8_lossy(&out.stdout).trim()
+            ))),
+            WaitResult::TimedOut => Err(failed("timed out".into())),
+        }
+    };
+    let r = run();
+    let _ = std::fs::remove_dir_all(&dir);
+    r
+}
+
+/// Adds what the OS needs to start a process in a container (MXC refuses a verbatim environment without it;
+/// none of it holds a secret). Returns `SystemRoot`.
+fn os_env(env: &mut Vec<(String, String)>, temp: &Path) -> String {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    for (k, v) in [
+        ("SystemRoot", root.clone()),
+        ("windir", root.clone()),
+        ("SystemDrive", root.chars().take(2).collect()),
+        ("LOCALAPPDATA", temp.to_string_lossy().into_owned()),
+        ("APPDATA", temp.to_string_lossy().into_owned()),
+        ("USERPROFILE", temp.to_string_lossy().into_owned()),
+        ("PATHEXT", ".COM;.EXE;.BAT;.CMD".into()),
+        ("ComSpec", format!("{root}\\System32\\cmd.exe")),
+    ] {
+        if !env.iter().any(|(x, _)| x.eq_ignore_ascii_case(k)) {
+            env.push((k.to_owned(), v));
+        }
+    }
+    root
+}
+
+/// The container a launch and the self-test both run: egress denied except `127.0.0.1:allow_port` (the
+/// shim's), no other network policy (in particular no `hostLoopback`).
+#[allow(clippy::too_many_arguments)]
+fn container_request(
+    policy: Policy,
+    token: Option<&str>,
+    command: String,
+    rw: Vec<String>,
+    ro: Vec<String>,
+    allow_port: Option<u16>,
+    timeout_ms: u32,
+    cwd: String,
+    env: Vec<(String, String)>,
+) -> ContainerRequest {
+    let allow = allow_port.map(|port| {
+        vec![NetworkRulePolicy {
+            to: Some(vec![NetworkPeerPolicy::new("127.0.0.1/32")]),
+            ports: Some(vec![NetworkPortPolicy {
+                protocol: Some(NetworkProtocol::Tcp),
+                port: Some(port),
+                end_port: None,
+            }]),
+        }]
+    });
+    let proxy_mode = allow_port.is_some() && policy == Policy::Proxy;
+    let (allow, ingress, runtime_config) = if proxy_mode {
+        (
+            None,
+            Some(NetworkIngressPolicy {
+                default: Some(NetworkAction::Allow),
+                host_loopback: Some(NetworkAction::Allow),
+            }),
+            // MXC sets the container's `HTTP(S)_PROXY` to this URL, over ours; the credentials go in it.
+            allow_port.map(|port| NetworkRuntimeConfig {
+                network_proxy: Some(match token {
+                    Some(t) => format!("http://{}:{t}@127.0.0.1:{port}", crate::proxy::PROXY_USER),
+                    None => format!("http://127.0.0.1:{port}"),
+                }),
+            }),
+        )
+    } else {
+        (allow, None, None)
+    };
+    ContainerRequest {
+        filesystem: Some(FilesystemPolicy {
+            readwrite_paths: rw,
+            readonly_paths: ro,
+            denied_paths: vec![],
+            clear_policy_on_exit: None,
+        }),
+        network: Some(NetworkPolicy {
+            egress: Some(NetworkEgressPolicy {
+                default: Some(NetworkAction::Deny),
+                allow,
+                ..Default::default()
+            }),
+            ingress,
+            runtime_config,
+        }),
+        ui: Some(UiPolicy {
+            disable: false,
+            ..Default::default()
+        }),
+        timeout_ms: Some(timeout_ms),
+        containment: Containment::ProcessContainer(ProcessContainerConfig::default()),
+        working_directory: Some(cwd),
+        environment: Some(env),
+        inherit_default_environment: Some(false),
+        ..ContainerRequest::new(command)
     }
 }
 
@@ -124,10 +361,17 @@ fn writer(mut w: Box<dyn Write + Send>) -> ChildIn {
 }
 
 pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError> {
-    let avail = probe();
+    let shim = spec.shim.clone();
+    let avail = tokio::task::spawn_blocking(move || probe(&shim))
+        .await
+        .map_err(|e| SandboxError::Spawn(e.to_string()))?;
+    if avail.loopback_blocked {
+        return Err(SandboxError::LoopbackBlocked(avail.detail));
+    }
     if !avail.available {
         return Err(SandboxError::Unavailable(format!("mxc: {}", avail.detail)));
     }
+    let policy = policy_of(&spec.shim);
     let mut tasks = Vec::new();
 
     // The container-local port of the shim, and the session pipe behind it.
@@ -155,22 +399,7 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
     }
 
     let mut env = build_env(spec, spec.proxy.as_ref().map(|_| port), &spec.temp);
-    // MXC refuses a verbatim environment without these; neither holds a secret.
-    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-    for (k, v) in [
-        ("SystemRoot", root.clone()),
-        ("windir", root.clone()),
-        ("SystemDrive", root.chars().take(2).collect()),
-        ("LOCALAPPDATA", spec.temp.to_string_lossy().into_owned()),
-        ("APPDATA", spec.temp.to_string_lossy().into_owned()),
-        ("USERPROFILE", spec.temp.to_string_lossy().into_owned()),
-        ("PATHEXT", ".COM;.EXE;.BAT;.CMD".into()),
-        ("ComSpec", format!("{root}\\System32\\cmd.exe")),
-    ] {
-        if !env.iter().any(|(x, _)| x.eq_ignore_ascii_case(k)) {
-            env.push((k.to_owned(), v));
-        }
-    }
+    let root = os_env(&mut env, &spec.temp);
 
     let mut cmd = vec![quote(&spec.shim.program.to_string_lossy())];
     cmd.extend(spec.shim.prefix_args.iter().map(|a| quote(a)));
@@ -213,51 +442,24 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
     if let Some(d) = spec.shim.program.parent() {
         ro.push(d.to_string_lossy().into_owned());
     }
-    ro.push(root.clone());
+    ro.push(root);
 
-    let allow = if spec.proxy.is_some() {
-        Some(vec![NetworkRulePolicy {
-            to: Some(vec![NetworkPeerPolicy::new("127.0.0.1/32")]),
-            ports: Some(vec![NetworkPortPolicy {
-                protocol: Some(NetworkProtocol::Tcp),
-                port: Some(port),
-                end_port: None,
-            }]),
-        }])
-    } else {
-        None
-    };
     let timeout_ms = spec
         .limits
         .wall_time
         .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX))
         .unwrap_or(u32::MAX);
-    let req = ContainerRequest {
-        filesystem: Some(FilesystemPolicy {
-            readwrite_paths: rw,
-            readonly_paths: ro,
-            denied_paths: vec![],
-            clear_policy_on_exit: None,
-        }),
-        network: Some(NetworkPolicy {
-            egress: Some(NetworkEgressPolicy {
-                default: Some(NetworkAction::Deny),
-                allow,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        ui: Some(UiPolicy {
-            disable: false,
-            ..Default::default()
-        }),
-        timeout_ms: Some(timeout_ms),
-        containment: Containment::ProcessContainer(ProcessContainerConfig::default()),
-        working_directory: Some(spec.cwd.to_string_lossy().into_owned()),
-        environment: Some(env),
-        inherit_default_environment: Some(false),
-        ..ContainerRequest::new(cmd.join(" "))
-    };
+    let req = container_request(
+        policy,
+        spec.proxy.as_ref().map(|p| p.token.as_str()),
+        cmd.join(" "),
+        rw,
+        ro,
+        spec.proxy.as_ref().map(|_| port),
+        timeout_ms,
+        spec.cwd.to_string_lossy().into_owned(),
+        env,
+    );
     let mut proc = tokio::task::spawn_blocking(move || v1::spawn(req, Default::default()))
         .await
         .map_err(|e| SandboxError::Spawn(e.to_string()))?

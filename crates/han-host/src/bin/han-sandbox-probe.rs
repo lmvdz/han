@@ -246,6 +246,26 @@ fn run(spec: &Value, prefix: &str) {
     if spec.get("proxy").and_then(Value::as_bool) == Some(true) {
         emit(prefix, "proxy-route".into(), proxy_route());
     }
+    // Listeners the harness then tries to reach from outside (inbound): kept open for `hold_ms`.
+    let listeners: Vec<_> = strs(spec, "listen")
+        .into_iter()
+        .map(|a| {
+            let l = std::net::TcpListener::bind(&a);
+            emit(
+                prefix,
+                format!("listen:{a}"),
+                l.as_ref()
+                    .map(|_| "listening".to_owned())
+                    .map_err(|e| e.to_string()),
+            );
+            l
+        })
+        .collect();
+    if !listeners.is_empty() {
+        let _ = std::io::stdout().flush();
+        let hold = spec.get("hold_ms").and_then(Value::as_u64).unwrap_or(5000);
+        std::thread::sleep(Duration::from_millis(hold));
+    }
 }
 
 fn main() {

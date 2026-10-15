@@ -21,7 +21,9 @@ fn shim_exe() -> ShimCommand {
 }
 
 fn available(b: SandboxBackend) -> bool {
-    let found = sandbox::probe().into_iter().find(|x| x.backend == b);
+    let found = sandbox::probe(&shim_exe())
+        .into_iter()
+        .find(|x| x.backend == b);
     match found {
         Some(x) if x.available => true,
         Some(x) => {
