@@ -159,6 +159,7 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
             proposal: proposal.clone(),
             expires_at: None,
             note: None,
+            evidence: None,
         },
     )
     .await;
@@ -539,4 +540,124 @@ async fn an_executor_refuses_its_open_effect_with_a_reason_and_evidence() {
             .any(|e| e.proposal == running && e.phase == "done" && e.claims == 1)
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_landings_change_summary_is_copied_into_the_body_and_an_approval_carries_its_evidence() {
+    let world = World::new(&[(ALICE, 41)]);
+    world
+        .home
+        .register(EXEC, "service", "d1", &common::pubkey(43), Some(ALICE))
+        .unwrap();
+    let alice = world.node(ALICE, 41);
+    let exec = world.node(EXEC, 43);
+    let space = space_of(
+        &call(
+            &alice,
+            Command::SpaceCreate {
+                home: world.home_ref.clone(),
+                name: "team".into(),
+                visibility: "members".into(),
+                join: "invite".into(),
+            },
+        )
+        .await,
+    );
+    confirm_operator(&world, &alice, ALICE, EXEC).await;
+    call(
+        &alice,
+        Command::PolicySet {
+            space: space.clone(),
+            policy: gated_policy(),
+        },
+    )
+    .await;
+    call(
+        &alice,
+        Command::MemberSet {
+            space: space.clone(),
+            actor: EXEC.into(),
+            role: "member".into(),
+        },
+    )
+    .await;
+    call(
+        &exec,
+        Command::SpaceFollow {
+            home: world.home_ref.clone(),
+            space: space.clone(),
+        },
+    )
+    .await;
+    let delta = "d".repeat(64);
+    let change = serde_json::json!({"repo": "github:o/r", "deltaDigest": delta, "total": 1,
+        "files": [{"path": "docs/a.md", "kind": "modify", "lines": 3}]});
+    let plan = serde_json::json!({"action": "vcs.land", "target": "github:o/r",
+        "args": {"ref": "refs/heads/main", "base": "a".repeat(40), "to": "b".repeat(40),
+                 "deltaDigest": delta, "tier": 0, "rebase": "none", "change": change}});
+    let propose = |plan: &serde_json::Value| Command::EffectPropose {
+        space: space.clone(),
+        executor: EXEC.into(),
+        plan: plan.to_string(),
+        task: None,
+        cost: None,
+        repeatable: false,
+        expires_at: None,
+    };
+    let proposal = id_of(&call(&alice, propose(&plan)).await);
+    until("the executor sees the summary's digest", || {
+        effects(&exec, EXEC, false)
+            .iter()
+            .any(|e| e.proposal == proposal && e.change_digest == han_exec_digest(&change))
+    })
+    .await;
+
+    // An approval with evidence: the record is a blob of the space; the body names its kind and digest.
+    let record = br#"{"schema":"han.review/1"}"#;
+    let CallResult::BlobRef {
+        hash,
+        size,
+        media_type,
+    } = call(
+        &alice,
+        Command::BlobPut {
+            space: space.clone(),
+            media_type: "application/json".into(),
+            data: han_core::base64url::encode(record),
+        },
+    )
+    .await
+    else {
+        panic!("a blob ref")
+    };
+    call(
+        &alice,
+        Command::EffectApprove {
+            space: space.clone(),
+            proposal: proposal.clone(),
+            expires_at: None,
+            note: None,
+            evidence: Some(han_node::api::ApprovalEvidence {
+                kind: "han.review/1".into(),
+                over: delta.clone(),
+                record: EvidenceRef {
+                    hash,
+                    size,
+                    media_type,
+                },
+            }),
+        },
+    )
+    .await;
+    until("the executor sees the approval", || {
+        effects(&exec, EXEC, false)
+            .iter()
+            .any(|e| e.proposal == proposal && e.approvals == vec![ALICE.to_owned()])
+    })
+    .await;
+}
+
+fn han_exec_digest(change: &serde_json::Value) -> Option<String> {
+    let v = han_core::json::parse(change.to_string().as_bytes()).unwrap();
+    Some(han_core::ids::json_digest(&v).unwrap())
 }

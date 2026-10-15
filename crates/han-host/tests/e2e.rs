@@ -387,6 +387,7 @@ adapter stderr:
             proposal: e.proposal.clone(),
             expires_at: None,
             note: None,
+            evidence: None,
         },
     )
     .await;

@@ -17,6 +17,7 @@ mod body;
 mod decide;
 mod doc;
 mod fold;
+pub(crate) mod gate;
 mod guard;
 mod state;
 
@@ -28,6 +29,7 @@ use crate::error::Error;
 use crate::grammar;
 use crate::types::{ActorId, EntryId, KeyId, LogRecord, Seq, Time};
 
+pub use crate::validate::change_summary;
 pub use access::{SessionAccess, can_read, session_access};
 pub use body::{
     AgentUnguard, Approve, Body, Checkpoint, Claim, EffectCancel, EffectResult, ForkOf, KeyAdd,
@@ -37,10 +39,15 @@ pub use body::{
 };
 pub use decide::{decide, decide_value, relevant_actors};
 pub use doc::{
-    ActorKind, AllowAgents, ApprovalRule, JoinMode, KeyDoc, NewRole, PolicyDoc, ProfileDoc, Role,
-    ServersDoc, SessionLevel, SessionsDoc, SteerMode, Visibility,
+    ActorKind, AllowAgents, ApprovalRule, GatesDoc, JoinMode, KeyDoc, NewRole, OwnerRule,
+    PathClass, PathRule, PolicyDoc, ProfileDoc, Role, ServersDoc, SessionLevel, SessionsDoc,
+    SteerMode, Visibility,
 };
 pub use fold::fold;
+pub use gate::{
+    Change, ChangeFile, Evidence, FileKind, Gate, MAX_CHANGE_BYTES, MAX_CHANGE_FILES,
+    MAX_GATE_RULES, MAX_PATH_OWNERS, NEVER_AUTO, PATH_OWNER, glob_match,
+};
 pub use guard::{GuardInput, GuardStatus, abandon_after, guard_status};
 pub use state::{
     ActorSet, Approval, ClaimState, Effect, EntryRef, Interval, KeyState, Phase, ProfileState,

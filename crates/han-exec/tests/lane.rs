@@ -451,6 +451,116 @@ async fn happy_path_queued_testing_landing_landed_confirmed() {
     assert_eq!(rig.node.items("han.land/1").len(), before);
 }
 
+impl Rig {
+    /// The change summary of landing `to`, as a host builds it (architecture.md P-17), as a plan's `args.change`.
+    fn summary(&self, to: &str) -> Value {
+        let d = self.vcs.delta(&self.w.work, &self.w.base, to).unwrap();
+        let n = self
+            .vcs
+            .delta_lines(&self.w.work, &self.w.base, to, &d)
+            .unwrap();
+        serde_json::to_value(han_vcs::land_change("local:origin", &d, &n).unwrap()).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn a_change_summary_that_matches_the_bundle_lands_and_is_the_one_the_body_carries() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    let to = rig.w.change("one", "a.txt", "a, edited\n");
+    let change = rig.summary(&to);
+    assert_eq!(change["files"][0]["path"], "a.txt");
+    assert_eq!(
+        change["files"][0]["lines"], 2,
+        "one line added, one removed"
+    );
+    let p = rig.node.propose(&rig.plan(&to, json!({"change": change})));
+    assert!(
+        rig.node.row(&p).change_digest.is_some(),
+        "the node digests the body's copy"
+    );
+    rig.node.approve(&p);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(
+        rig.states(&p),
+        ["queued", "testing", "landing", "landed", "confirmed"]
+    );
+}
+
+#[tokio::test]
+async fn an_understated_summary_is_rejected_before_anything_is_tested() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    let to = rig.w.change("one", "a.txt", "a, edited\n");
+    let mut change = rig.summary(&to);
+    change["files"][0]["lines"] = json!(1);
+    let p = rig.node.propose(&rig.plan(&to, json!({"change": change})));
+    rig.node.approve(&p);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.states(&p), ["queued", "rejected"]);
+    let last = rig.last(&p);
+    assert_eq!(last["reason"], "policy");
+    assert!(
+        last["detail"].as_str().unwrap().contains("understates"),
+        "{last}"
+    );
+    assert_eq!(rig.node.claims(), 0);
+    assert_eq!(rig.cancels().len(), 1);
+}
+
+#[tokio::test]
+async fn a_summary_for_other_files_or_one_the_body_does_not_carry_is_rejected() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    // The summary names a file the bundle does not change.
+    let to = rig.w.change("one", "a.txt", "a, edited\n");
+    let mut change = rig.summary(&to);
+    change["files"][0]["path"] = json!("b.txt");
+    let p = rig.node.propose(&rig.plan(&to, json!({"change": change})));
+    rig.node.approve(&p);
+    // The body's summary is not the plan's: the proposer signed one for Policy and another into the plan.
+    let to2 = rig.w.change("two", "c.txt", "c, edited\n");
+    let q = rig
+        .node
+        .propose(&rig.plan(&to2, json!({"change": rig.summary(&to2)})));
+    rig.node
+        .state()
+        .rows
+        .iter_mut()
+        .find(|r| r.proposal == q)
+        .unwrap()
+        .change_digest = Some("0".repeat(64));
+    rig.node.approve(&q);
+    // A plan that carries a summary the body lacks is the same lie the other way round.
+    let to3 = rig.w.change("three", "m.txt", "line 1, edited\n");
+    let r = rig
+        .node
+        .propose(&rig.plan(&to3, json!({"change": rig.summary(&to3)})));
+    rig.node
+        .state()
+        .rows
+        .iter_mut()
+        .find(|x| x.proposal == r)
+        .unwrap()
+        .change_digest = None;
+    rig.node.approve(&r);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    for (proposal, needle) in [
+        (&p, "is not the change's"),
+        (&q, "not the plan's"),
+        (&r, "not the plan's"),
+    ] {
+        assert_eq!(rig.states(proposal), ["queued", "rejected"], "{proposal}");
+        let last = rig.last(proposal);
+        assert_eq!(last["reason"], "policy");
+        assert!(last["detail"].as_str().unwrap().contains(needle), "{last}");
+    }
+    assert_eq!(rig.node.claims(), 0);
+}
+
 #[tokio::test]
 async fn the_ref_moving_by_a_path_disjoint_change_prepares_again_and_lands() {
     let rig = Rig::new();

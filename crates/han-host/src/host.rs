@@ -1914,6 +1914,7 @@ mod tests {
                 proposal: "p".into(),
                 expires_at: None,
                 note: None,
+                evidence: None,
             },
             Command::MemberSet {
                 space: "s".into(),

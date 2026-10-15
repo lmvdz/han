@@ -2196,6 +2196,253 @@ v.step(prop("p8", executor=G), "allow").step(E("x8", "effect.cancel", G, {"propo
 v.step(prop("p9"), "allow").step(ms("b1", O, X, "banned"), "allow").step(E("x9", "effect.cancel", X, {"proposal": "p9"}), "denied", note="banned: no role")
 add(v.done())
 
+# ── P-17 semantic gates and risk tiers (round 33, implemented ahead of the round) ──
+R, H3 = "@rev:a.example", "@h3:a.example"
+GK = {"k1": {"publicKey": "pk", "status": "valid"}}
+REVIEWER = {"actorKind": "agent", "operator": O, "operatorConfirmed": True, "keys": GK}
+BOTP = {"actorKind": "agent", "operator": OP, "operatorConfirmed": True, "keys": GK}
+REPO, REPO_B = "github:o/r", "github:o/b"
+MISSING = "<missing>"
+
+def chg(files, repo=REPO, label="d", total=None, truncated=False):
+    """A change summary: files are (path, kind, lines) and, for a rename, (path, "rename", lines, fromPath)."""
+    fl = []
+    for f in files:
+        d = {"path": f[0], "kind": f[1], "lines": f[2]}
+        if f[1] == "rename": d["fromPath"] = f[3]
+        fl.append(d)
+    c = {"repo": repo, "deltaDigest": digest_of("delta:" + label), "total": len(fl) if total is None else total, "files": fl}
+    if truncated: c["truncated"] = True
+    return c
+
+def cdigest(c):
+    return hashlib.sha256(json.dumps(c, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+def lprop(id, change=None, author=P, **kw):
+    e = prop(id, author=author, action=kw.pop("action", "vcs.land"), **kw)
+    if change is not None: e["body"]["change"] = change
+    return e
+
+def review(label="d", kind="han.review/1"):
+    return {"kind": kind, "over": digest_of("delta:" + label)}
+
+def lappr(id, pr, author=O, evidence=None):
+    e = appr(id, pr, author=author)
+    if evidence is not None: e["body"]["evidence"] = evidence
+    return e
+
+GATES = {"small": 20, "large": 500,
+         "paths": [{"glob": "payments/**", "class": "sensitive"}, {"glob": "ops/**", "class": "sensitive"},
+                   {"glob": "migrations/**", "class": "critical"}, {"glob": "auth/**", "class": "critical"},
+                   {"glob": "only-b/**", "class": "critical", "repo": REPO_B},
+                   {"glob": ".github/**", "class": "docs"}, {"glob": "**/Cargo.lock", "class": "generated"},
+                   {"glob": "docs/**", "class": "docs"}, {"glob": "**/*.md", "class": "docs"},
+                   {"glob": "**/tests/**", "class": "tests"}, {"glob": "gen/**", "class": "generated"}],
+         "owners": [{"glob": "payments/**", "owners": [P, R]}, {"glob": "auth/**", "owners": [M]}]}
+LAND_RULES = [{"action": "vcs.land", "maxTier": 1, "approvers": [R, "owner"], "evidence": "han.review/1"},
+              {"action": "vcs.land", "maxTier": 2, "approvers": ["@path-owner", "owner"], "humans": True},
+              {"action": "vcs.land", "approvers": ["owner", "member"], "humans": True}]
+
+v = V("gate-tiers", ["P-17"], "round 33: Policy derives a vcs.land's tier from its change summary and the policy's gates: path classes, sizes, the built-in never-auto paths, renames, repo-scoped rules, and a summary that is missing or truncated fails closed; the proposer states no tier")
+team(v, policy(gates=GATES))
+def tier(v, id, change, want, note=None, **extra):
+    v.step(lprop(id, change), "allow", check=dict({f"effects.{id}.gate.tier": want}, **extra), note=note)
+tier(v, "a", chg([("docs/guide.md", "modify", 5)], label="a"), 0, "docs only, small", **{"effects.a.gate.deltaDigest": digest_of("delta:a"), "effects.a.gate.changeDigest": cdigest(chg([("docs/guide.md", "modify", 5)], label="a"))})
+tier(v, "b", chg([("gen/x.rs", "add", 10), ("src/tests/t.rs", "modify", 3)], label="b"), 0, "generated and tests, small")
+tier(v, "c1", chg([("docs/g.md", "modify", 20)], label="c1"), 0, "20 lines is small")
+tier(v, "c2", chg([("docs/g.md", "modify", 21)], label="c2"), 1, "21 lines is not")
+tier(v, "d", chg([("src/lib.rs", "modify", 3)], label="d"), 1, "ordinary code")
+tier(v, "e", chg([("docs/g.md", "modify", 1), ("src/lib.rs", "modify", 1)], label="e"), 1, "docs and code")
+tier(v, "f1", chg([("payments/pay.rs", "modify", 3)], label="f1"), 2, "a sensitive path")
+tier(v, "f2", chg([("payments/NOTES.md", "modify", 1)], label="f2"), 2, "the first matching rule decides: payments comes before *.md")
+tier(v, "g1", chg([("src/a.rs", "modify", 500)], label="g1"), 1, "500 lines is not large")
+tier(v, "g2", chg([("src/a.rs", "modify", 501)], label="g2"), 2, "501 lines is")
+tier(v, "g3", chg([("src/a.rs", "modify", 300), ("src/b.rs", "add", 300)], label="g3"), 2, "sizes add up")
+tier(v, "h1", chg([("migrations/001.sql", "add", 3)], label="h1"), 3, "a critical path")
+tier(v, "h2", chg([("auth/a.rs", "modify", 1), ("payments/p.rs", "modify", 1)], label="h2"), 3, "the highest path decides")
+tier(v, "i1", chg([(".github/workflows/ci.yml", "modify", 1)], label="i1"), 2, "never auto: a rule that calls CI docs can't lower it")
+tier(v, "i2", chg([("Cargo.lock", "modify", 1)], label="i2"), 2, "never auto: a lockfile called generated")
+tier(v, "i3", chg([("crates/x/Cargo.toml", "modify", 1)], label="i3"), 2, "never auto: a dependency manifest")
+tier(v, "i4", chg([("deploy/.env", "add", 1)], label="i4"), 2, "never auto: credentials")
+tier(v, "i5", chg([("keys/server.pem", "add", 1)], label="i5"), 2, "never auto: a key")
+tier(v, "i6", chg([(".han/policy.json", "modify", 1)], label="i6"), 2, "never auto: HAN's own config")
+tier(v, "j1", chg([("docs/new.md", "rename", 0, "payments/old.md")], label="j1"), 2, "a rename is judged on both of its paths")
+tier(v, "j2", chg([("payments/new.rs", "rename", 0, "docs/old.md")], label="j2"), 2, "and on the new path")
+tier(v, "k1", chg([("only-b/x.rs", "modify", 1)], repo=REPO_B, label="k1"), 3, "a rule scoped to a repo applies in that repo")
+tier(v, "k2", chg([("only-b/x.rs", "modify", 1)], label="k2"), 1, "and in no other")
+tier(v, "l", chg([("docs/a.md", "modify", 1)], total=3, truncated=True, label="l"), 3, "files left out: fails closed")
+v.step(lprop("m"), "allow", check={"effects.m.gate": {"tier": 3}}, note="no change summary: fails closed, and nothing to name evidence over")
+v.step(prop("n"), "allow", check={"effects.n.gate": MISSING}, note="another action has no gate")
+v.step(lprop("o", chg([("docs/a.md", "modify", 1)], label="o", total=0)), "invalid", note="total below the files listed")
+bad = lprop("q", chg([("docs/a.md", "modify", 1)], label="q")); bad["body"]["tier"] = 0
+v.step(bad, "invalid", note="a proposer states no tier: the body is closed")
+v.step(lprop("r", chg([("docs/a.md", "modify", 1)], label="r"), action="git.push"), "invalid", note="a change summary belongs to a vcs.land")
+v.step(E("pol", "policy.set", O, {"policy": policy(gates=dict(GATES, paths=[{"glob": "docs/**", "class": "critical"}]))}), "allow")
+tier(v, "s", chg([("docs/g.md", "modify", 1)], label="s"), 3, "the new policy applies to a new proposal")
+v.step(E("pol2", "policy.set", O, {"policy": policy()}), "allow", check={"effects.a.gate.tier": 0, "effects.s.gate.tier": 3}, note="a tier is fixed at the proposal: a later policy changes none")
+v.step(lprop("t", chg([("docs/g.md", "modify", 1)], label="t")), "allow", check={"effects.t.gate": MISSING}, note="a policy without gates derives none")
+add(v.done())
+
+v = V("gate-schema", ["P-17", "R-09"], "round 33: the closed shapes of gates, approval rules, change summaries and approval evidence; every bound is checked")
+v.step(create(), "allow")
+def pol_with(**kw): return E("p" + str(len(v.v["steps"])), "policy.set", O, {"policy": policy(**kw)})
+v.step(pol_with(gates=GATES, approvals=LAND_RULES), "allow", note="the full example is valid")
+for note, g in [("small above large", dict(GATES, small=501)),
+                ("unknown class", dict(GATES, paths=[{"glob": "a/**", "class": "secret"}])),
+                ("a rule field the shape lacks", dict(GATES, paths=[{"glob": "a/**", "class": "docs", "tier": 0}])),
+                ("an empty segment", dict(GATES, paths=[{"glob": "a//b", "class": "docs"}])),
+                ("a segment of dots", dict(GATES, paths=[{"glob": "a/../b", "class": "docs"}])),
+                ("** inside a segment", dict(GATES, paths=[{"glob": "a**/b", "class": "docs"}])),
+                ("five ** segments", dict(GATES, paths=[{"glob": "**/**/**/**/**", "class": "docs"}])),
+                ("a leading slash", dict(GATES, paths=[{"glob": "/a", "class": "docs"}])),
+                ("a space in a glob", dict(GATES, paths=[{"glob": "a b", "class": "docs"}])),
+                ("65 path rules", dict(GATES, paths=[{"glob": f"d{i}/**", "class": "docs"} for i in range(65)])),
+                ("an owner rule with no owners", dict(GATES, owners=[{"glob": "a/**", "owners": []}])),
+                ("nine owners", dict(GATES, owners=[{"glob": "a/**", "owners": [f"@u{i}:a.example" for i in range(9)]}])),
+                ("an owner that is no actor", dict(GATES, owners=[{"glob": "a/**", "owners": ["owner"]}])),
+                ("a repeated owner", dict(GATES, owners=[{"glob": "a/**", "owners": [M, M]}])),
+                ("no owners member", {k: x for k, x in GATES.items() if k != "owners"})]:
+    v.step(pol_with(gates=g), "invalid", note=note)
+for note, rules in [("minTier above maxTier", [{"action": "vcs.land", "minTier": 2, "maxTier": 1, "approvers": [O]}]),
+                    ("a tier above 3", [{"action": "vcs.land", "maxTier": 4, "approvers": [O]}]),
+                    ("needs 0", [{"action": "vcs.land", "needs": 0, "approvers": [O]}]),
+                    ("needs 4", [{"action": "vcs.land", "needs": 4, "approvers": [O]}]),
+                    ("humans not a boolean", [{"action": "vcs.land", "humans": "yes", "approvers": [O]}]),
+                    ("an evidence kind with capitals", [{"action": "vcs.land", "evidence": "Han.Review", "approvers": [O]}]),
+                    ("an approver that is neither a role, an id nor @path-owner", [{"action": "vcs.land", "approvers": ["@path-owners"]}]),
+                    ("an unknown rule field", [{"action": "vcs.land", "approvers": [O], "tier": 1}])]:
+    v.step(pol_with(approvals=rules), "invalid", note=note)
+v.step(pol_with(approvals=[{"action": "vcs.land", "minTier": 1, "maxTier": 1, "needs": 3, "humans": True, "evidence": "x", "approvers": ["@path-owner", O, "member"]}]), "allow", note="every rule field at its edge")
+v.step(pol_with(gates=dict(GATES, small=0, large=0, paths=[], owners=[])), "allow", note="empty rule lists and zero limits")
+v.step(pol_with(approvals=[{"action": "vcs.land", "approvers": ["owner"]}]), "allow")
+v.step(ms("m1", O, P, "member"), "allow").step(ms("m2", O, X, "member"), "allow")
+ok = chg([("a", "modify", 1), ("é", "add", 2), ("z/x", "rename", 0, "y")], label="s1")
+ok["files"].sort(key=lambda f: f["path"].encode())
+v.step(lprop("c0", ok), "allow", note="UTF-8 byte order: a, é (0xC3), z/x")
+def badchange(note, mutate, label):
+    c = chg([("a", "modify", 1), ("b", "modify", 1)], label=label)
+    mutate(c)
+    v.step(lprop(label, c), "invalid", note=note)
+badchange("files out of byte order", lambda c: c["files"].reverse(), "u1")
+badchange("a path twice", lambda c: c["files"].__setitem__(1, dict(c["files"][0])), "u2")
+badchange("a rename without fromPath", lambda c: c["files"][0].update(kind="rename"), "u3")
+badchange("fromPath on a modify", lambda c: c["files"][0].update(fromPath="z"), "u4")
+badchange("a rename from itself", lambda c: c["files"][0].update(kind="rename", fromPath="a"), "u5")
+badchange("an absolute path", lambda c: c["files"][0].update(path="/a"), "u6")
+badchange("a dot-dot segment", lambda c: c["files"][0].update(path="x/../a"), "u7")
+badchange("a trailing slash", lambda c: c["files"][0].update(path="a/"), "u8")
+badchange("a control character", lambda c: c["files"][0].update(path="a\nb"), "u9")
+badchange("a path over 255 bytes", lambda c: c["files"][0].update(path="a" * 256), "u10")
+badchange("an unknown kind", lambda c: c["files"][0].update(kind="copy"), "u11")
+badchange("a float for lines", lambda c: c["files"][0].update(lines=1.5), "u12")
+badchange("truncated: false", lambda c: c.update(truncated=False), "u13")
+badchange("truncated with all files listed", lambda c: c.update(truncated=True), "u14")
+badchange("files left out and not truncated", lambda c: c.update(total=5), "u15")
+badchange("an unknown member", lambda c: c.update(tier=0), "u16")
+badchange("a repo with a space", lambda c: c.update(repo="a b"), "u17")
+badchange("a digest that is no digest", lambda c: c.update(deltaDigest="abc"), "u18")
+many = chg([(f"d/f{i:03d}", "modify", 1) for i in range(65)], label="u19")
+v.step(lprop("u19", many), "invalid", note="65 files")
+full = chg([(f"d/f{i:03d}", "modify", 1) for i in range(64)], label="u20")
+v.step(lprop("u20", full), "allow", note="64 files fit")
+fat = chg([("p/" + f"{i:02d}" + "x" * 200, "modify", 1) for i in range(64)], label="u21")
+v.step(lprop("u21", fat), "invalid", note="over 12,288 bytes of summary")
+trunc = chg([(f"d/f{i:03d}", "modify", 1) for i in range(64)], total=9000, truncated=True, label="u22")
+v.step(lprop("u22", trunc), "allow", note="64 listed of 9,000: a truncated summary is valid")
+for note, ev in [("evidence with no digest", {"kind": "han.review/1"}),
+                 ("evidence with a bad kind", {"kind": "Han", "over": digest_of("delta:u20")}),
+                 ("evidence over a non-digest", {"kind": "han.review/1", "over": "x"}),
+                 ("evidence with an unknown member", dict(review("u20"), record=digest_of("r")))]:
+    v.step(lappr("e" + str(len(v.v["steps"])), "u20", author=O, evidence=ev), "invalid", note=note)
+v.step(lappr("ev1", "u20", author=O, evidence=review("u20")), "allow", note="evidence a human gives is only a record: shape-checked, never required of a human")
+add(v.done())
+
+v = V("gated-approvals", ["P-17", "P-08", "P-07"], "round 33: the example policy: tier 0 and 1 take the machine reviewer's approval only with a han.review/1 record over the delta digest, or an owner's; tier 2 needs the path owner or an owner and no machine ever counts; tier 3 needs two distinct humans")
+v.prof(R, REVIEWER).prof("@bot:b.example", BOTP)
+team(v, policy(gates=GATES, approvals=LAND_RULES + [{"action": "deploy", "approvers": ["member"], "needs": 2, "humans": True}]))
+v.step(ms("mr", O, R, "member"), "allow").step(ms("mh", O, H3, "member"), "allow").step(ms("mb", O, "@bot:b.example", "member"), "allow").step(ms("mo", O, OP, "member"), "allow")
+# tier 1: the reviewer
+v.step(lprop("p1", chg([("src/lib.rs", "modify", 3)], label="p1")), "allow", check={"effects.p1.gate.tier": 1})
+v.step(claim("c1x", "p1"), "denied", note="E3: nobody approved")
+v.step(lappr("a1", "p1", author=R), "denied", note="the reviewer's approval carries no evidence")
+v.step(lappr("a2", "p1", author=R, evidence=review("p1", kind="han.ci/1")), "denied", note="evidence of another kind")
+v.step(lappr("a3", "p1", author=R, evidence=review("other")), "denied", note="a review over another delta")
+v.step(lappr("a4", "p1", author=R, evidence=review("p1")), "allow", check={"effects.p1.approvals.0.evidence": {"kind": "han.review/1", "over": digest_of("delta:p1")}}, note="a han.review/1 record over the plan's delta digest")
+v.step(claim("c1", "p1"), "allow", check={"effects.p1.claims.0.approval": "a4", "effects.p1.claims.0.coApprovals": MISSING})
+# tier 0: the reviewer, or an owner with no evidence
+v.step(lprop("p0", chg([("docs/g.md", "modify", 2)], label="p0")), "allow", check={"effects.p0.gate.tier": 0})
+v.step(lappr("b1", "p0", author=O), "allow", note="an owner is a human: no evidence asked")
+v.step(claim("c0", "p0"), "allow")
+v.step(lprop("p0b", chg([("docs/g.md", "modify", 2)], label="p0b")), "allow")
+v.step(lappr("b2", "p0b", author=M), "denied", note="a member is not listed for tier 0 and 1")
+v.step(lappr("b3", "p0b", author=R, evidence=review("p0b")), "allow").step(claim("c0b", "p0b"), "allow")
+# tier 2: path owner or owner; never a machine
+v.step(lprop("p2", chg([("payments/pay.rs", "modify", 3)], label="p2"), author=M), "allow", check={"effects.p2.gate.tier": 2, "effects.p2.gate.owners": [P, R]})
+v.step(lappr("d1", "p2", author=R, evidence=review("p2")), "denied", note="the reviewer is listed as owner of payments, but no machine counts at tier 2")
+v.step(lappr("d2", "p2", author=H3), "denied", note="a member that owns no path")
+v.step(lappr("d3", "p2", author=P), "allow", note="the path owner")
+v.step(claim("c2", "p2"), "allow", check={"effects.p2.claims.0.approval": "d3"})
+v.step(lprop("p2b", chg([("payments/pay.rs", "modify", 3)], label="p2b"), author=M), "allow")
+v.step(lappr("d4", "p2b", author=O), "allow").step(claim("c2b", "p2b"), "allow", note="or an owner")
+# a path owner approving a tier 3 change counts once
+v.step(lprop("p3", chg([("migrations/001.sql", "add", 3)], label="p3"), author=M), "allow", check={"effects.p3.gate.tier": 3})
+v.step(lappr("e1", "p3", author=R, evidence=review("p3")), "denied", note="no machine at tier 3")
+v.step(lappr("e2", "p3", author=O), "allow")
+v.step(claim("c3x", "p3"), "denied", note="E3: tier 3 needs two approvals")
+v.step(lappr("e2b", "p3", author=O), "allow", note="the same human approving again supersedes")
+v.step(claim("c3y", "p3"), "denied", note="still one human")
+v.step(lappr("e3", "p3", author=P), "allow")
+v.actors(claim("c3", "p3"), [X, M, O, P])
+v.step(lappr("e4", "p3", author=H3), "allow")
+v.actors(claim("c3", "p3"), [X, M, O, P])
+v.step(claim("c3", "p3"), "allow", check={"effects.p3.claims.0.approval": "e2b", "effects.p3.claims.0.coApprovals": ["e3"]}, note="two distinct humans: the first two candidates are consumed, the third stays")
+v.step(outc("o3", "c3", "failed", "no"), "allow", check={"effects.p3.phase": "open"}, note="not started: both approvals come back")
+v.step(claim("c3b", "p3", attempt=2), "allow", check={"effects.p3.claims.1.approval": "e2b", "effects.p3.claims.1.coApprovals": ["e3"]})
+# tier 3 by a truncated summary or none at all, and an agent proposer's operator as the fallback owner
+v.step(lprop("p3t", chg([("docs/a.md", "modify", 1)], total=70, truncated=True, label="p3t"), author=M), "allow", check={"effects.p3t.gate.tier": 3})
+v.step(lappr("f1", "p3t", author=O), "allow").step(claim("c3t", "p3t"), "denied", note="a truncated summary needs two people too")
+v.step(lappr("f2", "p3t", author=P), "allow").step(claim("c3t2", "p3t"), "allow")
+v.step(lprop("p3n", author=M), "allow", check={"effects.p3n.gate": {"tier": 3}})
+v.step(lappr("f3", "p3n", author=O), "allow").step(claim("c3n", "p3n"), "denied", note="no change summary: two people")
+v.step(lprop("p2o", chg([("ops/run.sh", "modify", 1)], label="p2o"), author="@bot:b.example"), "allow", check={"effects.p2o.gate.tier": 2, "effects.p2o.gate.owners": [OP]}, note="no owner rule for ops: the agent's confirmed operator is the path owner")
+v.step(lappr("g1", "p2o", author=P), "denied", note="not the operator")
+v.step(lappr("g2", "p2o", author=OP), "allow").step(claim("c2o", "p2o"), "allow")
+v.step(lprop("p2h", chg([("ops/run.sh", "modify", 1)], label="p2h"), author=M), "allow", check={"effects.p2h.gate.owners": MISSING}, note="a human proposer: no path owner, only an owner approves")
+v.step(lappr("g3", "p2h", author=OP), "denied").step(lappr("g4", "p2h", author=O), "allow")
+# a rule that asks for two humans, with no tier at all
+v.step(prop("dp", action="deploy"), "allow")
+v.step(lappr("h1", "dp", author=M), "allow").step(claim("cd0", "dp"), "denied", note="needs 2: one approval")
+v.step(lappr("h2", "dp", author=R), "denied", note="humans: an agent's approval never counts")
+v.step(lappr("h3", "dp", author=H3), "allow").step(claim("cd", "dp"), "allow", check={"effects.dp.claims.0.approval": "h1", "effects.dp.claims.0.coApprovals": ["h3"]})
+add(v.done())
+
+v = V("gate-defaults-and-predicates", ["P-17", "P-08"], "round 33: with no rule for a gated effect, tier 0 needs no approval and tier 1 and above need an owner; a rule with a tier predicate does not apply to an effect with no gate; a rule change decides at the claim, a tier does not change")
+v.prof(R, REVIEWER)
+team(v, policy(gates=GATES))
+v.step(ms("mr", O, R, "member"), "allow")
+v.step(lprop("t0", chg([("docs/a.md", "modify", 1)], label="t0")), "allow").step(claim("ct0", "t0"), "allow", note="tier 0: no rule, no approval")
+v.step(lprop("t1", chg([("src/a.rs", "modify", 1)], label="t1")), "allow").step(claim("ct1", "t1"), "denied", note="tier 1: no rule, an owner is needed")
+v.step(lappr("x1", "t1", author=M), "denied", note="a member is not an owner")
+v.step(lappr("x2", "t1", author=R, evidence=review("t1")), "denied", note="nor is a reviewer, evidence or not")
+v.step(lappr("x3", "t1", author=O), "allow").step(claim("ct1b", "t1"), "allow")
+v.step(lprop("t2", chg([("payments/a.rs", "modify", 1)], label="t2")), "allow").step(lappr("x4", "t2", author=O), "allow").step(claim("ct2", "t2"), "allow", note="tier 2: an owner")
+v.step(lprop("t3", chg([("auth/a.rs", "modify", 1)], label="t3")), "allow").step(lappr("x5", "t3", author=O), "allow").step(claim("ct3", "t3"), "denied", note="tier 3: two humans, whatever the rules say")
+v.step(lappr("x6", "t3", author=P), "denied", note="a member is not an owner (the default rule)")
+v.step(ms("m9", O, H3, "owner"), "allow").step(lappr("x7", "t3", author=H3), "allow").step(claim("ct3b", "t3"), "allow", check={"effects.t3.claims.0.coApprovals": ["x7"]}, note="a second owner")
+# a rule change decides at the claim; the tier stays
+v.step(E("pol", "policy.set", O, {"policy": policy(gates=GATES, approvals=LAND_RULES)}), "allow")
+v.step(lprop("t4", chg([("src/a.rs", "modify", 1)], label="t4")), "allow", check={"effects.t4.gate.tier": 1})
+v.step(lappr("y1", "t4", author=R, evidence=review("t4")), "allow")
+v.step(E("pol3", "policy.set", O, {"policy": policy(gates=GATES, approvals=[dict(LAND_RULES[0], approvers=["owner"])] + LAND_RULES[1:])}), "allow")
+v.step(claim("ct4", "t4"), "denied", note="the reviewer is no longer listed: its approval counts for nothing now")
+v.step(lappr("y2", "t4", author=O), "allow").step(claim("ct4b", "t4"), "allow", check={"effects.t4.claims.0.approval": "y2"}, note="and an owner's evidence-free approval does")
+# a tier predicate needs a gate
+v.step(E("pol4", "policy.set", O, {"policy": policy(approvals=[{"action": "vcs.land", "maxTier": 1, "approvers": [O]}, {"action": "vcs.land", "approvers": [M]}])}), "allow")
+v.step(lprop("u1", chg([("src/a.rs", "modify", 1)], label="u1")), "allow", check={"effects.u1.gate": MISSING}, note="no gates in the policy: no gate on the effect")
+v.step(lappr("z1", "u1", author=O), "denied", note="the tier rule does not apply to an effect with no gate")
+v.step(lappr("z2", "u1", author=M), "allow").step(claim("cu1", "u1"), "allow", note="the next rule does")
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",

@@ -938,6 +938,65 @@ steps += sent(al, ec_id(), e, c, code, d); assert code == "ok", code
 r33.append(vec("C2", "P-07a: run after C1. In `%s` bob (a member, neither proposer nor executor) cannot cancel an open effect: denied; x's cancel with a `reason` of 1,025 bytes, a malformed `evidence`, a content member the kind lacks (`note`), or one more member than the kind has is invalid, and a `reason` of exactly 1,024 bytes is ordered; once x has claimed an effect its own cancel is denied (the executor's right is for an open effect only), while the proposer's cancel is still ordered as a request" % EC,
                steps, ["P-07a", "P-04", "§5"], "denied; invalid x4; ok; denied; ok", source="maker (oracle: ref/wire.py Home)"))
 
+
+# ───────────── P-17 (semantic gates): a landing's change summary in the body, an approval's evidence in body and content ─────────────
+EG = "eg:" + SERVER
+GATE_POLICY = dict(SP_POLICY, gates={"small": 20, "large": 500, "paths": [{"glob": "payments/**", "class": "sensitive"}, {"glob": "docs/**", "class": "docs"}],
+                                     "owners": [{"glob": "payments/**", "owners": [A("bob")]}]},
+                   approvals=[{"action": "vcs.land", "maxTier": 1, "approvers": ["member", "owner"], "evidence": "han.review/1"}, {"action": "vcs.land", "approvers": ["@path-owner", "owner"]}])
+DELTA = hashlib.sha256(b"delta:eg").hexdigest()
+CHANGE = {"repo": "github:o/r", "deltaDigest": DELTA, "total": 2, "files": [{"path": "docs/a.md", "kind": "modify", "lines": 3}, {"path": "docs/b.md", "kind": "add", "lines": 4}]}
+REVIEW = b'{"schema":"han.review/1","verdict":"approve"}'
+REF_REVIEW = {"hash": hashlib.sha256(REVIEW).hexdigest(), "size": len(REVIEW), "type": "application/vnd.han.review+json"}
+eg_n = [10]
+def eg_id():
+    eg_n[0] += 1; return eg_n[0]
+def eg_land(n, steps, change=CHANGE, action="vcs.land", extra=None):
+    plan_ = {"action": action, "target": "github:o/r", "args": {"ref": "refs/heads/main", "base": "a" * 40, "to": "b" * 40, "deltaDigest": DELTA, "tier": 0, "rebase": "none", **({"change": change} if change is not None else {})}}
+    body = {"executor": xc, "action": action, "planDigest": hashlib.sha256(P.jcs(plan_)).hexdigest(), "repeatable": False, **({"change": change} if change is not None else {}), **(extra or {})}
+    return plan_, body
+e, c, r = oa("alice", "space.create", {"policy": GATE_POLICY}, {"name": "gates"}, space=EG, tag="eg-create")
+steps = put(al, 2, e, c, r) + member(al, EG, "bob", "member", 3) + member(al, EG, "carol", "member", 4) + member(al, EG, "x", "member", 5)
+plan_, body = eg_land(1, steps)
+e, c, r = oa("alice", "effect.propose", body, {"plan": plan_}, space=EG, tag="eg-propose-1")
+steps += put(al, 6, e, c, r)
+p1 = r["id"]
+steps += [{"conn": ca, "send": {"id": 7, "call": "blobGet", "args": {"ref": REF_REVIEW, "space": EG}}}, {"conn": ca, "expect": err(7, "not_found")},
+          {"conn": bo, "send": {"id": 8, "call": "blobPut", "args": {"ref": REF_REVIEW, "offset": 0, "data": W.b64(REVIEW)}}}, {"conn": bo, "expect": {"id": 8, "ok": {"have": len(REVIEW), "complete": True}}}]
+e, c, r = oa("bob", "effect.approve", {"proposal": p1, "planDigest": body["planDigest"], "evidence": {"kind": "han.review/1", "over": DELTA}}, {"evidence": REF_REVIEW}, space=EG, tag="eg-approve-1")
+steps += put(bo, 9, e, c, r)
+steps += [{"conn": ca, "send": {"id": 10, "call": "blobGet", "args": {"ref": REF_REVIEW, "space": EG}}}, {"conn": ca, "expect": {"id": 10, "ok": {"data": W.b64(REVIEW), "size": len(REVIEW), "offset": 0}}}]
+e, c, r = oa("x", "effect.claim", {"proposal": p1, "attempt": 1, "instance": "k1", "window": SP_POLICY["launchWindow"]}, space=EG, tag="eg-claim-1")
+steps += put(xc, 11, e, c, r)
+r33.append(vec("C3", "P-17, G-01: run after C2. In `%s`, whose policy has gates and a tier-0/1 rule, alice proposes a `vcs.land` whose body carries the change summary (the plan's `args.change`) and bob approves it with `evidence {kind, over}` in the body and the review record's BlobRef in the content; both are ordered with exact receipts, the record blob is readable by carol once referenced (`effect.approve.evidence` is a reference position), and x's claim is ordered: the approval counts" % EG,
+               steps, ["P-17", "G-01", "§5", "E3"], "ok x7; blobGet not_found, then ok", source="maker (oracle: ref/wire.py Home)"))
+
+steps = []
+def eg_try(actor, conn, kind, body_, content, tag, want):
+    e, c, code, d = attempt(actor, kind, body_, content, space=EG, tag="eg-" + tag)
+    assert code == want, (tag, code, d)
+    return sent(conn, eg_id(), e, c, code, d)
+plan_, body = eg_land(2, steps, change=None)
+for tag, ch in (("unsorted", dict(CHANGE, files=list(reversed(CHANGE["files"])))), ("total", dict(CHANGE, total=1)), ("truncated-false", dict(CHANGE, truncated=False)),
+                ("rename", dict(CHANGE, files=[{"path": "docs/a.md", "kind": "rename", "lines": 0}])), ("path", dict(CHANGE, files=[{"path": "../a", "kind": "add", "lines": 1}])),
+                ("member", dict(CHANGE, tier=0))):
+    steps += eg_try("alice", al, "effect.propose", dict(body, change=ch), {"plan": plan_}, "bad-" + tag, "invalid")
+steps += eg_try("alice", al, "effect.propose", dict(body, change=CHANGE, tier=0), {"plan": plan_}, "bad-tier", "invalid")
+plan_g, body_g = eg_land(3, steps, action="git.push")
+steps += eg_try("alice", al, "effect.propose", body_g, {"plan": plan_g}, "bad-action", "invalid")
+e, c, r = oa("alice", "effect.propose", dict(body, change=dict(CHANGE, files=CHANGE["files"][:1], total=2, truncated=True)), {"plan": plan_}, space=EG, tag="eg-propose-trunc")
+steps += put(al, eg_id(), e, c, r)
+p2 = r["id"]
+for tag, ev, content in (("no-over", {"kind": "han.review/1"}, None), ("kind", {"kind": "Han", "over": DELTA}, None), ("record", {"kind": "han.review/1", "over": DELTA, "record": DELTA}, None),
+                         ("blob", {"kind": "han.review/1", "over": DELTA}, {"evidence": {"hash": "xyz", "size": 1, "type": "text/plain"}}), ("note", {"kind": "han.review/1", "over": DELTA}, {"evidence": REF_REVIEW, "x": 1})):
+    steps += eg_try("bob", bo, "effect.approve", {"proposal": p2, "planDigest": body["planDigest"], "evidence": ev}, content, "bad-ev-" + tag, "invalid")
+steps += eg_try("carol", ca, "effect.approve", {"proposal": p2, "planDigest": body["planDigest"]}, None, "not-owner", "denied")
+steps += eg_try("alice", al, "policy.set", {"policy": dict(GATE_POLICY, gates=dict(GATE_POLICY["gates"], small=501))}, None, "bad-gates", "invalid")
+steps += eg_try("alice", al, "policy.set", {"policy": dict(GATE_POLICY, approvals=[{"action": "vcs.land", "maxTier": 9, "approvers": ["owner"]}])}, None, "bad-rule", "invalid")
+steps += eg_try("alice", al, "policy.set", {"policy": dict(GATE_POLICY, approvals=[{"action": "vcs.land", "minTier": 1, "maxTier": 3, "humans": True, "evidence": "han.review/1", "needs": 3, "approvers": ["@path-owner", "owner"]}])}, None, "good-rule", "ok")
+r33.append(vec("C4", "P-17, R-09: run after C3. In `%s` a proposal's `change` that is unsorted, has a total below its files, `truncated: false`, a rename without a source, a path with `..` or an unknown member is invalid, so is a `tier` member and a `change` on another action; a truncated summary is ordered; an approval's `evidence` without `over`, with a bad kind or an extra member, or whose content `evidence` is no BlobRef, is invalid, and carol, not an owner for a tier-3 effect, is denied; a `policy.set` with `small` above `large` or a rule with `maxTier` 9 is invalid and a rule with every new member is ordered" % EG,
+               steps, ["P-17", "R-09", "§5"], "invalid x8; ok; invalid x5; denied; invalid x2; ok", source="maker (oracle: ref/wire.py Home)"))
+
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""
     head = json.dumps({k: v for k, v in doc.items() if k != "vectors"}, ensure_ascii=False)[:-1]
@@ -952,7 +1011,7 @@ dump_vectors(os.path.join(OUT, "probes-r23.json"), {"format": "han-wire-vectors/
 dump_vectors(os.path.join(OUT, "probes-r24.json"), {"format": "han-wire-vectors/1", "kind": "r24", "note": "Round-24 coverage (DECISIONS-r24.md H3, H10 a; architecture.md section 3 state, G-09, G-11 test.limits). Run last: they lower and restore maxFrameBytes (test.limits). Every expected value is from ref/wire.py (W.Home) driven with the same entries; the cursor of a state page is exact.", "vectors": r24})
 dump_vectors(os.path.join(OUT, "probes-r25.json"), {"format": "han-wire-vectors/1", "kind": "r25", "note": "Round-25 coverage (DECISIONS-r25.md K7; architecture.md section 3 state, G-09). Run after probes-r24.json: they use its space `bc:a.localhost`. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r25})
 dump_vectors(os.path.join(OUT, "probes-r27.json"), {"format": "han-wire-vectors/1", "kind": "r27", "note": "Round-27 coverage (round-26 review N3; architecture.md P-01, section 4.1 step 4, R-14). Run after probes-r25.json. Every expected value is from ref/wire.py (W.Home) driven with the same entries; the claim's receipt is exact, so its `profiles` pins are.", "vectors": r27})
-dump_vectors(os.path.join(OUT, "probes-r33.json"), {"format": "han-wire-vectors/1", "kind": "r33", "note": "Round-33 coverage (architecture.md P-07a, G-01, section 5: the executor's `effect.cancel` with `reason` and `evidence`). Run after probes-r27.json: C2 uses the space C1 builds. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r33})
+dump_vectors(os.path.join(OUT, "probes-r33.json"), {"format": "han-wire-vectors/1", "kind": "r33", "note": "Round-33 coverage (architecture.md P-07a, P-17, G-01, section 5: the executor's `effect.cancel` with `reason` and `evidence`; a landing's change summary and an approval's evidence). Run after probes-r27.json: C2 uses the space C1 builds, C4 the space C3 builds. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r33})
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})

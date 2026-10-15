@@ -1,0 +1,4758 @@
+{
+ "name": "gate-schema",
+ "rules": [
+  "P-17",
+  "R-09"
+ ],
+ "description": "round 33: the closed shapes of gates, approval rules, change summaries and approval evidence; every bound is checked",
+ "profiles": {
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "maxTier": 1,
+        "approvers": [
+         "@rev:a.example",
+         "owner"
+        ],
+        "evidence": "han.review/1"
+       },
+       {
+        "action": "vcs.land",
+        "maxTier": 2,
+        "approvers": [
+         "@path-owner",
+         "owner"
+        ],
+        "humans": true
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner",
+         "member"
+        ],
+        "humans": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow",
+   "note": "the full example is valid"
+  },
+  {
+   "entry": {
+    "id": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 501,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "invalid",
+   "note": "small above large"
+  },
+  {
+   "entry": {
+    "id": "8d8ed36a8489cf8526e6ae183163d585bbc1d93a84200e00fb1c534fed658c90",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "a/**",
+         "class": "secret"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "invalid",
+   "note": "unknown class"
+  },
+  {
+   "entry": {
+    "id": "eb8f375ab3f3ae03b62a3d7b02529fd0e72b3882d9d456d1942ca9b8ed534a18",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "a/**",
+         "class": "docs",
+         "tier": 0
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "invalid",
+   "note": "a rule field the shape lacks"
+  },
+  {
+   "entry": {
+    "id": "468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "a//b",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "invalid",
+   "note": "an empty segment"
+  },
+  {
+   "entry": {
+    "id": "4e0adfa95b6346f320d86960d195ccf6fbc673525bdac7e4e97558830c7570f8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "a/../b",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "invalid",
+   "note": "a segment of dots"
+  },
+  {
+   "entry": {
+    "id": "7e3d751a16d14e0c060e62327c95ea68dfa4eddf4f9d1ac9dc8a81d4b6376a60",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "a**/b",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "invalid",
+   "note": "** inside a segment"
+  },
+  {
+   "entry": {
+    "id": "ec5974412cdcaceffd337c2f74139e3a4463e23f5f83c2bb4881acc708ca7e46",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "**/**/**/**/**",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p8",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "invalid",
+   "note": "five ** segments"
+  },
+  {
+   "entry": {
+    "id": "8142b0eaac7d9e96b334fcddbda8d45de3669828747ad0650ed4eb1c7d33f086",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "/a",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "invalid",
+   "note": "a leading slash"
+  },
+  {
+   "entry": {
+    "id": "0139872bce167e5d699661926555883a45c856577fc87a87a75f695dec07f157",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "a b",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p10",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "invalid",
+   "note": "a space in a glob"
+  },
+  {
+   "entry": {
+    "id": "79133ec8d7de9f341497821f3b69ef5a3fbf0e83af82f82e56e520e145e06b0f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "d0/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d1/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d2/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d3/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d4/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d5/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d6/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d7/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d8/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d9/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d10/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d11/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d12/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d13/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d14/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d15/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d16/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d17/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d18/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d19/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d20/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d21/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d22/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d23/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d24/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d25/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d26/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d27/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d28/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d29/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d30/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d31/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d32/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d33/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d34/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d35/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d36/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d37/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d38/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d39/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d40/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d41/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d42/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d43/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d44/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d45/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d46/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d47/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d48/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d49/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d50/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d51/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d52/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d53/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d54/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d55/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d56/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d57/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d58/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d59/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d60/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d61/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d62/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d63/**",
+         "class": "docs"
+        },
+        {
+         "glob": "d64/**",
+         "class": "docs"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p11",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "invalid",
+   "note": "65 path rules"
+  },
+  {
+   "entry": {
+    "id": "8be93ab90c5b721fe49a989f9c6c59f19ae1ec37e5eef4f821d5d83de1d09712",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "a/**",
+         "owners": []
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p12",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "invalid",
+   "note": "an owner rule with no owners"
+  },
+  {
+   "entry": {
+    "id": "ebfa5ef17f780a0b9ec09a55216d7e564b475ace444afab2205c6dc1ebae7722",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "a/**",
+         "owners": [
+          "@u0:a.example",
+          "@u1:a.example",
+          "@u2:a.example",
+          "@u3:a.example",
+          "@u4:a.example",
+          "@u5:a.example",
+          "@u6:a.example",
+          "@u7:a.example",
+          "@u8:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p13",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "invalid",
+   "note": "nine owners"
+  },
+  {
+   "entry": {
+    "id": "e473e37f7a195cf2410bcebd313df461def8c53718aa89e143bcb799e0a487d2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "a/**",
+         "owners": [
+          "owner"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p14",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "invalid",
+   "note": "an owner that is no actor"
+  },
+  {
+   "entry": {
+    "id": "37cdaec2fed0873f57b3dcea1517d76a6872e94917a5c121c69e55492ad918f9",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "a/**",
+         "owners": [
+          "@m:a.example",
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p15",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "invalid",
+   "note": "a repeated owner"
+  },
+  {
+   "entry": {
+    "id": "092171451ecb02219fa4c49c208e7c3f8fdac297b9121b481ed959acab0c8b33",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p16",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "invalid",
+   "note": "no owners member"
+  },
+  {
+   "entry": {
+    "id": "1b526e20f47c5f762cd3780ee9435a4f09ed674280f98bdb7943f0ae40ad4654",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "minTier": 2,
+        "maxTier": 1,
+        "approvers": [
+         "@o:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p17",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "invalid",
+   "note": "minTier above maxTier"
+  },
+  {
+   "entry": {
+    "id": "ca2d910ec09e295244db6e72a003bee3ef11f1bae6cc1ad858c49949bf25b5d6",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "maxTier": 4,
+        "approvers": [
+         "@o:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p18",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "invalid",
+   "note": "a tier above 3"
+  },
+  {
+   "entry": {
+    "id": "4748ea497779907fc04e45431058abaecb48e0ea27d8fbf3b5eaeb94b05500df",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "needs": 0,
+        "approvers": [
+         "@o:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p19",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "invalid",
+   "note": "needs 0"
+  },
+  {
+   "entry": {
+    "id": "a045d557a8929f663f228ff7413d5d0bbb295a348aca50cd7a8ec4746c6aefa5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "needs": 4,
+        "approvers": [
+         "@o:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p20",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "invalid",
+   "note": "needs 4"
+  },
+  {
+   "entry": {
+    "id": "22140b74e0c3c831fed193148225593333552274b9f13632e354ee4d6577dc20",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "humans": "yes",
+        "approvers": [
+         "@o:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p21",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "invalid",
+   "note": "humans not a boolean"
+  },
+  {
+   "entry": {
+    "id": "e54b761db426189a6964e34dc0269fa24a91546c0e0922b0c170c43b266ae330",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "evidence": "Han.Review",
+        "approvers": [
+         "@o:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p22",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "invalid",
+   "note": "an evidence kind with capitals"
+  },
+  {
+   "entry": {
+    "id": "2f078efd5a0b8d68ea6b86716cde51e8060452b596a77b3e583f5e5d083833c1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "@path-owners"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p23",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "invalid",
+   "note": "an approver that is neither a role, an id nor @path-owner"
+  },
+  {
+   "entry": {
+    "id": "eb9ea4b194843d1cde63a2e3b02998bd312293270466eef4675c48f6aa29fdf1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "@o:a.example"
+        ],
+        "tier": 1
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p24",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "invalid",
+   "note": "an unknown rule field"
+  },
+  {
+   "entry": {
+    "id": "a92412187be98b260941309e5da4bd973a8d1d97d64c63b83f3ec6c5cd93afd0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "minTier": 1,
+        "maxTier": 1,
+        "needs": 3,
+        "humans": true,
+        "evidence": "x",
+        "approvers": [
+         "@path-owner",
+         "@o:a.example",
+         "member"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p25",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "allow",
+   "note": "every rule field at its edge"
+  },
+  {
+   "entry": {
+    "id": "611cb5675a8e75a0e0682c2c44be4afa6e30fb69d539026db44e5665a02ee3f6",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 0,
+       "large": 0,
+       "paths": [],
+       "owners": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p26",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "allow",
+   "note": "empty rule lists and zero limits"
+  },
+  {
+   "entry": {
+    "id": "d8d7ff3da8d3678f73e60b621d66c840a138c9eea510f0d36b801012400528b1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-p27",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:28Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:29Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:30Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "84f674f9701bc2ad7ec60d061c8d166b09a7034cb271959121cb95c99de66875",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "1de003ea8f887d4c5b93360f9a8758c4c5315a9dc212c70536e5757c864f336b",
+      "total": 3,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "z/x",
+        "kind": "rename",
+        "lines": 0,
+        "fromPath": "y"
+       },
+       {
+        "path": "é",
+        "kind": "add",
+        "lines": 2
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:31Z",
+   "expect": "allow",
+   "note": "UTF-8 byte order: a, é (0xC3), z/x"
+  },
+  {
+   "entry": {
+    "id": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "7b8ef205ca5e665cd0b0497340c34e8fac0c19a15b32f16e43fa64ffdebb1ce5",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "01cc0a0e8d9c1ce10a4afc3c4617881229d4a1e60f711944f92f0a7b58ad372e",
+      "total": 2,
+      "files": [
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:32Z",
+   "expect": "invalid",
+   "note": "files out of byte order"
+  },
+  {
+   "entry": {
+    "id": "28013e231b79aef441949d3f0945b1a3b4ca22785b3fb4a37bda515bbeff0800",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "889819889c1fe6276a172b0e38a0f4e25e1bcbe3fde98e971efb36ee732087f0",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "fe1e0742f2e9f61d43a465b7b1002460caa042d9eb4a0129fa3e27da5884863a",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:33Z",
+   "expect": "invalid",
+   "note": "a path twice"
+  },
+  {
+   "entry": {
+    "id": "01add4455ab59cae02751bd1ef858d82151fbdd525f985950653fcae3a5531f1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "436d5fb469d90c37d58f476b66c34ce272e1435aa2b8530956435c5f16d18399",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "3499429ce2c5acb9d0e375c539d5fa09865205c732760f1d19055ddf3280f5b5",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "rename",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:34Z",
+   "expect": "invalid",
+   "note": "a rename without fromPath"
+  },
+  {
+   "entry": {
+    "id": "1887a0df47e11c439a7ab22cd08d10ea945b7a2965a57381ab5ba7517596be72",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "f5f7abb521c28e7b1998bd5f2f0aa9c15216fe224f7f5b7f0784c78571d8a79a",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "e1a488c0b32e0b1e8c35b44faa8e03e51bd6d4fd0db7501156b661cef529e133",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1,
+        "fromPath": "z"
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "invalid",
+   "note": "fromPath on a modify"
+  },
+  {
+   "entry": {
+    "id": "36c5b8666da4c7e0a15e6c34215d69fa462b7c91e8f818bed41d0a0416eba550",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "084e9543c489e90f94fbdd83de32395c1ab1bef1caea08cf0c94cfdcc34a3bda",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "8774a5732e2aed0e82abbe469fee33ff6ca59d39ed5b1a73ef1e72204eca128b",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "rename",
+        "lines": 1,
+        "fromPath": "a"
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:36Z",
+   "expect": "invalid",
+   "note": "a rename from itself"
+  },
+  {
+   "entry": {
+    "id": "914eef7fb50de31f12b9d6e487033bad9fe9bc49b8d35da74f42b3e1e8335ac7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "28627e786526271e4dd133336f7d174107859260ee7a4dea3eb5e9e31e03fec7",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "b12c41cfd4087d697231589f9a9a41f00f9fa98e73bf855dac08e82c40a32ff5",
+      "total": 2,
+      "files": [
+       {
+        "path": "/a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:37Z",
+   "expect": "invalid",
+   "note": "an absolute path"
+  },
+  {
+   "entry": {
+    "id": "b6d0f7434f895010a559f7a6809a7ac6788cb292cecfa6f9d9d47232243e2f0c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "bf2066a8836be12ea629bb1470ddce3b97d4230697c287fcab51cfa0e0702f18",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "393f6a0bac7f5269f399cb703894db7f8114828f0db06ac7f450ced7f8a8361f",
+      "total": 2,
+      "files": [
+       {
+        "path": "x/../a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:38Z",
+   "expect": "invalid",
+   "note": "a dot-dot segment"
+  },
+  {
+   "entry": {
+    "id": "74fbe213ea2d093d300152c7d80e59cf9cd0bf2b48b9a6bf286c39fb9bae2bcf",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "f094b959f411f107248d8ac26e5edb029cdb279054bf41ebeaf1b0141c452ef2",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "4a7bc951cc5ba52068ec2b83087fd7a1c9cef818bf5627789ffc418ea99ef9bc",
+      "total": 2,
+      "files": [
+       {
+        "path": "a/",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u8",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:39Z",
+   "expect": "invalid",
+   "note": "a trailing slash"
+  },
+  {
+   "entry": {
+    "id": "37b59990506d628ab1bf8bdea89712938b39c42629a7a950ac4cb589265eb2f7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "28a334d38a8fe75a36bc9727ca8332f134a8a8e3992bb86ffb5ad1577ed9a7b0",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "2fff5765d55b595887c839042d807900eca4e2b3cf78791c90c8af6393ae5269",
+      "total": 2,
+      "files": [
+       {
+        "path": "a\nb",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:40Z",
+   "expect": "invalid",
+   "note": "a control character"
+  },
+  {
+   "entry": {
+    "id": "fa9e19af065855c8b922c7dc908ee644710fe34150cb6d603b0d28f9614ab9bb",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "00d193ca45168507f795fe23badf69082073d8a7d862c1101e263c68b46900f8",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "5edc6e1119b3c2f809674bdf04257eea8817507cfc6f4e8ab95fb6acd46c577e",
+      "total": 2,
+      "files": [
+       {
+        "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u10",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:41Z",
+   "expect": "invalid",
+   "note": "a path over 255 bytes"
+  },
+  {
+   "entry": {
+    "id": "252a8dfe3476e71d4a6e35a240047c70c9172312a47adc59ebbe3328f2f66567",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "95dc84dad9dcd0d3ed622fcbba51109de66af23c1f8477acce8176ae745feb11",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "f5d8019132826e0b17af7f6dcf5f017989e57aa0fd553894add92fcd7429a0ff",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "copy",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u11",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:42Z",
+   "expect": "invalid",
+   "note": "an unknown kind"
+  },
+  {
+   "entry": {
+    "id": "f981d922741b84fee23f9f90bab5e351457178bab6190ce42432d466333d7156",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "e5b6bbc5396125b4e4cf9bc5b417c32d3c853f2e66e912c5836d3d9f17bdd490",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "53698c9eb28b768254133201051d53a41a84ac826d9d2e1c5214f74c74b366a2",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1.5
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u12",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:43Z",
+   "expect": "invalid",
+   "note": "a float for lines"
+  },
+  {
+   "entry": {
+    "id": "c5f60dfde7076300e53b5a29b30e262ce4514f14956cf56bf93d2a26007ef35e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "bfbf1561c4dc12c98649e4ba0f8bb67a7b6f589260d31b2eeb03a0c52ef8a19e",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "8300cdeeeec4f873a01af0677b4f70af7b787c0a6803e98d9aa8cedd107376b8",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ],
+      "truncated": false
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u13",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:44Z",
+   "expect": "invalid",
+   "note": "truncated: false"
+  },
+  {
+   "entry": {
+    "id": "5c3f5d9775769a1fb66244aae4c0017285a9deac6f9402691e4ae29d81f48c2b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "744bb36b0a2e97d43e82f292497be40e013dc311368743a64e015a803409f3f8",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "d22557c78590eb6c6416c689ba8d09258eabdceeac54df84e191c7a62bacd859",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ],
+      "truncated": true
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u14",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:45Z",
+   "expect": "invalid",
+   "note": "truncated with all files listed"
+  },
+  {
+   "entry": {
+    "id": "33738d5c0558aad36b678a589e15f7f47ed033a0e4ca77ca09c48a0b8e9c19a2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "2f1e5dffa3680f6d4eed416fdccb005acc728d806fed6603a77ca0286322df00",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "5d9a30f1c81a175a463012647697d701194a92fb92fdafc991f62243b5822446",
+      "total": 5,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u15",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:46Z",
+   "expect": "invalid",
+   "note": "files left out and not truncated"
+  },
+  {
+   "entry": {
+    "id": "711bd3736cb21b17b3035c436ef6c9fb1b183c878c0c7f3051862bdd17d6270d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "1826f5fca8fffef628afe7e38107dc54444347e439a88ab3f019053fb62c4c37",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "aff65facf48b31504aac7622b20750d4ce627921f494c5c47e113f3ea2b6e9e2",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ],
+      "tier": 0
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u16",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:47Z",
+   "expect": "invalid",
+   "note": "an unknown member"
+  },
+  {
+   "entry": {
+    "id": "d49455362a31f1553ddf6a887a7be415527f1d3c50085856eb7863642318fbf4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "ec80cb8a2b2ad1a0bd53a743610b8aae32db33243ecfb77ceb460b8e6fa8f0af",
+     "repeatable": false,
+     "change": {
+      "repo": "a b",
+      "deltaDigest": "aba6fcead663d1781607922874e5fca40d702aa87e1926f3746d59a580ec5435",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u17",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:48Z",
+   "expect": "invalid",
+   "note": "a repo with a space"
+  },
+  {
+   "entry": {
+    "id": "6c0e023c26c409bafe373b0765010abb627c5b9ececb0b5c61642badebc6727e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "130acf7d1c5e914f517c726b6f21e1f808f4adc56aa46481b7f47dca02e90e90",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "abc",
+      "total": 2,
+      "files": [
+       {
+        "path": "a",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "b",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u18",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:49Z",
+   "expect": "invalid",
+   "note": "a digest that is no digest"
+  },
+  {
+   "entry": {
+    "id": "3be88a2ce201101d05e7124f60b0e8efbc213c1851ff5b081459946940eb3f7c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "9c1a78c0267ded17a50a7e948bbd2597d7ee9fc433584d4a0a20ebf748bd1f04",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "8827c77ce0a8f2250b9715ade626e60b2fec84ccdbfb932053f24e3ed19b8882",
+      "total": 65,
+      "files": [
+       {
+        "path": "d/f000",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f001",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f002",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f003",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f004",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f005",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f006",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f007",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f008",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f009",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f010",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f011",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f012",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f013",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f014",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f015",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f016",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f017",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f018",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f019",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f020",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f021",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f022",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f023",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f024",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f025",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f026",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f027",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f028",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f029",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f030",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f031",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f032",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f033",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f034",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f035",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f036",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f037",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f038",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f039",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f040",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f041",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f042",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f043",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f044",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f045",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f046",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f047",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f048",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f049",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f050",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f051",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f052",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f053",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f054",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f055",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f056",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f057",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f058",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f059",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f060",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f061",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f062",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f063",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f064",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u19",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:50Z",
+   "expect": "invalid",
+   "note": "65 files"
+  },
+  {
+   "entry": {
+    "id": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "ff7300ad2083cb7a8fee066a8ebb12ad3d5dd60f0ef0ed1f2b110222e0a64ac0",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "bbaf9370e051c2a1e637cf9cccefbc50786e3d5a51100d7ada98d499171d3aeb",
+      "total": 64,
+      "files": [
+       {
+        "path": "d/f000",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f001",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f002",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f003",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f004",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f005",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f006",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f007",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f008",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f009",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f010",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f011",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f012",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f013",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f014",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f015",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f016",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f017",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f018",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f019",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f020",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f021",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f022",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f023",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f024",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f025",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f026",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f027",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f028",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f029",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f030",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f031",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f032",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f033",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f034",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f035",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f036",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f037",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f038",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f039",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f040",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f041",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f042",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f043",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f044",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f045",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f046",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f047",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f048",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f049",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f050",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f051",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f052",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f053",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f054",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f055",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f056",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f057",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f058",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f059",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f060",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f061",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f062",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f063",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u20",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:51Z",
+   "expect": "allow",
+   "note": "64 files fit"
+  },
+  {
+   "entry": {
+    "id": "ec1897a662f93542f1f26a53fdf94dafb402e6a63db5eca970851bd999b5bdab",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "886f6b867ef3bf5ad03d572b37b098cd6c4eea1872cc5895aeac0ef8f8b3f9c7",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "fe2edd9fc24b11deab9a06ec18e5dd14256da6cfa0762b384945d1b44db957c6",
+      "total": 64,
+      "files": [
+       {
+        "path": "p/00xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/01xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/02xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/03xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/04xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/05xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/06xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/07xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/08xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/09xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/10xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/12xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/13xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/14xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/15xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/16xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/17xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/18xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/19xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/20xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/21xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/22xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/23xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/24xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/25xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/26xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/27xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/28xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/29xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/30xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/31xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/32xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/33xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/34xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/35xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/36xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/37xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/38xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/39xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/40xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/41xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/42xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/43xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/44xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/45xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/46xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/47xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/48xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/49xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/50xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/51xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/52xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/53xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/54xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/55xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/56xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/57xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/58xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/59xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/60xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/61xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/62xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "p/63xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u21",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:52Z",
+   "expect": "invalid",
+   "note": "over 12,288 bytes of summary"
+  },
+  {
+   "entry": {
+    "id": "c8d46ba1251c53e8b2fadcedcc104244fad37df9aca49ceaece744fee5c17b01",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "512edcbf872e8eaa61721104f30b288324bc4fc84d84e7782a04fdd81cc6a39f",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "3ad6e06e1006a9be6f4894c5262dfaf8056883a42c4ed3ac7cf4b924964ab748",
+      "total": 9000,
+      "files": [
+       {
+        "path": "d/f000",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f001",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f002",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f003",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f004",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f005",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f006",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f007",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f008",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f009",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f010",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f011",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f012",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f013",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f014",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f015",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f016",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f017",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f018",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f019",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f020",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f021",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f022",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f023",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f024",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f025",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f026",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f027",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f028",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f029",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f030",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f031",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f032",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f033",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f034",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f035",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f036",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f037",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f038",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f039",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f040",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f041",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f042",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f043",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f044",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f045",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f046",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f047",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f048",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f049",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f050",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f051",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f052",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f053",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f054",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f055",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f056",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f057",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f058",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f059",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f060",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f061",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f062",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "d/f063",
+        "kind": "modify",
+        "lines": 1
+       }
+      ],
+      "truncated": true
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u22",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:53Z",
+   "expect": "allow",
+   "note": "64 listed of 9,000: a truncated summary is valid"
+  },
+  {
+   "entry": {
+    "id": "d695fa18cbabe01909d7b79e767bca7792bd010ed004bd8164e293fd16c8841c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+     "planDigest": "ff7300ad2083cb7a8fee066a8ebb12ad3d5dd60f0ef0ed1f2b110222e0a64ac0",
+     "evidence": {
+      "kind": "han.review/1"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e53",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:54Z",
+   "expect": "invalid",
+   "note": "evidence with no digest"
+  },
+  {
+   "entry": {
+    "id": "e19ad96d7eafe3d5c5fac732a848ce85b96e285522b8e06ef97f05a646b13a02",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+     "planDigest": "ff7300ad2083cb7a8fee066a8ebb12ad3d5dd60f0ef0ed1f2b110222e0a64ac0",
+     "evidence": {
+      "kind": "Han",
+      "over": "bbaf9370e051c2a1e637cf9cccefbc50786e3d5a51100d7ada98d499171d3aeb"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e54",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:55Z",
+   "expect": "invalid",
+   "note": "evidence with a bad kind"
+  },
+  {
+   "entry": {
+    "id": "267da4ccefc4a49b7080c8299e29340456cb6eda1e7602d5cfd0b7bb538baf14",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+     "planDigest": "ff7300ad2083cb7a8fee066a8ebb12ad3d5dd60f0ef0ed1f2b110222e0a64ac0",
+     "evidence": {
+      "kind": "han.review/1",
+      "over": "x"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e55",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:56Z",
+   "expect": "invalid",
+   "note": "evidence over a non-digest"
+  },
+  {
+   "entry": {
+    "id": "ddffebedb0cfd55d5cd3fc26b5c607d32bd802246260110d87e02747bc4faa06",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+     "planDigest": "ff7300ad2083cb7a8fee066a8ebb12ad3d5dd60f0ef0ed1f2b110222e0a64ac0",
+     "evidence": {
+      "kind": "han.review/1",
+      "over": "bbaf9370e051c2a1e637cf9cccefbc50786e3d5a51100d7ada98d499171d3aeb",
+      "record": "30a49980d52bc67a72008eafa67d000adeaa5e6aadcfd1aba693ca5344693c8a"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e56",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:57Z",
+   "expect": "invalid",
+   "note": "evidence with an unknown member"
+  },
+  {
+   "entry": {
+    "id": "b93c58956b07e501adfc6e2bac432342f4d5f875d192aa9712d0bc51a683b658",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+     "planDigest": "ff7300ad2083cb7a8fee066a8ebb12ad3d5dd60f0ef0ed1f2b110222e0a64ac0",
+     "evidence": {
+      "kind": "han.review/1",
+      "over": "bbaf9370e051c2a1e637cf9cccefbc50786e3d5a51100d7ada98d499171d3aeb"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ev1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:58Z",
+   "expect": "allow",
+   "note": "evidence a human gives is only a record: shape-checked, never required of a human"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "c0": "a42176665838b759f964cd22691062a43710b5d5a5c37d3b579bfef638ffc718",
+  "e53": "d695fa18cbabe01909d7b79e767bca7792bd010ed004bd8164e293fd16c8841c",
+  "e54": "e19ad96d7eafe3d5c5fac732a848ce85b96e285522b8e06ef97f05a646b13a02",
+  "e55": "267da4ccefc4a49b7080c8299e29340456cb6eda1e7602d5cfd0b7bb538baf14",
+  "e56": "ddffebedb0cfd55d5cd3fc26b5c607d32bd802246260110d87e02747bc4faa06",
+  "ev1": "b93c58956b07e501adfc6e2bac432342f4d5f875d192aa9712d0bc51a683b658",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "p1": "5334138a887a2f11864f38c095047389813e8afe60a0a283b00ae82fb75b28b4",
+  "p10": "0139872bce167e5d699661926555883a45c856577fc87a87a75f695dec07f157",
+  "p11": "79133ec8d7de9f341497821f3b69ef5a3fbf0e83af82f82e56e520e145e06b0f",
+  "p12": "8be93ab90c5b721fe49a989f9c6c59f19ae1ec37e5eef4f821d5d83de1d09712",
+  "p13": "ebfa5ef17f780a0b9ec09a55216d7e564b475ace444afab2205c6dc1ebae7722",
+  "p14": "e473e37f7a195cf2410bcebd313df461def8c53718aa89e143bcb799e0a487d2",
+  "p15": "37cdaec2fed0873f57b3dcea1517d76a6872e94917a5c121c69e55492ad918f9",
+  "p16": "092171451ecb02219fa4c49c208e7c3f8fdac297b9121b481ed959acab0c8b33",
+  "p17": "1b526e20f47c5f762cd3780ee9435a4f09ed674280f98bdb7943f0ae40ad4654",
+  "p18": "ca2d910ec09e295244db6e72a003bee3ef11f1bae6cc1ad858c49949bf25b5d6",
+  "p19": "4748ea497779907fc04e45431058abaecb48e0ea27d8fbf3b5eaeb94b05500df",
+  "p2": "9f0fbc625d07b6445b5f7c411a094c34f5bb9006f9b920445457b355812f97bc",
+  "p20": "a045d557a8929f663f228ff7413d5d0bbb295a348aca50cd7a8ec4746c6aefa5",
+  "p21": "22140b74e0c3c831fed193148225593333552274b9f13632e354ee4d6577dc20",
+  "p22": "e54b761db426189a6964e34dc0269fa24a91546c0e0922b0c170c43b266ae330",
+  "p23": "2f078efd5a0b8d68ea6b86716cde51e8060452b596a77b3e583f5e5d083833c1",
+  "p24": "eb9ea4b194843d1cde63a2e3b02998bd312293270466eef4675c48f6aa29fdf1",
+  "p25": "a92412187be98b260941309e5da4bd973a8d1d97d64c63b83f3ec6c5cd93afd0",
+  "p26": "611cb5675a8e75a0e0682c2c44be4afa6e30fb69d539026db44e5665a02ee3f6",
+  "p27": "d8d7ff3da8d3678f73e60b621d66c840a138c9eea510f0d36b801012400528b1",
+  "p3": "8d8ed36a8489cf8526e6ae183163d585bbc1d93a84200e00fb1c534fed658c90",
+  "p4": "eb8f375ab3f3ae03b62a3d7b02529fd0e72b3882d9d456d1942ca9b8ed534a18",
+  "p5": "468dbc9c7843d8261d1b38b5e61df2f51311a434c8de3e1717fbdaf5728b439d",
+  "p6": "4e0adfa95b6346f320d86960d195ccf6fbc673525bdac7e4e97558830c7570f8",
+  "p7": "7e3d751a16d14e0c060e62327c95ea68dfa4eddf4f9d1ac9dc8a81d4b6376a60",
+  "p8": "ec5974412cdcaceffd337c2f74139e3a4463e23f5f83c2bb4881acc708ca7e46",
+  "p9": "8142b0eaac7d9e96b334fcddbda8d45de3669828747ad0650ed4eb1c7d33f086",
+  "u1": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+  "u10": "fa9e19af065855c8b922c7dc908ee644710fe34150cb6d603b0d28f9614ab9bb",
+  "u11": "252a8dfe3476e71d4a6e35a240047c70c9172312a47adc59ebbe3328f2f66567",
+  "u12": "f981d922741b84fee23f9f90bab5e351457178bab6190ce42432d466333d7156",
+  "u13": "c5f60dfde7076300e53b5a29b30e262ce4514f14956cf56bf93d2a26007ef35e",
+  "u14": "5c3f5d9775769a1fb66244aae4c0017285a9deac6f9402691e4ae29d81f48c2b",
+  "u15": "33738d5c0558aad36b678a589e15f7f47ed033a0e4ca77ca09c48a0b8e9c19a2",
+  "u16": "711bd3736cb21b17b3035c436ef6c9fb1b183c878c0c7f3051862bdd17d6270d",
+  "u17": "d49455362a31f1553ddf6a887a7be415527f1d3c50085856eb7863642318fbf4",
+  "u18": "6c0e023c26c409bafe373b0765010abb627c5b9ececb0b5c61642badebc6727e",
+  "u19": "3be88a2ce201101d05e7124f60b0e8efbc213c1851ff5b081459946940eb3f7c",
+  "u2": "28013e231b79aef441949d3f0945b1a3b4ca22785b3fb4a37bda515bbeff0800",
+  "u20": "a2a0c66c8dc19bc0a7df0d6f2dd9444b64b00266b3b916b220dc4aa0e489d26d",
+  "u21": "ec1897a662f93542f1f26a53fdf94dafb402e6a63db5eca970851bd999b5bdab",
+  "u22": "c8d46ba1251c53e8b2fadcedcc104244fad37df9aca49ceaece744fee5c17b01",
+  "u3": "01add4455ab59cae02751bd1ef858d82151fbdd525f985950653fcae3a5531f1",
+  "u4": "1887a0df47e11c439a7ab22cd08d10ea945b7a2965a57381ab5ba7517596be72",
+  "u5": "36c5b8666da4c7e0a15e6c34215d69fa462b7c91e8f818bed41d0a0416eba550",
+  "u6": "914eef7fb50de31f12b9d6e487033bad9fe9bc49b8d35da74f42b3e1e8335ac7",
+  "u7": "b6d0f7434f895010a559f7a6809a7ac6788cb292cecfa6f9d9d47232243e2f0c",
+  "u8": "74fbe213ea2d093d300152c7d80e59cf9cd0bf2b48b9a6bf286c39fb9bae2bcf",
+  "u9": "37b59990506d628ab1bf8bdea89712938b39c42629a7a950ac4cb589265eb2f7"
+ }
+}

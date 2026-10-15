@@ -128,6 +128,11 @@ impl FakeNode {
             action: action.into(),
             plan_digest: digest.into(),
             plan: Some(plan.into()),
+            // the real node copies a landing's `args.change` into the body and digests it
+            change_digest: (action == "vcs.land")
+                .then(|| serde_json::from_str::<Value>(plan).ok())
+                .flatten()
+                .and_then(|p| han_exec::actions::change_digest(&p)),
             task: None,
             phase: "open".into(),
             approvals: vec![],

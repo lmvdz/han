@@ -92,6 +92,7 @@ async fn approving_takes_two_deliberate_steps_and_no_single_key_signs() {
             proposal: "p1".into(),
             expires_at: None,
             note: None,
+            evidence: None,
         }],
         "exactly one approval, naming the proposal"
     );
