@@ -134,12 +134,15 @@ Two commands for the people and agents who land HAN's own pull requests. They us
 
 | Line | Meaning |
 |---|---|
-| `MERGED #n`, `CLOSED #n` | a PR seen open in this run has merged or closed without a merge; `han dev prune` then runs |
+| `MERGED #n`, `CLOSED #n` | a PR seen open in this run has merged or closed without a merge; `han dev prune` then runs on that PR's head branch only (other sessions' worktrees are left alone; a full sweep is an explicit `han dev prune`) |
 | `CONFLICT #n …` | the head conflicts with the base. GitHub runs no `pull_request` CI on a conflicting PR, so its required check would never appear; this is reported at once |
 | `CI_FAILED #n checks` | the named checks failed, were cancelled or timed out |
 | `STALLED #n reason` | nothing is pending and the last push is older than `--grace` (default 900 s); also when auto-merge was switched off or `update-branch` failed |
+| `RETRIGGERED #n` | not an exit: auto-merge was switched off and on again, see below |
 | `GH_ERROR msg` | GitHub could not be asked |
 | `IDLE no open auto-merge PRs`, `OK watching: …` | nothing is watched; or `--once` found nothing to report |
+
+GitHub sometimes never fires an auto-merge that is ready. When a PR has auto-merge on, mergeState `CLEAN`, no pending and no failed checks, and its last push is older than `--grace`, `han dev prs` switches auto-merge off and on again with the same merge method (`gh pr merge --disable-auto`, then `--auto` with the method GitHub reports), prints `RETRIGGERED #n` (`{"event":"RETRIGGERED","pr":n}`) and keeps watching. It never merges directly; branch protection still applies. If the PR is still open and idle one more grace period after the retrigger, it is `STALLED` as above and the command exits. If re-enabling fails, auto-merge is left off and the `STALLED` line says `auto-merge is now OFF`. The retrigger time is kept in memory for the run only.
 
 A PR that is `BEHIND` its base gets `gh pr update-branch`. Run it in the background and read its output when it exits. `--json` prints one JSON object per line (`{"event":"CI_FAILED","pr":7,"detail":"lint","checks":["lint"]}`), and ends with `{"event":"WATCHING","prs":[…]}`.
 
