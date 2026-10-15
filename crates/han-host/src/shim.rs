@@ -41,7 +41,23 @@ pub const SELFTEST_BLOCKED: i32 = 20;
 /// `selftest` exit code: the loopback port failed some other way.
 pub const SELFTEST_FAILED: i32 = 21;
 
+/// `selftest` exit code: the self-test outlived its deadline and the watchdog ended the process.
+pub const SELFTEST_DEADLINE: i32 = 22;
+/// How long `selftest` may run before its watchdog ends the process (the probe allows itself longer).
+pub const SELFTEST_DEADLINE_MS: u64 = 20_000;
+
 const WSAEACCES: i32 = 10013;
+
+/// Ends the process with [`SELFTEST_DEADLINE`] once `ms` have passed, whatever the runtime is doing. A
+/// thread of its own does it, so a wedged runtime (a blocking lookup, a stuck connect) cannot hold it back,
+/// and a selftest whose launcher died cannot outlive its deadline.
+fn selftest_watchdog(ms: u64) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        eprintln!("han shim selftest: no result within {ms} ms; exiting");
+        std::process::exit(SELFTEST_DEADLINE);
+    });
+}
 
 /// Binds a loopback port, connects to it and accepts the connection; the exit code of `han shim selftest`.
 pub async fn selftest(port: u16) -> i32 {
@@ -53,14 +69,17 @@ pub async fn selftest(port: u16) -> i32 {
             SELFTEST_FAILED
         }
     };
-    let listener = match TcpListener::bind(("127.0.0.1", port)).await {
+    let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await {
         Ok(l) => l,
         Err(e) => return step("bind", e),
     };
     let wait = std::time::Duration::from_secs(5);
+    // A literal address: a `(&str, u16)` target goes through the resolver on a blocking thread, which can
+    // wedge inside a container and then keeps the runtime (and so the process) from shutting down.
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let (accepted, connected) = tokio::join!(
         tokio::time::timeout(wait, listener.accept()),
-        tokio::time::timeout(wait, TcpStream::connect(("127.0.0.1", port)))
+        tokio::time::timeout(wait, TcpStream::connect(addr))
     );
     match (connected, accepted) {
         (Ok(Ok(_)), Ok(Ok(_))) => SELFTEST_OK,
@@ -225,7 +244,7 @@ async fn mcp_stub(proxy: SocketAddr, token: &str) -> io::Result<()> {
 fn usage() -> i32 {
     eprintln!(
         "usage: han shim listen --port P (--pipe NAME | --unix PATH | --tcp ADDR) -- program args...\n       han shim mcp-stub --proxy 127.0.0.1:P --token T
-       han shim selftest --port P"
+       han shim selftest --port P [--deadline-ms N]"
     );
     2
 }
@@ -306,6 +325,14 @@ async fn run(args: Vec<String>) -> i32 {
             let Some(port) = opt("--port").and_then(|p| p.parse::<u16>().ok()) else {
                 return usage();
             };
+            let deadline = opt("--deadline-ms")
+                .and_then(|d| d.parse::<u64>().ok())
+                .unwrap_or(SELFTEST_DEADLINE_MS);
+            selftest_watchdog(deadline);
+            if opts.iter().any(|a| a == "--stall") {
+                // Test hook: never finishes, so only the watchdog can end it.
+                std::future::pending::<()>().await;
+            }
             selftest(port).await
         }
         "mcp-stub" => {

@@ -16,7 +16,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use han_node::api::{Fidelity, SandboxBackend};
 use mxc_sdk::v1::configs::ProcessContainerConfig;
@@ -24,7 +24,7 @@ use mxc_sdk::v1::policy::{
     NetworkAction, NetworkEgressPolicy, NetworkIngressPolicy, NetworkPeerPolicy, NetworkPolicy,
     NetworkPortPolicy, NetworkProtocol, NetworkRulePolicy, NetworkRuntimeConfig, UiPolicy,
 };
-use mxc_sdk::v1::{self, ContainerRequest, Containment, FilesystemPolicy, WaitResult};
+use mxc_sdk::v1::{self, ContainerRequest, Containment, FilesystemPolicy};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 
@@ -168,24 +168,58 @@ fn self_test(shim: &ShimCommand, policy: Policy) -> Result<(), SelfTest> {
             dir.to_string_lossy().into_owned(),
             env,
         );
-        let proc = v1::spawn(req, Default::default()).map_err(|e| failed(format!("mxc: {e:?}")))?;
-        let out = proc
-            .wait_with_output()
-            .map_err(|e| failed(format!("wait: {e}")))?;
-        match out.outcome {
-            WaitResult::Exited(c) if c == SELFTEST_OK => Ok(()),
-            WaitResult::Exited(c) if c == SELFTEST_BLOCKED => Err(SelfTest::Blocked),
-            WaitResult::Exited(c) => Err(failed(format!(
-                "exit {c}: {}{}",
-                String::from_utf8_lossy(&out.stderr).trim(),
-                String::from_utf8_lossy(&out.stdout).trim()
-            ))),
-            WaitResult::TimedOut => Err(failed("timed out".into())),
+        let mut proc = KillOnDrop(
+            v1::spawn(req, Default::default()).map_err(|e| failed(format!("mxc: {e:?}")))?,
+        );
+        let (out, err) = (proc.0.take_stdout(), proc.0.take_stderr());
+        let (tx, rx) = std::sync::mpsc::channel();
+        for stream in [out, err].into_iter().flatten() {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = { stream }.take(4096).read_to_string(&mut buf);
+                let _ = tx.send(buf);
+            });
+        }
+        drop(tx);
+        // The container has its own time limit; this one is the host's, in case that limit never fires.
+        let deadline = Instant::now() + Duration::from_millis(u64::from(SELFTEST_MS) + 5_000);
+        let code = loop {
+            match proc.0.try_wait() {
+                Ok(Some(c)) => break c,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Ok(None) => return Err(failed("timed out".into())),
+                Err(e) => return Err(failed(format!("wait: {e}"))),
+            }
+        };
+        match code {
+            c if c == SELFTEST_OK => Ok(()),
+            c if c == SELFTEST_BLOCKED => Err(SelfTest::Blocked),
+            c => {
+                let said: String = rx
+                    .try_iter()
+                    .chain(rx.recv_timeout(Duration::from_millis(500)))
+                    .map(|s| s.trim().to_owned())
+                    .collect();
+                Err(failed(format!("exit {c}: {said}")))
+            }
         }
     };
     let r = run();
     let _ = std::fs::remove_dir_all(&dir);
     r
+}
+
+/// Ends the container's whole process tree when dropped, so a self-test that errors, times out or panics
+/// never leaves its `han shim selftest` behind. `kill` tears the launch down, not just the direct child.
+struct KillOnDrop(v1::MxcProcess);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+    }
 }
 
 /// Adds what the OS needs to start a process in a container (MXC refuses a verbatim environment without it;
