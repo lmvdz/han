@@ -1,6 +1,0 @@
-[console_scripts]
-han = han.cli:main
-han-exec = han.exec.__main__:main
-han-host = han.host.__main__:main
-han-seq = han.seq.__main__:main
-han-verify = han.verify.__main__:main
