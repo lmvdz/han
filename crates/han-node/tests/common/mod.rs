@@ -180,6 +180,19 @@ pub async fn until(what: &str, mut f: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// Waits until `node` knows `session` of `space` and its watch of the session's stream is up: a view of the
+/// session opens on a session the node knows (an unknown one fails the view for good), and items published
+/// from now on reach the node (they are not replayed).
+pub async fn session_known(node: &dyn NodeApi, space: &str, session: &str) {
+    node.call(Command::SessionAwait {
+        space: space.into(),
+        session: session.into(),
+        timeout_ms: Some(30_000),
+    })
+    .await
+    .expect("the session syncs");
+}
+
 pub fn space_of(r: &CallResult) -> String {
     match r {
         CallResult::Space { space } => space.clone(),

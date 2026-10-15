@@ -5,9 +5,8 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
-use common::{Watched, World, call, id_of, space_of, until, window};
+use common::{Watched, World, call, id_of, session_known, space_of, until, window};
 use han_core::SigningKey;
 use han_core::json::Value;
 use han_core::{base64url, ids};
@@ -113,6 +112,7 @@ async fn a_host_streams_typed_items_that_another_member_reads() {
         )
         .await,
     );
+    session_known(&alice, &space, &session).await;
     let mut facts = Watched::open(
         &alice,
         Query::Session {
@@ -121,27 +121,21 @@ async fn a_host_streams_typed_items_that_another_member_reads() {
             window: window(),
         },
     );
-    until("alice knows the session", || !facts.rows().is_empty()).await;
-    // Stream items are not replayed: publish until alice's node is watching.
-    for i in 0..200 {
-        call(
-            &bob,
-            Command::StatusPublish {
-                space: space.clone(),
-                status: Box::new(status(&session, BOB)),
-            },
-        )
-        .await;
-        if facts
+    call(
+        &bob,
+        Command::StatusPublish {
+            space: space.clone(),
+            status: Box::new(status(&session, BOB)),
+        },
+    )
+    .await;
+    until("alice receives the status item", || {
+        facts
             .rows()
             .iter()
             .any(|r| matches!(r, Row::Session(s) if s.status.is_some()))
-        {
-            break;
-        }
-        assert!(i < 199, "alice never received a stream item");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    })
+    .await;
     let mut items = Watched::open(
         &alice,
         Query::Session {

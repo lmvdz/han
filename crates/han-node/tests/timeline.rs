@@ -236,6 +236,7 @@ async fn another_member_sees_the_live_timeline() {
         .await,
     );
     // Alice's node learns of the session and watches it: proven by a status item arriving.
+    common::session_known(&alice, &space, &session).await;
     let mut seen = Watched::open(
         &alice,
         Query::Session {
@@ -244,7 +245,6 @@ async fn another_member_sees_the_live_timeline() {
             window: window(),
         },
     );
-    until("alice knows the session", || !seen.rows().is_empty()).await;
     let mut st = han_node::api::StatusBody {
         session: session.clone(),
         agent: BOB.into(),
@@ -267,26 +267,21 @@ async fn another_member_sees_the_live_timeline() {
         seq: 0,
         at: "2026-01-01T00:00:00Z".into(),
     };
-    for i in 0..200 {
-        st.seq = 0;
-        call(
-            &bob,
-            Command::StatusPublish {
-                space: space.clone(),
-                status: Box::new(st.clone()),
-            },
-        )
-        .await;
-        let live = seen
-            .rows()
+    st.seq = 0;
+    call(
+        &bob,
+        Command::StatusPublish {
+            space: space.clone(),
+            status: Box::new(st.clone()),
+        },
+    )
+    .await;
+    until("alice receives the status item", || {
+        seen.rows()
             .iter()
-            .any(|r| matches!(r, Row::Session(s) if s.status.is_some()));
-        if live {
-            break;
-        }
-        assert!(i < 199, "alice never received a stream item");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+            .any(|r| matches!(r, Row::Session(s) if s.status.is_some()))
+    })
+    .await;
 
     let mut tl = Watched::open(
         &alice,

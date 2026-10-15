@@ -60,6 +60,13 @@ pub enum Pending {
         /// The space.
         space: String,
     },
+    /// A session of a followed space is not known yet, or this node's watch of its stream is not up.
+    Session {
+        /// The space.
+        space: String,
+        /// The session.
+        session: String,
+    },
     /// The profile of an actor (its operator, its keys) has not arrived from the actor's home.
     Profile {
         /// The actor.

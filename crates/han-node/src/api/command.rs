@@ -57,6 +57,20 @@ pub enum Command {
         #[ts(optional)]
         timeout_ms: Option<u64>,
     },
+    /// Waits until this node knows a session of a followed space and its watch of the session's stream is up,
+    /// so that a view of the session can be opened and the items sent from now on are seen. The node waits,
+    /// not the caller: at most `timeout_ms` (default and cap: the node's `sync_wait`). `not_found` if the
+    /// space is not followed; `unavailable` with `pending: session` if that has not happened by then.
+    SessionAwait {
+        /// The space.
+        space: String,
+        /// The session.
+        session: String,
+        /// How long to wait, at most.
+        #[serde(default)]
+        #[ts(optional)]
+        timeout_ms: Option<u64>,
+    },
     /// Registers an invite at the space's home and returns the ticket.
     Invite {
         /// The space.
@@ -386,6 +400,7 @@ impl Command {
             | Command::SpaceJoin { .. }
             | Command::SpaceFollow { .. }
             | Command::SpaceAwait { .. }
+            | Command::SessionAwait { .. }
             | Command::HomePin { .. }
             | Command::Invite { .. }
             | Command::MemberSet { .. }

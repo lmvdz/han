@@ -35,7 +35,15 @@ export type Pending = { "what": "space",
 /**
  * The space.
  */
-space: string, } | { "what": "profile", 
+space: string, } | { "what": "session", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The session.
+ */
+session: string, } | { "what": "profile", 
 /**
  * The actor.
  */
@@ -80,6 +88,18 @@ space: string, } | { "type": "space_await",
  * The space.
  */
 space: string, 
+/**
+ * How long to wait, at most.
+ */
+timeout_ms?: number, } | { "type": "session_await", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The session.
+ */
+session: string, 
 /**
  * How long to wait, at most.
  */
