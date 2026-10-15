@@ -83,7 +83,7 @@ jobs:
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: >
-          cargo nextest run ${PACKAGES:---workspace} --locked --no-tests=pass
+          cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
           -E 'not (binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem))'
       - name: Doc-tests
         env:
@@ -107,7 +107,7 @@ jobs:
         env:
           PACKAGES: ${{ needs.scope.outputs.packages }}
         run: >
-          cargo nextest run ${PACKAGES:---workspace} --locked --no-tests=pass
+          cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
           -E 'binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem)'
 
   # The spec checks need no Rust: policy vectors, the three-way consistency of the entry kinds, and (when a Markdown file
