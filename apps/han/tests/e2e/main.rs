@@ -955,6 +955,8 @@ async fn a_local_process_cannot_govern_or_steer_until_a_person_confirms() {
     // the person is there: the CLI asks once and the face client unlocks on its first steering input; a
     // second plain connection still gets nothing from either
     s.presence("all", "test-allow");
+    // the refusals above space the next prompt out (the node's and the client connection's), by up to 4 s
+    tokio::time::sleep(Duration::from_secs(6)).await;
     let (ok, _, err) = member(&s);
     assert!(ok, "the CLI governs after a confirmation: {err}");
     c.call(steer)
