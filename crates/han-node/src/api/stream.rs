@@ -31,8 +31,12 @@ pub trait NodeApi: Send + Sync + 'static {
     }
 
     /// Asks the person, on this device, to unlock a face connection, and returns how long the unlock lasts.
-    /// The RPC server calls it for one connection and keeps the window on that connection alone.
-    fn confirm_unlock(&self) -> BoxFuture<'_, Result<Duration, NodeError>> {
+    /// `client` names the asking process (its name and pid), when the system says. The RPC server calls it
+    /// for one connection and keeps the window on that connection alone.
+    fn confirm_unlock(
+        &self,
+        _client: Option<String>,
+    ) -> BoxFuture<'_, Result<Duration, NodeError>> {
         Box::pin(async { Err(NodeError::unavailable("this node has no presence check")) })
     }
 }

@@ -358,7 +358,7 @@ pub enum Command {
 /// [`CommandClass::Executor`] ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandClass {
-    /// Only a face acting for the device's person: approvals, membership, devices, policy, agents, steering a session.
+    /// Only a face acting for the device's person: approvals, membership, devices, policy, agents.
     Face,
     /// Also an agent's host and tools: its own sessions, tasks, status, leases and proposals.
     Agent,
@@ -415,8 +415,6 @@ impl Command {
             | Command::DeviceOffer
             | Command::DevicePair { .. }
             | Command::DeviceRevoke { .. }
-            // steering is a person's act: an agent's host and tools never send input to a session
-            | Command::SessionInput { .. }
             | Command::BlobFetch { .. }
             // the agent's host calls it in process; an agent's tools never upload blobs
             | Command::BlobPut { .. }
@@ -428,6 +426,9 @@ impl Command {
             | Command::TaskUpdate { .. }
             | Command::SessionOpen { .. }
             | Command::SessionClose { .. }
+            // an agent may steer another session as the policy allows (session rights, guarding); a face
+            // connection is locked for it until a person is present
+            | Command::SessionInput { .. }
             | Command::StatusPublish { .. }
             | Command::StreamPublish { .. }
             | Command::LeaseSet { .. }
@@ -448,15 +449,21 @@ impl Command {
             | Command::Invite { .. }
             | Command::MemberSet { .. }
             | Command::AgentCreate { .. }
+            // starts a tool-using agent on any repository or harness
+            | Command::AgentStart { .. }
             | Command::DeviceOffer
             | Command::DevicePair { .. }
             | Command::DeviceRevoke { .. }
             | Command::PolicySet { .. }
             | Command::SessionInput { .. } => true,
-            Command::SpaceCreate { .. }
-            | Command::SpaceFollow { .. }
-            | Command::SpaceAwait { .. }
-            | Command::AgentStart { .. }
+            // a home given by ticket is pinned (its node and receipt keys become the trust anchor of its
+            // server), which is `HomePin` by another door
+            Command::SpaceCreate { home, .. } | Command::SpaceFollow { home, .. } => {
+                matches!(home, Some(HomeRef::Ticket(_)))
+            }
+            // Tasks stay open to a face connection on purpose: a task is data, not a prompt (SR-54), and the
+            // policy decides who may create or cancel one.
+            Command::SpaceAwait { .. }
             | Command::AgentStop { .. }
             | Command::TaskCreate { .. }
             | Command::TaskUpdate { .. }

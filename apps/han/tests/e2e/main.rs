@@ -484,6 +484,12 @@ async fn joining_by_ticket_and_the_operators_confirm_use_only_the_setup_commands
     assert!(old.contains("registered"), "{old}");
 
     // Bob's node joins by ticket
+    // nobody sits at the machine that runs the tests to confirm Bob's joining
+    std::fs::create_dir_all(&bob_data).unwrap();
+    han_node::db::NodeDb::open(&std::path::Path::new(&bob_data).join("node.db"))
+        .unwrap()
+        .set_config(han_node::presence::REQUIRE_KEY, "")
+        .unwrap();
     let log = std::fs::File::create(s.dir.join("logs").join("bob.log")).unwrap();
     let mut node = std::process::Command::new(stack::HAN)
         .args([
@@ -906,6 +912,19 @@ async fn a_local_process_cannot_govern_or_steer_until_a_person_confirms() {
             auto_admit: false,
         },
         Command::DeviceOffer,
+        // pinning a home by the ticket of a command is `HomePin` by another door
+        Command::SpaceFollow {
+            home: Some(han_node::api::HomeRef::Ticket("han1home.x".into())),
+            space: s.space(),
+        },
+        Command::AgentStart {
+            space: s.space(),
+            agent: s.agent(),
+            harness: None,
+            repo: None,
+            issue: None,
+            home: None,
+        },
     ] {
         let e = plain.call(cmd.clone()).await.unwrap_err();
         assert!(

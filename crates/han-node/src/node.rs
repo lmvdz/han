@@ -140,8 +140,13 @@ pub(crate) struct Inner<T: Transport> {
     pub timelines: Arc<crate::timeline::StreamTimelines>,
     /// Spaces whose invite asked for `auto_admit`, and until when (wall seconds).
     pub auto_admit: Mutex<HashMap<String, i64>>,
-    /// One presence prompt at a time.
-    presence_gate: tokio::sync::Mutex<()>,
+    /// The person is asked here: one prompt at a time, approvals first.
+    prompter: presence::Prompter,
+    /// The presence settings the node started with (a later edit of `node.db` changes nothing).
+    presence_settings: presence::Settings,
+    /// Test rigs only: read the settings from `node.db` at each use instead (`HAN_PRESENCE_LIVE=1`, in
+    /// `conformance` builds), so a rig can change them while the node runs.
+    presence_live: bool,
 }
 
 /// The most a face may fetch or put of a blob through the node.
@@ -519,6 +524,17 @@ impl<T: Transport> Node<T> {
             None => NodeDb::in_memory(),
         }
         .map_err(unavailable)?;
+        // The presence settings are read once, and sealed with a key the db does not hold (an in-memory db has
+        // nothing to tamper with).
+        let presence_live =
+            cfg!(feature = "conformance") && std::env::var_os("HAN_PRESENCE_LIVE").is_some();
+        let presence_settings = match &config.data_dir {
+            Some(dir) if !presence_live => {
+                let name = presence::seal_name(dir);
+                presence::load(&db, Some((&*keys, name.as_str())))
+            }
+            _ => presence::load(&db, None),
+        };
         let mut engine = Engine::new(&config.actor, config.freshness);
         engine.tick(
             clock.steady_ms(),
@@ -565,7 +581,9 @@ impl<T: Transport> Node<T> {
             outbox_retry_at: Mutex::new(HashMap::new()),
             ticker: Mutex::new(None),
             auto_admit: Mutex::new(HashMap::new()),
-            presence_gate: tokio::sync::Mutex::new(()),
+            prompter: presence::Prompter::new(),
+            presence_settings,
+            presence_live,
         });
         let node = Node { inner };
         let pinned: Vec<HomeTicket> = node
@@ -594,6 +612,15 @@ impl<T: Transport> Node<T> {
         });
         *node.inner.ticker.lock().unwrap_or_else(|p| p.into_inner()) = Some(ticker);
         Ok(node)
+    }
+
+    /// The presence settings in force: those the node started with.
+    fn presence_now(&self) -> Result<presence::Settings, NodeError> {
+        if self.inner.presence_live {
+            presence::read(&self.inner.db)
+        } else {
+            Ok(self.inner.presence_settings.clone())
+        }
     }
 
     /// Stops the node's tasks: the links, and the clock of the views. Child roles die with their supervisor.
@@ -1690,16 +1717,17 @@ impl<T: Transport> Node<T> {
                     body.push(("expiresAt", s(t)));
                 }
                 // A person confirms on this device, out of band, before anything is signed (SR-106).
-                presence::confirm(
-                    &inner.db,
-                    inner.cfg.presence.as_ref(),
-                    inner.cfg.presence_timeout,
-                    &inner.presence_gate,
-                    presence::EFFECT_APPROVE,
-                    &space,
-                    &subject,
-                )
-                .await?;
+                inner
+                    .prompter
+                    .confirm(
+                        &self.presence_now()?,
+                        inner.cfg.presence.as_ref(),
+                        inner.cfg.presence_timeout,
+                        presence::EFFECT_APPROVE,
+                        &space,
+                        &subject,
+                    )
+                    .await?;
                 // The wait can be long: sign only the plan the person confirmed, and only if it still waits.
                 let still = inner.engine().approval_subject(&space, &proposal);
                 if !still.is_some_and(|n| n.open && n.digest == subject.digest) {
@@ -1910,20 +1938,22 @@ impl<T: Transport> NodeApi for Node<T> {
     }
 
     fn presence_required(&self) -> Result<bool, NodeError> {
-        presence::unlock_required(&self.inner.db)
+        Ok(self.presence_now()?.require.covers(presence::FACE_UNLOCK))
     }
 
-    fn confirm_unlock(&self) -> BoxFuture<'_, Result<Duration, NodeError>> {
+    fn confirm_unlock(&self, client: Option<String>) -> BoxFuture<'_, Result<Duration, NodeError>> {
         Box::pin(async move {
             let inner = &self.inner;
-            presence::confirm_unlock(
-                &inner.db,
-                inner.cfg.presence.as_ref(),
-                inner.cfg.presence_timeout,
-                inner.cfg.unlock_window,
-                &inner.presence_gate,
-            )
-            .await
+            inner
+                .prompter
+                .confirm_unlock(
+                    &self.presence_now()?,
+                    inner.cfg.presence.as_ref(),
+                    inner.cfg.presence_timeout,
+                    inner.cfg.unlock_window,
+                    client,
+                )
+                .await
         })
     }
 

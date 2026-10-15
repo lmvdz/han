@@ -2,8 +2,9 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{Stream, prelude::*};
@@ -193,18 +194,45 @@ fn protocol_error(code: i64, message: &str) -> ErrorObject {
     }
 }
 
-/// When the person's unlock of one face connection ends; none while it is locked. It belongs to the connection
-/// that was unlocked: another connection to the same pipe starts locked and needs its own check.
-type Unlock = Arc<Mutex<Option<Instant>>>;
+/// The lock of one face connection. It belongs to the connection: another connection to the same pipe starts
+/// locked and needs its own check.
+#[derive(Default)]
+struct Lock {
+    /// When the person's unlock ends, by the monotonic clock and by the wall clock; the unlock holds only
+    /// while both say it has not ended, so neither a suspend nor a clock change can stretch it.
+    until: Mutex<Option<(Instant, SystemTime)>>,
+    /// An unlock waits for the person.
+    pending: AtomicBool,
+    /// Spacing after refused unlocks on this connection.
+    backoff: Mutex<crate::presence::Backoff>,
+}
+
+impl Lock {
+    /// How long the unlock still holds, if it does.
+    fn remaining(&self) -> Option<Duration> {
+        let (mono, wall) = (*self.until.lock().unwrap_or_else(|e| e.into_inner()))?;
+        let by_mono = mono.checked_duration_since(Instant::now())?;
+        let by_wall = wall.duration_since(SystemTime::now()).ok()?;
+        Some(by_mono.min(by_wall)).filter(|d| !d.is_zero())
+    }
+}
+
+/// Clears `pending` when the unlock ends, however it ends (a closed connection aborts it).
+struct Pending<'a>(&'a AtomicBool);
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Whether `cmd` may go to the node now: a face connection sends a command that governs or steers only while
 /// it is unlocked and only if the node requires a person for it.
-fn gate(api: &dyn NodeApi, unlock: &Unlock, cmd: &Command) -> Result<(), NodeError> {
+fn gate(api: &dyn NodeApi, lock: &Lock, cmd: &Command) -> Result<(), NodeError> {
     if !cmd.needs_presence() || !api.presence_required()? {
         return Ok(());
     }
-    let until = *unlock.lock().unwrap_or_else(|e| e.into_inner());
-    if until.is_some_and(|t| Instant::now() < t) {
+    if lock.remaining().is_some() {
         return Ok(());
     }
     Err(NodeError::presence_required(
@@ -212,7 +240,69 @@ fn gate(api: &dyn NodeApi, unlock: &Unlock, cmd: &Command) -> Result<(), NodeErr
     ))
 }
 
+/// What the prompt may say about the peer: its process name (where the system tells) and pid.
+fn describe_peer(conn: &Stream) -> Option<String> {
+    let pid = conn.peer_creds().ok()?.pid()?;
+    #[cfg(target_os = "linux")]
+    if let Ok(name) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+        return Some(format!("{} (pid {pid})", name.trim()));
+    }
+    Some(format!("process {pid}"))
+}
+
+/// One `unlock` request on a face connection.
+async fn unlock(
+    api: Arc<dyn NodeApi>,
+    lock: Arc<Lock>,
+    client: Option<String>,
+) -> Result<Value, ErrorObject> {
+    let reply = |window: Duration| Ok(json!({ "window_ms": window.as_millis() as u64 }));
+    // already unlocked: nothing to ask
+    if let Some(left) = lock.remaining() {
+        return reply(left);
+    }
+    if lock.pending.swap(true, Ordering::SeqCst) {
+        let e = NodeError::conflict("an unlock already waits for a person on this connection");
+        return Err(ErrorObject::node(&e));
+    }
+    let _pending = Pending(&lock.pending);
+    let wait = lock
+        .backoff
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .wait();
+    if let Some(wait) = wait {
+        let e = NodeError::denied(format!(
+            "{}an unlock was refused a moment ago; try again in {} s",
+            crate::presence::NOT_UNLOCKED,
+            wait.as_secs() + 1
+        ));
+        return Err(ErrorObject::node(&e));
+    }
+    match api.confirm_unlock(client).await {
+        Ok(window) => {
+            lock.backoff
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .allowed();
+            *lock.until.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((Instant::now() + window, SystemTime::now() + window));
+            reply(window)
+        }
+        Err(e) => {
+            if matches!(e, NodeError::Denied { .. }) {
+                lock.backoff
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .refused();
+            }
+            Err(ErrorObject::node(&e))
+        }
+    }
+}
+
 async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass) {
+    let client = describe_peer(&conn);
     let (recv, mut send) = conn.split();
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
     // Every task of the connection is owned by it: when the connection is aborted (the server dropped) or
@@ -229,7 +319,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
     }));
     let mut calls = JoinSet::new();
     let views: Views = Arc::default();
-    let unlock: Unlock = Arc::default();
+    let lock: Arc<Lock> = Arc::default();
     let mut reader = BufReader::new(recv);
     let mut buf = Vec::new();
     loop {
@@ -263,7 +353,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
                 }
                 Ok(cmd) => {
                     if class == ConnectionClass::Face
-                        && let Err(e) = gate(&*api, &unlock, &cmd)
+                        && let Err(e) = gate(&*api, &lock, &cmd)
                     {
                         let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
                         continue;
@@ -294,17 +384,14 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
                 let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
             }
             Some("unlock") => {
-                let (api, out, unlock) = (Arc::clone(&api), out.clone(), Arc::clone(&unlock));
+                let (api, out, lock, client) = (
+                    Arc::clone(&api),
+                    out.clone(),
+                    Arc::clone(&lock),
+                    client.clone(),
+                );
                 calls.spawn(async move {
-                    let result = match api.confirm_unlock().await {
-                        Ok(window) => {
-                            *unlock.lock().unwrap_or_else(|e| e.into_inner()) =
-                                Some(Instant::now() + window);
-                            Ok(json!({ "window_ms": window.as_millis() as u64 }))
-                        }
-                        Err(e) => Err(ErrorObject::node(&e)),
-                    };
-                    let _ = out.send(respond(&id, result));
+                    let _ = out.send(respond(&id, unlock(api, lock, client).await));
                 });
             }
             Some("view") => match (id.as_u64(), serde_json::from_value::<Query>(params)) {

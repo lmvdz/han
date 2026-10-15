@@ -31,6 +31,9 @@ pub struct RpcClient {
     /// Whether a refusal with `presence_required` makes the client ask the device to unlock the connection
     /// and send the command again (a face does; a probe of the lock does not).
     unlocks: bool,
+    /// One unlock at a time from this client: concurrent calls that were refused wait for the first one's
+    /// answer instead of each asking the person.
+    unlocking: tokio::sync::Mutex<()>,
 }
 
 impl RpcClient {
@@ -110,6 +113,7 @@ impl RpcClient {
             subs,
             gone: gone_flag,
             unlocks,
+            unlocking: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -193,8 +197,13 @@ impl NodeApi for RpcClient {
                 serde_json::to_value(&cmd).map_err(|e| NodeError::invalid(e.to_string()))?;
             let mut result = self.request("call", params.clone()).await;
             if self.unlocks && matches!(result, Err(NodeError::PresenceRequired { .. })) {
-                self.unlock().await?;
-                result = self.request("call", params).await;
+                let _one = self.unlocking.lock().await;
+                // another call may have unlocked the connection while this one waited
+                result = self.request("call", params.clone()).await;
+                if matches!(result, Err(NodeError::PresenceRequired { .. })) {
+                    self.unlock().await?;
+                    result = self.request("call", params).await;
+                }
             }
             serde_json::from_value(result?)
                 .map_err(|e| NodeError::unavailable(format!("rpc: bad result: {e}")))

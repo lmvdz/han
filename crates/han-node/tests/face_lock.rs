@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{World, call, space_of};
-use han_node::api::{Command, ConnectionClass, NodeApi, NodeError, Query, ViewEvent, Window};
+use han_node::api::{
+    Command, CommandClass, ConnectionClass, HomeRef, NodeApi, NodeError, Query, ViewEvent, Window,
+};
 use han_node::rpc::{RpcClient, default_endpoint, serve_as};
 use han_node::{Node, presence};
 use han_presence::PresenceError;
@@ -55,6 +57,53 @@ fn locked_commands(space: &str) -> Vec<(&'static str, Command)> {
         ),
         ("device pair", Command::DevicePair { code: "x".into() }),
         (
+            "home pin",
+            Command::HomePin {
+                ticket: "han1home.x".into(),
+            },
+        ),
+        (
+            "join",
+            Command::SpaceJoin {
+                ticket: "han1.x".into(),
+            },
+        ),
+        (
+            "agent key",
+            Command::AgentCreate {
+                name: "x".into(),
+                server: "a.localhost".into(),
+            },
+        ),
+        (
+            "agent start",
+            Command::AgentStart {
+                space: space.into(),
+                agent: "@coder:a.localhost".into(),
+                harness: None,
+                repo: None,
+                issue: None,
+                home: None,
+            },
+        ),
+        // a ticket given with a command is pinned, which is `HomePin` by another door
+        (
+            "follow by ticket",
+            Command::SpaceFollow {
+                home: Some(HomeRef::Ticket("han1home.x".into())),
+                space: space.into(),
+            },
+        ),
+        (
+            "create by ticket",
+            Command::SpaceCreate {
+                home: Some(HomeRef::Ticket("han1home.x".into())),
+                name: "x".into(),
+                visibility: "members".into(),
+                join: "invite".into(),
+            },
+        ),
+        (
             "steer",
             Command::SessionInput {
                 space: space.into(),
@@ -75,7 +124,9 @@ struct Stage {
 
 async fn stage(script: Arc<Scripted>, window: Option<Duration>) -> Stage {
     let world = World::new(&[(ALICE, 41), (BOB, 42)]);
+    let data = world.dir.join("alice-data");
     let alice = world.node_with(ALICE, 41, |c| {
+        c.data_dir = Some(data);
         c.set_presence(script);
         c.unlock_window = window;
     });
@@ -293,12 +344,26 @@ async fn approvals_ask_per_action_and_hosts_cannot_unlock() {
     let e = host.unlock().await.unwrap_err();
     assert!(matches!(e, NodeError::Denied { .. }), "{e:?}");
     for (name, cmd) in locked_commands(&s.space) {
+        let by_class = cmd.class() == CommandClass::Face;
         let e = host.call(cmd).await.unwrap_err();
-        assert!(
+        // an agent may steer another session as the policy allows, so that command reaches the node (and
+        // the policy) from a host connection; every other one is refused by class
+        assert_eq!(
             matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
+            by_class,
             "{name}: {e:?}"
         );
+        assert!(!presence_required(&Err(e)), "{name}");
     }
+    assert_eq!(
+        Command::SessionInput {
+            space: s.space.clone(),
+            session: "x".into(),
+            text: "x".into()
+        }
+        .class(),
+        CommandClass::Agent
+    );
     assert!(script.prompts().is_empty());
 }
 
@@ -311,17 +376,73 @@ async fn the_setting_decides_and_weakening_it_needs_a_person() {
     let db = han_node::db::NodeDb::open(&s.world.dir.join("unused.db")).unwrap();
     let t = Duration::from_secs(1);
     // with the default (everything required) a window change needs a person
-    let e = presence::change(&db, None, None, Some(3000), Some(script.clone()), t).unwrap_err();
+    let e =
+        presence::change(&db, None, None, None, Some(3000), Some(script.clone()), t).unwrap_err();
     assert!(matches!(e, NodeError::Denied { .. }), "{e:?}");
     script.allow();
-    presence::change(&db, None, None, Some(3000), Some(script.clone()), t).unwrap();
+    presence::change(&db, None, None, None, Some(3000), Some(script.clone()), t).unwrap();
     assert_eq!(
         presence::unlock_window(&db).unwrap(),
         Duration::from_secs(3000)
     );
     // out of range is invalid, not clamped
-    let e = presence::change(&db, None, None, Some(1), Some(script.clone()), t).unwrap_err();
+    let e = presence::change(&db, None, None, None, Some(1), Some(script.clone()), t).unwrap_err();
     assert!(matches!(e, NodeError::Invalid { .. }), "{e:?}");
     db.set_config(presence::UNLOCK_SECS_KEY, "soon").unwrap();
     assert!(presence::unlock_window(&db).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_unlock_is_refused_while_one_waits_and_an_unlocked_connection_is_not_asked_again()
+{
+    let script = Scripted::new();
+    let s = stage(script.clone(), None).await;
+    // the person takes a while to answer
+    script.during(|| std::thread::sleep(Duration::from_millis(500)));
+    script.allow();
+    let a = RpcClient::connect_locked(&s.face).await.unwrap();
+    let (first, second) = tokio::join!(a.unlock(), async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        a.unlock().await
+    });
+    first.expect("the person confirmed");
+    assert!(
+        matches!(second, Err(NodeError::Conflict { .. })),
+        "{second:?}"
+    );
+    // unlocked: a further unlock asks nobody
+    a.unlock().await.expect("still unlocked");
+    assert_eq!(script.prompts().len(), 1, "{:?}", script.prompts());
+    // a face client whose calls were refused together asks the person once
+    let script2 = Scripted::new();
+    script2.allow();
+    let s2 = stage(script2.clone(), None).await;
+    let face = Arc::new(RpcClient::connect(&s2.face).await.unwrap());
+    let mut calls = Vec::new();
+    for _ in 0..4 {
+        let (face, cmd) = (Arc::clone(&face), set_bob(&s2));
+        calls.push(tokio::spawn(async move { face.call(cmd).await }));
+    }
+    for c in calls {
+        c.await
+            .unwrap()
+            .expect("every call goes through after one confirmation");
+    }
+    assert_eq!(script2.prompts().len(), 1, "{:?}", script2.prompts());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_running_node_ignores_an_edit_of_its_db() {
+    let script = Scripted::new();
+    let s = stage(script.clone(), None).await;
+    let raw = RpcClient::connect_locked(&s.face).await.unwrap();
+    assert!(presence_required(&raw.call(set_bob(&s)).await));
+    // a process of the same user opens node.db and switches the requirement off
+    let db = han_node::db::NodeDb::open(&s.world.dir.join("alice-data").join("node.db")).unwrap();
+    db.set_config(presence::REQUIRE_KEY, "").unwrap();
+    assert!(
+        presence_required(&raw.call(set_bob(&s)).await),
+        "the node keeps the settings it started with"
+    );
+    assert!(script.prompts().is_empty());
 }

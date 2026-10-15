@@ -124,6 +124,11 @@ pub enum HarnessFact {
 pub struct PresenceFacts {
     /// `presence.require` covers approvals.
     pub required: bool,
+    /// `presence.require` is `all` or names `face.unlock`: a face connection is locked for governing and
+    /// steering until a person confirms.
+    pub locks_connections: bool,
+    /// `presence.require` as written.
+    pub require: String,
     /// `presence.backend`.
     pub choice: String,
     /// The backend that choice builds on this platform (`none` when there is no check).
@@ -703,6 +708,20 @@ fn presence_findings(
             return;
         }
     };
+    if !p.locks_connections && !p.require.is_empty() {
+        out.push(finding(
+            "presence.unlock",
+            "presence",
+            format!(
+                "presence.require is {:?} and does not name face.unlock, so any program of your OS user can govern (members, policy, invites, devices, agent keys) and steer sessions over the node's pipe without a person",
+                p.require
+            ),
+            format!(
+                "han node presence --require {},face.unlock --data {data}",
+                p.require
+            ),
+        ));
+    }
     if !p.required {
         return;
     }
@@ -816,6 +835,8 @@ fn presence_facts(data: &Path) -> Option<Result<PresenceFacts, String>> {
         let (require, backend) = han_node::presence::settings(&db).map_err(|e| e.to_string())?;
         Ok(PresenceFacts {
             required: require.covers(han_node::presence::EFFECT_APPROVE),
+            locks_connections: require.covers(han_node::presence::FACE_UNLOCK),
+            require: require.to_string(),
             choice: backend.to_string(),
             effective: backend.build().name().to_owned(),
             pkcheck: on_path("pkcheck"),
@@ -1378,6 +1399,8 @@ mod tests {
         let facts = |required, effective: &str, pkcheck| {
             Some(Ok(PresenceFacts {
                 required,
+                locks_connections: true,
+                require: "all".into(),
                 choice: "auto".into(),
                 effective: effective.into(),
                 pkcheck,
@@ -1397,6 +1420,21 @@ mod tests {
         assert!(analyze(&f).is_empty());
         f.presence = Some(Err("node.db: bad".into()));
         assert_eq!(only(&f).id, "presence.settings");
+        // an explicit list without face.unlock leaves the pipe open to any program of the user
+        f.presence = Some(Ok(PresenceFacts {
+            required: true,
+            locks_connections: false,
+            require: "effect.approve,effect.cancel".into(),
+            choice: "auto".into(),
+            effective: "polkit".into(),
+            pkcheck: true,
+        }));
+        let x = only(&f);
+        assert_eq!(x.id, "presence.unlock");
+        assert_eq!(
+            x.fix,
+            "han node presence --require effect.approve,effect.cancel,face.unlock --data /d"
+        );
     }
 
     #[test]
