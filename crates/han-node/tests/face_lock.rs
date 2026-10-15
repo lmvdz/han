@@ -1,0 +1,327 @@
+//! A face connection is locked for the commands that govern or steer until a person confirms on the device
+//! (SR-106). Any process of the person's OS user can open the face pipe; the pipe proves nothing about who is
+//! at the machine. The presence backend is a test double injected through the node's config.
+
+mod common;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use common::{World, call, space_of};
+use han_node::api::{Command, ConnectionClass, NodeApi, NodeError, Query, ViewEvent, Window};
+use han_node::rpc::{RpcClient, default_endpoint, serve_as};
+use han_node::{Node, presence};
+use han_presence::PresenceError;
+use han_presence::testing::Scripted;
+
+const ALICE: &str = "@alice:a.localhost";
+const BOB: &str = "@bob:a.localhost";
+
+type N = Node<han_net::MemTransport>;
+
+/// What a command that governs or steers is, one of each kind.
+fn locked_commands(space: &str) -> Vec<(&'static str, Command)> {
+    vec![
+        (
+            "member",
+            Command::MemberSet {
+                space: space.into(),
+                actor: BOB.into(),
+                role: "member".into(),
+            },
+        ),
+        (
+            "policy",
+            Command::PolicySet {
+                space: space.into(),
+                policy: "{}".into(),
+            },
+        ),
+        (
+            "invite",
+            Command::Invite {
+                space: space.into(),
+                ttl_secs: None,
+                expires_at: None,
+                auto_admit: false,
+            },
+        ),
+        ("device offer", Command::DeviceOffer),
+        (
+            "device revoke",
+            Command::DeviceRevoke {
+                key_id: "d1".into(),
+            },
+        ),
+        ("device pair", Command::DevicePair { code: "x".into() }),
+        (
+            "steer",
+            Command::SessionInput {
+                space: space.into(),
+                session: "nothing".into(),
+                text: "go".into(),
+            },
+        ),
+    ]
+}
+
+struct Stage {
+    world: World,
+    _alice: N,
+    space: String,
+    face: String,
+    _servers: Vec<han_node::rpc::RpcServer>,
+}
+
+async fn stage(script: Arc<Scripted>, window: Option<Duration>) -> Stage {
+    let world = World::new(&[(ALICE, 41), (BOB, 42)]);
+    let alice = world.node_with(ALICE, 41, |c| {
+        c.set_presence(script);
+        c.unlock_window = window;
+    });
+    let space = space_of(
+        &call(
+            &alice,
+            Command::SpaceCreate {
+                home: world.home_ref.clone(),
+                name: "team".into(),
+                visibility: "members".into(),
+                join: "invite".into(),
+            },
+        )
+        .await,
+    );
+    let dir = world.dir.join("face-lock");
+    std::fs::create_dir_all(&dir).unwrap();
+    let face = default_endpoint(&dir);
+    let api: Arc<dyn NodeApi> = Arc::new(alice.clone());
+    let servers = vec![
+        serve_as(Arc::clone(&api), &face, ConnectionClass::Face).unwrap(),
+        serve_as(api, &format!("{face}-host"), ConnectionClass::Host).unwrap(),
+    ];
+    Stage {
+        world,
+        _alice: alice,
+        space,
+        face,
+        _servers: servers,
+    }
+}
+
+fn presence_required(r: &Result<han_node::api::CallResult, NodeError>) -> bool {
+    matches!(r, Err(NodeError::PresenceRequired { .. }))
+}
+
+fn set_bob(s: &Stage) -> Command {
+    Command::MemberSet {
+        space: s.space.clone(),
+        actor: BOB.into(),
+        role: "member".into(),
+    }
+}
+
+/// Run as a child by `a_separate_process_on_the_face_pipe_cannot_govern_or_steer`: a plain local process that
+/// opens the face pipe (the endpoint is in the environment) and tries what an unsandboxed agent would. It
+/// prints one line per attempt.
+#[test]
+#[ignore]
+fn locked_child() {
+    let (Ok(endpoint), Ok(space)) = (
+        std::env::var("HAN_FACE_LOCK_ENDPOINT"),
+        std::env::var("HAN_FACE_LOCK_SPACE"),
+    ) else {
+        return;
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let raw = RpcClient::connect_locked(&endpoint).await.unwrap();
+            for (name, cmd) in locked_commands(&space) {
+                let r = raw.call(cmd).await;
+                println!(
+                    "child {name}: {}",
+                    match r {
+                        Err(NodeError::PresenceRequired { .. }) => "presence_required".to_owned(),
+                        other => format!("{other:?}"),
+                    }
+                );
+            }
+            // reads and own work still go through
+            let mut v = raw.view(Query::Spaces {
+                window: Window::default(),
+            });
+            let first = v.next().await;
+            println!(
+                "child read: {}",
+                if matches!(first, Some(ViewEvent::Snapshot { .. })) {
+                    "ok"
+                } else {
+                    "failed"
+                }
+            );
+            // a client that does ask for the unlock gets the person's answer, which here is no
+            let asking = RpcClient::connect(&endpoint).await.unwrap();
+            let e = asking
+                .call(Command::DeviceOffer)
+                .await
+                .expect_err("nobody confirms");
+            println!("child asking: {e}");
+        });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_separate_process_on_the_face_pipe_cannot_govern_or_steer() {
+    let script = Scripted::new();
+    let s = stage(script.clone(), None).await;
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "locked_child", "--nocapture"])
+        .env("HAN_FACE_LOCK_ENDPOINT", &s.face)
+        .env("HAN_FACE_LOCK_SPACE", &s.space)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{text}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for (name, _) in locked_commands(&s.space) {
+        assert!(
+            text.contains(&format!("child {name}: presence_required")),
+            "{name} was not refused as presence_required:\n{text}"
+        );
+    }
+    assert!(text.contains("child read: ok"), "{text}");
+    assert!(
+        text.contains("child asking: denied: not unlocked: "),
+        "{text}"
+    );
+    // the only prompt was the one the asking client caused, and the person said no (an empty script)
+    let seen = script.prompts();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].action, "unlock");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unlock_is_for_one_connection_and_for_the_window() {
+    let script = Scripted::new();
+    let s = stage(script.clone(), Some(Duration::from_millis(1500))).await;
+    let a = RpcClient::connect_locked(&s.face).await.unwrap();
+    let b = RpcClient::connect_locked(&s.face).await.unwrap();
+    assert!(presence_required(&a.call(set_bob(&s)).await));
+    // the person confirms on connection A
+    script.allow();
+    let window = a.unlock().await.expect("a person confirmed");
+    assert_eq!(window, Duration::from_millis(1500));
+    a.call(set_bob(&s))
+        .await
+        .expect("A governs inside the window");
+    // steering is open on A too: the error is the session's, not the lock's
+    let steer = a
+        .call(Command::SessionInput {
+            space: s.space.clone(),
+            session: "nothing".into(),
+            text: "go".into(),
+        })
+        .await;
+    assert!(!presence_required(&steer), "{steer:?}");
+    // B shares the pipe and the process, and gets nothing from A's unlock
+    assert!(presence_required(&b.call(set_bob(&s)).await));
+    assert_eq!(script.prompts().len(), 1, "B was not asked or let through");
+    // the window ends: A is locked again
+    tokio::time::sleep(Duration::from_millis(1700)).await;
+    assert!(presence_required(&a.call(set_bob(&s)).await));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_face_client_unlocks_when_it_is_refused_and_asks_once_per_window() {
+    let script = Scripted::new();
+    let s = stage(script.clone(), None).await;
+    let face = RpcClient::connect(&s.face).await.unwrap();
+    script.allow();
+    face.call(set_bob(&s)).await.expect("confirmed once");
+    // a second governing command in the window asks nobody
+    face.call(Command::Invite {
+        space: s.space.clone(),
+        ttl_secs: None,
+        expires_at: None,
+        auto_admit: false,
+    })
+    .await
+    .expect("inside the window");
+    let seen = script.prompts();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].action, "unlock");
+    assert!(
+        seen[0]
+            .message()
+            .starts_with("Unlock governing and steering")
+    );
+    // a cancelled prompt is the command's error, typed, and nothing was done
+    let other = RpcClient::connect(&s.face).await.unwrap();
+    script.fail(PresenceError::Cancelled);
+    let e = other.call(Command::DeviceOffer).await.unwrap_err();
+    assert!(
+        matches!(&e, NodeError::Denied { message } if message.starts_with(presence::NOT_UNLOCKED)
+            && message.contains("cancelled")),
+        "{e:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approvals_ask_per_action_and_hosts_cannot_unlock() {
+    let script = Scripted::new();
+    let s = stage(script.clone(), None).await;
+    // an approval is not behind the unlock: it is refused by its own check (a person, bound to the plan), and
+    // by the node's lookup, not by the lock
+    let raw = RpcClient::connect_locked(&s.face).await.unwrap();
+    let r = raw
+        .call(Command::EffectApprove {
+            space: s.space.clone(),
+            proposal: "nothing".into(),
+            expires_at: None,
+            note: None,
+        })
+        .await;
+    assert!(!presence_required(&r), "{r:?}");
+    // an integration (host class) connection never unlocks and never governs or steers
+    let host = RpcClient::connect_locked(&format!("{}-host", s.face))
+        .await
+        .unwrap();
+    let e = host.unlock().await.unwrap_err();
+    assert!(matches!(e, NodeError::Denied { .. }), "{e:?}");
+    for (name, cmd) in locked_commands(&s.space) {
+        let e = host.call(cmd).await.unwrap_err();
+        assert!(
+            matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
+            "{name}: {e:?}"
+        );
+    }
+    assert!(script.prompts().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_setting_decides_and_weakening_it_needs_a_person() {
+    let script = Scripted::new();
+    let s = stage(script.clone(), None).await;
+    let raw = RpcClient::connect_locked(&s.face).await.unwrap();
+    assert!(presence_required(&raw.call(set_bob(&s)).await));
+    let db = han_node::db::NodeDb::open(&s.world.dir.join("unused.db")).unwrap();
+    let t = Duration::from_secs(1);
+    // with the default (everything required) a window change needs a person
+    let e = presence::change(&db, None, None, Some(3000), Some(script.clone()), t).unwrap_err();
+    assert!(matches!(e, NodeError::Denied { .. }), "{e:?}");
+    script.allow();
+    presence::change(&db, None, None, Some(3000), Some(script.clone()), t).unwrap();
+    assert_eq!(
+        presence::unlock_window(&db).unwrap(),
+        Duration::from_secs(3000)
+    );
+    // out of range is invalid, not clamped
+    let e = presence::change(&db, None, None, Some(1), Some(script.clone()), t).unwrap_err();
+    assert!(matches!(e, NodeError::Invalid { .. }), "{e:?}");
+    db.set_config(presence::UNLOCK_SECS_KEY, "soon").unwrap();
+    assert!(presence::unlock_window(&db).is_err());
+}

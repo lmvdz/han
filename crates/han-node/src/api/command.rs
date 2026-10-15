@@ -358,7 +358,7 @@ pub enum Command {
 /// [`CommandClass::Executor`] ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandClass {
-    /// Only a face acting for the device's person: approvals, membership, devices, policy, agents.
+    /// Only a face acting for the device's person: approvals, membership, devices, policy, agents, steering a session.
     Face,
     /// Also an agent's host and tools: its own sessions, tasks, status, leases and proposals.
     Agent,
@@ -369,12 +369,16 @@ pub enum CommandClass {
 /// What a connection to the node API is, which the node knows from the endpoint it came in on and not from
 /// anything the peer says. It bounds the commands the connection may send (SR-06, SR-106): only a
 /// [`ConnectionClass::Face`] may send a [`CommandClass::Face`] command, so an agent's host or an executor can
-/// never approve, however it asks.
+/// never approve, however it asks. A face connection is also **locked** for the commands that govern or steer
+/// ([`Command::needs_presence`]) until the person confirms their presence on that connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionClass {
-    /// A face acting for the device's person: every command.
+    /// A face acting for the device's person: every command; the ones that govern or steer once the person
+    /// has confirmed their presence on the connection.
     Face,
-    /// An agent's host and tools: [`CommandClass::Agent`] commands.
+    /// An agent's host and tools, and any other local client that is not a face (an integration): its own
+    /// sessions, tasks, status, leases and proposals ([`CommandClass::Agent`] commands) and reads. It can never
+    /// approve, govern or steer, and it has no way to unlock. Its endpoint is `role_endpoint(.., Host)`.
     Host,
     /// An executor: [`CommandClass::Agent`] and [`CommandClass::Executor`] commands.
     Executor,
@@ -411,6 +415,8 @@ impl Command {
             | Command::DeviceOffer
             | Command::DevicePair { .. }
             | Command::DeviceRevoke { .. }
+            // steering is a person's act: an agent's host and tools never send input to a session
+            | Command::SessionInput { .. }
             | Command::BlobFetch { .. }
             // the agent's host calls it in process; an agent's tools never upload blobs
             | Command::BlobPut { .. }
@@ -422,12 +428,52 @@ impl Command {
             | Command::TaskUpdate { .. }
             | Command::SessionOpen { .. }
             | Command::SessionClose { .. }
-            | Command::SessionInput { .. }
             | Command::StatusPublish { .. }
             | Command::StreamPublish { .. }
             | Command::LeaseSet { .. }
             | Command::EffectPropose { .. } => CommandClass::Agent,
             Command::EffectClaim { .. } | Command::EffectOutcome { .. } => CommandClass::Executor,
+        }
+    }
+
+    /// Whether the command governs (membership, policy, invites, devices, agent keys, trust in a home) or steers
+    /// a session. A face connection sends these only after the person confirmed their presence on it
+    /// (SR-106): any process of the person's OS user can open the face pipe, so the pipe alone proves nothing.
+    /// Approvals are not listed: they ask for a person at each action, bound to the plan. The match has no
+    /// wildcard arm, so a new variant must be decided before the crate builds.
+    pub fn needs_presence(&self) -> bool {
+        match self {
+            Command::SpaceJoin { .. }
+            | Command::HomePin { .. }
+            | Command::Invite { .. }
+            | Command::MemberSet { .. }
+            | Command::AgentCreate { .. }
+            | Command::DeviceOffer
+            | Command::DevicePair { .. }
+            | Command::DeviceRevoke { .. }
+            | Command::PolicySet { .. }
+            | Command::SessionInput { .. } => true,
+            Command::SpaceCreate { .. }
+            | Command::SpaceFollow { .. }
+            | Command::SpaceAwait { .. }
+            | Command::AgentStart { .. }
+            | Command::AgentStop { .. }
+            | Command::TaskCreate { .. }
+            | Command::TaskUpdate { .. }
+            | Command::TaskCancel { .. }
+            | Command::BlobFetch { .. }
+            | Command::BlobPut { .. }
+            | Command::SessionOpen { .. }
+            | Command::SessionClose { .. }
+            | Command::StatusPublish { .. }
+            | Command::LeaseSet { .. }
+            | Command::EffectApprove { .. }
+            | Command::EffectCancel { .. }
+            | Command::EffectPropose { .. }
+            | Command::EffectClaim { .. }
+            | Command::EffectOutcome { .. }
+            | Command::OutboxRetry { .. }
+            | Command::StreamPublish { .. } => false,
         }
     }
 

@@ -43,6 +43,14 @@ pub enum NodeError {
         #[ts(optional)]
         pending: Option<Pending>,
     },
+    /// The command governs or steers, and nobody has confirmed their presence on this connection (or the
+    /// confirmation ran out). Unlock the connection (`RpcClient::unlock`: the device asks the person) and send
+    /// it again. A face does this on its own; a process that cannot be at the device never gets past it.
+    #[error("presence_required: {message}")]
+    PresenceRequired {
+        /// Free text.
+        message: String,
+    },
     /// The thing is in a state that rules the request out (a task already closed, a space already followed).
     #[error("conflict: {message}")]
     Conflict {
@@ -129,6 +137,13 @@ impl NodeError {
         }
     }
 
+    /// `presence_required`.
+    pub fn presence_required(message: impl Into<String>) -> Self {
+        NodeError::PresenceRequired {
+            message: message.into(),
+        }
+    }
+
     /// The code as written in JSON.
     pub fn code(&self) -> &'static str {
         match self {
@@ -136,6 +151,7 @@ impl NodeError {
             NodeError::Invalid { .. } => "invalid",
             NodeError::NotFound { .. } => "not_found",
             NodeError::Unavailable { .. } => "unavailable",
+            NodeError::PresenceRequired { .. } => "presence_required",
             NodeError::Conflict { .. } => "conflict",
         }
     }

@@ -704,6 +704,14 @@ async fn up(a: UpArgs) -> Res<()> {
         "--data".into(),
         s(&home_data),
     ])?;
+    // The setup below governs (a space, its policy, the agent's membership) over the node's pipe in a row of
+    // commands, with nobody to confirm each: the dev node leaves the unlock for governing and steering off and
+    // keeps the per-action checks for approvals and cancels. `han node presence` changes it, with a person.
+    std::fs::create_dir_all(&person_data)?;
+    han_node::db::NodeDb::open(&person_data.join("node.db"))?.set_config(
+        han_node::presence::REQUIRE_KEY,
+        "effect.approve,effect.cancel",
+    )?;
     services.insert(
         "node".to_owned(),
         spawn(

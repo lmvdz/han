@@ -5,6 +5,10 @@
 //! the action and the short plan digest, and signs only on success. The setting is device-local: it lives in
 //! `node.db` (`presence.require`, `presence.backend`), is read at each approval, and no command of the node
 //! API can change it, so a face or an agent cannot switch the check off.
+//!
+//! The same check unlocks a face connection (`face.unlock`): any process of the person's OS user can open the
+//! face pipe, so a connection starts locked for the commands that govern or steer, and the OS prompt, which
+//! a process cannot answer for the person, opens them for a short window on that connection only.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +28,17 @@ pub const BACKEND_KEY: &str = "presence.backend";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// The action kind of an approval, as `presence.require` names it.
 pub const EFFECT_APPROVE: &str = "effect.approve";
+/// The action kind of unlocking a face connection to govern and steer, as `presence.require` names it.
+pub const FACE_UNLOCK: &str = "face.unlock";
+/// The `config` key holding how many seconds an unlock lasts (`600` by default).
+pub const UNLOCK_SECS_KEY: &str = "presence.unlock_secs";
+/// How long an unlock lasts when nothing says.
+pub const DEFAULT_UNLOCK: Duration = Duration::from_secs(600);
+/// The shortest and longest unlock a setting may name, in seconds.
+pub const UNLOCK_SECS_RANGE: std::ops::RangeInclusive<u64> = 10..=3600;
+
+/// The start of the message of a `denied` error when a person did not unlock a face connection.
+pub const NOT_UNLOCKED: &str = "not unlocked: ";
 
 /// A presence check handed to a node by whoever builds it (tests, an embedding app). It keeps
 /// [`NodeConfig`](crate::NodeConfig) `Debug` and `Clone`.
@@ -49,29 +64,72 @@ pub fn settings(db: &NodeDb) -> Result<(Require, BackendChoice), NodeError> {
     Ok((require, backend))
 }
 
-/// Changes the device's presence settings (`han node presence`). While approvals require a person, a change
-/// needs one too, so a process that can only type into a terminal cannot switch the check off. `presence` is
-/// the check to ask; none means the backend the stored setting names. Blocks while the person answers.
+/// How long one unlock of a face connection lasts. A value that does not parse, or is outside
+/// [`UNLOCK_SECS_RANGE`], is an error, never a default.
+pub fn unlock_window(db: &NodeDb) -> Result<Duration, NodeError> {
+    let read = db
+        .config(UNLOCK_SECS_KEY)
+        .map_err(|e| NodeError::unavailable(format!("node.db: {e}")))?;
+    let Some(v) = read else {
+        return Ok(DEFAULT_UNLOCK);
+    };
+    v.trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|n| UNLOCK_SECS_RANGE.contains(n))
+        .map(Duration::from_secs)
+        .ok_or_else(|| {
+            NodeError::invalid(format!(
+                "node.db: {UNLOCK_SECS_KEY} must be {} to {} seconds",
+                UNLOCK_SECS_RANGE.start(),
+                UNLOCK_SECS_RANGE.end()
+            ))
+        })
+}
+
+/// Changes the device's presence settings (`han node presence`). While approvals or unlocks require a person,
+/// a change needs one too, so a process that can only type into a terminal cannot switch the check off or
+/// stretch the unlock window. `presence` is the check to ask; none means the backend the stored setting
+/// names. `unlock_secs` is the unlock window in seconds ([`UNLOCK_SECS_RANGE`]). Blocks while the person
+/// answers.
 pub fn change(
     db: &NodeDb,
     require: Option<Require>,
     backend: Option<BackendChoice>,
+    unlock_secs: Option<u64>,
     presence: Option<Arc<dyn Presence>>,
     timeout: Duration,
 ) -> Result<(Require, BackendChoice), NodeError> {
     let (old_require, old_backend) = settings(db)?;
+    let old_window = unlock_window(db)?;
     let (new_require, new_backend) = (
         require.unwrap_or_else(|| old_require.clone()),
         backend.unwrap_or(old_backend),
     );
-    if (new_require.clone(), new_backend) == (old_require.clone(), old_backend) {
+    let new_window = match unlock_secs {
+        None => old_window,
+        Some(n) if UNLOCK_SECS_RANGE.contains(&n) => Duration::from_secs(n),
+        Some(_) => {
+            return Err(NodeError::invalid(format!(
+                "the unlock window is {} to {} seconds",
+                UNLOCK_SECS_RANGE.start(),
+                UNLOCK_SECS_RANGE.end()
+            )));
+        }
+    };
+    if (new_require.clone(), new_backend, new_window)
+        == (old_require.clone(), old_backend, old_window)
+    {
         return Ok((old_require, old_backend));
     }
-    if old_require.covers(EFFECT_APPROVE) {
+    if old_require.covers(EFFECT_APPROVE) || old_require.covers(FACE_UNLOCK) {
         let check = presence.unwrap_or_else(|| old_backend.build());
         let prompt = PresencePrompt {
             action: "presence.set".into(),
-            target: format!("require={new_require} backend={new_backend}"),
+            target: format!(
+                "require={new_require} backend={new_backend} unlock_secs={}",
+                new_window.as_secs()
+            ),
             plan_digest_short: "-".into(),
             space: "this device".into(),
             requester: "you".into(),
@@ -86,6 +144,7 @@ pub fn change(
     };
     put(REQUIRE_KEY, new_require.to_string())?;
     put(BACKEND_KEY, new_backend.to_string())?;
+    put(UNLOCK_SECS_KEY, new_window.as_secs().to_string())?;
     Ok((new_require, new_backend))
 }
 
@@ -151,6 +210,61 @@ pub(crate) async fn confirm(
     match outcome {
         Ok(proof) => check_proof(&proof, &prompt),
         Err(e) => Err(refusal(&e)),
+    }
+}
+
+/// Whether a face connection must confirm a person before it governs or steers.
+pub(crate) fn unlock_required(db: &NodeDb) -> Result<bool, NodeError> {
+    Ok(settings(db)?.0.covers(FACE_UNLOCK))
+}
+
+/// Asks the person to unlock one face connection and returns how long the unlock lasts. `window` overrides the
+/// stored window (tests, embedding apps). When no person is required it returns at once. Prompts are one at a
+/// time, with approvals': a second one waits for the first.
+pub(crate) async fn confirm_unlock(
+    db: &NodeDb,
+    injected: Option<&PresenceSlot>,
+    timeout: Duration,
+    window: Option<Duration>,
+    gate: &tokio::sync::Mutex<()>,
+) -> Result<Duration, NodeError> {
+    let (require, backend) = settings(db)?;
+    let window = match window {
+        Some(w) => w,
+        None => unlock_window(db)?,
+    };
+    if !require.covers(FACE_UNLOCK) {
+        return Ok(window);
+    }
+    let presence: Arc<dyn Presence> = match injected {
+        Some(p) => Arc::clone(&p.0),
+        None => backend.build(),
+    };
+    let prompt = PresencePrompt {
+        action: PresencePrompt::UNLOCK.into(),
+        target: "govern and steer".into(),
+        plan_digest_short: "-".into(),
+        space: "this device".into(),
+        requester: "a local connection".into(),
+        timeout,
+    };
+    let _one_at_a_time = gate.lock().await;
+    let asked = prompt.clone();
+    let outcome = tokio::task::spawn_blocking(move || presence.confirm(&asked))
+        .await
+        .map_err(|e| NodeError::unavailable(format!("{NOT_UNLOCKED}presence check: {e}")))?;
+    match outcome {
+        Ok(proof) if proof.plan_digest_short() == prompt.plan_digest_short => Ok(window),
+        Ok(_) => Err(NodeError::denied(format!(
+            "{NOT_UNLOCKED}the presence check confirmed something else"
+        ))),
+        Err(e) => Err(NodeError::denied(format!(
+            "{NOT_UNLOCKED}{}",
+            refusal(&e)
+                .to_string()
+                .trim_start_matches("denied: ")
+                .trim_start_matches(APPROVAL_NOT_SIGNED)
+        ))),
     }
 }
 
@@ -248,18 +362,39 @@ mod tests {
         let t = Duration::from_secs(1);
         let script = Scripted::new();
         // required (the default): an empty script, a cancel and a missing backend all leave it as it is
-        assert!(change(&db, none(), None, Some(script.clone()), t).is_err());
+        assert!(change(&db, none(), None, None, Some(script.clone()), t).is_err());
         script.fail(PresenceError::Cancelled);
-        assert!(change(&db, none(), None, Some(script.clone()), t).is_err());
-        assert!(change(&db, none(), None, Some(<dyn Presence>::deny_all()), t).is_err());
+        assert!(change(&db, none(), None, None, Some(script.clone()), t).is_err());
+        assert!(change(&db, none(), None, None, Some(<dyn Presence>::deny_all()), t).is_err());
         assert_eq!(settings(&db).unwrap().0, Require::All);
         // a person confirms: it changes
         script.allow();
-        let (r, _) = change(&db, none(), None, Some(script.clone()), t).unwrap();
+        let (r, _) = change(&db, none(), None, None, Some(script.clone()), t).unwrap();
         assert_eq!(r, Require::Kinds(Vec::new()));
         // no longer required: raising it again needs nobody
-        let (r, b) = change(&db, Some(Require::All), Some(BackendChoice::None), None, t).unwrap();
+        let (r, b) = change(
+            &db,
+            Some(Require::All),
+            Some(BackendChoice::None),
+            None,
+            None,
+            t,
+        )
+        .unwrap();
         assert_eq!((r, b), (Require::All, BackendChoice::None));
+    }
+
+    #[test]
+    fn only_a_requirement_that_names_the_unlock_locks_a_connection() {
+        let db = NodeDb::in_memory().unwrap();
+        assert!(unlock_required(&db).unwrap(), "required by default");
+        db.set_config(REQUIRE_KEY, "effect.approve,effect.cancel")
+            .unwrap();
+        assert!(!unlock_required(&db).unwrap());
+        db.set_config(REQUIRE_KEY, "face.unlock").unwrap();
+        assert!(unlock_required(&db).unwrap());
+        db.set_config(REQUIRE_KEY, "").unwrap();
+        assert!(!unlock_required(&db).unwrap());
     }
 
     #[tokio::test]

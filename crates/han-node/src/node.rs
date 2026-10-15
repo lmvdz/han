@@ -66,6 +66,9 @@ pub struct NodeConfig {
     pub presence: Option<PresenceSlot>,
     /// How long a person has to answer the presence check.
     pub presence_timeout: Duration,
+    /// How long one unlock of a face connection lasts. Absent, `presence.unlock_secs` in `node.db` says
+    /// (ten minutes by default). Only tests and embedding apps set it.
+    pub unlock_window: Option<Duration>,
 }
 
 impl NodeConfig {
@@ -87,6 +90,7 @@ impl NodeConfig {
             fetcher: han_net::wellknown::Fetcher::new(),
             presence: None,
             presence_timeout: crate::presence::DEFAULT_TIMEOUT,
+            unlock_window: None,
         }
     }
 
@@ -1902,6 +1906,24 @@ impl<T: Transport> NodeApi for Node<T> {
                 self.inner.engine().note_error(&what, e);
             }
             result
+        })
+    }
+
+    fn presence_required(&self) -> Result<bool, NodeError> {
+        presence::unlock_required(&self.inner.db)
+    }
+
+    fn confirm_unlock(&self) -> BoxFuture<'_, Result<Duration, NodeError>> {
+        Box::pin(async move {
+            let inner = &self.inner;
+            presence::confirm_unlock(
+                &inner.db,
+                inner.cfg.presence.as_ref(),
+                inner.cfg.presence_timeout,
+                inner.cfg.unlock_window,
+                &inner.presence_gate,
+            )
+            .await
         })
     }
 

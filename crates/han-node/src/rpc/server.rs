@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{Stream, prelude::*};
@@ -192,6 +193,25 @@ fn protocol_error(code: i64, message: &str) -> ErrorObject {
     }
 }
 
+/// When the person's unlock of one face connection ends; none while it is locked. It belongs to the connection
+/// that was unlocked: another connection to the same pipe starts locked and needs its own check.
+type Unlock = Arc<Mutex<Option<Instant>>>;
+
+/// Whether `cmd` may go to the node now: a face connection sends a command that governs or steers only while
+/// it is unlocked and only if the node requires a person for it.
+fn gate(api: &dyn NodeApi, unlock: &Unlock, cmd: &Command) -> Result<(), NodeError> {
+    if !cmd.needs_presence() || !api.presence_required()? {
+        return Ok(());
+    }
+    let until = *unlock.lock().unwrap_or_else(|e| e.into_inner());
+    if until.is_some_and(|t| Instant::now() < t) {
+        return Ok(());
+    }
+    Err(NodeError::presence_required(
+        "this connection has not confirmed a person on the device, or the confirmation ran out",
+    ))
+}
+
 async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass) {
     let (recv, mut send) = conn.split();
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
@@ -209,6 +229,7 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
     }));
     let mut calls = JoinSet::new();
     let views: Views = Arc::default();
+    let unlock: Unlock = Arc::default();
     let mut reader = BufReader::new(recv);
     let mut buf = Vec::new();
     loop {
@@ -241,6 +262,12 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
                     let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
                 }
                 Ok(cmd) => {
+                    if class == ConnectionClass::Face
+                        && let Err(e) = gate(&*api, &unlock, &cmd)
+                    {
+                        let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
+                        continue;
+                    }
                     let (api, out) = (Arc::clone(&api), out.clone());
                     while calls.try_join_next().is_some() {}
                     calls.spawn(async move {
@@ -262,6 +289,24 @@ async fn connection(conn: Stream, api: Arc<dyn NodeApi>, class: ConnectionClass)
                     let _ = out.send(respond(&id, Err(err)));
                 }
             },
+            Some("unlock") if class != ConnectionClass::Face => {
+                let e = NodeError::denied(format!("a {class:?} connection cannot unlock"));
+                let _ = out.send(respond(&id, Err(ErrorObject::node(&e))));
+            }
+            Some("unlock") => {
+                let (api, out, unlock) = (Arc::clone(&api), out.clone(), Arc::clone(&unlock));
+                calls.spawn(async move {
+                    let result = match api.confirm_unlock().await {
+                        Ok(window) => {
+                            *unlock.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(Instant::now() + window);
+                            Ok(json!({ "window_ms": window.as_millis() as u64 }))
+                        }
+                        Err(e) => Err(ErrorObject::node(&e)),
+                    };
+                    let _ = out.send(respond(&id, result));
+                });
+            }
             Some("view") => match (id.as_u64(), serde_json::from_value::<Query>(params)) {
                 (Some(sub), Ok(query)) => {
                     let _ = out.send(respond(&id, Ok(json!({ "sub": sub }))));

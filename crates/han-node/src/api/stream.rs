@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use futures_core::Stream;
 
@@ -21,6 +22,19 @@ pub trait NodeApi: Send + Sync + 'static {
 
     /// Watches something: a snapshot of the window, then diffs, until the stream is dropped.
     fn view(&self, query: Query) -> ViewStream;
+
+    /// Whether a face connection must confirm a person before it governs or steers
+    /// ([`Command::needs_presence`]). The RPC server asks at each such command; the node answers from its
+    /// presence setting. An implementation with no device behind it (a test double) needs nobody.
+    fn presence_required(&self) -> Result<bool, NodeError> {
+        Ok(false)
+    }
+
+    /// Asks the person, on this device, to unlock a face connection, and returns how long the unlock lasts.
+    /// The RPC server calls it for one connection and keeps the window on that connection alone.
+    fn confirm_unlock(&self) -> BoxFuture<'_, Result<Duration, NodeError>> {
+        Box::pin(async { Err(NodeError::unavailable("this node has no presence check")) })
+    }
 }
 
 /// A role process's own node, as the role may use it: a host or an executor that runs its own node in process

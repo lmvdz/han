@@ -50,18 +50,23 @@ enum NodeCmd {
     },
     /// Removes the background service.
     UninstallService,
-    /// Shows or sets this device's human-presence check for approvals (stored in `node.db`, read at each
-    /// approval). While approvals require a person, changing it needs one to confirm.
+    /// Shows or sets this device's human-presence check for approvals and for unlocking governing and steering
+    /// on a connection (stored in `node.db`, read at each use). While either requires a person, changing it
+    /// needs one to confirm.
     Presence {
         /// The data directory of the node.
         #[arg(long, env = "HAN_DATA", default_value = "han-data")]
         data: PathBuf,
-        /// `all`, or a comma-separated list of action kinds (`effect.approve`); the empty list requires nothing.
+        /// `all`, or a comma-separated list of action kinds (`effect.approve`, `effect.cancel`, `face.unlock`);
+        /// the empty list requires nothing.
         #[arg(long)]
         require: Option<String>,
         /// `auto`, `windows-hello`, `touch-id`, `polkit` or `none`.
         #[arg(long)]
         backend: Option<String>,
+        /// How many seconds one unlock of a connection to govern and steer lasts (10 to 3600, default 600).
+        #[arg(long)]
+        unlock_secs: Option<u64>,
     },
     /// Says whether the node is running, who it acts as, and how its links stand.
     Status {
@@ -147,13 +152,14 @@ async fn presence(
     data: &std::path::Path,
     require: Option<String>,
     backend: Option<String>,
+    unlock_secs: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use han_node::presence::{BackendChoice, Require, change, settings};
+    use han_node::presence::{BackendChoice, Require, change, settings, unlock_window};
     let require = require.map(|r| r.parse::<Require>()).transpose()?;
     let backend = backend.map(|b| b.parse::<BackendChoice>()).transpose()?;
     std::fs::create_dir_all(data)?;
     let db = han_node::db::NodeDb::open(&data.join("node.db"))?;
-    let changing = require.is_some() || backend.is_some();
+    let changing = require.is_some() || backend.is_some() || unlock_secs.is_some();
     if changing {
         println!("confirm on this device if asked…");
     }
@@ -163,6 +169,7 @@ async fn presence(
                 &db,
                 require,
                 backend,
+                unlock_secs,
                 None,
                 han_node::presence::DEFAULT_TIMEOUT,
             )
@@ -172,6 +179,7 @@ async fn presence(
     })?;
     println!("presence.require {require}");
     println!("presence.backend {backend}");
+    println!("presence.unlock_secs {}", unlock_window(&db)?.as_secs());
     Ok(())
 }
 
@@ -222,7 +230,8 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
             data,
             require,
             backend,
-        }) => presence(&data, require, backend).await,
+            unlock_secs,
+        }) => presence(&data, require, backend, unlock_secs).await,
         Some(NodeCmd::Status { data, endpoint }) => status(&data, endpoint).await,
         Some(NodeCmd::UninstallService) => {
             println!("{}", service::uninstall()?);

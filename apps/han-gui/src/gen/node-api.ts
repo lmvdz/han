@@ -25,7 +25,11 @@ retry_after_ms: number | null,
 /**
  * What the request waits for, when it is state that is on its way (a space still syncing).
  */
-pending?: Pending, } | { "code": "conflict", 
+pending?: Pending, } | { "code": "presence_required", 
+/**
+ * Free text.
+ */
+message: string, } | { "code": "conflict", 
 /**
  * Free text.
  */
