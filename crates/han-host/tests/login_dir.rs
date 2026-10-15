@@ -20,7 +20,10 @@ fn s(p: &Path) -> String {
 }
 
 fn available(b: SandboxBackend) -> bool {
-    match sandbox::probe().into_iter().find(|x| x.backend == b) {
+    match sandbox::probe(&production_shim::shim())
+        .into_iter()
+        .find(|x| x.backend == b)
+    {
         Some(x) if x.available => true,
         Some(x) => {
             eprintln!("SKIP: {b:?} unavailable here: {}", x.detail);

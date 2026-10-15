@@ -30,7 +30,15 @@ pub struct Stack {
 
 /// Whether an OS sandbox is available here.
 pub fn os_sandbox() -> bool {
-    han_host::sandbox::probe()
+    let shim = han_host::sandbox::ShimCommand::new(HAN, ["shim"]);
+    let found = han_host::sandbox::probe(&shim);
+    for b in found.iter().filter(|b| !b.available && b.loopback_blocked) {
+        eprintln!(
+            "SKIP the OS sandbox: {:?} unusable here: {}",
+            b.backend, b.detail
+        );
+    }
+    found
         .iter()
         .any(|b| b.available && b.backend != han_node::api::SandboxBackend::None)
 }
@@ -72,6 +80,16 @@ pub fn han(args: &[&str]) -> String {
 impl Stack {
     /// `han dev up --script <script>` plus `extra` arguments.
     pub fn up(script: &str, extra: &[&str]) -> Stack {
+        Stack::up_as(script, extra, advisory(), &[])
+    }
+
+    /// Like [`Stack::up`], but the agent is never advisory, whatever the machine has: for a test that sets
+    /// the agent's sandbox itself (`extra` has `--sandbox`).
+    pub fn up_confined(script: &str, extra: &[&str], env: &[(&str, &str)]) -> Stack {
+        Stack::up_as(script, extra, false, env)
+    }
+
+    fn up_as(script: &str, extra: &[&str], advisory: bool, env: &[(&str, &str)]) -> Stack {
         let guard = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!(
             "han-e2e-{}-{}",
@@ -85,7 +103,7 @@ impl Stack {
         )))
         .unwrap();
         let mut args = vec!["dev", "up", "--script", script];
-        if advisory() {
+        if advisory {
             args.push("--advisory");
         }
         args.extend_from_slice(extra);
@@ -95,6 +113,7 @@ impl Stack {
         // that the test would wait on.
         let status = Command::new(HAN)
             .args(&args)
+            .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
             .stderr(log)

@@ -12,6 +12,7 @@ mod doctor;
 mod enroll;
 mod exec;
 mod executor;
+mod gate;
 mod harness;
 mod homecmd;
 mod host;

@@ -56,6 +56,8 @@ pub struct NodeInfo {
     pub node_id: String,
     /// Supervised roles.
     pub roles: Vec<RoleInfo>,
+    /// What stops roles from starting on this machine (the supervisor's).
+    pub problems: Vec<String>,
 }
 
 /// Where a session's work timeline comes from. han-timeline backs it in M4; until then [`NoTimeline`] says
@@ -680,7 +682,7 @@ impl Engine {
     fn problems(&self) -> Vec<String> {
         let mut spaces: Vec<&SpaceModel> = self.spaces.values().collect();
         spaces.sort_by(|a, b| a.space.cmp(&b.space));
-        let mut out = Vec::new();
+        let mut out = self.info.problems.clone();
         for m in spaces {
             if m.link == SpaceLink::Misconfigured {
                 out.push(format!(

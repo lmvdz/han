@@ -31,6 +31,7 @@ pub(super) fn probe() -> BackendAvailability {
     let Some(bwrap) = find("bwrap") else {
         return BackendAvailability {
             backend: SandboxBackend::Bwrap,
+            loopback_blocked: false,
             available: false,
             detail: "bwrap is not installed".into(),
         };
@@ -53,11 +54,13 @@ pub(super) fn probe() -> BackendAvailability {
     match out {
         Ok(o) if o.status.success() => BackendAvailability {
             backend: SandboxBackend::Bwrap,
+            loopback_blocked: false,
             available: true,
             detail: format!("{}", bwrap.display()),
         },
         Ok(o) => BackendAvailability {
             backend: SandboxBackend::Bwrap,
+            loopback_blocked: false,
             available: false,
             detail: format!(
                 "bwrap cannot create namespaces: {}",
@@ -66,6 +69,7 @@ pub(super) fn probe() -> BackendAvailability {
         },
         Err(e) => BackendAvailability {
             backend: SandboxBackend::Bwrap,
+            loopback_blocked: false,
             available: false,
             detail: format!("bwrap: {e}"),
         },

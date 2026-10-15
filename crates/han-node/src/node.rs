@@ -523,6 +523,7 @@ impl<T: Transport> Node<T> {
         engine.set_node_info(NodeInfo {
             node_id,
             roles: Vec::new(),
+            problems: Vec::new(),
         });
         engine.set_device_key(&config.key_id);
         let follows = db.follows().map_err(unavailable)?;
@@ -644,6 +645,7 @@ impl<T: Transport> Node<T> {
         engine.set_node_info(NodeInfo {
             node_id: self.node_id(),
             roles,
+            problems: inner.supervisor.problems(),
         });
         engine.tick(inner.clock.steady_ms(), inner.now_secs());
     }
@@ -1331,6 +1333,7 @@ impl<T: Transport> Node<T> {
                     })
                     .map_err(|e| match e {
                         SupervisorError::Running(_) => NodeError::conflict(e.to_string()),
+                        SupervisorError::SandboxUnavailable(m) => NodeError::unavailable(m),
                         other => NodeError::unavailable(other.to_string()),
                     })?;
                 Ok(CallResult::Done)

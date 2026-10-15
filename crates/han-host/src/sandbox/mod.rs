@@ -2,9 +2,17 @@
 //!
 //! | Backend | OS | Filesystem | Network | DNS | Limits |
 //! |---|---|---|---|---|---|
-//! | MXC ProcessContainer | Windows 11 (no admin) | rw = worktree and temp, ro = listed paths, everything else denied | egress denied except one container-local loopback port: the in-sandbox shim, which forwards to a per-session named pipe bridged to the proxy | **resolves** (the host DNS client answers; SR-27 gap) | wall time only |
+//! | MXC ProcessContainer | Windows 11 (no admin), on a build where a container can use its own loopback port (a self-test proves it, see below) | rw = worktree and temp, ro = listed paths, everything else denied | egress denied except one container-local loopback port: the in-sandbox shim, which forwards to a per-session named pipe bridged to the proxy | **resolves** (the host DNS client answers; SR-27 gap) | wall time only |
 //! | bubblewrap | Linux | a new root: system dirs read-only, listed paths ro/rw, private `/tmp`, no home | a new network namespace with only `lo`: the shim forwards to a bind-mounted unix socket bridged to the proxy; a seccomp filter allows only AF_UNIX, AF_INET, AF_INET6 and AF_NETLINK sockets, so no AF_VSOCK (a VM host's hypervisor), AF_PACKET, bluetooth, CAN, TIPC or KCM; `--disable-userns` stops nested user namespaces (listed as a gap when bwrap lacks it) | blocked (no resolver reachable) | address space through `prlimit` if present; wall time |
 //! | none | any | advisory | advisory (proxy settings only) | advisory | wall time |
+//!
+//! MXC fails closed. Since Windows 11 Insider 26220 (`processmodel.dll`, October 2026) a loopback connect from
+//! inside a BaseContainer fails with `WSAEACCES` (10013), even to the container's own listener, and the only
+//! policy that lifts it (`ingress.hostLoopback = Allow`) opens all host loopback, which HAN never sets. A
+//! build number says nothing (builds change in both directions), so [`probe`] runs `han shim selftest` in one
+//! container, once per process, under the policy a launch uses (the strict one, else MXC's identity-less loopback proxy; see `mxc.rs`). If the port does not work the backend is
+//! unavailable, with [`BackendAvailability::loopback_blocked`] set, and [`admit`] refuses an MXC session rather
+//! than letting it start and lose its tools. `Auto` then means advisory only where the space allows it.
 //!
 //! The backend, its fidelity and every known gap are returned in [`SandboxInfo`] for the host to publish in
 //! status (SR-34, SR-99). Without a sandbox a session starts only when the space allows advisory mode (SR-23).
@@ -47,6 +55,19 @@ pub enum Preference {
     Bwrap,
     /// No sandbox (advisory).
     None,
+}
+
+impl Preference {
+    /// The preference a name stands for (`auto`, `mxc`, `bwrap`, `none`; empty is `auto`).
+    pub fn parse(name: &str) -> Result<Preference, String> {
+        Ok(match name {
+            "auto" | "" => Preference::Auto,
+            "mxc" => Preference::Mxc,
+            "bwrap" => Preference::Bwrap,
+            "none" => Preference::None,
+            other => return Err(format!("unknown sandbox {other}: auto, mxc, bwrap or none")),
+        })
+    }
 }
 
 /// Resource caps (SR-31). What a backend cannot enforce is listed in [`SandboxInfo::gaps`].
@@ -160,12 +181,19 @@ pub struct SandboxInfo {
     pub proxy_inside: Option<SocketAddr>,
 }
 
+/// What to do on a machine whose MXC gives a container no loopback port.
+pub const LOOPBACK_FIX: &str = "use WSL2+bubblewrap when available, or run the agent on the runner, or `--allow-advisory` (not recommended)";
+
 /// Why a sandbox could not be launched.
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxError {
     /// The backend is not available on this machine.
     #[error("sandbox backend unavailable: {0}")]
     Unavailable(String),
+    /// MXC is installed but this Windows build gives a container no working loopback port, so the agent
+    /// could not reach its tools (docs/runner.md).
+    #[error("sandbox backend unavailable: {0}; fix: {LOOPBACK_FIX}")]
+    LoopbackBlocked(String),
     /// No sandbox could be established and the space does not allow advisory mode (SR-23).
     #[error("no sandbox is available and advisory mode is not allowed: {0}")]
     AdvisoryNotAllowed(String),
@@ -189,14 +217,17 @@ pub struct BackendAvailability {
     pub available: bool,
     /// What the probe found.
     pub detail: String,
+    /// The backend is there but the OS refuses a container its own loopback port (10013); only MXC.
+    pub loopback_blocked: bool,
 }
 
-/// The backends this machine offers.
-pub fn probe() -> Vec<BackendAvailability> {
+/// The backends this machine offers. `shim` is what a launch would run inside a sandbox; MXC's self-test
+/// runs it (once per process, cached).
+pub fn probe(shim: &ShimCommand) -> Vec<BackendAvailability> {
     let native: Option<BackendAvailability> = {
         #[cfg(windows)]
         {
-            Some(mxc::probe())
+            Some(mxc::probe(shim))
         }
         #[cfg(target_os = "linux")]
         {
@@ -204,6 +235,7 @@ pub fn probe() -> Vec<BackendAvailability> {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
+            let _ = shim;
             None
         }
     };
@@ -213,8 +245,68 @@ pub fn probe() -> Vec<BackendAvailability> {
             backend: SandboxBackend::None,
             available: true,
             detail: "no confinement: advisory only".into(),
+            loopback_blocked: false,
         }))
         .collect()
+}
+
+/// Which backend a session with `pref` gets, given what `available` says, or why it gets none. This is the
+/// whole decision, apart from the probing: a named backend that is not usable is an error (never a fall back
+/// to advisory), `Auto` takes the first usable native one, and advisory needs `allow_advisory` (SR-23).
+pub fn admit(
+    pref: Preference,
+    allow_advisory: bool,
+    available: &[BackendAvailability],
+) -> Result<SandboxBackend, SandboxError> {
+    let named = |b: SandboxBackend| match available.iter().find(|a| a.backend == b) {
+        Some(a) if a.available => Ok(b),
+        Some(a) if a.loopback_blocked => Err(SandboxError::LoopbackBlocked(a.detail.clone())),
+        Some(a) => Err(SandboxError::Unavailable(format!("{b:?}: {}", a.detail))),
+        None => Err(SandboxError::Unavailable(format!(
+            "{b:?} is not available on this OS"
+        ))),
+    };
+    match pref {
+        Preference::Mxc => named(SandboxBackend::Mxc),
+        Preference::Bwrap => named(SandboxBackend::Bwrap),
+        Preference::None if allow_advisory => Ok(SandboxBackend::None),
+        Preference::None => Err(SandboxError::AdvisoryNotAllowed(
+            "the session asked for no sandbox".into(),
+        )),
+        Preference::Auto => {
+            let native = |a: &&BackendAvailability| a.backend != SandboxBackend::None;
+            if let Some(a) = available.iter().filter(native).find(|a| a.available) {
+                return Ok(a.backend);
+            }
+            if allow_advisory {
+                return Ok(SandboxBackend::None);
+            }
+            // Say why there is none: a blocked loopback port is its own, typed, answer.
+            if let Some(a) = available.iter().filter(native).find(|a| a.loopback_blocked) {
+                return Err(SandboxError::LoopbackBlocked(a.detail.clone()));
+            }
+            Err(SandboxError::AdvisoryNotAllowed(
+                available
+                    .iter()
+                    .filter(native)
+                    .map(|b| format!("{:?}: {}", b.backend, b.detail))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ))
+        }
+    }
+}
+
+/// Whether a session with the sandbox called `name` could start on this machine now: `Ok`, or the typed
+/// reason it could not. The node asks this before it starts an agent host.
+pub fn gate(name: &str, allow_advisory: bool, shim: &ShimCommand) -> Result<(), SandboxError> {
+    let pref = Preference::parse(name).map_err(SandboxError::Invalid)?;
+    let available = if pref == Preference::None {
+        Vec::new()
+    } else {
+        probe(shim)
+    };
+    admit(pref, allow_advisory, &available).map(|_| ())
 }
 
 /// A child's stdin.
@@ -273,33 +365,17 @@ impl Drop for Sandboxed {
 /// Launches `spec`.
 pub async fn launch(spec: SandboxSpec) -> Result<Sandboxed, SandboxError> {
     std::fs::create_dir_all(&spec.temp)?;
-    let backend = match spec.backend {
-        Preference::Auto => auto_backend(),
-        Preference::Mxc => SandboxBackend::Mxc,
-        Preference::Bwrap => SandboxBackend::Bwrap,
-        Preference::None => SandboxBackend::None,
-    };
+    let shim = spec.shim.clone();
+    let available = tokio::task::spawn_blocking(move || probe(&shim))
+        .await
+        .map_err(|e| SandboxError::Spawn(e.to_string()))?;
+    let backend = admit(spec.backend, spec.allow_advisory, &available)?;
     let mut s = match backend {
         #[cfg(windows)]
         SandboxBackend::Mxc => mxc::launch(&spec).await?,
         #[cfg(target_os = "linux")]
         SandboxBackend::Bwrap => bwrap::launch(&spec).await?,
-        SandboxBackend::None => {
-            if !spec.allow_advisory {
-                let why = if spec.backend == Preference::None {
-                    "the session asked for no sandbox".to_owned()
-                } else {
-                    probe()
-                        .into_iter()
-                        .filter(|b| b.backend != SandboxBackend::None)
-                        .map(|b| format!("{:?}: {}", b.backend, b.detail))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                };
-                return Err(SandboxError::AdvisoryNotAllowed(why));
-            }
-            launch_none(&spec).await?
-        }
+        SandboxBackend::None => launch_none(&spec).await?,
         #[allow(unreachable_patterns)]
         other => {
             return Err(SandboxError::Unavailable(format!(
@@ -315,14 +391,6 @@ pub async fn launch(spec: SandboxSpec) -> Result<Sandboxed, SandboxError> {
         }));
     }
     Ok(s)
-}
-
-fn auto_backend() -> SandboxBackend {
-    probe()
-        .into_iter()
-        .find(|b| b.available)
-        .map(|b| b.backend)
-        .unwrap_or(SandboxBackend::None)
 }
 
 /// A random hex string from the OS CSPRNG.
@@ -510,4 +578,75 @@ async fn launch_none(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError> {
         proxy_inside: spec.proxy.as_ref().map(|p| p.addr),
     };
     Ok(from_tokio_child(child, info, Vec::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn av(backend: SandboxBackend, available: bool, blocked: bool) -> BackendAvailability {
+        BackendAvailability {
+            backend,
+            available,
+            detail: format!("{backend:?} detail"),
+            loopback_blocked: blocked,
+        }
+    }
+
+    fn none() -> BackendAvailability {
+        av(SandboxBackend::None, true, false)
+    }
+
+    #[test]
+    fn mxc_with_a_blocked_loopback_port_is_refused_and_never_falls_back() {
+        let found = [av(SandboxBackend::Mxc, false, true), none()];
+        for allow in [false, true] {
+            assert!(matches!(
+                admit(Preference::Mxc, allow, &found),
+                Err(SandboxError::LoopbackBlocked(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn auto_is_advisory_only_where_the_space_allows_it_and_says_why_otherwise() {
+        let found = [av(SandboxBackend::Mxc, false, true), none()];
+        assert_eq!(
+            admit(Preference::Auto, true, &found).unwrap(),
+            SandboxBackend::None
+        );
+        let e = admit(Preference::Auto, false, &found).unwrap_err();
+        assert!(matches!(e, SandboxError::LoopbackBlocked(_)), "{e}");
+        assert!(e.to_string().contains("WSL2+bubblewrap"), "{e}");
+        let other = [av(SandboxBackend::Mxc, false, false), none()];
+        assert!(matches!(
+            admit(Preference::Auto, false, &other),
+            Err(SandboxError::AdvisoryNotAllowed(_))
+        ));
+    }
+
+    #[test]
+    fn a_working_backend_is_taken_and_a_backend_this_os_lacks_is_unavailable() {
+        let found = [av(SandboxBackend::Mxc, true, false), none()];
+        assert_eq!(
+            admit(Preference::Auto, false, &found).unwrap(),
+            SandboxBackend::Mxc
+        );
+        assert_eq!(
+            admit(Preference::Mxc, false, &found).unwrap(),
+            SandboxBackend::Mxc
+        );
+        assert!(matches!(
+            admit(Preference::Bwrap, true, &found),
+            Err(SandboxError::Unavailable(_))
+        ));
+        assert!(matches!(
+            admit(Preference::None, false, &found),
+            Err(SandboxError::AdvisoryNotAllowed(_))
+        ));
+        assert_eq!(
+            admit(Preference::None, true, &found).unwrap(),
+            SandboxBackend::None
+        );
+    }
 }

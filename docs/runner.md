@@ -372,6 +372,18 @@ reuse `han`'s own `~/.rustup` instead: `sudo chmod 711 /home/han`, `sudo chmod -
 refuses to start and names it. Check from the agent's side: `sudo -u han-agent1 /opt/rust/cargo/bin/cargo --version`
 works, and `cargo build` in a session reaches crates.io through the proxy only.
 
+### 7.3 MXC and the in-sandbox loopback port (Windows)
+
+An agent in an MXC container reaches its tools through one loopback port inside the container (the shim's). Since Windows 11 Insider build 26220 (October 2026) the default MXC network rule fails every loopback connect from inside a container with error 10013, even to its own listener. HAN does not trust a build number. The first time a process needs MXC, it runs `han shim selftest` in one container (a few seconds, once per process) under the policy a launch uses: it binds a loopback port and connects to it. HAN tries two policies and uses the first that works: the strict one (egress allowed to that one port only), then MXC's identity-less loopback proxy (egress denied, the container's proxy set to the shim's port; Microsoft documents it as a development and testing mode). Its `ingress` and `hostLoopback` settings are `Allow`, so `sandbox_probe` checks that nothing connects into the container, from the host or from the PC's LAN address, and fails if anything does. `ingress.hostLoopback = Allow` alone, with an allow rule, is never used.
+
+If neither works, MXC is unavailable on this build and HAN fails closed:
+
+- `han agent start` for an agent set to `mxc` (or to `auto` without `--allow-advisory`) is refused before any host starts, with the reason: `MXC on this Windows build blocks the in-sandbox loopback port (10013)`.
+- `han node status` lists it as a problem, and `han doctor` reports `sandbox.mxc.loopback` with the agents it stops.
+- Fix: use WSL2+bubblewrap when available (`han agent set <agent> --sandbox bwrap`), or run the agent on the runner, or `--allow-advisory` (not recommended: no confinement).
+
+`HAN_MXC_FORCE_UNAVAILABLE=loopback` makes the probe report this state without running the container; it can only refuse.
+
 ## 8. Check it
 
 ### 8.1 `han doctor`
@@ -386,6 +398,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - `agents.json` and the harness records: an unreadable file, an OS user name or sandbox or toolchain no launch could use, an OS user that does not exist on this machine, a harness that is not set up or whose files are gone;
 - logins: whether an agent that uses Claude Code has one (as `han agent login --check` does, without reading it);
 - the device's presence setting: approvals that need a person but a backend with no check (or `pkcheck` missing);
+- Windows: whether MXC can give a container a working loopback port (`sandbox.mxc.loopback`, see 7.3);
 - the Rust toolchain the sandboxes get: enabled but not installed, or a `--repo` whose `rust-toolchain.toml` pins a toolchain that is not installed;
 - the executor (`/var/lib/han-exec`, or `--exec-dir`): `exec.json` names repositories but has no `github` block, or the write App's key file is missing or not mode 600 (the fix is the `han executor add … --github-app … --github-installation … --github-key …` of 9);
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).

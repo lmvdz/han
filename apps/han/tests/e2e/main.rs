@@ -52,6 +52,99 @@ async fn the_session_starts_under_the_real_sandbox_with_the_production_shim() {
     }
 }
 
+/// Bug: on a Windows build where MXC gives a container no loopback port (10013), `han agent start` for an MXC
+/// agent succeeded, the session started, and the agent failed mid-session when it could not reach its tools.
+/// The start is now refused with the reason and no session starts; status says why.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn an_mxc_agent_is_refused_with_the_reason_when_the_loopback_port_does_not_work() {
+    // The node's self-test is made to fail (`HAN_MXC_FORCE_UNAVAILABLE`), as it does on such a build.
+    let s = Stack::up_confined(
+        "simple",
+        &["--sandbox", "mxc"],
+        &[("HAN_MXC_FORCE_UNAVAILABLE", "loopback")],
+    );
+    let c = s.client().await;
+    let started = std::time::Instant::now();
+    let (ok, out, err) = run(&[
+        "agent",
+        "start",
+        "--space",
+        &s.space(),
+        "--agent",
+        &s.agent(),
+        "--repo",
+        &s.remote().to_string_lossy(),
+        "--issue",
+        &s.get("issue"),
+        "--home",
+        &s.ticket(),
+        "--data",
+        &s.person_data().to_string_lossy(),
+    ]);
+    assert!(
+        !ok,
+        "the start of an MXC agent must be refused:
+{out}
+{err}"
+    );
+    assert!(
+        err.contains("loopback") && err.contains("10013"),
+        "the refusal says why: {err}"
+    );
+    assert!(
+        err.contains("WSL2+bubblewrap") && err.contains("--allow-advisory"),
+        "the refusal says what to do: {err}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(60),
+        "it fails fast: {:?}",
+        started.elapsed()
+    );
+    // no session started: no host role, and the agent's events log was never written
+    let status = |rows: Vec<Row>| {
+        rows.into_iter().find_map(|r| match r {
+            Row::NodeStatus(n) => Some(n),
+            _ => None,
+        })
+    };
+    let n = status(
+        rows(
+            &c,
+            Query::NodeStatus {
+                window: Window::default(),
+            },
+        )
+        .await,
+    )
+    .expect("the node has a status");
+    assert!(n.roles.is_empty(), "a host was started: {:?}", n.roles);
+    assert!(s.agent_events().is_empty(), "the agent ran");
+    // status shows it (the probe's detail is the node's problem, with the fix)
+    until(
+        "the node's status names the sandbox problem",
+        60,
+        || async {
+            status(
+                rows(
+                    &c,
+                    Query::NodeStatus {
+                        window: Window::default(),
+                    },
+                )
+                .await,
+            )
+            .is_some_and(|n| {
+                n.problems
+                    .iter()
+                    .any(|p| p.contains("loopback port") && p.contains("fix:"))
+            })
+        },
+    )
+    .await;
+}
+
 /// Bug: the agent's messages were never mirrored. Its messages, a thought and a tool call are Session items,
 /// and the board step reads "waiting for input: …".
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -31,7 +31,9 @@ fn shim_exe() -> ShimCommand {
 }
 
 fn available(b: SandboxBackend) -> bool {
-    let found = sandbox::probe().into_iter().find(|x| x.backend == b);
+    let found = sandbox::probe(&shim_exe())
+        .into_iter()
+        .find(|x| x.backend == b);
     match found {
         Some(x) if x.available => true,
         Some(x) => {
@@ -43,6 +45,16 @@ fn available(b: SandboxBackend) -> bool {
             false
         }
     }
+}
+
+/// Why no OS sandbox is usable here, for a skip or note line.
+fn why_none() -> String {
+    sandbox::probe(&shim_exe())
+        .into_iter()
+        .filter(|b| b.backend != SandboxBackend::None)
+        .map(|b| format!("{:?}: {}", b.backend, b.detail))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 async fn session_proxy(token: &str) -> ProxyHandle {
@@ -355,6 +367,107 @@ async fn mxc_confines_the_tree() {
     eprintln!("MXC gaps: {:#?}", info.gaps);
 }
 
+/// Inbound: the identity-less loopback proxy policy allows ingress into the container, so a listener inside
+/// (on `0.0.0.0` or `127.0.0.1`) must still be unreachable from the host (loopback) and from the PC's LAN
+/// address, or it would be a channel out. Every inbound connect must be refused.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nothing_connects_into_an_mxc_container() {
+    if !available(SandboxBackend::Mxc) {
+        return;
+    }
+    let f = fixture();
+    let proxy = session_proxy(TOKEN).await;
+    let (p_any, p_lo) = (
+        sandbox::pick_inside_port().unwrap(),
+        sandbox::pick_inside_port().unwrap(),
+    );
+    // the PC's LAN address: the source address the OS would use to leave the machine (nothing is sent)
+    let lan = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|u| u.connect("192.0.2.1:9").and_then(|_| u.local_addr()))
+        .map(|a| a.ip())
+        .ok();
+    let spec_json = json!({
+        "listen": [format!("0.0.0.0:{p_any}"), format!("127.0.0.1:{p_lo}")],
+        "hold_ms": 20000,
+    });
+    let program = probe_exe();
+    let spec = SandboxSpec {
+        session: "inbound".into(),
+        backend: Preference::Mxc,
+        program: program.clone(),
+        args: vec![],
+        cwd: f.wt.clone(),
+        env: vec![("HAN_PROBE_SPEC".into(), spec_json.to_string())],
+        rw: vec![f.wt.clone()],
+        ro: vec![program.parent().unwrap().to_path_buf()],
+        temp: f.temp.clone(),
+        proxy: Some(ProxyTarget {
+            addr: proxy.addr(),
+            token: TOKEN.into(),
+        }),
+        allow_advisory: false,
+        limits: Limits {
+            wall_time: Some(Duration::from_secs(60)),
+            ..Limits::default()
+        },
+        shim: shim_exe(),
+        inside_port: None,
+    };
+    let mut sb = sandbox::launch(spec).await.unwrap();
+    let mut out = tokio::io::BufReader::new(sb.stdout.take().unwrap());
+    drop(sb.stdin.take());
+    // wait until both listeners are up inside (otherwise a refusal would prove nothing)
+    let mut up = Vec::new();
+    let waited = tokio::time::timeout(Duration::from_secs(60), async {
+        let mut line = String::new();
+        while up.len() < 2 {
+            line.clear();
+            if tokio::io::AsyncBufReadExt::read_line(&mut out, &mut line)
+                .await
+                .unwrap_or(0)
+                == 0
+            {
+                break;
+            }
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                up.push(v);
+            }
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "the listeners did not report: {up:?}");
+    eprintln!("inside: {up:?}");
+    assert!(
+        up.iter().all(|v| v["ok"] == true),
+        "the container could not listen, so the test would prove nothing: {up:?}"
+    );
+    let mut targets: Vec<SocketAddr> = vec![];
+    for port in [p_any, p_lo] {
+        targets.push(([127, 0, 0, 1], port).into());
+        if let Some(ip) = lan {
+            targets.push(SocketAddr::new(ip, port));
+        }
+    }
+    let mut connected = Vec::new();
+    for t in &targets {
+        let r =
+            tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(t)).await;
+        eprintln!(
+            "host connect {t}: {:?}",
+            r.as_ref().map(|c| c.as_ref().map(|_| ()))
+        );
+        if matches!(r, Ok(Ok(_))) {
+            connected.push(*t);
+        }
+    }
+    sb.kill();
+    assert!(
+        connected.is_empty(),
+        "the host (or LAN address) connected into the container: {connected:?} (lan {lan:?})"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bwrap_confines_the_tree() {
@@ -451,7 +564,7 @@ async fn advisory_mode_needs_permission_and_says_so() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wall_time_and_kill_end_the_tree() {
     let f = fixture();
-    let backend = sandbox::probe()
+    let backend = sandbox::probe(&shim_exe())
         .into_iter()
         .find(|b| b.available && b.backend != SandboxBackend::None)
         .map(|b| match b.backend {
@@ -459,7 +572,13 @@ async fn wall_time_and_kill_end_the_tree() {
             SandboxBackend::Bwrap => Preference::Bwrap,
             SandboxBackend::None => Preference::None,
         })
-        .unwrap_or(Preference::None);
+        .unwrap_or_else(|| {
+            eprintln!(
+                "NOTE: no usable OS sandbox here, so this runs advisory: {}",
+                why_none()
+            );
+            Preference::None
+        });
     let shim = shim_exe();
     let mk = |wall: Option<Duration>| SandboxSpec {
         session: "wall".into(),
@@ -515,14 +634,20 @@ async fn stdio_and_the_mcp_stub_cross_the_sandbox() {
         });
     }));
     let proxy = Proxy::start(cfg).await.unwrap();
-    let backend = sandbox::probe()
+    let backend = sandbox::probe(&shim_exe())
         .into_iter()
         .find(|b| b.available && b.backend != SandboxBackend::None)
         .map(|b| match b.backend {
             SandboxBackend::Mxc => Preference::Mxc,
             _ => Preference::Bwrap,
         })
-        .unwrap_or(Preference::None);
+        .unwrap_or_else(|| {
+            eprintln!(
+                "NOTE: no usable OS sandbox here, so this runs advisory: {}",
+                why_none()
+            );
+            Preference::None
+        });
     let shim = shim_exe();
     let spec = SandboxSpec {
         session: "stub".into(),

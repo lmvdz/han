@@ -75,7 +75,10 @@ async fn han_as_the_shim_starts_an_agent_inside_the_os_sandbox() {
     } else {
         SandboxBackend::Bwrap
     };
-    match sandbox::probe().into_iter().find(|b| b.backend == native) {
+    match sandbox::probe(&sandbox::ShimCommand::new(HAN, ["shim"]))
+        .into_iter()
+        .find(|b| b.backend == native)
+    {
         Some(b) if b.available => {}
         Some(b) => return eprintln!("SKIP: {native:?} unavailable here: {}", b.detail),
         None => return eprintln!("SKIP: {native:?} does not exist on this OS"),
