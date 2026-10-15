@@ -71,10 +71,10 @@ async fn fast_stage_cold_then_warm_after_a_leaf_change() {
     cfg.step_timeout = std::time::Duration::from_secs(3600);
     cfg.run_timeout = std::time::Duration::from_secs(7200);
     // HAN_WARM_BENCH_ENV="NAME=value" adds a variable to the steps (for example CARGO_LOG, to see why cargo rebuilds)
-    if let Ok(kv) = std::env::var("HAN_WARM_BENCH_ENV") {
-        if let Some((k, v)) = kv.split_once('=') {
-            cfg.extra_env.push((k.into(), v.into()));
-        }
+    if let Ok(kv) = std::env::var("HAN_WARM_BENCH_ENV")
+        && let Some((k, v)) = kv.split_once('=')
+    {
+        cfg.extra_env.push((k.into(), v.into()));
     }
     let runner = WarmRunner::new(cfg).unwrap();
     let base = git(&repo, &["rev-parse", "HEAD"], None);
