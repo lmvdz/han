@@ -770,6 +770,15 @@ pub struct EffectRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub expires_at: Option<String>,
+    /// The seq of the entry that gave the open approvals their latest member: the order a landing lane
+    /// takes changes in (R33 §4). Absent while nothing is approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approved_seq: Option<u64>,
+    /// The receipt time of that entry: the time of the commit a landing lane makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approved_at: Option<String>,
     /// The seq of the proposal.
     pub seq: u64,
     /// The head of the space when the row was made (an executor claims each effect at most once per head).

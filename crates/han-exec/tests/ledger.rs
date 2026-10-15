@@ -72,3 +72,78 @@ fn a_claim_that_never_landed_may_be_claimed_again_under_its_number() {
         Err(LedgerError::Exists(_))
     ));
 }
+
+#[test]
+fn a_lanes_instruction_is_journalled_with_the_claim_and_survives_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.db");
+    let lane = han_exec::LaneInstruction {
+        onto: "a".repeat(40),
+        commit: "b".repeat(40),
+        repository: dir.path().join("landing.git"),
+    };
+    {
+        let l = Ledger::open(&path).unwrap();
+        l.claiming_with(&key(1), "vcs.land", "{}", "test", 5, 30, Some(&lane))
+            .unwrap();
+        l.claiming(&key(2), "count", "{}", "test", 6, 30).unwrap();
+        l.lane_put("s1:a.localhost", "p1", r#"{"state":"testing"}"#)
+            .unwrap();
+        l.lane_put("s1:a.localhost", "p1", r#"{"state":"landing"}"#)
+            .unwrap();
+        l.meta_put("lane-session|s1:a.localhost", "e1").unwrap();
+    }
+    let l = Ledger::open(&path).unwrap();
+    assert_eq!(l.get(&key(1)).unwrap().unwrap().lane, Some(lane.clone()));
+    assert_eq!(l.get(&key(2)).unwrap().unwrap().lane, None);
+    assert_eq!(l.pending().unwrap()[0].lane, Some(lane));
+    assert_eq!(
+        l.lane_all().unwrap(),
+        vec![(
+            "s1:a.localhost".to_owned(),
+            "p1".to_owned(),
+            r#"{"state":"landing"}"#.to_owned()
+        )]
+    );
+    assert_eq!(
+        l.meta_get("lane-session|s1:a.localhost")
+            .unwrap()
+            .as_deref(),
+        Some("e1")
+    );
+    assert_eq!(l.meta_get("nope").unwrap(), None);
+    assert_eq!(l.format().unwrap(), han_exec::ledger::FORMAT_VERSION);
+}
+
+#[test]
+fn a_journal_from_before_the_lane_opens_and_gains_its_tables() {
+    // The first migration alone is what the executor shipped before the lane.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+             INSERT INTO meta VALUES ('format', '1');
+             CREATE TABLE attempts (key TEXT PRIMARY KEY, space TEXT NOT NULL, proposal TEXT NOT NULL,
+               attempt INTEGER NOT NULL, action TEXT NOT NULL, plan TEXT NOT NULL, state TEXT NOT NULL,
+               claim_id TEXT, clock TEXT NOT NULL, sent_ms INTEGER NOT NULL, window INTEGER NOT NULL,
+               report TEXT, detail TEXT NOT NULL DEFAULT '');
+             CREATE INDEX attempts_proposal ON attempts (space, proposal);
+             CREATE TABLE journal (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL,
+               state TEXT NOT NULL, detail TEXT NOT NULL);
+             INSERT INTO attempts (key, space, proposal, attempt, action, plan, state, clock, sent_ms, window)
+               VALUES ('s|p|1', 's', 'p', 1, 'git_push', '{}', 'launching', 'test', 1, 30);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let l = Ledger::open(&path).unwrap();
+    let a = l.pending().unwrap();
+    assert_eq!(
+        (a.len(), a[0].state.as_str(), a[0].lane.clone()),
+        (1, "launching", None)
+    );
+    l.lane_put("s", "p", "{}").unwrap();
+    assert_eq!(l.lane_all().unwrap().len(), 1);
+}

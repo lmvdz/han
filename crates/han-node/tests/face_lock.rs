@@ -396,6 +396,15 @@ async fn approvals_ask_per_action_and_hosts_cannot_unlock() {
         matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
         "{e:?}"
     );
+    // ...but it may upload a blob in process (its landing lane's evidence), which the node then decides on
+    let put = Command::BlobPut {
+        space: s.space.clone(),
+        media_type: "application/json".into(),
+        data: "e30".into(),
+    };
+    if let Err(NodeError::Denied { message }) = exec.call(put).await {
+        assert!(!message.contains("may not send"), "{message}");
+    }
     assert!(script.prompts().is_empty());
 }
 

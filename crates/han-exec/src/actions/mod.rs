@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 pub use git_push::GitPush;
 pub use http_request::{HttpRequest, is_public};
-pub use land::{VcsLand, depends_cycle};
+pub use land::{REF_MOVED, VcsLand, commit_title, depends_cycle};
 pub use open_pr::OpenPr;
+pub(crate) use open_pr::ensure_pr;
 
 use crate::{Action, ActionCtx, PlanError};
 

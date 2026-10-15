@@ -48,28 +48,52 @@ impl OpenPr {
             .clone()
             .ok_or("the repository is not on GitHub")?;
         let minter = ctx.github.as_ref().ok_or("no GitHub App is configured")?;
-        let token = minter.token(&gh, &[("pull_requests", "write")]).await?;
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let octo = octocrab::Octocrab::builder()
-            .base_uri(minter.api_base())
-            .map_err(|_| "bad API base".to_string())?
-            .personal_token(token.expose().to_owned())
-            .build()
-            .map_err(|_| "building the GitHub client failed".to_string())?;
+        let octo = minter.client(&gh, &[("pull_requests", "write")]).await?;
         Ok((octo, gh))
     }
 
     async fn find(&self, octo: &octocrab::Octocrab, gh: &str, head: &str) -> Result<Found, String> {
-        let owner = gh.split('/').next().unwrap_or_default();
-        let route = format!("/repos/{gh}/pulls?state=open&head={owner}:{head}");
-        let list: Value = octo
-            .get(route, None::<&()>)
-            .await
-            .map_err(|_| "listing pull requests failed".to_string())?;
-        Ok(match list.as_array().and_then(|a| a.first()) {
-            Some(pr) => Found::Open(describe(pr)),
-            None => Found::None,
-        })
+        find_pr(octo, gh, head).await
+    }
+}
+
+/// The open pull request for `head` on `gh` (`owner/name`), if there is one.
+async fn find_pr(octo: &octocrab::Octocrab, gh: &str, head: &str) -> Result<Found, String> {
+    let owner = gh.split('/').next().unwrap_or_default();
+    let route = format!("/repos/{gh}/pulls?state=open&head={owner}:{head}");
+    let list: Value = octo
+        .get(route, None::<&()>)
+        .await
+        .map_err(|_| "listing pull requests failed".to_string())?;
+    Ok(match list.as_array().and_then(|a| a.first()) {
+        Some(pr) => Found::Open(describe(pr)),
+        None => Found::None,
+    })
+}
+
+/// A pull request for `head` into `base` on `gh` (`owner/name`): the open one when there is one (a push to
+/// `head` already updated it), else a new one. Returns what it found or opened, as `pull request #N URL`.
+/// The landing lane calls this for the branch it pushes the commit under test to.
+pub(crate) async fn ensure_pr(
+    minter: &crate::github::GithubMinter,
+    gh: &str,
+    head: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+) -> Result<String, String> {
+    let octo = minter.client(gh, &[("pull_requests", "write")]).await?;
+    if let Found::Open(d) = find_pr(&octo, gh, head).await? {
+        return Ok(d);
+    }
+    let req = json!({"title": title, "head": head, "base": base, "body": body});
+    match octo.post(format!("/repos/{gh}/pulls"), Some(&req)).await {
+        Ok::<Value, _>(pr) => Ok(describe(&pr)),
+        // The request went out; whether GitHub made the pull request is known from a lookup.
+        Err(_) => match find_pr(&octo, gh, head).await? {
+            Found::Open(d) => Ok(d),
+            Found::None => Err("creating the pull request failed".into()),
+        },
     }
 }
 

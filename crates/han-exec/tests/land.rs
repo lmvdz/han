@@ -62,11 +62,9 @@ impl World {
         git(&work, &["checkout", "-q", "main"]);
         let config = ExecConfig {
             repos: vec![RepoTarget {
-                name: "local:origin".into(),
-                remote: remote.to_string_lossy().into_owned(),
-                github: None,
+                landing_refs: vec![REF.into()],
+                ..RepoTarget::new("local:origin", remote.to_string_lossy().into_owned())
             }],
-            landing_refs: vec![REF.into()],
             ..ExecConfig::default()
         };
         World {
@@ -314,10 +312,8 @@ fn plan_check_refuses_what_is_out_of_scope_or_malformed() {
         VcsLand.plan_check(&other, &w.config),
         Err(PlanError::OutOfScope(_))
     ));
-    let none = ExecConfig {
-        landing_refs: vec![],
-        ..(*w.config).clone()
-    };
+    let mut none = (*w.config).clone();
+    none.repos[0].landing_refs.clear();
     assert!(matches!(
         VcsLand.plan_check(&ok, &none),
         Err(PlanError::OutOfScope(_))

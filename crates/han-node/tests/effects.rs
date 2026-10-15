@@ -167,10 +167,66 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
     })
     .await;
 
+    // The row says which entry gave the approvals their latest member, and when: a landing lane orders its
+    // changes by it and dates its commits with it.
+    let approved = effects(&exec, EXEC, false)
+        .into_iter()
+        .find(|e| e.proposal == proposal)
+        .unwrap();
+    assert!(approved.approved_seq.is_some_and(|n| n > row.seq));
+    assert!(
+        approved
+            .approved_at
+            .as_deref()
+            .is_some_and(han_core::grammar::is_time)
+    );
+    assert_eq!((row.approved_seq, row.approved_at), (None, None));
+
+    // A claim that did not start returns the approvals it consumed (P-09), with their order and time, so the
+    // executor can claim again.
+    let first = id_of(
+        &call(
+            &exec,
+            Command::EffectClaim {
+                space: space.clone(),
+                proposal: proposal.clone(),
+                attempt: 1,
+                window: 30,
+            },
+        )
+        .await,
+    );
+    until("the claim consumed the approval", || {
+        effects(&exec, EXEC, false)
+            .iter()
+            .any(|e| e.proposal == proposal && e.phase == "claimed" && e.approvals.is_empty())
+    })
+    .await;
+    call(
+        &exec,
+        Command::EffectOutcome {
+            space: space.clone(),
+            claim: first,
+            result: "failed".into(),
+            started: "no".into(),
+            cost: None,
+        },
+    )
+    .await;
+    until("the approval returned with the effect", || {
+        effects(&exec, EXEC, false).iter().any(|e| {
+            e.proposal == proposal
+                && e.phase == "open"
+                && e.approvals == vec![ALICE.to_owned()]
+                && e.approved_seq == approved.approved_seq
+        })
+    })
+    .await;
+
     let claim = Command::EffectClaim {
         space: space.clone(),
         proposal: proposal.clone(),
-        attempt: 1,
+        attempt: 2,
         window: 30,
     };
     assert_eq!(claim.class(), CommandClass::Executor);
@@ -196,9 +252,15 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
     until("the effect is done", || {
         effects(&exec, EXEC, true)
             .iter()
-            .any(|e| e.proposal == proposal && e.phase == "done" && e.claims == 1)
+            .any(|e| e.proposal == proposal && e.phase == "done" && e.claims == 2)
     })
     .await;
+    // The claim consumed the approvals, and with them their order.
+    assert!(
+        effects(&exec, EXEC, true)
+            .iter()
+            .all(|e| e.approved_seq.is_none() && e.approved_at.is_none())
+    );
     assert!(effects(&exec, EXEC, false).is_empty());
 }
 

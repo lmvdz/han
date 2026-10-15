@@ -8,14 +8,18 @@
 //! * [`gate::Gate`]: the local gate seam. Until spec round 33 (risk tiers, semantic gates) every action outside
 //!   the sandbox needs an approval; the gate reads the plan's [`han_vcs::ChangeSummary`] when there is one.
 //! * [`Executor`]: the loop over the node API's `Effects` view: gate, plan check, claim, launch, report.
+//! * [`Lane`]: the landing lane (R33), a service of the executor that claims `vcs.land` effects at push time,
+//!   after the commit it squash-rebased onto the target ref has passed the repository's [`Checks`].
 //! * [`github::GithubMinter`]: the single minter of GitHub App installation tokens (SR-49), each scoped to one
 //!   repository and the permissions of one action (SR-67).
 
 pub mod actions;
+pub mod checks;
 pub mod clock;
 mod executor;
 pub mod gate;
 pub mod github;
+pub mod lane;
 pub mod ledger;
 pub mod secret;
 
@@ -24,9 +28,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use clock::{Elapsed, SystemElapsed};
-pub use executor::{ExecError, Executor, ExecutorConfig, StepReport};
+pub use checks::Checks;
+pub use clock::{Elapsed, SystemElapsed, SystemWall, Wall};
+pub use executor::{ExecError, Executor, ExecutorConfig, LaneClaim, StepReport};
 pub use gate::{Gate, GateDecision, GateInput, NeedsApproval};
+pub use lane::Lane;
 pub use ledger::{Ledger, LedgerError, Report};
 pub use secret::Secret;
 
@@ -131,7 +137,8 @@ pub struct ActionCtx {
     /// runs).
     pub args_blob: Option<Arc<Vec<u8>>>,
     /// The landing lane's instruction for this attempt (see [`LaneInstruction`]); `None` for every effect
-    /// that is not claimed by a lane, and for `lookup` after a restart until the lane persists it.
+    /// that is not claimed by a lane. The executor journals it with the claim and re-attaches it for `lookup`
+    /// after a restart.
     pub lane: Option<LaneInstruction>,
 }
 
@@ -140,7 +147,8 @@ pub struct ActionCtx {
 ///
 /// The executor attaches it to [`ActionCtx::lane`] when a lane claims the effect, after the lane has
 /// squash-rebased the approved change onto the target ref's tip and tested exactly that commit. The lane
-/// signs its evidence over the same values (PR 3), so the claim, the evidence and the push name one commit.
+/// can sign its evidence ([`checks::ChecksEvidence`]) over the same values, so the claim, the evidence and the
+/// push name one commit.
 /// It is data, not authority: `vcs.land` re-checks all of it against the plan before the ref moves, and
 /// refuses to run without it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,11 +212,6 @@ pub struct ExecConfig {
     /// Branch prefixes a push may move (default `han/`). A ref outside them is out of scope.
     #[serde(default = "default_prefixes")]
     pub branch_prefixes: Vec<String>,
-    /// The full refs `vcs.land` may move, listed explicitly (for example `refs/heads/main`); separate from
-    /// `branch_prefixes`, which only `git_push` and `open_pr` use. Default empty: nothing lands until a ref
-    /// is configured. They apply to every repository in `repos`.
-    #[serde(default)]
-    pub landing_refs: Vec<String>,
     /// The GitHub App, when GitHub actions are configured.
     #[serde(default)]
     pub github: Option<GithubApp>,
@@ -230,7 +233,7 @@ impl ExecConfig {
 }
 
 /// A repository the executor may write.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepoTarget {
     /// The name plans use, `github:owner/repo` or a local name.
@@ -241,6 +244,130 @@ pub struct RepoTarget {
     /// SR-67) and `open_pr` may run on it.
     #[serde(default)]
     pub github: Option<String>,
+    /// The full refs `vcs.land` may move on this repository, listed explicitly (for example
+    /// `refs/heads/main`); separate from [`ExecConfig::branch_prefixes`], which only `git_push` and `open_pr`
+    /// use. Default empty: nothing lands, and no landing lane runs, until a ref is configured.
+    #[serde(default)]
+    pub landing_refs: Vec<String>,
+    /// What the repository's landing lane reads from its checks.
+    #[serde(default)]
+    pub checks: ChecksConfig,
+    /// How long a change may stay in each lane state before it is reported stalled.
+    #[serde(default)]
+    pub deadlines: Deadlines,
+    /// The branch prefix the lane pushes the commits it tests to (`<prefix><ref>/<proposal>`); default
+    /// `han/lane/`.
+    #[serde(default = "default_lane_prefix")]
+    pub lane_branch_prefix: String,
+}
+
+fn default_lane_prefix() -> String {
+    "han/lane/".into()
+}
+
+impl RepoTarget {
+    /// A repository with nothing configured for landing.
+    pub fn new(name: impl Into<String>, remote: impl Into<String>) -> RepoTarget {
+        RepoTarget {
+            name: name.into(),
+            remote: remote.into(),
+            github: None,
+            landing_refs: Vec::new(),
+            checks: ChecksConfig::default(),
+            deadlines: Deadlines::default(),
+            lane_branch_prefix: default_lane_prefix(),
+        }
+    }
+}
+
+/// The checks a repository's landing lane gates on (R33 §4 "Two stages").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChecksConfig {
+    /// Names of the checks that must be green on the exact commit the lane lands (`fast`, pre-merge).
+    #[serde(default = "default_required")]
+    pub required: Vec<String>,
+    /// Names of the checks that must be green on the landed commit before the change is `confirmed` (`full`,
+    /// post-merge). Default empty: a repository with no `full` set treats `landed` as `confirmed`.
+    #[serde(default)]
+    pub full: Vec<String>,
+    /// Seconds between two reads of a backend (default 30).
+    #[serde(default = "default_poll_secs")]
+    pub poll_secs: u64,
+    /// Seconds a required check may be missing before the change is reported stalled (default 300): GitHub
+    /// runs nothing on a pull request that cannot merge, so a check that never appears is not a slow one.
+    #[serde(default = "default_appear_secs")]
+    pub appear_secs: u64,
+    /// How many times the lane asks for a red required check to run again before it rejects the change
+    /// (default 0).
+    #[serde(default)]
+    pub rerun: u32,
+}
+
+fn default_required() -> Vec<String> {
+    vec!["quick".into()]
+}
+
+fn default_poll_secs() -> u64 {
+    30
+}
+
+fn default_appear_secs() -> u64 {
+    300
+}
+
+impl Default for ChecksConfig {
+    fn default() -> Self {
+        ChecksConfig {
+            required: default_required(),
+            full: Vec::new(),
+            poll_secs: default_poll_secs(),
+            appear_secs: default_appear_secs(),
+            rerun: 0,
+        }
+    }
+}
+
+/// The deadline of each lane state, in seconds (R33 §3). A change past its state's deadline is reported
+/// stalled, with the reason; nothing else happens to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deadlines {
+    /// `queued`: default 1800 (30 min, for a lane of one).
+    #[serde(default = "default_queued_secs")]
+    pub queued_secs: u64,
+    /// `testing`: the repository's CI timeout plus ten minutes; default 2400.
+    #[serde(default = "default_testing_secs")]
+    pub testing_secs: u64,
+    /// `landing`: the claim's `launchWindow` when absent.
+    #[serde(default)]
+    pub landing_secs: Option<u64>,
+    /// `landed`: the full suite's timeout plus 30 minutes; default 3600.
+    #[serde(default = "default_landed_secs")]
+    pub landed_secs: u64,
+}
+
+fn default_queued_secs() -> u64 {
+    1800
+}
+
+fn default_testing_secs() -> u64 {
+    2400
+}
+
+fn default_landed_secs() -> u64 {
+    3600
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Deadlines {
+            queued_secs: default_queued_secs(),
+            testing_secs: default_testing_secs(),
+            landing_secs: None,
+            landed_secs: default_landed_secs(),
+        }
+    }
 }
 
 /// A GitHub App: the private key is loaded by the executor itself (keychain or file) and never leaves it.
@@ -271,6 +398,12 @@ pub trait Action: Send + Sync + 'static {
     /// Checks what the plan would do against the world, for example that the commit to push has exactly the
     /// approved changeset. Runs before claiming and again before launching (X-09). May read, never write.
     async fn preflight(&self, plan: &Value, ctx: &ActionCtx) -> Result<(), PlanError>;
+
+    /// Whether only a landing lane may claim this action's effects. The executor's own loop never claims one
+    /// (the lane claims at push time, after its checks are green); default `false`.
+    fn lane_only(&self) -> bool {
+        false
+    }
 
     /// Runs it.
     async fn run(&self, plan: &Value, key: &IdempotencyKey, ctx: &ActionCtx) -> Outcome;

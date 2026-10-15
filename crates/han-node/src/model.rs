@@ -257,6 +257,10 @@ pub(crate) struct EffectInfo {
     pub cost: Option<(String, u64)>,
     pub expires_at: Option<String>,
     pub approvals: Vec<String>,
+    /// The seq and time of the latest approval entry the open approvals stand on (cleared with them).
+    pub approved: Option<(u64, String)>,
+    /// What the latest claim consumed, returned by a not-started outcome (P-09).
+    consumed: (Vec<String>, Option<(u64, String)>),
     pub seq: u64,
     repeatable: bool,
     phase: Phase,
@@ -821,6 +825,8 @@ impl SpaceModel {
                         cost: p.cost.map(|c| (c.unit, c.amount)),
                         expires_at: p.expires_at,
                         approvals: Vec::new(),
+                        approved: None,
+                        consumed: (Vec::new(), None),
                         seq,
                         repeatable: p.repeatable,
                         phase: Phase::Open,
@@ -851,6 +857,7 @@ impl SpaceModel {
                             e.notes.push((author.clone(), note.to_owned()));
                         }
                         e.approvals.push(author);
+                        e.approved = Some((seq, rec.receipt.time.clone()));
                     }
                 }
             }
@@ -869,7 +876,8 @@ impl SpaceModel {
             Body::Claim(c) => {
                 if let Some(e) = self.effects.get_mut(&c.proposal) {
                     e.phase = Phase::Claimed;
-                    e.approvals.clear(); // a claim consumes the approvals it stands on
+                    // A claim consumes the approvals it stands on; a not-started outcome returns them.
+                    e.consumed = (std::mem::take(&mut e.approvals), e.approved.take());
                     e.notes.clear();
                     e.claims += 1;
                     e.last_claim = Some(id.clone());
@@ -895,6 +903,16 @@ impl SpaceModel {
                         // asked for, which this fold does not track: it shows open until the next
                         // claim is refused).
                         (EffectResult::Failed | EffectResult::Cancelled, Started::No) => {
+                            let (back, approved) = std::mem::take(&mut e.consumed);
+                            for a in back {
+                                // A newer approval of the same author supersedes the returned one.
+                                if !e.approvals.contains(&a) {
+                                    e.approvals.push(a);
+                                }
+                            }
+                            if e.approved.is_none() {
+                                e.approved = approved;
+                            }
                             Phase::Open
                         }
                         (EffectResult::Failed, _) if e.repeatable => Phase::Open,
@@ -2162,6 +2180,8 @@ impl SpaceModel {
                         repeatable: e.repeatable,
                         cost: e.cost.clone(),
                         expires_at: e.expires_at.clone(),
+                        approved_seq: e.approved.as_ref().map(|(n, _)| *n),
+                        approved_at: e.approved.as_ref().map(|(_, t)| t.clone()),
                         seq: e.seq,
                         head: self.head,
                     }),

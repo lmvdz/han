@@ -490,6 +490,27 @@ impl GitVcs {
         Ok(PathBuf::from(out))
     }
 
+    /// Makes sure the landing repository `repo` exists (a bare repository that keeps its objects).
+    fn ensure_landing_repo(&self, repo: &Path) -> Result<()> {
+        if !repo.join("HEAD").exists() {
+            remove_tree(repo)?;
+            self.git(None)?
+                .args(["init", "--bare", "--quiet"])
+                .arg(format!("--template={}", slash(&self.template_dir())))
+                .arg(repo)
+                .run()?;
+            for (k, v) in [
+                ("gc.auto", "0"),
+                ("gc.pruneExpire", "never"),
+                ("core.logAllRefUpdates", "false"),
+                ("fetch.fsckObjects", "true"),
+            ] {
+                self.git(Some(repo))?.args(["config", k, v]).run()?;
+            }
+        }
+        Ok(())
+    }
+
     fn commit_of(&self, dir: &Path, rev: &str) -> Result<String> {
         self.git(Some(dir))?
             .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
@@ -1850,22 +1871,7 @@ impl Vcs for GitVcs {
         let repo = self.landing_for(remote);
         let _local = self.fetch_lock.lock().unwrap_or_else(|p| p.into_inner());
         let _lock = self.store_lock(&repo)?;
-        if !repo.join("HEAD").exists() {
-            remove_tree(&repo)?;
-            self.git(None)?
-                .args(["init", "--bare", "--quiet"])
-                .arg(format!("--template={}", slash(&self.template_dir())))
-                .arg(&repo)
-                .run()?;
-            for (k, v) in [
-                ("gc.auto", "0"),
-                ("gc.pruneExpire", "never"),
-                ("core.logAllRefUpdates", "false"),
-                ("fetch.fsckObjects", "true"),
-            ] {
-                self.git(Some(&repo))?.args(["config", k, v]).run()?;
-            }
-        }
+        self.ensure_landing_repo(&repo)?;
         let file = self.tmp_dir().join(unique("import") + ".bundle");
         std::fs::write(&file, bundle)?;
         let result = (|| -> Result<PathBuf> {
@@ -1930,6 +1936,47 @@ impl Vcs for GitVcs {
         })();
         let _ = std::fs::remove_file(&file);
         result
+    }
+
+    fn fetch_ref(
+        &self,
+        remote: &str,
+        auth: Option<&RemoteAuth>,
+        refname: &str,
+    ) -> Result<Option<(PathBuf, String)>> {
+        if !refname.starts_with("refs/") || refname.contains(':') {
+            return Err(VcsError::Invalid(format!("not a full ref name: {refname}")));
+        }
+        self.ensure_root()?;
+        let repo = self.landing_for(remote);
+        let _local = self.fetch_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let _lock = self.store_lock(&repo)?;
+        self.ensure_landing_repo(&repo)?;
+        if self.remote_ref(&repo, remote, refname, auth)?.is_none() {
+            return Ok(None);
+        }
+        let local = format!(
+            "refs/han/tip/{}",
+            refname
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect::<String>()
+        );
+        self.git_auth(Some(&repo), remote, auth)?
+            .args([
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--end-of-options",
+                remote,
+                &format!("+{refname}:{local}"),
+            ])
+            .run()?;
+        // The tip as fetched, which is what the squash-rebase must sit on (the ref may have moved since
+        // `ls-remote`; the landing compare-and-swap catches that).
+        let tip = self.commit_of(&repo, &local)?;
+        Ok(Some((repo, tip)))
     }
 
     fn merge_simulate(&self, dir: &Path, ours: &str, theirs: &str) -> Result<MergeSim> {

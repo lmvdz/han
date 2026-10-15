@@ -587,6 +587,22 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// Fetches the tip of `refname` from `remote` (with `auth`) into the repository of this backend's own for
+    /// `remote` (the one [`Vcs::import_bundle`] returns), and returns that repository with the tip's commit id:
+    /// the commit exactly as fetched. `None` when the ref does not exist. A landing lane squash-rebases onto it.
+    fn fetch_ref(
+        &self,
+        remote: &str,
+        auth: Option<&RemoteAuth>,
+        refname: &str,
+    ) -> Result<Option<(PathBuf, String)>> {
+        let _ = (remote, auth, refname);
+        Err(VcsError::Invalid(format!(
+            "{} fetches no refs",
+            self.name()
+        )))
+    }
+
     /// Simulates merging `theirs` into `ours` in the repository at `dir`, without touching its working tree,
     /// index or refs.
     fn merge_simulate(&self, dir: &Path, ours: &str, theirs: &str) -> Result<MergeSim>;

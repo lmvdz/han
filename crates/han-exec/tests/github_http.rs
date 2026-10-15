@@ -128,9 +128,8 @@ impl JwtSource for StaticJwt {
 fn github_rig(api: &str) -> (Rig, Arc<GithubMinter>) {
     let mut rig = Rig::new(vec![Arc::new(OpenPr), Arc::new(GitPush)]);
     rig.config.repos = vec![RepoTarget {
-        name: "github:o/r".into(),
-        remote: "https://github.invalid/o/r.git".into(),
         github: Some("o/r".into()),
+        ..RepoTarget::new("github:o/r", "https://github.invalid/o/r.git")
     }];
     let app = GithubApp {
         app_id: 1,
