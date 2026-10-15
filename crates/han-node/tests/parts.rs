@@ -220,3 +220,65 @@ fn a_rejected_outbox_row_keeps_the_code_the_home_answered() {
         ("rejected", Some("invalid"), Some("bad shape"))
     );
 }
+
+#[test]
+fn node_db_keeps_host_items_in_first_seen_order_and_replaces_by_id() {
+    use han_node::api::{ItemBody, MessageRole};
+    let dir = temp("db-items");
+    let path = dir.join("node.db");
+    let msg = |text: &str, done: bool| ItemBody::Message {
+        role: MessageRole::Agent,
+        text: text.into(),
+        done,
+        masked: Vec::new(),
+    };
+    {
+        let db = NodeDb::open(&path).unwrap();
+        db.put_item("s:a.b", "s1", "msg:1:1", Some(1), &msg("Which", false), 3)
+            .unwrap();
+        db.put_item("s:a.b", "s1", "msg:1:2", Some(1), &msg("two", true), 3)
+            .unwrap();
+        db.put_item(
+            "s:a.b",
+            "s1",
+            "msg:1:1",
+            Some(1),
+            &msg("Which branch?", true),
+            3,
+        )
+        .unwrap();
+    }
+    let db = NodeDb::open(&path).unwrap();
+    let ids: Vec<_> = db
+        .items("s:a.b")
+        .unwrap()
+        .into_iter()
+        .map(|i| (i.id, i.body))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            ("msg:1:1".to_owned(), msg("Which branch?", true)),
+            ("msg:1:2".to_owned(), msg("two", true))
+        ]
+    );
+    // Only the newest `keep` stay.
+    for n in 3..7 {
+        db.put_item(
+            "s:a.b",
+            "s1",
+            &format!("msg:1:{n}"),
+            None,
+            &msg("x", true),
+            3,
+        )
+        .unwrap();
+    }
+    let kept: Vec<_> = db
+        .items("s:a.b")
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(kept, ["msg:1:4", "msg:1:5", "msg:1:6"]);
+}

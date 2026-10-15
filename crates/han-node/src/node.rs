@@ -609,6 +609,9 @@ impl<T: Transport> Node<T> {
             for st in db.statuses(&f.space).map_err(unavailable)? {
                 engine.apply_status(&f.space, st);
             }
+            for it in db.items(&f.space).map_err(unavailable)? {
+                engine.restore_item(&f.space, &it.session, it.id, it.turn, it.body);
+            }
         }
         let pins = db.home_pins().map_err(unavailable)?;
         let timelines = Arc::new(crate::timeline::StreamTimelines::new());
