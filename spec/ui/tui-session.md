@@ -424,9 +424,9 @@ The Stream tab has an entry cursor, the focused entry, drawn by a marker in the 
 
 ### 5.4 Suggested replies
 
-An agent's turn may end with numbered next steps that it suggests: "1. Run the full suite. 2. Open the PR. 3. Stop here." The node gives them to the view as a `suggestions` item of that turn (P-15). The view never looks for them in message text itself.
+An agent's turn may end with numbered follow-ups that it suggests: "1. Run the full suite. 2. Open the PR. 3. Stop here." The node gives them to the view as a `suggestions` item of that turn (P-15). The view never looks for them in message text itself.
 
-- **TSV-R52. When the strip shows.** The reply strip shows the suggestions of the session's **latest** turn, only after that turn has ended, and only while the local user may steer (`can_steer`, TSV-R33). It goes away when a new turn starts, when the session closes, or when an input is recorded. Suggestions of older turns are never offered. They stay visible inside their turn as a folded entry, labelled `next`, that reads "suggested N next steps".
+- **TSV-R52. When the strip shows.** The reply strip shows the suggestions of the session's **latest** turn, only after that turn has ended, and only while the local user may steer (`can_steer`, TSV-R33). It goes away when a new turn starts, when the session closes, or when an input is recorded. Suggestions of older turns are never offered. They stay visible inside their turn as a folded entry, labelled `options`, that reads "N follow-ups offered".
 - **TSV-R53. Agent text, not HAN's.** The strip's first column holds the TUI-drawn label "lars-coder suggests:" (the agent's short name). Each suggestion follows as its digit, then its text in quotation marks, in the style of agent text:
 
   ```

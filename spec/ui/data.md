@@ -406,7 +406,7 @@ The mock and its harness provide the following, with the same behaviour as produ
 - **State that survives a restart.**
   - The harness, not the app instance, holds the persisted store (settings, keybindings, the seen set) and the mock node's state (followed spaces, pending joins, the outbox).
   - `harness.relaunch()` tears down the atom registry and mounts the app again. In Playwright it reloads the page, and re-injects the store before the app starts.
-  - The new instance sees what a real restart would: persisted state is kept, and in-memory state (drafts, dismissed items, collapse state) is gone.
+  - The new instance sees what a real restart would: persisted state is kept, dismissed items are kept by the node, and in-memory state (drafts, collapse state) is gone.
 - **Two windows or two devices on one mock state.**
   - One mock hub can serve several app instances, either Playwright pages or RTL roots.
   - Each instance declares a role: `window: main | secondary` for multi-window tests, or `device: A | B` for pairing.

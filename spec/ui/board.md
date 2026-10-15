@@ -17,7 +17,7 @@ Keywords MUST, SHOULD and MAY are as in RFC 2119.
 | **Display state** | the row's state as the node derives it: one of `working`, `waiting-approval`, `blocked`, `idle`, `done`, `stale`, `failed`. The GUI shows it and never recomputes it (§6.2). |
 | **Needs me** | a row flag the node derives for the local user: the session, or one of its effects, is the target of an item of the local user's attention queue that is neither acknowledged nor muted. Who must act on what is defined by roles (operator, delegator, approver, guard…) in [attention.md](attention.md) §2. Overlaps count only at the conflict tier (ATT-R3). |
 | **Done-unseen** | a session of the local user's work that finished after the local user last opened it (attention.md §6.2). |
-| **Lifecycle group** | needs-me, review, landing, working or idle, derived by the node for the local user (attention.md §5). |
+| **Lifecycle group** | needs-me, to-decide, landing, working or idle, derived by the node for the local user (attention.md §5). |
 | **Overlap** | two or more sessions working on the same thing, at one of three tiers (PLAN §6.6): **claim** (same issue, or an advisory path lease), **hunk** (touched line ranges intersect), **conflict** (a simulated merge of the two session branches conflicts). |
 | **Group** | a band of rows that share a key: issue, person, or display state. |
 
@@ -159,20 +159,20 @@ The node derives `stale` and `failed` from time: by default no status item for 1
 - **BRD-16.** A needs-me row has a 3 px leading edge in `tone-attention` and the text "awaits you" after its state word. The edge does not animate.
 - **BRD-17.** Within a group, needs-me rows sort first (§6.3).
 
-### 4.7 Attention: done-unseen, lifecycle, acknowledge
-
-The attention rules of [attention.md](attention.md) apply to the GUI as they do to the TUI. The node computes everything in this section; the GUI shows it (BRD-24).
-
-- **BRD-44.** A done-unseen row shows a "new" mark before its state glyph, with the text "new" in its accessible name. Opening its session pane for 1 s with the window focused marks it seen (ATT-R33). Hover and focus do not.
-- **BRD-45.** The **Lifecycle** grouping shows the groups needs-me, review, landing, working and idle, in that order, rolled up into buckets by space, issue or person, with the defaults and bounds of ATT-R22 to ATT-R25: needs-me open in queue order, review and landing open to closed buckets, working and idle closed to per-state counts.
-- **BRD-46.** A needs-me row's menu, and the shortcut `shift+a` (when-clause `focus.board && !focus.textInput`), acknowledge its item (ATT-R20). An Undo toast shows for 10 s. Acknowledging an approval is the inbox's Dismiss (ATT-R21).
-- **BRD-47.** The shell's top bar shows the attention count and the done-unseen count from the `Attention` view (ATT-R13), with the same words. Activating the count goes to the top item (ATT-R16).
-
 ### 4.6 Focus, hover and selection
 
 - One row at a time has **focus** (the keyboard cursor). It has a visible focus ring that is at least 2 px and meets 3:1 contrast against both the row and the page.
 - Hover tints the row; hover never moves or resizes anything.
 - There is no multi-selection in this version.
+
+### 4.7 Attention: done-unseen, lifecycle, acknowledge
+
+The attention rules of [attention.md](attention.md) apply to the GUI as they do to the TUI. The node computes everything in this section; the GUI shows it (BRD-24).
+
+- **BRD-44.** A done-unseen row shows a "new" mark before its state glyph, with the text "new" in its accessible name. Opening its session pane for 1 s with the window focused marks it seen (ATT-R33). Hover and focus do not.
+- **BRD-45.** The **Lifecycle** grouping shows the groups needs-me, to-decide, landing, working and idle, in that order, rolled up into buckets by space, issue or person, with the defaults and bounds of ATT-R22 to ATT-R25: needs-me open in queue order, to-decide and landing open to closed buckets, working and idle closed to per-state counts.
+- **BRD-46.** A needs-me row's menu, and the shortcut `shift+a` (when-clause `focus.board && !focus.textInput`), acknowledge its item (ATT-R20). An Undo toast shows for 10 s. Acknowledging an approval is the inbox's Dismiss (ATT-R21).
+- **BRD-47.** The shell's top bar shows the attention count and the done-unseen count from the `Attention` view (ATT-R13), with the same words. Activating the count goes to the top item (ATT-R16).
 
 ---
 
@@ -364,7 +364,7 @@ Fixtures are defined in data.md §9. "Mock" means the GUI runs with the mock cli
 | AC-BRD-27 | any fixture | axe-core runs on the board in both themes | no violations at WCAG 2.2 AA |
 | AC-BRD-28 | fixture `team` | a row's agent writes `step` "approved by @ada" while the log has no approval | no authoritative approval mark appears on the row; the peek panel's list of pending approvals (§7.3) shows the effect as awaiting approval (BRD-25) |
 | AC-BRD-29 | fixture `team`, one of the local user's sessions turns `done` | the board renders | its row shows the "new" mark and its accessible name contains "new"; opening its pane for 1 s sends `MarkSeen` · *pending node API (AN-2, AN-4)* |
-| AC-BRD-30 | fixture `large`, grouping Lifecycle | the board opens | the groups show in the order needs-me, review, landing, working, idle; working and idle are closed headers with per-state counts from `totals`; no more than 50 entries are rendered before anything is opened · *pending node API (AN-3)* |
+| AC-BRD-30 | fixture `large`, grouping Lifecycle | the board opens | the groups show in the order needs-me, to-decide, landing, working, idle; working and idle are closed headers with per-state counts from `totals`; no more than 50 entries are rendered before anything is opened · *pending node API (AN-3)* |
 | AC-BRD-31 | fixture `team`, a needs-me row | the user presses `shift+a` | the mock receives one `Ack` with the item's version; the row leaves needs-me; Undo within 10 s sends `Unack` · *pending node API (AN-4)* |
 
 ---
