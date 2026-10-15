@@ -101,7 +101,7 @@ The Ed25519 signature of those bytes, base64url without padding, is `MlgcxEfCrmI
 
 ## Counts
 
-<!--s:wv_n-->113<!--/s--> vectors and <!--s:wv_exp-->454<!--/s--> expectations. An expectation is one step that expects a frame, a close, silence, an HTTP body or a `clock` reply; a `generate` step is one step and its appends are not expectations. Per vector family: <!--s:wv_families-->21 operations (golden): 72 expectations; 39 agreed probes: 50 expectations; 22 decided probes: 44 expectations; 17 round-22 probes: 129 expectations (and 1,001 generated appends the runner checks, not counted); 8 round-23 probes: 78 expectations; 4 round-24 probes: 59 expectations; 1 round-25 probes: 14 expectations; 1 round-27 probes: 8 expectations<!--/s-->. The results against the two reference servers are in `conformance/interop/RESULTS.md` (section 6) and architecture.md §10.
+<!--s:wv_n-->115<!--/s--> vectors and <!--s:wv_exp-->473<!--/s--> expectations. An expectation is one step that expects a frame, a close, silence, an HTTP body or a `clock` reply; a `generate` step is one step and its appends are not expectations. Per vector family: <!--s:wv_families-->21 operations (golden): 72 expectations; 39 agreed probes: 50 expectations; 22 decided probes: 44 expectations; 17 round-22 probes: 129 expectations (and 1,001 generated appends the runner checks, not counted); 8 round-23 probes: 78 expectations; 4 round-24 probes: 59 expectations; 1 round-25 probes: 14 expectations; 1 round-27 probes: 8 expectations; 2 round-33 probes: 19 expectations<!--/s-->. The results against the two reference servers are in `conformance/interop/RESULTS.md` (section 6) and architecture.md §10.
 
 ## Not yet vectorised
 
