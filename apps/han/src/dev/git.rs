@@ -24,6 +24,9 @@ pub trait Git {
     fn git_dir(&self) -> Res<PathBuf>;
     /// Updates the remote-tracking refs.
     fn fetch(&self) -> Res<()>;
+    /// Brings in the objects of pull request `number`'s head (`refs/pull/<n>/head`), which GitHub may have made
+    /// after the local branch; no ref is updated.
+    fn fetch_pr_head(&self, number: u64) -> Res<()>;
     /// Forgets worktrees whose directory is gone.
     fn prune_worktrees(&self) -> Res<()>;
     /// The worktrees that have a branch checked out.
@@ -103,6 +106,11 @@ impl Git for GitCli {
 
     fn fetch(&self) -> Res<()> {
         self.run(&["fetch", "-q", "origin"]).map(|_| ())
+    }
+
+    fn fetch_pr_head(&self, number: u64) -> Res<()> {
+        self.run(&["fetch", "-q", "origin", &format!("refs/pull/{number}/head")])
+            .map(|_| ())
     }
 
     fn prune_worktrees(&self) -> Res<()> {
