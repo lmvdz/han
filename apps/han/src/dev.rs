@@ -181,11 +181,13 @@ struct State {
 pub async fn run(args: DevArgs) -> Res<()> {
     match args.cmd {
         DevCmd::Up(a) => {
-            let dir = abs(&a.dir);
             let r = up(a).await;
-            if r.is_err() {
-                // a half-made stack leaves nothing running
-                kill_strays(&dir);
+            if let Err(e) = &r {
+                // the real error first: cleanup must never stop it being seen
+                eprintln!("error: {e}");
+                // a half-made stack leaves nothing running: stop exactly what this run spawned
+                kill_spawned();
+                std::process::exit(1);
             }
             r
         }
@@ -221,6 +223,13 @@ fn free_tcp() -> Res<u16> {
 /// A program that sits next to `han` (cargo puts every binary of the workspace in one directory).
 fn sibling(name: &str, given: Option<&PathBuf>) -> Res<PathBuf> {
     if let Some(p) = given {
+        if !p.is_file() {
+            return Err(format!(
+                "{name} not found at {}: build it (`cargo build --workspace --bins`) or point at it",
+                p.display()
+            )
+            .into());
+        }
         return Ok(p.clone());
     }
     let exe = std::env::current_exe()?;
@@ -236,12 +245,7 @@ fn sibling(name: &str, given: Option<&PathBuf>) -> Res<PathBuf> {
         dir = d.parent();
     }
     Err(format!(
-        "{name} is not next to han: build it (`cargo build -p {}`) or point at it",
-        if name == "han-github" {
-            "han-github"
-        } else {
-            "han-host --bin han-fake-agent"
-        }
+        "{name} is not next to han: build it (`cargo build --workspace --bins`) or point at it"
     )
     .into())
 }
@@ -272,6 +276,10 @@ fn spawn(name: &str, state_dir: &Path, program: &Path, args: &[String]) -> Res<S
         cmd.process_group(0);
     }
     let child = cmd.spawn()?;
+    SPAWNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(child.id());
     Ok(Service {
         pid: child.id(),
         program: program.to_path_buf(),
@@ -305,12 +313,24 @@ fn kill(pid: u32, tree: bool) {
     }
 }
 
+/// Every pid this `han dev up` run spawned, so a failed run stops exactly those.
+static SPAWNED: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+fn kill_spawned() {
+    let pids = std::mem::take(&mut *SPAWNED.lock().unwrap_or_else(|e| e.into_inner()));
+    for pid in pids.into_iter().rev() {
+        kill(pid, true);
+    }
+}
+
 /// Kills every process whose command line mentions `dir`: hosts and agents that outlived a killed node.
+/// Never this process or its ancestors, whose own command line usually names `dir` too.
 fn kill_strays(dir: &Path) {
+    let me = std::process::id();
     #[cfg(windows)]
     {
         let script = format!(
-            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{}*' -and $_.ProcessId -ne $PID }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+            "$all = Get-CimInstance Win32_Process; $keep = @{{}}; $p = {me}; while ($p -and -not $keep.ContainsKey($p)) {{ $keep[$p] = 1; $p = ($all | Where-Object {{ $_.ProcessId -eq $p }}).ParentProcessId }}; $keep[$PID] = 1; $all | Where-Object {{ $_.CommandLine -like '*{}*' -and -not $keep.ContainsKey([int]$_.ProcessId) }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
             dir.to_string_lossy().replace('\'', "''")
         );
         let _ = Command::new("powershell")
@@ -321,12 +341,40 @@ fn kill_strays(dir: &Path) {
     }
     #[cfg(unix)]
     {
-        let _ = Command::new("pkill")
-            .args(["-KILL", "-f", &dir.to_string_lossy()])
-            .stdout(Stdio::null())
+        let mut keep = vec![me];
+        let mut p = me;
+        while let Some(parent) = parent_of(p) {
+            if parent == 0 || keep.contains(&parent) {
+                break;
+            }
+            keep.push(parent);
+            p = parent;
+        }
+        let Ok(out) = Command::new("pgrep")
+            .args(["-f", &dir.to_string_lossy()])
             .stderr(Stdio::null())
-            .status();
+            .output()
+        else {
+            return;
+        };
+        for pid in String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|x| x.parse::<u32>().ok())
+            .filter(|p| !keep.contains(p))
+        {
+            kill(pid, false);
+        }
     }
+}
+
+#[cfg(unix)]
+fn parent_of(pid: u32) -> Option<u32> {
+    let out = Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 async fn wait_until<F, Fut>(what: &str, secs: u64, mut f: F) -> Res<()>
