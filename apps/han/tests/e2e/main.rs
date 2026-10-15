@@ -972,6 +972,7 @@ async fn a_local_process_cannot_govern_or_steer_until_a_person_confirms() {
             repo: None,
             issue: None,
             home: None,
+            task: None,
         },
     ] {
         let e = plain.call(cmd.clone()).await.unwrap_err();
