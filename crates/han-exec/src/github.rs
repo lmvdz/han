@@ -128,6 +128,46 @@ impl GithubMinter {
             .map_err(|_| "building the GitHub client failed".to_string())
     }
 
+    /// The permissions the App's installation was granted, by name (`contents` → `write`), as GitHub lists them
+    /// for the installation. Asks with the App's JWT; no installation token is made.
+    pub async fn installation_permissions(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, String> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let jwt = self.jwt.jwt(self.app_id, now)?;
+        let url = format!(
+            "{}/app/installations/{}",
+            self.api_base, self.installation_id
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .bearer_auth(jwt.expose())
+            .header("accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| format!("installation request: {}", without_url(&e)))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("installation request: HTTP {}", status.as_u16()));
+        }
+        let v: Value = resp
+            .json()
+            .await
+            .map_err(|_| "installation response is not JSON".to_string())?;
+        let perms = v
+            .get("permissions")
+            .and_then(Value::as_object)
+            .ok_or_else(|| "installation response has no permissions".to_string())?;
+        Ok(perms
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
+            .collect())
+    }
+
     /// An installation token for `repo` (`owner/name`) with exactly `permissions` (for example
     /// `[("contents", "write")]`).
     pub async fn token(&self, repo: &str, permissions: &[(&str, &str)]) -> Result<Secret, String> {

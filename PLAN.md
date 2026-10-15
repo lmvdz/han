@@ -316,7 +316,7 @@ Terminal input is shared and injectable (other processes, terminal plugins, buil
 | Topic | Decision |
 |---|---|
 | GitHub | a per-team GitHub App with fine-grained permissions and short-lived installation tokens, minted only by han-exec (the single holder of the **write** App's private key). han-github reads with a different, read-only App (Issues and Metadata read) whose key it holds itself, so a compromised poller cannot mint write tokens. Future work: a read-token broker in the executor, so han-github holds no GitHub key at all. MVP: han-github polls issues every 60 s with conditional requests (ETags). Later: a webhook relay run by the team, or a small hosted forwarder |
-| Finish flow | configurable per space and per repo: mark done; push the branch and propose a PR (default); or merge the timeline into main. Each step is gated or free as configured |
+| Finish flow | configurable per space and per repo: mark done; push the branch and propose a PR (default); or merge the timeline into main. Each step is gated or free as configured. The `land` flow is set per space with a per repository override in the node's `agents.json` (`finish`; `han agent finish`), resolved into the host spec's `work.finish.land`, off by default; the executor side is `exec.json` (`han executor set`), see docs/runner.md 9.1 |
 | git | shell out to `git` for push (gix can't push yet); gix for reads; octocrab for the GitHub API |
 
 ### 6.8 Operations

@@ -43,6 +43,10 @@ pub struct DoctorArgs {
     /// The `han-github` directory, if it is not `/var/lib/han/github` (Linux).
     #[arg(long)]
     github_dir: Option<PathBuf>,
+    /// Ask GitHub what the executor's write App may do (one request with the App's JWT), to check the
+    /// permissions the landing lane needs. Off by default: `han doctor` otherwise makes no network request.
+    #[arg(long)]
+    check_github_app: bool,
 }
 
 /// One thing that is wrong.
@@ -178,6 +182,30 @@ pub struct ExecutorFacts {
     pub key_exists: bool,
     /// The key file's permission bits (Unix).
     pub key_mode: Option<u32>,
+    /// What `exec.json` says of each repository.
+    pub repos: Vec<RepoFact>,
+    /// What GitHub says the write App's installation may do, when `--check-github-app` asked (`Err`: why it
+    /// could not).
+    pub app_permissions: Option<Result<BTreeMap<String, String>, String>>,
+}
+
+/// One repository of the executor's `exec.json`, as the landing lane reads it.
+#[derive(Clone, Debug, Default)]
+pub struct RepoFact {
+    pub name: String,
+    pub landing_refs: Vec<String>,
+    pub required: Vec<String>,
+    pub full: Vec<String>,
+    pub rerun: u32,
+}
+
+/// A session of another actor (an executor's lane, for one) as this node's operator sees it.
+#[derive(Clone, Debug)]
+pub struct LaneSessionFact {
+    pub space: String,
+    pub actor: String,
+    /// The operator may watch it.
+    pub watch: bool,
 }
 
 /// Where `han runner setup` puts the config and the read-only App's key of `han-github`.
@@ -229,6 +257,8 @@ pub struct Facts {
     pub executor: Option<ExecutorFacts>,
     /// `None` when `han runner setup` has not made the `han-github` directory on this machine.
     pub github: Option<GithubFacts>,
+    /// The sessions of actors that are not agents of `agents.json`, in the spaces where the `land` flow is on.
+    pub lane_sessions: Vec<LaneSessionFact>,
 }
 
 // ───────────────────────── analysis ─────────────────────────
@@ -288,6 +318,17 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     if let Some(e) = &f.executor {
         executor_findings(e, &mut out);
     }
+    let mut land = Vec::new();
+    land_findings(f, &mut land);
+    // a space-wide flow and a repository layer on it say the same thing once
+    for x in land {
+        if !out
+            .iter()
+            .any(|o| (&o.id, &o.cause, &o.fix) == (&x.id, &x.cause, &x.fix))
+        {
+            out.push(x);
+        }
+    }
     if let Some(g) = &f.github {
         github_findings(g, &mut out);
     }
@@ -308,6 +349,198 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
         ));
     }
     out
+}
+
+/// The ref a `land` flow lands on when it names none (the work's default branch).
+const DEFAULT_LAND_REF: &str = "refs/heads/main";
+
+/// The permissions the landing lane asks GitHub for: the push (`contents`), the checks it reads, and, when
+/// the repository lets it rerun a red check, the checks it writes.
+fn app_permission_needs(e: &ExecutorFacts) -> Vec<(&'static str, &'static str)> {
+    let checks = if e.repos.iter().any(|r| r.rerun > 0) {
+        "write"
+    } else {
+        "read"
+    };
+    vec![
+        ("contents", "write"),
+        ("checks", checks),
+        ("statuses", "read"),
+    ]
+}
+
+/// Whether `have` (what GitHub granted) covers `need` (`read` or `write`).
+fn permission_covers(have: Option<&String>, need: &str) -> bool {
+    matches!(
+        (have.map(String::as_str), need),
+        (Some("write" | "admin"), _) | (Some("read"), "read")
+    )
+}
+
+/// The `land` finish flow end to end: the setting in `agents.json`, then what it needs of the executor
+/// (`exec.json`), of the lane session's watch right and of the write App.
+fn land_findings(f: &Facts, out: &mut Vec<Finding>) {
+    let Ok(file) = &f.agents else { return };
+    let mut on = Vec::new();
+    for (space, entry) in &file.finish {
+        if let Some(l) = file.land_for(space, None) {
+            on.push((space.clone(), None, l));
+        }
+        for repo in entry.repos.keys() {
+            if let Some(l) = file.land_for(space, Some(repo)) {
+                on.push((space.clone(), Some(repo.clone()), l));
+            }
+        }
+    }
+    for (space, repo, land) in &on {
+        let target = land.target_ref.as_deref().unwrap_or(DEFAULT_LAND_REF);
+        let subject = match repo {
+            Some(r) => format!("{space} {r}"),
+            None => space.clone(),
+        };
+        let repo_arg = repo.as_deref().unwrap_or("<repo>");
+        if let Some(e) = &f.executor {
+            let named: Vec<&RepoFact> = e
+                .repos
+                .iter()
+                .filter(|r| repo.as_ref().is_none_or(|n| &r.name == n))
+                .collect();
+            let dir = q(e.dir.to_string_lossy());
+            if named.is_empty() {
+                out.push(finding(
+                    "land.executor.repo-missing",
+                    subject.clone(),
+                    format!(
+                        "the land flow is on, but {} has no repository {}, so the executor refuses every landing there",
+                        e.dir.join("exec.json").display(),
+                        repo.as_deref().unwrap_or("to land on")
+                    ),
+                    format!(
+                        "han executor set {repo_arg} --dir {dir} --remote <remote> --landing-refs {target}"
+                    ),
+                ));
+            } else if !named
+                .iter()
+                .any(|r| r.landing_refs.iter().any(|l| l == target))
+            {
+                let r = named[0];
+                let mut refs = r.landing_refs.clone();
+                refs.push(target.to_owned());
+                out.push(finding(
+                    "land.executor.landing-ref",
+                    subject.clone(),
+                    format!(
+                        "the land flow lands on {target}, but the executor's landing_refs for {} are [{}]: nothing lands, and no landing lane runs, until the ref is listed",
+                        r.name,
+                        r.landing_refs.join(", ")
+                    ),
+                    format!(
+                        "han executor set {} --dir {dir} --landing-refs {}",
+                        r.name,
+                        refs.join(",")
+                    ),
+                ));
+            }
+            for r in named
+                .iter()
+                .filter(|r| r.landing_refs.iter().any(|l| l == target))
+            {
+                if r.required.is_empty() {
+                    out.push(finding(
+                        "land.checks.none",
+                        format!("{subject} ({})", r.name),
+                        format!(
+                            "the executor has no required checks for {}: a change would land with nothing gating it",
+                            r.name
+                        ),
+                        format!(
+                            "han executor set {} --dir {dir} --required <check name of the repository's CI>",
+                            r.name
+                        ),
+                    ));
+                }
+                if land.no_full_stage && !r.full.is_empty() {
+                    out.push(finding(
+                        "land.checks.full-stage",
+                        format!("{subject} ({})", r.name),
+                        format!(
+                            "the land flow says the repository has no post-merge stage (the host prunes on `landed`), but the executor still runs the full checks [{}] after the merge",
+                            r.full.join(", ")
+                        ),
+                        format!(
+                            "han agent finish {space} {}land --no-full-stage=false   (or drop the full checks: han executor set {} --dir {dir} --full \"\")",
+                            repo.as_ref()
+                                .map(|r| format!("--repo {r} "))
+                                .unwrap_or_default(),
+                            r.name
+                        ),
+                    ));
+                }
+            }
+        }
+        for s in f
+            .lane_sessions
+            .iter()
+            .filter(|s| &s.space == space && !s.watch)
+        {
+            out.push(finding(
+                "land.watch.denied",
+                format!("{subject} ({})", s.actor),
+                format!(
+                    "{}'s session in {space} cannot be watched: the agents that propose a landing could not follow the lane. Watching is the space's `sessions.watch` level (default `member`); it is not set per session",
+                    s.actor
+                ),
+                format!(
+                    "han space policy {space} <policy.json>   (the policy with sessions.watch at \"member\" or wider; an owner sets it)"
+                ),
+            ));
+        }
+    }
+    let (Some(e), false) = (&f.executor, on.is_empty()) else {
+        return;
+    };
+    let Some(perms) = &e.app_permissions else {
+        return;
+    };
+    let (app, inst) = e
+        .github
+        .as_ref()
+        .map(|(a, i, _)| (a.to_string(), i.to_string()))
+        .unwrap_or_default();
+    let subject = e.dir.to_string_lossy().into_owned();
+    match perms {
+        Err(why) => out.push(finding(
+            "land.github.unreadable",
+            subject,
+            format!("could not read what the write App (id {app}) may do: {why}"),
+            "check the App id, installation id and key in exec.json (`han executor add … --github-app … --github-installation … --github-key …`) and that this machine reaches api.github.com, then run `han doctor --check-github-app` again",
+        )),
+        Ok(have) => {
+            let missing: Vec<String> = app_permission_needs(e)
+                .into_iter()
+                .filter(|(name, need)| !permission_covers(have.get(*name), need))
+                .map(|(name, need)| {
+                    format!(
+                        "{name}: {need} (has {})",
+                        have.get(name).map_or("none", String::as_str)
+                    )
+                })
+                .collect();
+            if !missing.is_empty() {
+                out.push(finding(
+                    "land.github.permissions",
+                    subject,
+                    format!(
+                        "the write App (id {app}) lacks what the landing lane needs: {}",
+                        missing.join("; ")
+                    ),
+                    format!(
+                        "GitHub: Settings > Developer settings > GitHub Apps > the write App > Permissions: Contents read and write, Checks read-only (read and write when `rerun` is above 0), Commit statuses read-only; then the owner accepts the change on installation {inst}"
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 fn executor_findings(e: &ExecutorFacts, out: &mut Vec<Finding>) {
@@ -499,12 +732,25 @@ fn executor_facts(dir: Option<&Path>) -> Option<ExecutorFacts> {
     };
     #[cfg(not(unix))]
     let key_mode = None;
+    let repos = cfg
+        .repos
+        .iter()
+        .map(|r| RepoFact {
+            name: r.name.clone(),
+            landing_refs: r.landing_refs.clone(),
+            required: r.checks.required.clone(),
+            full: r.checks.full.clone(),
+            rerun: r.checks.rerun,
+        })
+        .collect();
     Some(ExecutorFacts {
         dir,
         has_repos: !cfg.repos.is_empty(),
         key_exists: meta.is_some(),
         key_mode,
         github,
+        repos,
+        app_permissions: None,
     })
 }
 
@@ -1100,6 +1346,7 @@ pub async fn gather(
     repos: &[PathBuf],
     exec_dir: Option<&Path>,
     github_dir: Option<&Path>,
+    check_github_app: bool,
 ) -> Facts {
     let linux = cfg!(target_os = "linux");
     let node = node_facts(endpoint).await;
@@ -1172,6 +1419,14 @@ pub async fn gather(
         }
         toolchain = toolchain_facts(data, file, repos);
     }
+    let mut executor = executor_facts(exec_dir);
+    if check_github_app && let Some(e) = &mut executor {
+        e.app_permissions = app_permissions(&e.dir).await;
+    }
+    let lane_sessions = match &agents {
+        Ok(file) if node.is_ok() => lane_sessions(endpoint, file).await,
+        _ => Vec::new(),
+    };
     Facts {
         data: data.to_path_buf(),
         linux,
@@ -1185,9 +1440,85 @@ pub async fn gather(
         mxc_loopback_blocked,
         sandbox_refusals,
         stale: stale_processes(),
-        executor: executor_facts(exec_dir),
+        executor,
         github: github_facts(github_dir),
+        lane_sessions,
     }
+}
+
+/// What GitHub says the executor's write App may do, when `exec.json` has the App.
+async fn app_permissions(dir: &Path) -> Option<Result<BTreeMap<String, String>, String>> {
+    let cfg: han_exec::ExecConfig =
+        serde_json::from_slice(&std::fs::read(dir.join("exec.json")).ok()?).ok()?;
+    let app = cfg.github?;
+    Some(match han_exec::github::GithubMinter::from_app(&app) {
+        Ok(minter) => minter.installation_permissions().await,
+        Err(e) => Err(e),
+    })
+}
+
+/// The sessions, in the spaces where the `land` flow is on, of actors that are not agents of `agents.json`
+/// (the executor's lane session is one), with whether the operator of this node may watch each. The right is
+/// the space's `sessions.watch` level, the same for the agents that follow the lane.
+async fn lane_sessions(endpoint: &str, file: &AgentsFile) -> Vec<LaneSessionFact> {
+    let spaces: Vec<&String> = file
+        .finish
+        .keys()
+        .filter(|s| {
+            file.land_for(s, None).is_some()
+                || file.finish[*s]
+                    .repos
+                    .keys()
+                    .any(|r| file.land_for(s, Some(r)).is_some())
+        })
+        .collect();
+    if spaces.is_empty() {
+        return Vec::new();
+    }
+    let Ok(client) = RpcClient::connect(endpoint).await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for space in spaces {
+        let board = rows(
+            &client,
+            Query::Board {
+                space: space.clone(),
+                group: Default::default(),
+                collapsed: Vec::new(),
+                window: Window::default(),
+            },
+        )
+        .await;
+        for b in board {
+            let Row::Board(b) = b else { continue };
+            if file.agents.contains_key(&b.agent) {
+                continue;
+            }
+            for r in rows(
+                &client,
+                Query::Session {
+                    id: b.session.clone(),
+                    part: Default::default(),
+                    window: Window::default(),
+                },
+            )
+            .await
+            {
+                if let Row::Session(s) = r
+                    && !s.is_mine
+                    && !s.closed
+                {
+                    out.push(LaneSessionFact {
+                        space: space.clone(),
+                        actor: s.actor,
+                        watch: s.rights.watch,
+                    });
+                }
+            }
+        }
+    }
+    out
 }
 
 // ───────────────────────── the command ─────────────────────────
@@ -1229,6 +1560,7 @@ pub async fn run(args: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
         &args.repos,
         args.exec_dir.as_deref(),
         args.github_dir.as_deref(),
+        args.check_github_app,
     )
     .await;
     let r = report(&args.data, analyze(&facts));
@@ -1275,6 +1607,7 @@ mod tests {
             stale: Vec::new(),
             executor: None,
             github: None,
+            lane_sessions: Vec::new(),
         }
     }
 
@@ -1647,6 +1980,8 @@ mod tests {
             github: Some((7, 8, PathBuf::from("/x/github-app.pem"))),
             key_exists: true,
             key_mode: Some(0o600),
+            repos: Vec::new(),
+            app_permissions: None,
         }
     }
 
@@ -1687,6 +2022,154 @@ mod tests {
         let x = only(&f);
         assert_eq!(x.id, "executor.github.key-mode");
         assert!(x.cause.contains("644"));
+    }
+
+    fn land_facts() -> Facts {
+        let mut f = healthy();
+        f.agents = agents(
+            r#"{"finish":{"s1:han.example":{"land":{"enabled":true,"targetRef":"refs/heads/main"},
+                "repos":{"github:o/r":{}}}}}"#,
+        );
+        let mut e = exec_facts();
+        e.repos = vec![RepoFact {
+            name: "github:o/r".into(),
+            landing_refs: vec!["refs/heads/main".into()],
+            required: vec!["quick".into()],
+            full: Vec::new(),
+            rerun: 0,
+        }];
+        f.executor = Some(e);
+        f.lane_sessions = vec![LaneSessionFact {
+            space: "s1:han.example".into(),
+            actor: "@exec:han.example".into(),
+            watch: true,
+        }];
+        f
+    }
+
+    #[test]
+    fn a_land_flow_that_is_set_up_end_to_end_is_healthy_and_off_is_not_checked() {
+        let f = land_facts();
+        assert!(analyze(&f).is_empty(), "{:#?}", analyze(&f));
+        // the flow off (the default): nothing about landing is checked, whatever the executor says
+        let mut off = land_facts();
+        off.agents = Ok(AgentsFile::default());
+        off.executor.as_mut().unwrap().repos.clear();
+        assert!(analyze(&off).is_empty());
+    }
+
+    #[test]
+    fn the_executor_must_list_the_target_ref_and_the_fix_lists_it() {
+        let mut f = land_facts();
+        f.executor.as_mut().unwrap().repos[0].landing_refs = vec!["refs/heads/dev".into()];
+        let got = analyze(&f);
+        let x = got
+            .iter()
+            .find(|x| x.id == "land.executor.landing-ref")
+            .unwrap();
+        assert!(x.cause.contains("refs/heads/main") && x.cause.contains("refs/heads/dev"));
+        assert_eq!(
+            x.fix,
+            "han executor set github:o/r --dir /x --landing-refs refs/heads/dev,refs/heads/main"
+        );
+        // an executor with no such repository at all
+        f.executor.as_mut().unwrap().repos.clear();
+        assert!(ids(&f).contains(&"land.executor.repo-missing".to_owned()));
+        // no executor on this machine: it cannot be checked, so nothing is said
+        f.executor = None;
+        assert!(analyze(&f).is_empty());
+    }
+
+    #[test]
+    fn a_space_wide_flow_needs_one_repository_with_the_ref() {
+        let mut f = land_facts();
+        f.agents = agents(
+            r#"{"finish":{"s1:han.example":{"land":{"enabled":true,"targetRef":"refs/heads/trunk"}}}}"#,
+        );
+        assert_eq!(only(&f).id, "land.executor.landing-ref");
+        f.executor.as_mut().unwrap().repos[0]
+            .landing_refs
+            .push("refs/heads/trunk".into());
+        assert!(analyze(&f).is_empty());
+    }
+
+    #[test]
+    fn checks_that_do_not_fit_the_flow_are_reported() {
+        let mut f = land_facts();
+        f.executor.as_mut().unwrap().repos[0].required.clear();
+        assert_eq!(only(&f).id, "land.checks.none");
+        let mut f = land_facts();
+        f.agents =
+            agents(r#"{"finish":{"s1:han.example":{"land":{"enabled":true,"noFullStage":true}}}}"#);
+        let e = f.executor.as_mut().unwrap();
+        e.repos[0].full = vec!["full".into()];
+        let x = only(&f);
+        assert_eq!(x.id, "land.checks.full-stage");
+        assert!(x.fix.contains("--no-full-stage=false") && !x.fix.contains("--repo"));
+        // set on the repository's own layer, the fix names it
+        f.agents = agents(
+            r#"{"finish":{"s1:han.example":{"repos":{"github:o/r":{"enabled":true,"noFullStage":true}}}}}"#,
+        );
+        assert!(only(&f).fix.contains("--repo github:o/r land"));
+    }
+
+    #[test]
+    fn a_lane_session_the_operator_cannot_watch_is_reported_with_the_policy_fix() {
+        let mut f = land_facts();
+        f.lane_sessions[0].watch = false;
+        let x = only(&f);
+        assert_eq!(x.id, "land.watch.denied");
+        assert!(
+            x.fix.contains("han space policy s1:han.example"),
+            "{}",
+            x.fix
+        );
+        // another space's session is not this flow's business
+        f.lane_sessions[0].space = "s9:han.example".into();
+        assert!(analyze(&f).is_empty());
+    }
+
+    #[test]
+    fn the_write_apps_permissions_are_checked_only_when_asked_for() {
+        let perms = |pairs: &[(&str, &str)]| {
+            Some(Ok(pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect::<BTreeMap<_, _>>()))
+        };
+        let mut f = land_facts();
+        // not asked: nothing
+        assert!(analyze(&f).is_empty());
+        let all = [
+            ("contents", "write"),
+            ("checks", "read"),
+            ("statuses", "read"),
+        ];
+        f.executor.as_mut().unwrap().app_permissions = perms(&all);
+        assert!(analyze(&f).is_empty());
+        // contents read-only, no checks
+        f.executor.as_mut().unwrap().app_permissions =
+            perms(&[("contents", "read"), ("statuses", "read")]);
+        let x = only(&f);
+        assert_eq!(x.id, "land.github.permissions");
+        assert!(
+            x.cause.contains("contents: write (has read)"),
+            "{}",
+            x.cause
+        );
+        assert!(x.cause.contains("checks: read (has none)"), "{}", x.cause);
+        assert!(x.fix.contains("installation 8"), "{}", x.fix);
+        // a rerun needs checks: write
+        f.executor.as_mut().unwrap().app_permissions = perms(&all);
+        f.executor.as_mut().unwrap().repos[0].rerun = 1;
+        assert!(only(&f).cause.contains("checks: write (has read)"));
+        // GitHub could not be asked
+        f.executor.as_mut().unwrap().app_permissions =
+            Some(Err("installation request: HTTP 401".into()));
+        assert_eq!(only(&f).id, "land.github.unreadable");
+        // the flow off: the App's permissions are no concern of the lane
+        f.agents = Ok(AgentsFile::default());
+        assert!(analyze(&f).is_empty());
     }
 
     fn github_facts_ok() -> GithubFacts {
