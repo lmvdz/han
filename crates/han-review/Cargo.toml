@@ -1,0 +1,26 @@
+[package]
+name = "han-review"
+description = "HAN tier-1 machine reviewer (R33): an independent model reads a changeset and returns a typed verdict, recorded as a review record over the delta digest. Off by default; carries no authority of its own."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+han-core.workspace = true
+han-vcs = { path = "../han-vcs", version = "0.1.0" }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
