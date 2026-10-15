@@ -263,6 +263,14 @@ pub struct RepoTarget {
     /// `han/lane/`.
     #[serde(default = "default_lane_prefix")]
     pub lane_branch_prefix: String,
+    /// How often the lane sends the item of a change that is not final again, in seconds; default 60, 0 never.
+    /// The home does not replay stream items, so a host that missed one learns the state from the next.
+    #[serde(default = "default_republish_secs")]
+    pub republish_secs: u64,
+}
+
+fn default_republish_secs() -> u64 {
+    lane::DEFAULT_REPUBLISH_SECS
 }
 
 fn default_lane_prefix() -> String {
@@ -280,6 +288,7 @@ impl RepoTarget {
             checks: ChecksConfig::default(),
             deadlines: Deadlines::default(),
             lane_branch_prefix: default_lane_prefix(),
+            republish_secs: default_republish_secs(),
         }
     }
 }

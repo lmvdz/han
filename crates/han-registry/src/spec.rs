@@ -95,7 +95,7 @@ impl FinishSpec {
 }
 
 /// The `land` finish flow.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LandFinish {
     /// The ref to land on (a full branch ref). Default: the work's `defaultBranch`.
@@ -114,6 +114,31 @@ pub struct LandFinish {
     /// final one, in seconds. 0: it follows only while the session lives.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub settle_secs: u64,
+    /// The host's backstop: when the session ends with commits after its last proposal (or with no proposal)
+    /// that were never proposed, the host proposes them as a `vcs.land`, titled from the task. Uncommitted
+    /// work is never committed for it; it is reported `unlanded`. Default true (on whenever `land` is on).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub auto_propose: bool,
+}
+
+impl Default for LandFinish {
+    fn default() -> Self {
+        LandFinish {
+            target_ref: None,
+            tier_rules: Vec::new(),
+            no_full_stage: false,
+            settle_secs: 0,
+            auto_propose: true,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -409,6 +434,7 @@ mod tests {
                         }],
                         no_full_stage: true,
                         settle_secs: 600,
+                        auto_propose: false,
                     }),
                 },
             },

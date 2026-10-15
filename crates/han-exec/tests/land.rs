@@ -328,6 +328,7 @@ fn plan_check_refuses_what_is_out_of_scope_or_malformed() {
         Box::new(|p| p["args"]["rebase"] = json!("merge")),
         Box::new(|p| p["args"]["tier"] = json!(4)),
         Box::new(|p| p["args"]["force"] = json!(true)),
+        Box::new(|p| p["args"]["bundleBase"] = json!("main")),
         Box::new(|p| p["argsBlob"]["type"] = json!("text/plain")),
         Box::new(|p| {
             p.as_object_mut().unwrap().remove("argsBlob");

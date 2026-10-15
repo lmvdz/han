@@ -32,8 +32,8 @@ pub use query::{
 };
 pub use rows::{
     AGENT_TEXT, AgentText, ApprovalRow, BoardRow, BoardTotals, BudgetStatus, ClaimKind, CostRow,
-    DiffOp, EffectRow, ErrorNote, Fidelity, FilePatchRow, FileTouch, GroupTotal, GuardRow,
-    InputRow, JoinProgressRow, JoinStage, Needed, NeededGuard, NodeStatusRow, OutboxRow,
+    DiffOp, EffectEnd, EffectRow, ErrorNote, Fidelity, FilePatchRow, FileTouch, GroupTotal,
+    GuardRow, InputRow, JoinProgressRow, JoinStage, Needed, NeededGuard, NodeStatusRow, OutboxRow,
     OverlapClaim, OverlapConflict, OverlapFile, OverlapKind, OverlapParty, OverlapRow,
     OverlapSummary, PatchStatus, PlanItem, RECENT_ERRORS, RoleInfo, Row, SUMMARY_FIELDS,
     SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRights, SessionRow, SessionState, SpaceLink,

@@ -469,7 +469,10 @@ impl Shared {
                 let flow = self.land.as_ref().ok_or(
                     "land is not enabled for this space and repository: use git_push and open_pr",
                 )?;
-                let draft = flow.draft(&req.summary, &effect)?;
+                // The host's backstop proposes what is committed and commits nothing (`committedOnly`); an agent
+                // that sets it only gets less.
+                let commit = effect.get("committedOnly").and_then(Value::as_bool) != Some(true);
+                let draft = flow.draft_with(&req.summary, &effect, commit)?;
                 Ok((draft.plan, Some(draft.bundle)))
             }
             "http_request" => {
@@ -1350,6 +1353,17 @@ async fn run_opened(
         flow.on_release(Arc::new(move || m.mirror().unwatch()));
     }
     let land_watcher = shared.land.is_some().then(|| land_watch(shared.clone()));
+    // This host holds its session directory while it runs; a sweep of old directories (its own, below, and
+    // any later host's) never touches one it cannot take. Failing to take it only costs the protection.
+    let _held = shared
+        .land
+        .is_some()
+        .then(|| crate::land::SessionLock::take(&cfg.session_dir))
+        .flatten();
+    let land_sweeper = shared
+        .land
+        .is_some()
+        .then(|| land_sweep(shared.clone(), deps.vcs.clone(), api.clone()));
 
     // 6. The agent.
     let policy = Arc::new(crate::acp::SandboxPolicy {
@@ -1513,6 +1527,10 @@ async fn run_opened(
                     handled = i.seq;
                     // Only a signed input with a receipt drives a turn (R-24); its text is the instruction.
                     let Some(text) = i.text.clone() else { continue };
+                    // A pruned workspace takes no more turns: say so, as data, instead of failing in it.
+                    if refuse_steer(&shared, i.seq, &i.author).await {
+                        continue;
+                    }
                     let driver = Driver {
                         author: i.author.clone(),
                         kind: DriverKind::SessionInput,
@@ -1534,8 +1552,12 @@ async fn run_opened(
     if let Some(m) = &mirror {
         m.rescan();
     }
+    if let Some(w) = land_sweeper {
+        w.abort();
+    }
     if let Some(w) = land_watcher {
         w.abort();
+        land_backstop(&shared).await;
         land_settle(&shared).await;
     }
     let final_state = if state == SessionState::Failed {
@@ -1626,20 +1648,7 @@ async fn land_step(
             ));
         }
         Ok(crate::land::Pruned::Kept(u)) => {
-            let mut body = u.item();
-            body["at"] = Value::String(now_text());
-            let r = shared
-                .api
-                .call(Command::StreamPublish {
-                    space: shared.cfg.space.clone(),
-                    session: shared.session.clone(),
-                    name: crate::land::PROFILE.into(),
-                    body: body.to_string(),
-                })
-                .await;
-            if let Err(e) = r {
-                shared.publish_failed("unlanded item", &e);
-            }
+            publish_unlanded(shared, &u).await;
             let text = format!(
                 "kept: {} commit(s) after the proposal never landed{}",
                 u.commits.len(),
@@ -1657,6 +1666,172 @@ async fn land_step(
         }
         _ => {}
     }
+}
+
+/// Publishes an `unlanded` report (R33 §7) on the session's stream.
+async fn publish_unlanded(shared: &Arc<Shared>, u: &crate::land::Unlanded) {
+    let mut body = u.item();
+    body["at"] = Value::String(now_text());
+    let r = shared
+        .api
+        .call(Command::StreamPublish {
+            space: shared.cfg.space.clone(),
+            session: shared.session.clone(),
+            name: crate::land::PROFILE.into(),
+            body: body.to_string(),
+        })
+        .await;
+    if let Err(e) = r {
+        shared.publish_failed("unlanded item", &e);
+    }
+}
+
+/// How often the sweep of earlier sessions' proposals looks at the log.
+const SWEEP_POLL: Duration = Duration::from_secs(15);
+
+/// The sweep at host start: the earlier session directories next to this one that have a land ledger and that
+/// no running host holds are followed the way a live session's are, through the lane's items and the Effects
+/// view, and pruned by the same rules. The session of each is over, so a rejected change no longer keeps its
+/// workspace. A host that crashed (or whose proposals were never final when it stopped) leaves them behind.
+/// Ends when every one is pruned or reported `unlanded`.
+fn land_sweep(
+    shared: Arc<Shared>,
+    vcs: Arc<dyn Vcs>,
+    api: Arc<dyn NodeApi>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut flows = Vec::new();
+        for dir in crate::land::sweep_dirs(&shared.cfg.session_dir) {
+            let feed = Arc::new(crate::land::NodeLaneFeed::new(
+                api.clone(),
+                shared.cfg.space.clone(),
+                shared.cfg.executor.clone(),
+            ));
+            let Some(flow) = crate::land::Flow::orphan(&shared.cfg, &dir, vcs.clone(), feed) else {
+                continue;
+            };
+            // A directory a running host holds is not ours to prune.
+            let Some(held) = crate::land::SessionLock::take(&dir) else {
+                continue;
+            };
+            flows.push((Arc::new(flow), held));
+        }
+        let mut tick = tokio::time::interval(SWEEP_POLL);
+        while !flows.is_empty() {
+            tick.tick().await;
+            if shared.signals_closed() {
+                break;
+            }
+            let mut left = Vec::new();
+            for (flow, held) in flows {
+                if !sweep_step(&shared, &flow).await {
+                    left.push((flow, held));
+                }
+            }
+            flows = left;
+        }
+    })
+}
+
+/// One look at an earlier session's proposals; true when it is over (pruned, or kept and reported).
+async fn sweep_step(shared: &Arc<Shared>, flow: &Arc<crate::land::Flow>) -> bool {
+    if let Err(e) = flow.poll().await {
+        tracing::debug!("the landing lane could not be read: {e}");
+    }
+    let f = flow.clone();
+    match tokio::task::spawn_blocking(move || f.prune(false, true)).await {
+        Ok(crate::land::Pruned::Removed) => {
+            shared.signal(Signal::Summary(format!(
+                "an earlier session's workspace {} was removed: its proposals are final",
+                flow.workspace_dir().display()
+            )));
+            true
+        }
+        Ok(crate::land::Pruned::Kept(u)) => {
+            publish_unlanded(shared, &u).await;
+            shared.signal(Signal::Summary(format!(
+                "kept an earlier session's workspace {}: {} commit(s) after its proposal never landed{}",
+                flow.workspace_dir().display(),
+                u.commits.len(),
+                if u.uncommitted {
+                    ", and uncommitted changes"
+                } else {
+                    ""
+                }
+            )));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The backstop (`autoPropose`): the session is over, and it holds commits after its last proposal (or with no
+/// proposal) that nobody proposed. The host proposes them as a `vcs.land`, titled from the task, so that
+/// nothing is left silently. Uncommitted work is not committed for it; the prune reports it `unlanded`.
+async fn land_backstop(shared: &Arc<Shared>) {
+    let Some(flow) = shared.land.clone() else {
+        return;
+    };
+    if !tokio::task::spawn_blocking(move || flow.backstop_ready())
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let answer = propose_effect(
+        shared,
+        ProposeRequest {
+            summary: "the session ended with committed work that was never proposed".into(),
+            kind: "land".into(),
+            effect: json!({"committedOnly": true}),
+        },
+    )
+    .await;
+    let text = match answer {
+        ProposeAnswer::Proposed { id, .. } | ProposeAnswer::Queued { id } => format!(
+            "the session ended with committed work nobody proposed: the host proposed it for landing ({})",
+            id.chars().take(12).collect::<String>()
+        ),
+        ProposeAnswer::Refused { reason } => {
+            format!(
+                "committed work was left unproposed, and the host could not propose it: {reason}"
+            )
+        }
+    };
+    shared.signal(Signal::Summary(text));
+}
+
+/// A steer to a session whose workspace is gone: no turn, a refusal as data (a `han.land/1` item) and in the
+/// status. True when it was refused.
+async fn refuse_steer(shared: &Arc<Shared>, seq: u64, author: &str) -> bool {
+    let Some(mut body) = shared.land.as_ref().and_then(|f| f.steer_refusal()) else {
+        return false;
+    };
+    body["input"] = json!(seq);
+    body["author"] = json!(author);
+    body["at"] = Value::String(now_text());
+    let r = shared
+        .api
+        .call(Command::StreamPublish {
+            space: shared.cfg.space.clone(),
+            session: shared.session.clone(),
+            name: crate::land::PROFILE.into(),
+            body: body.to_string(),
+        })
+        .await;
+    if let Err(e) = r {
+        shared.publish_failed("steer refusal", &e);
+    }
+    let text = format!(
+        "steer from {author} refused: {}",
+        body["detail"].as_str().unwrap_or("the workspace is gone")
+    );
+    shared.signal(Signal::Summary(text.clone()));
+    shared.signal(Signal::Land {
+        text,
+        blocked: true,
+    });
+    true
 }
 
 /// When work stops: looks at the lane once more (and keeps looking for up to the spec's `settleSecs` while a

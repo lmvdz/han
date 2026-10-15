@@ -55,6 +55,8 @@ A clean three-way merge in a shared file is not path-disjoint. It changes what t
 
 **Frozen once proposed (the #81 lesson).** A changeset is fixed by its proposal. The host MUST NOT add commits to a proposed workspace. Further work becomes a new changeset and a new proposal, based on the old one's `to`, with `dependsOn` naming the old proposal.
 
+**The bundle of a follow-up (dogfood, 2026-10-15).** The lane squashes, so the old `to` never reaches the remote. A follow-up's bundle therefore does not start at it: the host bundles from the session's first base, `bundleBase..to`, and the plan names that commit as `args.bundleBase` when it differs from `base`. `base` stays the old `to` (the delta and its digest are `base..to`), and it is inside the bundle. The bundle imports on any executor that can fetch `bundleBase`: after a restart, with a new object store, or on another machine. The cost is a bundle that grows with the session's history, up to the blob limit.
+
 ## 3. Changeset states and liveness
 
 | State | Pending while in it | Who moves it | Default deadline |
@@ -78,6 +80,10 @@ Faces and the node's views derive **`stalled`** the way they derive `stale`: the
 The **liveness invariant**: every changeset is in a state with something pending and within its deadline, or it is final, or it is `stalled` and someone has been told. Conformance tests this invariant, not single events.
 
 States are folded from the log (proposal, approvals, claim, outcome) and from the lane's status items. Nothing is claimed by an agent.
+
+**Missed items (dogfood, 2026-10-15).** The home does not replay stream items, so a host that was away when the lane published a change's item would wait for ever. Two measures, both required of a lane and a host:
+- the lane publishes the current item of every change that is not final again every `republish_secs` (default 60), and every change's item once more after it restarts;
+- the host also reads how its proposals' effects ended in the log. An effect cancelled with a lane reason (`<reason>: <detail>`, `reason` one of the rejection reasons above) is `rejected` with it, any other cancel is `cancelled`, and an outcome of `succeeded` is `landed`. The log only moves a change on; a later item (`confirmed`) still counts.
 
 ## 4. Lanes
 
@@ -187,7 +193,9 @@ When a changeset's effect is final, its host removes:
 - its build output (`CARGO_TARGET_DIR`);
 - its local refs.
 
-It keeps a workspace with uncommitted changes, or one whose tip has commits that the target lacks by patch id after the proposal's `to`. For that kept workspace it reports an **`unlanded`** item `{workspace, proposal, commits: [{id, subject}]}`, which is an event for the agent and the operator, not housekeeping. A periodic sweep catches what a crashed host left behind. Reference: the stopgap `prune-worktrees.sh` outside the repo found 37 merged branches and the lost #81 commit on its first run.
+It keeps a workspace with uncommitted changes, or one whose tip has commits that the target lacks by patch id after the proposal's `to`. For that kept workspace it reports an **`unlanded`** item `{workspace, proposal, commits: [{id, subject}]}`, which is an event for the agent and the operator, not housekeeping. A sweep catches what a crashed host left behind: a host that starts re-scans the session directories that have a land ledger and no running host, follows their proposals through the same log and prunes by the same rules (the session is over, so a rejected change no longer keeps the workspace).
+
+A session that ends with committed work nobody proposed has it proposed by the host as a `vcs.land`, titled from the task (`autoPropose`, on with the flow); uncommitted work is never committed for it and is reported `unlanded`. A steer to a session whose workspace was pruned is refused as data (`steer_refused`), not run in a removed directory. Reference: the stopgap `prune-worktrees.sh` outside the repo found 37 merged branches and the lost #81 commit on its first run.
 
 ## 8. Profile surface
 

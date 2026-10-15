@@ -1,0 +1,13 @@
+{
+  "agent": {"name": "pi-acp", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "tool_call", "id": "toolu_w1", "title": "write src/auth/login.rs", "kind": "edit", "locations": ["src/auth/login.rs"], "rawInput": {"path": "src/auth/login.rs"}},
+      {"type": "write_file", "path": "src/auth/login.rs", "content": "pub fn login(user: &str, token: &str) -> bool {\n    !user.is_empty() && token.len() >= 8\n}\n"},
+      {"type": "tool_update", "id": "toolu_w1", "status": "completed", "output": "Wrote src/auth/login.rs"},
+      {"type": "message", "text": "The login check is written. I am done."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

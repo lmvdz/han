@@ -17,7 +17,12 @@
 //! * `rebaseOf`: the proposal this one re-proposes after a failed path-disjoint check;
 //! * `title`: the subject line of the commit the lane makes (the approval binds it); default a line naming
 //!   the change;
-//! * `argsBlob`: the commits `base..to` as a git bundle, imported as `git_push` does (R15).
+//! * `bundleBase`: the commit the bundle needs, one the executor can get from the remote; default `base`. A
+//!   proposal that depends on another has the other's `to` as its `base`, and the lane squashes, so that `to`
+//!   never reaches the remote. The host bundles from the session's first base, `bundleBase..to`, which holds
+//!   `base` and imports on any executor, after a restart or on another machine;
+//! * `argsBlob`: the commits `bundleBase..to` (`base..to` without `bundleBase`) as a git bundle, imported as
+//!   `git_push` does (R15).
 //!
 //! The lane's rebase happens after approval, so the executor gets it out of the plan: the claim context
 //! carries a [`crate::LaneInstruction`] (`onto`, `commit` and the repository that holds them). Before the
@@ -63,6 +68,8 @@ struct Args {
     rebase_of: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    bundle_base: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +99,16 @@ pub fn commit_title(plan: &Value) -> String {
             None => "land".into(),
         },
     }
+}
+
+/// The commit a plan's bundle needs: its `bundleBase`, else its `base` (empty when the plan has neither).
+pub fn bundle_base(plan: &Value) -> String {
+    let a = plan.get("args");
+    ["bundleBase", "base"]
+        .iter()
+        .find_map(|k| a.and_then(|a| a.get(*k)).and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// The plan's `change` as a valid summary (architecture.md P-17): the shape and the bounds Policy checks.
@@ -186,8 +203,9 @@ impl VcsLand {
         let auth = super::write_auth(plan, ctx)
             .await
             .map_err(|e| PlanError::Preflight(format!("credential: {e}")))?;
+        let needs = a.bundle_base.as_deref().unwrap_or(&a.base);
         ctx.vcs
-            .import_bundle(&repo.remote, auth.as_ref(), bytes, &a.base, &a.to)
+            .import_bundle(&repo.remote, auth.as_ref(), bytes, needs, &a.to)
             .map_err(|e| match e {
                 han_vcs::VcsError::Invalid(m) => PlanError::Changeset(m),
                 other => PlanError::Preflight(other.to_string()),
@@ -285,7 +303,10 @@ impl Action for VcsLand {
                 a.refname
             )));
         }
-        for (name, sha) in [("base", &a.base), ("to", &a.to)] {
+        for (name, sha) in [("base", &a.base), ("to", &a.to)]
+            .into_iter()
+            .chain(a.bundle_base.as_ref().map(|b| ("bundleBase", b)))
+        {
             if !is_hex(sha, &[40, 64]) {
                 return Err(PlanError::Schema(format!("{name} is not a commit id")));
             }

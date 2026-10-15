@@ -17,7 +17,17 @@
 //!   proposal. The host refuses to propose when the old `to` is no longer an ancestor of the workspace's head
 //!   (a rewrite of proposed history), when nothing was added since, or when the old proposal was rejected
 //!   (the way on is `rebaseOf`, which names the rejected proposal, keeps its base and depends on nothing);
-//! * the lane's executor imports the bundle `old.to..new.to` on top of what it imported for the old proposal.
+//! * every bundle is `workspace base..to`, whatever the changeset's own `base` (the plan names the bundle's
+//!   prerequisite as `bundleBase` when it differs). The lane squashes, so an earlier proposal's `to` never
+//!   reaches the remote, and a bundle that needed it would import only on the executor that imported the
+//!   earlier one. This one imports on any executor, after a restart or on another machine, and holds the
+//!   changeset's `base` inside it.
+//!
+//! **Missed items.** The home does not replay stream items, so the host also reads how its proposals' effects
+//! ended in the log ([`LaneFeed::ended`]): an effect cancelled with a lane reason is rejected with it, one
+//! with an outcome has landed. **Backstop:** a session that ends with commits nobody proposed has them
+//! proposed by the host ([`Flow::backstop_ready`]). **Sweep:** a host that starts follows the proposals of
+//! earlier session directories the same way ([`Flow::orphan`]).
 //!
 //! The host cannot stop the agent writing in its own workspace (that is the agent's sandbox); what it
 //! refuses is making the *proposal* from a changed past. Commits that follow a proposal and never become a
@@ -27,7 +37,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use han_node::api::{
-    BoxFuture, CallResult, Command, Filter, ItemBody, NodeApi, Query, Row, SessionPart, Window,
+    BoxFuture, CallResult, Command, EffectEnd, Filter, ItemBody, NodeApi, Query, Row, SessionPart,
+    Window,
 };
 use han_registry::LandFinish;
 use han_vcs::{Commit, Vcs, Workspace};
@@ -106,6 +117,93 @@ impl LaneChange {
     }
 }
 
+/// The reasons a lane rejection carries, which its `effect.cancel` names first (`<reason>: <detail>`).
+const LANE_REASONS: [&str; 5] = ["conflict", "test", "dependency", "policy", "timeout"];
+
+/// How far along a state is, for telling whether the log moves a proposal on.
+fn rank(state: &str) -> u8 {
+    match state {
+        "queued" => 1,
+        "testing" => 2,
+        "landing" => 3,
+        "landed" => 4,
+        "confirmed" => 5,
+        _ => 0,
+    }
+}
+
+/// A `BlobRef` as the lane's items carry it.
+fn blob_json(e: &han_node::api::EvidenceRef) -> Value {
+    json!({"hash": e.hash, "size": e.size, "type": e.media_type})
+}
+
+/// What the log says about a proposal whose lane item was missed: how its effect ended.
+#[derive(Clone, Debug, PartialEq)]
+struct Fallback {
+    state: &'static str,
+    reason: Option<String>,
+    detail: String,
+    conflict: Option<Value>,
+    evidence: Option<Value>,
+}
+
+impl Fallback {
+    fn of(end: &EffectEnd) -> Option<Fallback> {
+        let proof = end.evidence.as_ref().map(blob_json);
+        match end.by.as_str() {
+            "cancel" => {
+                let text = end.reason.as_deref().unwrap_or_default();
+                match text.split_once(':') {
+                    Some((r, d)) if LANE_REASONS.contains(&r.trim()) => {
+                        let r = r.trim();
+                        Some(Fallback {
+                            state: "rejected",
+                            reason: Some(r.to_owned()),
+                            detail: bound(d.trim(), MAX_LANE_TEXT),
+                            conflict: proof.clone().filter(|_| r == "conflict"),
+                            evidence: proof.filter(|_| r != "conflict"),
+                        })
+                    }
+                    _ => Some(Fallback {
+                        state: "cancelled",
+                        reason: None,
+                        detail: if text.is_empty() {
+                            "the proposal was cancelled".into()
+                        } else {
+                            bound(text, MAX_LANE_TEXT)
+                        },
+                        conflict: None,
+                        evidence: proof,
+                    }),
+                }
+            }
+            "outcome" | "resolve" => match end.result.as_deref() {
+                Some("succeeded") => Some(Fallback {
+                    state: "landed",
+                    reason: None,
+                    detail: "landed (the executor's outcome is in the log)".into(),
+                    conflict: None,
+                    evidence: proof,
+                }),
+                Some(r) => Some(Fallback {
+                    state: "rejected",
+                    reason: Some("claim_failed".into()),
+                    detail: format!("the landing claim ended {r}"),
+                    conflict: None,
+                    evidence: proof,
+                }),
+                None => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether this moves a proposal that is in `state`: only one that has not landed yet, and is not over.
+    fn moves(&self, state: &str) -> bool {
+        !matches!(state, "rejected" | "cancelled" | "reverted") && rank(state) < rank("landed")
+    }
+}
+
 /// Where the host reads the lane from.
 pub trait LaneFeed: Send + Sync {
     /// The latest item of every change the lane has published.
@@ -113,6 +211,14 @@ pub trait LaneFeed: Send + Sync {
 
     /// The bytes a `BlobRef` of the lane names (a conflict record).
     fn blob<'a>(&'a self, blob: &'a Value) -> BoxFuture<'a, Result<Vec<u8>, String>>;
+
+    /// How the final `vcs.land` effects of the session's executor ended, from the log (the Effects view), as
+    /// `(proposal, end)`. The home does not replay stream items, so a host that missed the lane's last item
+    /// for its proposal still learns from here that the effect was cancelled, with the lane's reason, or has
+    /// an outcome. A feed without the view answers none.
+    fn ended(&self) -> BoxFuture<'_, Result<Vec<(String, EffectEnd)>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 /// The lane as the node shows it: the lane's session (the executor's, in the space) has the `han.land/1`
@@ -186,6 +292,30 @@ impl LaneFeed for NodeLaneFeed {
                 }
             }
             Ok(out)
+        })
+    }
+
+    fn ended(&self) -> BoxFuture<'_, Result<Vec<(String, EffectEnd)>, String>> {
+        Box::pin(async move {
+            let rows = self
+                .first(Query::Effects {
+                    space: Some(self.space.clone()),
+                    executor: Some(self.executor.clone()),
+                    include_done: true,
+                    window: Window {
+                        limit: 1000,
+                        from_end: true,
+                        ..Window::default()
+                    },
+                })
+                .await?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|r| match r {
+                    Row::Effect(e) if e.action == "vcs.land" => e.ended.map(|x| (e.proposal, x)),
+                    _ => None,
+                })
+                .collect())
         })
     }
 
@@ -310,6 +440,9 @@ impl Unlanded {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Ledger {
+    /// The space the proposals were made in (a sweep of old session directories follows only its own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    space: Option<String>,
     proposals: Vec<Proposed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unlanded: Option<Unlanded>,
@@ -393,10 +526,11 @@ impl Flow {
         feed: Arc<dyn LaneFeed>,
     ) -> Option<Flow> {
         let land = cfg.finish.land.clone()?;
-        let ledger = std::fs::read_to_string(cfg.session_dir.join(LEDGER_FILE))
+        let mut ledger: Ledger = std::fs::read_to_string(cfg.session_dir.join(LEDGER_FILE))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
+        ledger.space.get_or_insert_with(|| cfg.space.clone());
         Some(Flow {
             land,
             repo_name: cfg.repo.name.clone(),
@@ -491,6 +625,18 @@ impl Flow {
     /// bundles it. It does not change what was proposed before (see the module doc); `proposed` records the
     /// draft once the proposal exists, `abandon` drops it.
     pub fn draft(&self, summary: &str, effect: &Map<String, Value>) -> Result<Draft, String> {
+        self.draft_with(summary, effect, true)
+    }
+
+    /// [`Flow::draft`], with the choice of committing the workspace first. The host's backstop proposes only
+    /// what is committed (`commit` false): uncommitted work is never committed for anyone, it is reported
+    /// `unlanded`.
+    pub fn draft_with(
+        &self,
+        summary: &str,
+        effect: &Map<String, Value>,
+        commit: bool,
+    ) -> Result<Draft, String> {
         let mut inner = lock(&self.inner);
         if inner.ledger.pruned {
             return Err("the workspace was pruned after its proposals were final".into());
@@ -547,14 +693,17 @@ impl Flow {
             }
             (None, None) => (self.workspace.base.clone(), Vec::new(), None),
         };
-        let head = self
-            .vcs
-            .commit_all(
-                dir,
-                &format!("{}\n\nHAN session {}", summary.trim(), self.session),
-                &self.agent,
-            )
-            .map_err(|e| e.to_string())?;
+        let head = if commit {
+            self.vcs
+                .commit_all(
+                    dir,
+                    &format!("{}\n\nHAN session {}", summary.trim(), self.session),
+                    &self.agent,
+                )
+                .map_err(|e| e.to_string())?
+        } else {
+            self.vcs.head(dir).map_err(|e| e.to_string())?
+        };
         if head == base || latest.as_ref().is_some_and(|l| l.to == head) {
             return Err(match &latest {
                 Some(l) => format!(
@@ -574,9 +723,13 @@ impl Flow {
             return Err("there is nothing to land: the changes cancel out".into());
         }
         let digest = delta.digest().map_err(|e| e.to_string())?;
+        // The bundle starts at the session's first base, which the remote holds, whatever this changeset's own
+        // base is: a follow-up's base is the earlier proposal's `to`, which the lane squashes and never
+        // pushes, so a bundle that needs it imports only on the executor that imported the first one.
+        let bundle_base = self.workspace.base.clone();
         let bundle = self
             .vcs
-            .bundle(dir, &base, &head)
+            .bundle(dir, &bundle_base, &head)
             .map_err(|e| format!("the changeset can't be bundled: {e}"))?;
         if bundle.len() > crate::host::MAX_BUNDLE {
             return Err(format!(
@@ -604,6 +757,9 @@ impl Flow {
             "rebase": "path-disjoint",
             "title": title,
         });
+        if bundle_base != base {
+            args["bundleBase"] = json!(bundle_base);
+        }
         if let Some(c) = &change {
             args["change"] = serde_json::to_value(c).map_err(|e| e.to_string())?;
         }
@@ -719,8 +875,15 @@ impl Flow {
 
     // ───── following the lane ─────
 
-    /// Reads the lane's items for the session's open proposals and folds them in. Returns whether anything
-    /// changed. A conflict record is fetched the first time it is named.
+    /// Reads the lane's items for the session's open proposals, and how their effects ended in the log, and
+    /// folds them in. Returns whether anything changed. A conflict record is fetched the first time it is
+    /// named.
+    ///
+    /// The log settles what a missed item cannot: the home does not replay stream items, so a host that was
+    /// away when the lane published a proposal's last item would wait for ever. An effect cancelled with a
+    /// lane reason (`conflict: ...`) is `rejected` with that reason, one cancelled otherwise is `cancelled`,
+    /// one with a successful outcome is `landed`, one with any other final outcome is `rejected`
+    /// (`claim_failed`). The log only moves a proposal on: an item that is further along (`confirmed`) stands.
     pub async fn poll(&self) -> Result<bool, String> {
         let open: Vec<String> = {
             let inner = lock(&self.inner);
@@ -735,17 +898,28 @@ impl Flow {
         if open.is_empty() {
             return Ok(false);
         }
-        let seen = self.feed.changes().await?;
+        let (seen, ended) = (self.feed.changes().await, self.feed.ended().await);
+        if let (Err(e), Err(_)) = (&seen, &ended) {
+            return Err(e.clone());
+        }
+        let (seen, ended) = (seen.unwrap_or_default(), ended.unwrap_or_default());
         let mut changed = false;
         for id in open {
-            let Some(c) = seen
+            let item = seen
                 .iter()
                 .filter(|c| c.proposal == id)
-                .max_by_key(|c| c.seq)
-            else {
+                .max_by_key(|c| c.seq);
+            let fallback = ended
+                .iter()
+                .find(|(p, _)| *p == id)
+                .and_then(|(_, e)| Fallback::of(e));
+            if item.is_none() && fallback.is_none() {
                 continue;
-            };
-            let fetched = match &c.conflict {
+            }
+            let named = item
+                .and_then(|c| c.conflict.clone())
+                .or_else(|| fallback.as_ref().and_then(|f| f.conflict.clone()));
+            let fetched = match &named {
                 Some(r) => {
                     let need = lock(&self.inner)
                         .ledger
@@ -765,7 +939,9 @@ impl Flow {
                 continue;
             };
             let before = p.clone();
-            if c.seq >= p.lane_seq {
+            if let Some(c) = item
+                && c.seq >= p.lane_seq
+            {
                 p.state = c.state.clone();
                 p.reason = c.reason.clone();
                 p.detail = c.detail.clone();
@@ -777,6 +953,21 @@ impl Flow {
                 }
                 if c.evidence.is_some() {
                     p.evidence = c.evidence.clone();
+                }
+            }
+            if let Some(f) = &fallback
+                && f.moves(&p.state)
+            {
+                p.state = f.state.to_owned();
+                p.reason = f.reason.clone();
+                p.detail = Some(f.detail.clone());
+                p.stalled = None;
+                p.position = None;
+                if f.conflict.is_some() {
+                    p.conflict = f.conflict.clone();
+                }
+                if f.evidence.is_some() {
+                    p.evidence = f.evidence.clone();
                 }
             }
             if fetched.is_some() {
@@ -955,13 +1146,18 @@ impl Flow {
             return Pruned::Waiting("the agent may propose again with rebaseOf");
         }
         let dir = &self.workspace.dir;
-        let report = match self.unlanded_of(&last) {
-            Ok(r) => r,
-            Err(e) => {
-                // Not knowing is not a reason to delete someone's commits.
-                tracing::warn!("land: the workspace is kept, its state could not be read: {e}");
-                return Pruned::Waiting("the workspace could not be examined");
+        // A workspace that is already gone (removed by hand) has nothing to report; its build output may remain.
+        let report = if dir.exists() {
+            match self.unlanded_of(&last) {
+                Ok(r) => r,
+                Err(e) => {
+                    // Not knowing is not a reason to delete someone's commits.
+                    tracing::warn!("land: the workspace is kept, its state could not be read: {e}");
+                    return Pruned::Waiting("the workspace could not be examined");
+                }
             }
+        } else {
+            None
         };
         if let Some(u) = report {
             inner.ledger.unlanded = Some(u.clone());
@@ -1043,6 +1239,140 @@ impl Flow {
     /// The workspace's directory.
     pub fn workspace_dir(&self) -> &Path {
         &self.workspace.dir
+    }
+
+    // ───── the backstop ─────
+
+    /// Whether the session ends with committed work that nobody proposed, which the host proposes itself
+    /// (`autoPropose`, on by default with the flow): commits in the workspace after the last proposal's `to`,
+    /// or after the base when there is no proposal. Uncommitted changes never count and are never committed
+    /// for it (they are reported `unlanded` when the workspace is pruned). When the last proposal failed, the
+    /// agent's work is already known to the lane and needs `rebaseOf`, which is the agent's to decide.
+    pub fn backstop_ready(&self) -> bool {
+        if !self.land.auto_propose {
+            return false;
+        }
+        let inner = lock(&self.inner);
+        if inner.ledger.pruned || inner.pending.is_some() {
+            return false;
+        }
+        let last = inner.ledger.proposals.last();
+        if last.is_some_and(Proposed::failed) {
+            return false;
+        }
+        let from = last.map_or(self.workspace.base.as_str(), |l| l.to.as_str());
+        let dir = &self.workspace.dir;
+        let Ok(tip) = self.tip() else {
+            return false;
+        };
+        tip != from && self.vcs.is_ancestor(dir, from, "HEAD").unwrap_or(false)
+    }
+
+    // ───── a workspace that is gone ─────
+
+    /// What a steer to this session gets when its workspace was pruned (or is otherwise gone): a refusal as
+    /// data. The agent's process still has the removed directory as its working directory, so a turn would
+    /// fail in ways nobody can read; the host does not start one.
+    pub fn steer_refusal(&self) -> Option<Value> {
+        let gone = lock(&self.inner).ledger.pruned || !self.workspace.dir.join(".git").exists();
+        gone.then(|| {
+            json!({
+                "item": "steer_refused",
+                "reason": "workspace_pruned",
+                "workspace": self.workspace.dir.display().to_string(),
+                "detail": "this session's workspace was removed after its proposals were final, so it takes \
+                           no more instructions: start a new session for further work",
+            })
+        })
+    }
+
+    // ───── a crashed host's leftovers ─────
+
+    /// The flow of an earlier session's directory that has a ledger, for the sweep at host start: the
+    /// ledger's proposals are followed through the Effects view and the workspace is pruned by the same rules
+    /// (the session is over, so a rejected change no longer keeps it). `None` for a directory that is not
+    /// worth following: no ledger, another space, nothing proposed, already pruned, or already reported
+    /// `unlanded` (that report is for someone to act on).
+    pub fn orphan(
+        cfg: &HostConfig,
+        dir: &Path,
+        vcs: Arc<dyn Vcs>,
+        feed: Arc<dyn LaneFeed>,
+    ) -> Option<Flow> {
+        let land = cfg.finish.land.clone()?;
+        let ledger: Ledger =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(LEDGER_FILE)).ok()?).ok()?;
+        if ledger.pruned
+            || ledger.unlanded.is_some()
+            || ledger.proposals.is_empty()
+            || ledger.space.as_deref().is_some_and(|s| s != cfg.space)
+        {
+            return None;
+        }
+        let base = ledger.proposals.first()?.base.clone();
+        Some(Flow {
+            land,
+            repo_name: cfg.repo.name.clone(),
+            source: cfg.repo.source.clone(),
+            default_branch: cfg.repo.default_branch.clone(),
+            session: String::new(),
+            agent: cfg.agent.clone(),
+            ask: None,
+            issue: None,
+            workspace: Workspace {
+                dir: crate::host::worktree_of(dir),
+                base,
+                branch: String::new(),
+                shared_store: None,
+            },
+            session_dir: dir.to_owned(),
+            vcs,
+            feed,
+            release: Mutex::new(None),
+            inner: Mutex::new(Inner {
+                ledger,
+                ..Inner::default()
+            }),
+        })
+    }
+}
+
+/// The earlier session directories next to `session_dir` that have a ledger: what a host that starts looks
+/// at for a crashed host's leftovers. Sorted.
+pub fn sweep_dirs(session_dir: &Path) -> Vec<PathBuf> {
+    let Some(parent) = session_dir.parent() else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p != session_dir && p.join(LEDGER_FILE).is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The hold of a session directory by the host that runs the session: an OS lock on `host.lock`, released by
+/// the OS when the host dies. A sweep of old directories only touches one it can take the lock of, so it never
+/// prunes the workspace of a session that is still running.
+pub struct SessionLock(#[allow(dead_code)] std::fs::File);
+
+/// The lock's file name in the session directory.
+pub const LOCK_FILE: &str = "host.lock";
+
+impl SessionLock {
+    /// Takes the hold of `dir`, or `None` when another process has it (or it cannot be taken).
+    pub fn take(dir: &Path) -> Option<SessionLock> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(LOCK_FILE))
+            .ok()?;
+        file.try_lock().ok()?;
+        Some(SessionLock(file))
     }
 }
 

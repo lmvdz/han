@@ -442,6 +442,8 @@ impl AgentsFile {
                 .and_then(|l| l.settle_secs)
                 .or(base.and_then(|l| l.settle_secs))
                 .unwrap_or(0),
+            // The host's backstop is on with the flow (no setting turns it off yet).
+            ..LandFinish::default()
         })
     }
 
