@@ -917,12 +917,14 @@ async fn an_executor_cannot_approve_or_govern() {
     let s = Stack::up("propose", &[]);
     s.dev(&["stop", "exec"]);
     let out = probe(&s, "exec", &s.executor(), &s.dir.join("exec"));
-    for name in ["approve", "cancel", "member", "invite", "policy", "revoke"] {
+    for name in ["approve", "member", "invite", "policy", "revoke"] {
         assert!(
             out.contains(&format!("{name}: refused by class")),
             "{name}: {out}"
         );
     }
+    // P-07a: it may refuse an effect it will not run, so cancel reaches the node (Policy decides which effects)
+    assert!(out.contains("cancel: reached the node"), "{out}");
     assert!(!out.contains("claim:"), "an executor may claim: {out}");
     assert!(out.contains("own: reached the node"), "{out}");
     s.dev(&["start", "exec"]);

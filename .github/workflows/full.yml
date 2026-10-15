@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e "witnesses/impl-py[dev]"
+          pip install -e "witnesses/impl-py[dev,claude]"
       - name: Build the TypeScript witness
         working-directory: witnesses/cleanroom-ts
         run: |
@@ -160,7 +160,7 @@ jobs:
       - name: A systemd container with git
         run: |
           sudo install -d -o "$(id -u)" /srv/han-image && cat > /srv/han-image/Containerfile <<'EOF'
-          FROM docker.io/library/debian:bookworm-slim
+          FROM docker.io/library/debian:trixie-slim
           RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv dbus polkitd git ca-certificates procps passwd && rm -rf /var/lib/apt/lists/*
           CMD ["/sbin/init"]
           EOF

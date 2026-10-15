@@ -33,13 +33,20 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// worktrees named `wt-*` and for a workspace outside the root.
 struct Repo {
     tmp: tempfile::TempDir,
+    /// `tmp` as git spells it: symlinks resolved (macOS /var is /private/var) and Windows 8.3 names expanded.
+    dir: PathBuf,
     main: PathBuf,
 }
 
 impl Repo {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let t = tmp.path();
+        let dir = {
+            let c = tmp.path().canonicalize().unwrap();
+            let c = c.to_string_lossy().into_owned();
+            PathBuf::from(c.strip_prefix(r"\\?\").unwrap_or(&c))
+        };
+        let t = dir.as_path();
         let (origin, main) = (t.join("origin.git"), t.join("v1"));
         std::fs::create_dir_all(&main).unwrap();
         git(t, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
@@ -53,15 +60,15 @@ impl Repo {
         git(&main, &["commit", "-q", "-m", "base"]);
         git(&main, &["push", "-q", "-u", "origin", "main"]);
         git(t, &["clone", "-q", &origin.to_string_lossy(), "other"]);
-        Self { tmp, main }
+        Self { tmp, dir, main }
     }
 
     fn path(&self, name: &str) -> PathBuf {
-        self.tmp.path().join(name)
+        self.dir.join(name)
     }
 
     fn root(&self) -> String {
-        format!("{}/wt-", norm(&self.tmp.path().to_string_lossy()))
+        format!("{}/wt-", norm(&self.dir.to_string_lossy()))
     }
 
     fn cfg(&self) -> Config {
@@ -404,7 +411,7 @@ fn the_main_checkout_is_never_removed_even_under_the_root() {
     let r = Repo::new();
     let mut cfg = r.cfg();
     // a root that covers the main checkout itself
-    cfg.root = format!("{}/", norm(&r.tmp.path().to_string_lossy()));
+    cfg.root = format!("{}/", norm(&r.dir.to_string_lossy()));
     let tip = git(&r.main, &["rev-parse", "HEAD"]);
     let out = r.sweep_with(&cfg, vec![rec("main", PrState::Merged, &tip, 1)]);
     assert!(out.is_empty(), "{out:?}");
