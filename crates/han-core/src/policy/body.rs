@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::doc::{NewRole, PolicyDoc, ProfileDoc, SteerMode};
+use super::gate::{Change, Evidence};
 use crate::error::Error;
 use crate::grammar as g;
 use crate::json::{self, MAX_SAFE_INT, Value};
@@ -167,6 +168,8 @@ pub struct Propose {
     pub task: Option<EntryId>,
     /// No claim at or after this time.
     pub expires_at: Option<Time>,
+    /// The summary of a `vcs.land`'s change, which Policy derives the tier from (P-17).
+    pub change: Option<Change>,
 }
 
 /// Body of `effect.approve`.
@@ -179,6 +182,8 @@ pub struct Approve {
     pub plan_digest: String,
     /// The approval lapses at this time.
     pub expires_at: Option<Time>,
+    /// The record the approval rests on (P-17).
+    pub evidence: Option<Evidence>,
 }
 
 /// Body of `effect.claim`.

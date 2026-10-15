@@ -1179,3 +1179,137 @@ fn diff_text_is_the_plain_unified_diff_between_two_commits() {
     assert!(!d.contains('\u{1b}'), "no colour: {d}");
     assert_eq!(r.vcs.diff_text(&r.dir, &base, &base).unwrap(), "");
 }
+
+// ───────────────────────── the change summary of a landing (P-17, X-13) ─────────────────────────
+
+fn sizes(r: &Repo, base: &str, head: &str) -> (Delta, Vec<u64>) {
+    let d = r.vcs.delta(&r.dir, base, head).unwrap();
+    let n = r.vcs.delta_lines(&r.dir, base, head, &d).unwrap();
+    (d, n)
+}
+
+#[test]
+fn delta_lines_counts_text_binary_renames_and_mode_changes() {
+    let r = repo();
+    let mut before = base_files();
+    before.push(Edit::Put("bin.dat", &[0u8; 3000], "100644"));
+    before.push(Edit::Put("grow.dat", &[0u8; 100], "100644"));
+    let base = r.commit(None, &before);
+    let mut after = change_files();
+    after.push(Edit::Put("grow.dat", &[1u8; 4000], "100644"));
+    after.push(Edit::Rm("bin.dat"));
+    let head = r.commit(Some(&base), &after);
+    let (d, n) = sizes(&r, &base, &head);
+    let by = |p: &str| n[d.entries.iter().position(|e| e.path == p).unwrap()];
+    assert_eq!(by("a.txt"), 2, "one line replaced: one added, one removed");
+    assert_eq!(by("b.txt"), 1, "a deleted line");
+    assert_eq!(by("new.txt"), 1);
+    assert_eq!(by("moved/mv.txt"), 0, "a rename keeps its content");
+    assert_eq!(by("run.sh"), 0, "a change of mode only");
+    assert_eq!(by("bin.dat"), 3000, "a deleted binary file: its size");
+    assert_eq!(
+        by("grow.dat"),
+        4000,
+        "a binary file: the larger of the two sizes"
+    );
+}
+
+#[test]
+fn a_summary_that_does_not_fit_lists_a_prefix_and_says_so() {
+    let r = repo();
+    let base = r.commit(None, &[put("keep.txt", "k\n")]);
+    // 70 short paths: the file limit cuts at 64
+    let owned: Vec<(String, String)> = (0..70)
+        .map(|i| (format!("d/f{i:03}.txt"), format!("{i}\n")))
+        .collect();
+    let edits: Vec<Edit> = owned.iter().map(|(p, c)| put(p, c)).collect();
+    let head = r.commit(Some(&base), &edits);
+    let (d, n) = sizes(&r, &base, &head);
+    let c = han_vcs::land_change("local:origin", &d, &n).unwrap();
+    assert_eq!((c.total, c.files.len(), c.truncated), (70, 64, Some(true)));
+    assert_eq!(c.files[0].path, "d/f000.txt");
+    let v = han_core::json::to_value(&c).unwrap();
+    assert!(han_core::policy::change_summary(&v));
+    han_vcs::check_land_change(&c, "local:origin", &d.digest().unwrap(), &d, &n).unwrap();
+
+    // 64 long paths: the byte limit cuts earlier
+    let long: Vec<(String, String)> = (0..64)
+        .map(|i| (format!("p/{i:02}{}", "x".repeat(200)), "x\n".to_owned()))
+        .collect();
+    let edits: Vec<Edit> = long.iter().map(|(p, c)| put(p, c)).collect();
+    let head = r.commit(Some(&base), &edits);
+    let (d, n) = sizes(&r, &base, &head);
+    let c = han_vcs::land_change("local:origin", &d, &n).unwrap();
+    assert!(
+        c.files.len() < 64 && c.truncated == Some(true),
+        "{}",
+        c.files.len()
+    );
+    assert_eq!(c.total, 64);
+    let v = han_core::json::to_value(&c).unwrap();
+    assert!(han_core::policy::change_summary(&v));
+    han_vcs::check_land_change(&c, "local:origin", &d.digest().unwrap(), &d, &n).unwrap();
+
+    // a change that fits is whole
+    let head = r.commit(Some(&base), &[put("a.txt", "a\n")]);
+    let (d, n) = sizes(&r, &base, &head);
+    let c = han_vcs::land_change("local:origin", &d, &n).unwrap();
+    assert_eq!((c.total, c.files.len(), c.truncated), (1, 1, None));
+}
+
+#[test]
+fn a_summary_is_checked_against_the_change() {
+    let r = repo();
+    let base = r.commit(None, &base_files());
+    let head = r.commit(Some(&base), &change_files());
+    let (d, n) = sizes(&r, &base, &head);
+    let digest = d.digest().unwrap();
+    let good = han_vcs::land_change("local:origin", &d, &n).unwrap();
+    let check =
+        |c: &han_vcs::Change| han_vcs::check_land_change(c, "local:origin", &digest, &d, &n);
+    check(&good).unwrap();
+
+    let mut c = good.clone();
+    c.files[0].lines = 99;
+    check(&c).unwrap(); // an overstated size only raises the tier
+
+    let mut c = good.clone();
+    c.files[0].lines -= 1;
+    assert!(check(&c).unwrap_err().contains("understates"));
+
+    let mut c = good.clone();
+    c.files.swap(0, 1);
+    assert!(check(&c).unwrap_err().contains("is not the change's"));
+
+    let mut c = good.clone();
+    c.files[0].kind = han_vcs::FileKind::Add;
+    assert!(check(&c).is_err(), "another kind");
+
+    let mut c = good.clone();
+    let rename = c.files.iter_mut().find(|f| f.from_path.is_some()).unwrap();
+    rename.from_path = Some("elsewhere.txt".into());
+    assert!(check(&c).is_err(), "another source");
+
+    let mut c = good.clone();
+    c.files.pop();
+    assert!(
+        check(&c).unwrap_err().contains("without saying so"),
+        "left out, not truncated"
+    );
+
+    let mut c = good.clone();
+    c.truncated = Some(true);
+    assert!(check(&c).is_err(), "truncated with everything listed");
+
+    let mut c = good.clone();
+    c.files.truncate(2);
+    c.truncated = Some(true);
+    check(&c).unwrap(); // a prefix, said so: valid, and tier 3 for Policy
+
+    let mut c = good.clone();
+    c.total -= 1;
+    assert!(check(&c).unwrap_err().contains("counts"));
+
+    assert!(han_vcs::check_land_change(&good, "other", &digest, &d, &n).is_err());
+    assert!(han_vcs::check_land_change(&good, "local:origin", &"0".repeat(64), &d, &n).is_err());
+}

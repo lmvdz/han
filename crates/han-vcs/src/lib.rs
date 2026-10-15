@@ -674,6 +674,18 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// The size of each entry of `delta` (the [`Vcs::delta`] of `base..head`), in the order of its entries: for a
+    /// text file the lines added plus the lines removed, as `git diff --numstat` counts them with renames off;
+    /// for a file the backend treats as binary the larger of its two byte sizes; 0 for a rename and for a change
+    /// of mode only. A landing's change summary carries them (architecture.md P-17).
+    fn delta_lines(&self, dir: &Path, base: &str, head: &str, delta: &Delta) -> Result<Vec<u64>> {
+        let _ = (dir, base, head, delta);
+        Err(VcsError::Invalid(format!(
+            "{} counts no delta lines",
+            self.name()
+        )))
+    }
+
     /// The unified text diff from `base` to `head`, both commits of the repository at `dir`: no colour, no
     /// renames, no external diff or text conversion, so any implementation reads the same bytes. Binary files
     /// appear as a one-line notice. A reviewer reads it; nothing is applied from it.
@@ -782,4 +794,114 @@ pub trait Vcs: Send + Sync + 'static {
 
     /// Removes a workspace (after merge or cancel).
     fn remove_workspace(&self, ws: &Workspace) -> Result<()>;
+}
+
+// ───────────────────────── the change summary of a landing (P-17) ─────────────────────────
+
+pub use han_core::policy::{Change, ChangeFile, FileKind};
+
+fn summary_kind(k: &DeltaKind) -> (FileKind, Option<String>) {
+    match k {
+        DeltaKind::Add => (FileKind::Add, None),
+        DeltaKind::Modify => (FileKind::Modify, None),
+        DeltaKind::Delete => (FileKind::Delete, None),
+        DeltaKind::Rename { from_path } => (FileKind::Rename, Some(from_path.clone())),
+    }
+}
+
+fn is_valid(c: &Change) -> bool {
+    han_core::json::to_value(c).is_ok_and(|v| han_core::policy::change_summary(&v))
+}
+
+/// The summary of `delta` that a `vcs.land` plan's `args.change` carries (architecture.md P-17): its entries
+/// in order, each with its size from `lines`, as many as fit the summary's bounds; when not all do, a prefix
+/// and `truncated`. `repo` is the plan's `target`.
+pub fn land_change(repo: &str, delta: &Delta, lines: &[u64]) -> Result<Change> {
+    if lines.len() != delta.entries.len() {
+        return Err(VcsError::Invalid(
+            "a size for every entry of the delta".into(),
+        ));
+    }
+    let total = delta.entries.len() as u64;
+    let mut change = Change {
+        repo: repo.to_owned(),
+        delta_digest: delta.digest()?,
+        total,
+        files: Vec::new(),
+        truncated: (total > 0).then_some(true),
+    };
+    if !is_valid(&Change {
+        files: Vec::new(),
+        truncated: None,
+        total: 0,
+        ..change.clone()
+    }) {
+        return Err(VcsError::Invalid("the repository name is not valid".into()));
+    }
+    for (e, n) in delta.entries.iter().zip(lines) {
+        let (kind, from_path) = summary_kind(&e.kind);
+        let mut next = change.clone();
+        next.files.push(ChangeFile {
+            path: e.path.clone(),
+            kind,
+            lines: *n,
+            from_path,
+        });
+        next.truncated = ((next.files.len() as u64) < total).then_some(true);
+        if !is_valid(&next) {
+            break; // the rest does not fit, or is not a path a summary can name
+        }
+        change = next;
+    }
+    change.truncated = ((change.files.len() as u64) < total).then_some(true);
+    Ok(change)
+}
+
+/// Checks a plan's `change` against the delta the executor computed from the bundle (architecture.md X-13):
+/// the repository and the digest are the plan's, `total` is the delta's entry count, the files listed are the
+/// first entries of the delta with the same path, kind and source, none with a size below the executor's own
+/// count, and `truncated` is present exactly when entries are left out. An overstated size only raises the
+/// tier, so it passes; an understated one does not.
+pub fn check_land_change(
+    claimed: &Change,
+    repo: &str,
+    delta_digest: &str,
+    delta: &Delta,
+    lines: &[u64],
+) -> std::result::Result<(), String> {
+    if claimed.repo != repo {
+        return Err(format!("the summary is for {}, not {repo}", claimed.repo));
+    }
+    if claimed.delta_digest != delta_digest {
+        return Err("the summary's delta digest is not the plan's".into());
+    }
+    if claimed.total != delta.entries.len() as u64 || lines.len() != delta.entries.len() {
+        return Err(format!(
+            "the summary counts {} paths; the change has {}",
+            claimed.total,
+            delta.entries.len()
+        ));
+    }
+    if claimed.files.len() > delta.entries.len()
+        || claimed.truncated.is_some() != (claimed.files.len() < delta.entries.len())
+    {
+        return Err("the summary leaves paths out without saying so, or says so without".into());
+    }
+    for (i, f) in claimed.files.iter().enumerate() {
+        let e = &delta.entries[i];
+        let (kind, from_path) = summary_kind(&e.kind);
+        if f.path != e.path || f.kind != kind || f.from_path != from_path {
+            return Err(format!(
+                "the summary's path {} is not the change's {}",
+                f.path, e.path
+            ));
+        }
+        if f.lines < lines[i] {
+            return Err(format!(
+                "the summary understates {}: {} lines, the change has {}",
+                f.path, f.lines, lines[i]
+            ));
+        }
+    }
+    Ok(())
 }

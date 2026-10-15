@@ -587,6 +587,14 @@ impl Flow {
         }
         let tier = self.tier_of(&delta);
         let title = self.title(summary);
+        // P-17: the summary Policy derives the tier from; the node copies it into the proposal's body and the
+        // executor checks it against the bundle (X-13). A backend that can't count lines sends none, which
+        // Policy makes tier 3.
+        let change = self
+            .vcs
+            .delta_lines(dir, &base, &head, &delta)
+            .ok()
+            .and_then(|n| han_vcs::land_change(&self.repo_name, &delta, &n).ok());
         let mut args = json!({
             "ref": self.target_ref(),
             "base": base,
@@ -596,6 +604,9 @@ impl Flow {
             "rebase": "path-disjoint",
             "title": title,
         });
+        if let Some(c) = &change {
+            args["change"] = serde_json::to_value(c).map_err(|e| e.to_string())?;
+        }
         if !depends_on.is_empty() {
             args["dependsOn"] = depends_on
                 .iter()

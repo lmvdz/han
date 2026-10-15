@@ -42,6 +42,11 @@ MAX_GUARDED_FOR = 16 + 3      # P-15, checked: a proposal whose guardedFor with 
 MAX_UNCONSUMED_APPROVALS = MAX_OPEN_APPROVALS + 1 + MAX_GUARDED_FOR       # 36: bounds an effect's E3 candidates and so receipt.profiles (P-01)
 MAX_APPROVALS = MAX_OPEN_APPROVALS + 1 + 2 * MAX_GUARDED_FOR              # 55: bounds an effect's state item (§3)
 
+MAX_CHANGE_FILES = 64         # P-17 (round 33): files a change summary lists
+MAX_CHANGE_BYTES = 12288      # P-17: the JCS of a change summary (the proposal's header stays under 16 KiB)
+MAX_GATE_RULES = 64           # P-17: path-class rules, and path-owner rules, per policy
+MAX_PATH_OWNERS = 16          # P-17: path owners an effect keeps (the first by file order, each once)
+
 # ───────────────────────── encoding ─────────────────────────
 def _jcs_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
@@ -119,19 +124,125 @@ def json_ok(v, depth=0) -> bool:
 
 POLICY_FIELDS = {"visibility", "join", "membersMayInvite", "allowAgents", "approvals", "separateApprover", "budget",
                  "maxDelegationDepth", "minDurability", "launchWindow", "extensionsMinRole", "sessions", "servers"}
+
+# ── P-17 semantic gates (round 33): the grammar of paths, globs and the summary of a change ──
+PATH_OWNER = "@path-owner"                       # an approvers entry: an author of the effect's `gate.owners` (P-17)
+RULE_FIELDS = {"action", "approvers", "minTier", "maxTier", "humans", "evidence", "needs"}
+EVIDENCE_KIND = _rx(r"^[a-z0-9][a-z0-9./_-]{0,63}$")
+REPO_NAME = _rx(r"^[!-~]{1,128}$")
+GLOB_TEXT = _rx(r"^[A-Za-z0-9._/*?@+=,~:-]{1,256}$")
+CLASS_TIER = {"docs": 0, "tests": 0, "generated": 0, "code": 1, "sensitive": 2, "critical": 3}
+CHANGE_KINDS = ("add", "modify", "delete", "rename")
+# Paths no rule can let a machine approve (P-17): CI, HAN's own policy and gate config, dependency manifests and lockfiles,
+# credentials, and who may approve what.
+NEVER_AUTO = (
+    ".github/**", ".gitlab/**", ".gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "azure-pipelines.yml",
+    ".han/**",
+    "**/Cargo.toml", "**/Cargo.lock", "**/package.json", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
+    "**/bun.lockb", "**/go.mod", "**/go.sum", "**/requirements*.txt", "**/pyproject.toml", "**/poetry.lock", "**/uv.lock",
+    "**/Pipfile", "**/Pipfile.lock", "**/Gemfile", "**/Gemfile.lock", "**/pom.xml", "**/build.gradle", "**/build.gradle.kts",
+    "**/deny.toml", "**/rust-toolchain.toml",
+    "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.keystore", "**/id_rsa*", "**/id_ed25519*",
+    "**/.secrets/**", "**/secrets/**", "**/credentials", "**/credentials.*", "**/.netrc", "**/.npmrc", "**/.pypirc",
+    "**/CODEOWNERS", "**/sudoers", "**/sudoers.d/**", "**/.ssh/**",
+)
+
+def _repo_path(v) -> bool:
+    """A path of a change: UTF-8 of 1 to 255 bytes, `/`-separated, no empty, `.` or `..` segment, no control character."""
+    if not (isinstance(v, str) and 0 < len(v.encode("utf-8", "surrogatepass")) <= 255): return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in v): return False
+    return all(seg not in ("", ".", "..") for seg in v.split("/"))
+
+def _glob(v) -> bool:
+    """A path glob: `*` and `?` inside a segment, `**` as a whole segment (zero or more segments), at most four of them."""
+    if not (isinstance(v, str) and GLOB_TEXT.fullmatch(v)): return False
+    segs = v.split("/")
+    return (all(seg not in ("", ".", "..") for seg in segs) and sum(seg == "**" for seg in segs) <= 4
+            and all(seg == "**" or "**" not in seg for seg in segs))
+
+def _seg_match(pat: str, s: str) -> bool:
+    row = [True] + [False] * len(s)
+    for c in pat:
+        nxt = [False] * (len(s) + 1)
+        if c == "*":
+            ok = False
+            for j in range(len(s) + 1):
+                ok = ok or row[j]
+                nxt[j] = ok
+        else:
+            for j in range(1, len(s) + 1):
+                nxt[j] = row[j - 1] and (c == "?" or c == s[j - 1])
+        row = nxt
+    return row[len(s)]
+
+def glob_match(pat: str, path: str) -> bool:
+    """P-17: whether `pat` matches the whole of `path`. Anchored, case-sensitive, over Unicode scalar values."""
+    ps, ss = pat.split("/"), path.split("/")
+    m = [[False] * (len(ss) + 1) for _ in range(len(ps) + 1)]
+    m[len(ps)][len(ss)] = True
+    for i in range(len(ps) - 1, -1, -1):
+        for j in range(len(ss), -1, -1):
+            if ps[i] == "**": m[i][j] = m[i + 1][j] or (j < len(ss) and m[i][j + 1])
+            else: m[i][j] = j < len(ss) and _seg_match(ps[i], ss[j]) and m[i + 1][j + 1]
+    return m[0][0]
+
+def _change(v) -> bool:
+    """P-17: the summary of a change (`effect.propose.change`, and the plan's `args.change`): what Policy reads of a `vcs.land`."""
+    if not (isinstance(v, dict) and {"repo", "deltaDigest", "total", "files"} <= set(v) <= {"repo", "deltaDigest", "total", "files", "truncated"}): return False
+    if not (isinstance(v["repo"], str) and REPO_NAME.fullmatch(v["repo"]) and _hex(v["deltaDigest"]) and _int(v["total"])): return False
+    if "truncated" in v and v["truncated"] is not True: return False
+    files = v["files"]
+    if not (isinstance(files, list) and len(files) <= MAX_CHANGE_FILES): return False
+    last = None
+    for f in files:
+        if not (isinstance(f, dict) and {"path", "kind", "lines"} <= set(f) <= {"path", "kind", "lines", "fromPath"}): return False
+        if not (_repo_path(f["path"]) and f["kind"] in CHANGE_KINDS and _int(f["lines"])): return False
+        if f["kind"] == "rename":
+            if not (_repo_path(f.get("fromPath")) and f["fromPath"] != f["path"]): return False
+        elif "fromPath" in f: return False
+        b = f["path"].encode("utf-8")
+        if last is not None and b <= last: return False             # strictly ascending by UTF-8 bytes: one entry per path
+        last = b
+    if (v["total"] > len(files)) != ("truncated" in v): return False   # truncated exactly when files are left out
+    if v["total"] < len(files): return False
+    return len(jcs(v)) <= MAX_CHANGE_BYTES
+
+def _evidence(v) -> bool:
+    return (isinstance(v, dict) and set(v) == {"kind", "over"} and isinstance(v["kind"], str)
+            and bool(EVIDENCE_KIND.fullmatch(v["kind"])) and _hex(v["over"]))
+
+def _rule(a) -> bool:
+    if not (isinstance(a, dict) and {"action", "approvers"} <= set(a) <= RULE_FIELDS): return False
+    if not (isinstance(a["action"], str) and (a["action"] == "*" or bool(ACTION.fullmatch(a["action"])))): return False
+    if not (isinstance(a["approvers"], list) and 0 < len(a["approvers"]) <= 64
+            and all(x in READ_ROLES or x == PATH_OWNER or _actor(x) for x in a["approvers"])): return False
+    for k in ("minTier", "maxTier"):
+        if k in a and not (_int(a[k]) and a[k] <= 3): return False
+    if "minTier" in a and "maxTier" in a and a["minTier"] > a["maxTier"]: return False
+    if "humans" in a and not isinstance(a["humans"], bool): return False
+    if "evidence" in a and not (isinstance(a["evidence"], str) and EVIDENCE_KIND.fullmatch(a["evidence"])): return False
+    return "needs" not in a or (_int(a["needs"]) and 1 <= a["needs"] <= 3)
+
+def _gates(g) -> bool:
+    if not (isinstance(g, dict) and set(g) == {"small", "large", "paths", "owners"}): return False
+    if not (_int(g["small"]) and _int(g["large"]) and g["small"] <= g["large"]): return False
+    if not (isinstance(g["paths"], list) and len(g["paths"]) <= MAX_GATE_RULES and all(
+            isinstance(r, dict) and {"glob", "class"} <= set(r) <= {"glob", "class", "repo"} and _glob(r["glob"]) and r["class"] in CLASS_TIER
+            and ("repo" not in r or (isinstance(r["repo"], str) and REPO_NAME.fullmatch(r["repo"]))) for r in g["paths"])): return False
+    return (isinstance(g["owners"], list) and len(g["owners"]) <= MAX_GATE_RULES and all(
+            isinstance(r, dict) and {"glob", "owners"} <= set(r) <= {"glob", "owners", "repo"} and _glob(r["glob"])
+            and isinstance(r["owners"], list) and 0 < len(r["owners"]) <= 8 and len(set(r["owners"])) == len(r["owners"]) and all(_actor(x) for x in r["owners"])
+            and ("repo" not in r or (isinstance(r["repo"], str) and REPO_NAME.fullmatch(r["repo"]))) for r in g["owners"]))
 SESSION_LEVELS = ("guest", "member", "owner", "nobody")      # least to most restrictive (P-15)
 STEER_MODES = ("auto", "guarded")
 
 def _policy(v):
-    if not (isinstance(v, dict) and set(v) == POLICY_FIELDS): return False
+    if not (isinstance(v, dict) and POLICY_FIELDS <= set(v) <= POLICY_FIELDS | {"gates"}): return False
+    if "gates" in v and not _gates(v["gates"]): return False
     if v["visibility"] not in ("members", "public") or v["join"] not in ("invite", "open", "closed"): return False
     if not isinstance(v["membersMayInvite"], bool) or not isinstance(v["separateApprover"], bool): return False
     if v["allowAgents"] not in ("any", "with-operator", "none") or v["minDurability"] not in ("local", "replicated"): return False
-    if not (isinstance(v["approvals"], list) and len(v["approvals"]) <= 64 and all(
-            isinstance(a, dict) and set(a) == {"action", "approvers"}
-            and isinstance(a["action"], str) and (a["action"] == "*" or bool(ACTION.fullmatch(a["action"])))
-            and isinstance(a["approvers"], list) and 0 < len(a["approvers"]) <= 64
-            and all(x in READ_ROLES or _actor(x) for x in a["approvers"]) for a in v["approvals"])): return False
+    if not (isinstance(v["approvals"], list) and len(v["approvals"]) <= 64 and all(_rule(a) for a in v["approvals"])): return False
     if not (v["budget"] is None or _budget(v["budget"])): return False
     if not (_int(v["maxDelegationDepth"]) and v["maxDelegationDepth"] <= 16): return False
     if not (_int(v["launchWindow"]) and 15 <= v["launchWindow"] <= 3600): return False
@@ -176,8 +287,8 @@ SCHEMA = {
     "task.cancel": {"task": (_id, True)},
     "effect.propose": {"executor": (_actor, True), "action": (lambda v: isinstance(v, str) and bool(ACTION.fullmatch(v)), True),
                        "planDigest": (_hex, True), "cost": (_budget, False), "repeatable": (lambda v: isinstance(v, bool), True), "task": (_id, False),
-                       "expiresAt": (_time, False)},
-    "effect.approve": {"proposal": (_id, True), "planDigest": (_hex, True), "expiresAt": (_time, False)},
+                       "expiresAt": (_time, False), "change": (_change, False)},
+    "effect.approve": {"proposal": (_id, True), "planDigest": (_hex, True), "expiresAt": (_time, False), "evidence": (_evidence, False)},
     "effect.claim": {"proposal": (_id, True), "attempt": (lambda v: _int(v) and v >= 1, True), "instance": (_keyid, True),
                      "window": (lambda v: _int(v) and 15 <= v <= 3600, True)},
     "effect.cancel": {"proposal": (_id, True)},
@@ -244,9 +355,72 @@ def approval_rule(policy, action):
             return r
     return None
 
-def may_approve(state, rule, actor):
-    role = role_of(state, actor)
-    return role in READ_ROLES and any(x == actor or x == role for x in rule["approvers"])
+DEFAULT_GATED_RULE = {"action": "*", "approvers": ["owner"]}   # a gated effect of tier 1 or more that no rule covers still needs an owner (P-17)
+
+def rule_for(state, eff):
+    """P-08 (round 33): the rule that applies to `eff`: the first whose action matches and whose tier predicate (`minTier`, `maxTier`) holds. A rule
+    with a tier predicate never applies to an effect without a gate. A gated effect of tier 1 or more that no rule covers needs an owner."""
+    g = eff.get("gate")
+    for r in state["policy"]["approvals"]:
+        if r["action"] != eff["action"] and r["action"] != "*": continue
+        if ("minTier" in r or "maxTier" in r) and (g is None or g["tier"] < r.get("minTier", 0) or g["tier"] > r.get("maxTier", 3)): continue
+        return r
+    return DEFAULT_GATED_RULE if g is not None and g["tier"] >= 1 else None
+
+def counts(state, eff, rule, actor, kind, evidence):
+    """P-08, P-17: whether an approval by `actor` (of `kind` `human`, `agent` or `service`, with `evidence` {kind, over} or None) counts under `rule`:
+    the actor holds a role the rule names (a role, its id, or `@path-owner`); of tier 2 or more, or under `humans`, only humans count; and when
+    the rule asks for `evidence`, a non-human approval counts only with that kind over the effect's `deltaDigest`."""
+    role, g = role_of(state, actor), eff.get("gate")
+    if role not in READ_ROLES: return False
+    if not any(x == actor or x == role or (x == PATH_OWNER and g is not None and actor in g.get("owners", [])) for x in rule["approvers"]): return False
+    if kind != "human":
+        if rule.get("humans") or (g is not None and g["tier"] >= 2): return False
+        if rule.get("evidence") and not (g is not None and evidence == {"kind": rule["evidence"], "over": g.get("deltaDigest")}): return False
+    return True
+
+def needs(eff, rule) -> int:
+    """P-07 E3 (round 33): the distinct approvals a claim consumes under the rule: its `needs`, and two when the effect's tier is 3."""
+    g = eff.get("gate")
+    return max(rule.get("needs", 1), 2 if g is not None and g["tier"] >= 3 else 1)
+
+def never_auto(path: str) -> bool:
+    return any(glob_match(g, path) for g in NEVER_AUTO)
+
+def _in_repo(rule, repo) -> bool:
+    return "repo" not in rule or rule["repo"] == repo
+
+def gate_of(policy, body, ctx, author):
+    """P-17: the gate of a `vcs.land` proposal, derived from the policy in force and the proposal's change summary, never from a tier
+    the proposer states; None when the policy has no `gates` or the action is another. {tier, deltaDigest?, changeDigest?, owners?}."""
+    gates = policy.get("gates")
+    if gates is None or body["action"] != "vcs.land": return None
+    ch, out, owners = body.get("change"), {}, []
+    if ch is None or ch.get("truncated"):
+        tier = 3                                                    # fails closed: what is not shown is not known
+    else:
+        tier, lines = 0, 0
+        for f in ch["files"]:
+            lines += f["lines"]
+            for path in [f["path"]] + ([f["fromPath"]] if "fromPath" in f else []):
+                cls = next((r["class"] for r in gates["paths"] if _in_repo(r, ch["repo"]) and glob_match(r["glob"], path)), "code")
+                tier = max(tier, CLASS_TIER[cls], 2 if never_auto(path) else 0)
+        if lines > gates["large"]: tier = max(tier, 2)
+        elif tier == 0 and lines > gates["small"]: tier = 1
+    if ch is not None:
+        out["deltaDigest"] = ch["deltaDigest"]
+        out["changeDigest"] = hashlib.sha256(jcs(ch)).hexdigest()
+        for f in ch["files"]:
+            for path in [f["path"]] + ([f["fromPath"]] if "fromPath" in f else []):
+                r = next((r for r in gates["owners"] if _in_repo(r, ch["repo"]) and glob_match(r["glob"], path)), None)
+                for o in (r["owners"] if r else []):
+                    if o not in owners: owners.append(o)
+    if not owners:                                                  # no path owner: the proposer's confirmed operator
+        pr = ctx["profiles"][author]
+        if pr["actorKind"] != "human" and pr.get("operatorConfirmed") and pr.get("operator"): owners = [pr["operator"]]
+    out["tier"] = tier
+    if owners: out["owners"] = owners[:MAX_PATH_OWNERS]
+    return out
 
 def latest_claim(eff):
     return eff["claims"][-1] if eff["claims"] else None
@@ -262,12 +436,12 @@ def approval_candidates(state, eff, time):
     """E3 order: unconsumed, unexpired approvals whose author satisfies the rule now (no profiles needed). These are also the approvals
     the cap counts (P-08). The state holds no open approval by a guarded author (the fold drops them), so a candidate is usable at a
     claim if its key is valid, which needs its pinned profile (`usable`)."""
-    rule = approval_rule(state["policy"], eff["action"])
+    rule = rule_for(state, eff)
     out = []
     for a in eff["approvals"]:
         if a.get("consumedBy"): continue
         if time is not None and a.get("expiresAt") and ts(a["expiresAt"]) <= ts(time): continue
-        if not rule or not may_approve(state, rule, a["author"]): continue
+        if not rule or not counts(state, eff, rule, a["author"], a["actorKind"], a.get("evidence")): continue
         if state["policy"]["separateApprover"] and a["author"] == eff["proposer"]: continue
         out.append(a)
     return out
@@ -309,9 +483,12 @@ def relevant_actors(state, entry, ctx) -> list[str]:
     eff = state["effects"].get(entry["body"]["proposal"]) if entry["kind"] == "effect.claim" and state else None
     if eff:
         out.extend(g for g in guards_of(state, ctx, eff) if g)
+        rule, got = rule_for(state, eff), 0
         for a in approval_candidates(state, eff, ctx["time"]):
             out.append(a["author"])
-            if usable(state, ctx, a): break
+            if usable(state, ctx, a):
+                got += 1
+                if got >= needs(eff, rule): break
     return list(dict.fromkeys(out))
 
 
@@ -518,6 +695,7 @@ def _propose(state, entry, ctx, role):
         if b.get("task") not in mine: return deny("agents spend only from a budgeted task assigned to them")
     if over_bound(effect_guarded_for(state, ctx, author, b["executor"], b.get("task")), author, b["executor"]):
         return deny("too many guarded tasks; close some")                       # P-15: the bound is kept, never exceeded
+    if "change" in b and b["action"] != "vcs.land": return invalid("a change summary belongs to a vcs.land")   # P-17
     return ALLOW
 
 def _budgeted_tasks_of(state, actor):
@@ -536,11 +714,11 @@ def _approve(state, entry, ctx, role):
     if not eff: return invalid("no such proposal")
     if b["planDigest"] != eff["planDigest"]: return invalid("planDigest mismatch")
     if eff["phase"] not in ("open", "claimed"): return deny(f"cannot approve in {eff['phase']}")
-    rule = approval_rule(state["policy"], eff["action"])
+    rule = rule_for(state, eff)
     if b.get("expiresAt") and ts(b["expiresAt"]) <= ts(ctx["time"]): return deny("approval already expired")
     guards = guards_of(state, ctx, eff)
     if not (author in guards and role in READ_ROLES):                    # a guard approves as a guard (P-15): no rule, no cap
-        if not rule or not may_approve(state, rule, author): return deny("not an approver for this action")
+        if not rule or not counts(state, eff, rule, author, ctx["profiles"][author]["actorKind"], b.get("evidence")): return deny("not an approver for this action")
         if state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")
         if sum(1 for a in approval_candidates(state, eff, ctx["time"])
                if a["author"] != author and a["author"] not in guards) >= MAX_OPEN_APPROVALS:
@@ -556,11 +734,15 @@ def reopen(eff):
     return "cancelled" if eff["cancelRequested"] else "open"
 
 def pick_approval(state, eff, ctx):
-    """E3: the first usable candidate (a valid key, an author not guarded now). A candidate reached with no pinned profile → invalid."""
+    """E3: the first usable candidates (a valid key, an author not guarded now), as many as the rule needs (one, two at tier 3). A candidate
+    reached with no pinned profile → invalid; fewer usable candidates than needed → none."""
+    picked, rule = [], rule_for(state, eff)
     for a in approval_candidates(state, eff, ctx["time"]):
-        if key_status(ctx, a["author"], a["keyId"]) is None: return "unpinned", a
-        if usable(state, ctx, a): return "ok", a
-    return "none", None
+        if key_status(ctx, a["author"], a["keyId"]) is None: return "unpinned", picked
+        if usable(state, ctx, a):
+            picked.append(a)
+            if len(picked) >= needs(eff, rule): return "ok", picked
+    return "none", picked
 
 def _claim(state, entry, ctx, role):
     b, author = entry["body"], entry["author"]
@@ -574,7 +756,7 @@ def _claim(state, entry, ctx, role):
         return deny("E2 proposer no longer authorized")
     if not _accountable(state, ctx, eff["proposer"]): return deny("E2 proposer's operator confirmation withdrawn")
     if b["window"] != state["policy"]["launchWindow"]: return deny("E5 claim's window is not the space's launchWindow")
-    if approval_rule(state["policy"], eff["action"]):
+    if rule_for(state, eff):
         res, _ = pick_approval(state, eff, ctx)
         if res == "unpinned": return invalid("approver profile not pinned")
         if res == "none": return deny("E3 no usable approval")
@@ -889,6 +1071,8 @@ def fold(state, record, ctx) -> dict:
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
         eff["guardedFor"] = effect_guarded_for(s, ctx, author, b["executor"], b.get("task"))      # P-15: fixed now, never shrinks
+        gate = gate_of(s["policy"], b, ctx, author)                                              # P-17: fixed now, from the policy in force
+        if gate is not None: eff["gate"] = gate
         s["effects"][eid] = eff
     elif kind == "effect.approve":
         eff = s["effects"][b["proposal"]]
@@ -898,14 +1082,16 @@ def fold(state, record, ctx) -> dict:
                             if old.get("consumedBy") or (old["author"] != author and old in keep)]   # the open ones that don't count (P-08)
         a = {"id": eid, "author": author, "keyId": e["keyId"], "actorKind": ctx["profiles"][author]["actorKind"]}
         if "expiresAt" in b: a["expiresAt"] = b["expiresAt"]
+        if "evidence" in b: a["evidence"] = dict(b["evidence"])
         eff["approvals"].append(a)
     elif kind == "effect.claim":
         eff = s["effects"][b["proposal"]]
         c = {"id": eid, "attempt": b["attempt"], "instance": b["instance"], "time": rc["time"], "window": b["window"], "settled": False}
         chosen = []
-        if approval_rule(s["policy"], eff["action"]):
-            _, a = pick_approval(s, eff, ctx)
-            chosen.append(a); c["approval"] = a["id"]
+        if rule_for(s, eff):
+            _, picked = pick_approval(s, eff, ctx)
+            chosen.extend(picked); c["approval"] = picked[0]["id"]
+            if len(picked) > 1: c["coApprovals"] = [x["id"] for x in picked[1:]]
         for g in guards_of(s, ctx, eff):
             a = next((x for x in chosen if x["author"] == g), None) or guard_approval(s, eff, g, ctx)[1]
             if a is None: continue                           # unreachable when decide allowed the claim
@@ -927,7 +1113,7 @@ def fold(state, record, ctx) -> dict:
         c["outcome"], c["started"] = b["result"], b["started"]
         if b["started"] == "no":
             _settle(s, c, 0)
-            back = set(c.get("guardApprovals", [])) | ({c["approval"]} if c.get("approval") else set())
+            back = set(c.get("guardApprovals", [])) | set(c.get("coApprovals", [])) | ({c["approval"]} if c.get("approval") else set())
             gone = []
             for a in eff["approvals"]:
                 if a["id"] in back:

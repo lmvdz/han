@@ -4,7 +4,9 @@
 use serde::Serialize;
 
 use super::doc::{ActorKind, ApprovalRule, PolicyDoc, Role};
+use super::gate::{Evidence, PATH_OWNER};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use super::state::{ActorSet, Approval, Effect, Remaining, Source, SpaceState, Task};
 use super::{Ctx, KeyStatus, MAX_GUARDED_FOR};
@@ -137,48 +139,122 @@ pub(super) fn is_human(ctx: &Ctx, actor: &str) -> bool {
         .is_some_and(|p| p.actor_kind == ActorKind::Human)
 }
 
-pub(super) fn approval_rule<'a>(policy: &'a PolicyDoc, action: &str) -> Option<&'a ApprovalRule> {
-    policy
-        .approvals
-        .iter()
-        .find(|r| r.action == action || r.action == "*")
+/// A gated effect of tier 1 or more that no rule covers still needs an owner (P-17).
+static DEFAULT_GATED_RULE: LazyLock<ApprovalRule> = LazyLock::new(|| ApprovalRule {
+    action: "*".to_owned(),
+    approvers: vec!["owner".to_owned()],
+    min_tier: None,
+    max_tier: None,
+    humans: None,
+    evidence: None,
+    needs: None,
+});
+
+/// P-08 (round 33): the rule that applies to `eff`: the first whose action matches and whose tier predicate
+/// (`minTier`, `maxTier`) holds. A rule with a tier predicate never applies to an effect without a gate. A
+/// gated effect of tier 1 or more that no rule covers needs an owner.
+pub(super) fn rule_for<'a>(state: &'a SpaceState, eff: &Effect) -> Option<&'a ApprovalRule> {
+    let g = eff.gate.as_ref();
+    for r in &state.policy.approvals {
+        if r.action != eff.action && r.action != "*" {
+            continue;
+        }
+        let predicated = r.min_tier.is_some() || r.max_tier.is_some();
+        if predicated
+            && g.is_none_or(|g| {
+                g.tier < r.min_tier.unwrap_or(0) || g.tier > r.max_tier.unwrap_or(3)
+            })
+        {
+            continue;
+        }
+        return Some(r);
+    }
+    g.filter(|g| g.tier >= 1).map(|_| &*DEFAULT_GATED_RULE)
 }
 
-pub(super) fn may_approve(state: &SpaceState, rule: &ApprovalRule, actor: &str) -> bool {
-    match role_of(state, actor) {
-        Some(role) if role.reads() => rule
-            .approvers
-            .iter()
-            .any(|x| x == actor || x == role.as_str()),
-        _ => false,
+/// P-08, P-17: whether an approval by `actor` (of `kind`, with `evidence`) counts under `rule`: the actor
+/// holds a role the rule names (a role, its id, or `@path-owner`); of tier 2 or more, or under `humans`, only
+/// humans count; and when the rule asks for `evidence`, a non-human approval counts only with that kind over
+/// the effect's `deltaDigest`.
+pub(super) fn counts(
+    state: &SpaceState,
+    eff: &Effect,
+    rule: &ApprovalRule,
+    actor: &str,
+    kind: ActorKind,
+    evidence: Option<&Evidence>,
+) -> bool {
+    let Some(role) = role_of(state, actor).filter(|r| r.reads()) else {
+        return false;
+    };
+    let g = eff.gate.as_ref();
+    let named = rule.approvers.iter().any(|x| {
+        x == actor
+            || x == role.as_str()
+            || (x == PATH_OWNER && g.is_some_and(|g| g.owners.iter().any(|o| o == actor)))
+    });
+    if !named {
+        return false;
     }
+    if kind != ActorKind::Human {
+        if rule.humans == Some(true) || g.is_some_and(|g| g.tier >= 2) {
+            return false;
+        }
+        if let Some(k) = &rule.evidence {
+            let over = g.and_then(|g| g.delta_digest.as_deref());
+            if !evidence.is_some_and(|e| e.kind == *k && Some(e.over.as_str()) == over) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// P-07 E3 (round 33): the distinct approvals a claim consumes under the rule: its `needs`, and two when the
+/// effect's tier is 3.
+pub(super) fn needs(eff: &Effect, rule: &ApprovalRule) -> usize {
+    let floor = if eff.gate.as_ref().is_some_and(|g| g.tier >= 3) {
+        2
+    } else {
+        1
+    };
+    usize::from(rule.needs.unwrap_or(1)).max(floor)
 }
 
 pub(super) fn expired(a: &Approval, now: i64) -> bool {
     a.expires_at.as_deref().is_some_and(|e| secs(e) <= now)
 }
 
-/// E3 order: unconsumed, unexpired approvals whose author satisfies the rule now (no profiles
-/// needed). These are also the approvals the cap counts (P-08).
+/// E3 order: unconsumed, unexpired approvals that count under the rule now (no profiles needed). These are
+/// also the approvals the cap counts (P-08).
 pub(super) fn approval_candidates<'e>(
     state: &SpaceState,
     eff: &'e Effect,
     now: i64,
 ) -> Vec<&'e Approval> {
-    let Some(rule) = approval_rule(&state.policy, &eff.action) else {
+    let Some(rule) = rule_for(state, eff) else {
         return Vec::new();
     };
     eff.approvals
         .iter()
         .filter(|a| a.consumed_by.is_none())
         .filter(|a| !expired(a, now))
-        .filter(|a| may_approve(state, rule, &a.author))
+        .filter(|a| {
+            counts(
+                state,
+                eff,
+                rule,
+                &a.author,
+                a.actor_kind,
+                a.evidence.as_ref(),
+            )
+        })
         .filter(|a| !(state.policy.separate_approver && a.author == eff.proposer))
         .collect()
 }
 
-/// E3: a candidate is consumed if its key is valid (no candidate's author is guarded: the fold
-/// drops such approvals).
+/// E3: a candidate is consumed if its key is valid (no candidate's author is guarded: the fold drops such
+/// approvals).
 pub(super) fn usable(ctx: &Ctx, a: &Approval) -> bool {
     key_status(ctx, &a.author, &a.key_id) == Key::Valid
 }
@@ -191,21 +267,28 @@ pub(super) enum Pick {
     None,
 }
 
-/// E3: the first usable candidate. A candidate reached with no pinned profile is `Unpinned`.
+/// E3: the first usable candidates, as many as the rule needs (one, two at tier 3). A candidate reached with
+/// no pinned profile is `Unpinned`; fewer usable candidates than needed is `None`. The approvals picked so
+/// far come with the answer.
 pub(super) fn pick_approval<'e>(
     state: &SpaceState,
     eff: &'e Effect,
     ctx: &Ctx,
-) -> (Pick, Option<&'e Approval>) {
+) -> (Pick, Vec<&'e Approval>) {
+    let need = rule_for(state, eff).map_or(1, |r| needs(eff, r));
+    let mut picked = Vec::new();
     for a in approval_candidates(state, eff, ctx.secs) {
         if key_status(ctx, &a.author, &a.key_id) == Key::Unpinned {
-            return (Pick::Unpinned, Some(a));
+            return (Pick::Unpinned, picked);
         }
         if usable(ctx, a) {
-            return (Pick::Ok, Some(a));
+            picked.push(a);
+            if picked.len() >= need {
+                return (Pick::Ok, picked);
+            }
         }
     }
-    (Pick::None, None)
+    (Pick::None, picked)
 }
 
 /// E3 for a guard: an unconsumed, unexpired approval by `g` itself, while `g` holds a role,

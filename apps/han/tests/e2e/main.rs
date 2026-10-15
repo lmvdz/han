@@ -383,6 +383,7 @@ async fn an_approved_push_lands_exactly_once() {
             proposal: e.proposal.clone(),
             expires_at: None,
             note: None,
+            evidence: None,
         })
         .await
         .expect_err("no presence check, no approval");
@@ -405,6 +406,7 @@ async fn an_approved_push_lands_exactly_once() {
         proposal: e.proposal.clone(),
         expires_at: None,
         note: None,
+        evidence: None,
     })
     .await
     .expect("the approval is accepted");

@@ -2010,6 +2010,41 @@ impl Vcs for GitVcs {
         self.delta_between(dir, base, head)
     }
 
+    fn delta_lines(&self, dir: &Path, base: &str, head: &str, delta: &Delta) -> Result<Vec<u64>> {
+        let base = self.commit_of(dir, base)?;
+        let head = self.commit_of(dir, head)?;
+        let numstat = self
+            .git(Some(dir))?
+            .arg("diff-tree")
+            .args(["-r", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"])
+            .args(["--numstat", &base, &head])
+            .run()?;
+        let counts = parse_numstat(&numstat.stdout);
+        let size = |id: &Option<String>| -> Result<u64> {
+            let Some(id) = id else { return Ok(0) };
+            self.git(Some(dir))?
+                .args(["cat-file", "-s", id])
+                .text()?
+                .trim()
+                .parse()
+                .map_err(|_| VcsError::Invalid(format!("size of {id}")))
+        };
+        delta
+            .entries
+            .iter()
+            .map(|e| {
+                if matches!(e.kind, DeltaKind::Rename { .. }) {
+                    return Ok(0);
+                }
+                Ok(match counts.get(&e.path) {
+                    Some((_, _, true)) => size(&e.from)?.max(size(&e.to)?),
+                    Some((a, r, false)) => u64::from(*a) + u64::from(*r),
+                    None => 0,
+                })
+            })
+            .collect()
+    }
+
     fn diff_text(&self, dir: &Path, base: &str, head: &str) -> Result<String> {
         let base = self.commit_of(dir, base)?;
         let head = self.commit_of(dir, head)?;

@@ -76,6 +76,7 @@ pub async fn run(args: ProbeArgs) -> Result<(), Box<dyn std::error::Error>> {
                 proposal: "none".into(),
                 expires_at: None,
                 note: None,
+                evidence: None,
             },
         ),
         (

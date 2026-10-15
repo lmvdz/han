@@ -8,9 +8,9 @@ use super::body::{
 };
 use super::doc::{ActorKind, AllowAgents, JoinMode, NewRole, Role, SteerMode};
 use super::guard::{
-    Key, Pick, abandon_after, approval_candidates, approval_rule, budget_change_ok,
-    effect_guarded_for, effect_source, expired, guard_approval, guard_status, guards_of, in_guards,
-    is_human, key_status, may_approve, over_bound, pick_approval, reads, remaining, role_of, secs,
+    Key, Pick, abandon_after, approval_candidates, budget_change_ok, counts, effect_guarded_for,
+    effect_source, expired, guard_approval, guard_status, guards_of, in_guards, is_human,
+    key_status, needs, over_bound, pick_approval, reads, remaining, role_of, rule_for, secs,
     server_of, space_unit, task_guarded_for, task_source, unbounded_guards, usable, writes,
 };
 use super::state::{Effect, Phase, Source, SpaceState, Task};
@@ -86,10 +86,15 @@ pub fn relevant_actors(state: Option<&SpaceState>, entry: &PolicyEntry, ctx: &Ct
         && let Some(eff) = state.effects.get(&b.proposal)
     {
         out.extend(guards_of(state, ctx, eff).into_iter().flatten());
+        let need = rule_for(state, eff).map_or(1, |r| needs(eff, r));
+        let mut got = 0;
         for a in approval_candidates(state, eff, ctx.secs) {
             out.push(a.author.clone());
             if usable(ctx, a) {
-                break;
+                got += 1;
+                if got >= need {
+                    break;
+                }
             }
         }
     }
@@ -560,6 +565,9 @@ fn propose(
     if over_bound(&guarded, &[author, &b.executor]) {
         return deny("too many guarded tasks; close some"); // P-15: the bound is kept, never exceeded
     }
+    if b.change.is_some() && b.action != "vcs.land" {
+        return invalid("a change summary belongs to a vcs.land"); // P-17
+    }
     Verdict::Allow
 }
 
@@ -580,17 +588,19 @@ fn approve(
     if !matches!(eff.phase, Phase::Open | Phase::Claimed) {
         return deny("cannot approve in this phase");
     }
-    let rule = approval_rule(&state.policy, &eff.action);
+    let rule = rule_for(state, eff);
     if b.expires_at.as_deref().is_some_and(|e| secs(e) <= ctx.secs) {
         return deny("approval already expired");
     }
     let guards = guards_of(state, ctx, eff);
     if !(in_guards(&guards, author) && reads(role)) {
         // a guard approves as a guard (P-15): no rule, no cap
-        let Some(rule) = rule.filter(|r| may_approve(state, r, author)) else {
+        let kind = ctx
+            .profile(author)
+            .map_or(ActorKind::Human, |p| p.actor_kind);
+        if !rule.is_some_and(|r| counts(state, eff, r, author, kind, b.evidence.as_ref())) {
             return deny("not an approver for this action");
-        };
-        let _ = rule;
+        }
         if state.policy.separate_approver && author == eff.proposer {
             return deny("separate approver required");
         }
@@ -643,7 +653,7 @@ fn claim(
     if b.window != state.policy.launch_window {
         return deny("E5 claim's window is not the space's launchWindow");
     }
-    if approval_rule(&state.policy, &eff.action).is_some() {
+    if rule_for(state, eff).is_some() {
         match pick_approval(state, eff, ctx).0 {
             Pick::Unpinned => return invalid("approver profile not pinned"),
             Pick::None => return deny("E3 no usable approval"),
