@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use futures::{FutureExt, StreamExt};
@@ -265,6 +265,23 @@ struct Shared {
     publish_errors: AtomicU64,
     read_others: Mutex<bool>,
     proposals: Mutex<Vec<String>>,
+    /// The session's budget with the proxy's ledger, set once the egress is up. Proposal cost is read from it.
+    budget: OnceLock<crate::glue::SessionBudget>,
+    /// How much of the measured spend earlier proposals already carried, in the budget's unit.
+    charged: Mutex<u64>,
+}
+
+/// The cost a proposal carries: what the proxy measured since the last proposal, in the budget's unit
+/// (SR-41). `None` when nothing is measured: no budget, or one without a ledger (no price table, or a
+/// subscription), where money is unknown and is never guessed. Also returns the spend to count as charged
+/// once the proposal is queued.
+fn measured_cost(
+    budget: Option<&crate::glue::SessionBudget>,
+    charged: u64,
+) -> Option<((String, u64), u64)> {
+    let b = budget.filter(|b| b.ledger.is_some())?;
+    let spent = b.spent();
+    Some(((b.unit.clone(), spent.saturating_sub(charged)), spent))
 }
 
 impl Shared {
@@ -579,6 +596,12 @@ impl HostBridge for Bridge {
                     reason: "the plan is not valid I-JSON".into(),
                 };
             };
+            // The cost is the proxy's measurement, never the agent's word (the tool has no cost argument).
+            let (cost, spent) = measured_cost(
+                sh.budget.get(),
+                *sh.charged.lock().unwrap_or_else(|p| p.into_inner()),
+            )
+            .unzip();
             // R-24: a proposal of a task-driven turn names the task.
             let r = sh
                 .api
@@ -587,13 +610,17 @@ impl HostBridge for Bridge {
                     executor: sh.cfg.executor.clone(),
                     plan: plan_text,
                     task: sh.task.clone(),
-                    cost: None,
+                    cost,
                     repeatable: false,
                     expires_at: None,
                 })
                 .await;
             match r {
                 Ok(CallResult::Queued { id, outbox_id, .. }) => {
+                    if let Some(spent) = spent {
+                        let mut c = sh.charged.lock().unwrap_or_else(|p| p.into_inner());
+                        *c = (*c).max(spent);
+                    }
                     sh.proposals
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
@@ -1097,6 +1124,8 @@ async fn run_opened(
         publish_errors: AtomicU64::new(0),
         read_others: Mutex::new(false),
         proposals: Mutex::new(Vec::new()),
+        budget: OnceLock::new(),
+        charged: Mutex::new(0),
     });
 
     let env = crate::glue::Egress::start(
@@ -1110,6 +1139,9 @@ async fn run_opened(
     )
     .await
     .map_err(HostError::Sandbox)?;
+    if let Some(b) = env.budget() {
+        let _ = shared.budget.set(b.clone());
+    }
     let base = crate::glue::base_files(&workspace.dir);
     let crate::glue::Launched {
         stdin,
@@ -1763,6 +1795,63 @@ mod tests {
             turn_timeout: Duration::from_secs(1),
             exclusion: Vec::new(),
         }
+    }
+
+    /// A session budget that costs one unit per token, with `tokens` already settled.
+    fn spent_budget(tokens: u64, model_route: bool) -> crate::glue::SessionBudget {
+        use crate::proxy::{Budget, CallBound, Usage};
+        let mut spec = budgeted(1_000);
+        spec.prices = [(
+            "m".to_owned(),
+            han_registry::PriceSpec {
+                input: 1_000_000,
+                output: 1_000_000,
+                ..Default::default()
+            },
+        )]
+        .into();
+        let b = crate::glue::SessionBudget::new(&spec, model_route);
+        if let Some(l) = &b.ledger {
+            let hold = l
+                .reserve(&CallBound {
+                    model: Some("m".into()),
+                    input_tokens: tokens,
+                    max_output: Some(1),
+                })
+                .unwrap();
+            l.settle(
+                hold,
+                &Usage {
+                    input: tokens,
+                    requests: 1,
+                    ..Usage::default()
+                },
+            );
+        }
+        b
+    }
+
+    #[test]
+    fn a_proposal_carries_the_spend_measured_since_the_last_one() {
+        let b = spent_budget(40, true);
+        // the first proposal carries all of it, in the budget's unit
+        let (cost, spent) = measured_cost(Some(&b), 0).unwrap();
+        assert_eq!((cost, spent), (("USD-cent".to_owned(), 40), 40));
+        // once that is charged, the next carries only what came after (here: nothing)
+        let (cost, _) = measured_cost(Some(&b), spent).unwrap();
+        assert_eq!(cost, ("USD-cent".to_owned(), 0));
+    }
+
+    #[test]
+    fn money_that_is_not_measured_is_not_guessed() {
+        // no budget at all
+        assert!(measured_cost(None, 0).is_none());
+        // a subscription session (no model route) and a budget with no prices have no ledger
+        assert!(measured_cost(Some(&spent_budget(40, false)), 0).is_none());
+        let mut spec = budgeted(100);
+        spec.prices.clear();
+        let unpriced = crate::glue::SessionBudget::new(&spec, true);
+        assert!(measured_cost(Some(&unpriced), 0).is_none());
     }
 
     #[tokio::test]

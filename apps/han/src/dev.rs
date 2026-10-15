@@ -462,6 +462,23 @@ const PROPOSE_LATE_SCRIPT: &str = r#"{
   ]
 }"#;
 
+/// A paid model call, then two proposals: the first claims a cost of its own, the second does not.
+const MODEL_PROPOSE_SCRIPT: &str = r#"{
+  "agent": {"name": "han-fake-agent", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "model_call", "model": "fake-model", "max_tokens": 20},
+      {"type": "write_file", "path": "src/auth/login.rs", "content": "pub fn login(user: &str, token: &str) -> bool {\n    !user.is_empty() && token.len() >= 8\n}\n"},
+      {"type": "mcp_call", "id": "p1", "server": "han", "tool": "propose", "args": {"summary": "Push the login check, claiming a cost of 1", "kind": "git_push", "effect": {}, "cost": {"unit": "USD-cent", "amount": 1}}},
+      {"type": "mcp_call", "id": "p2", "server": "han", "tool": "propose", "args": {"summary": "Push the login check", "kind": "git_push", "effect": {"cost": {"unit": "USD-cent", "amount": 1}}}},
+      {"type": "message", "text": "Both proposals are made."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [{"type": "message", "text": "Noted."}, {"type": "end", "stopReason": "end_turn"}]}
+  ]
+}"#;
+
 const PROPOSE_SCRIPT: &str = r#"{
   "agent": {"name": "han-fake-agent", "version": "0.0.34"},
   "modes": {"current": "off", "available": ["off"]},
@@ -769,7 +786,7 @@ async fn up(a: UpArgs) -> Res<()> {
             let fake = dir.join("fake");
             std::fs::create_dir_all(&fake)?;
             let script_path = match a.script.as_str() {
-                "simple" | "propose" | "propose-late" | "model-calls" => {
+                "simple" | "propose" | "propose-late" | "model-calls" | "model-propose" => {
                     let p = fake.join("script.json");
                     std::fs::write(
                         &p,
@@ -777,6 +794,7 @@ async fn up(a: UpArgs) -> Res<()> {
                             "simple" => SIMPLE_SCRIPT,
                             "propose" => PROPOSE_SCRIPT,
                             "model-calls" => MODEL_CALLS_SCRIPT,
+                            "model-propose" => MODEL_PROPOSE_SCRIPT,
                             _ => PROPOSE_LATE_SCRIPT,
                         },
                     )?;

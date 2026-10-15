@@ -180,6 +180,13 @@ impl HanTools {
     }
 
     async fn propose(&self, summary: String, args: &Value) -> CallToolResult {
+        // The cost of a proposal is what the host's proxy measured; the agent has no say in it.
+        if args.get("cost").is_some() {
+            return tool_error(
+                "invalid",
+                "propose has no `cost`: the host fills it in from what the session has spent",
+            );
+        }
         #[derive(Deserialize)]
         struct A {
             kind: String,

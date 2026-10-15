@@ -375,6 +375,26 @@ async fn propose_goes_to_the_host_and_says_it_has_not_run() {
 }
 
 #[tokio::test]
+async fn an_agent_cannot_name_the_cost_of_its_proposal() {
+    let rig = rig().await;
+    for cost in [json!({"unit": "USD-cent", "amount": 1}), json!(0)] {
+        let r = call(
+            &rig,
+            "propose",
+            json!({"summary": "x", "kind": "http_request", "effect": {}, "cost": cost}),
+        )
+        .await;
+        assert_eq!(r.is_error, Some(true));
+        assert!(
+            serde_json::to_string(&r.content)
+                .unwrap()
+                .contains("no `cost`")
+        );
+    }
+    assert!(rig.bridge.calls.lock().unwrap().proposals.is_empty());
+}
+
+#[tokio::test]
 async fn a_refused_proposal_is_a_tool_error() {
     let rig = rig_with(vec![], true).await;
     let r = call(
