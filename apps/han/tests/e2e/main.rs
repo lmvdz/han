@@ -627,6 +627,7 @@ async fn a_budget_without_a_price_table_says_it_is_not_enforced() {
     assert_eq!((budget.limit, budget.spent), (100, 0));
 }
 
+#[cfg(feature = "conformance")]
 /// Runs `han role-probe` as `role` with the keys in `keys`, and returns what it printed.
 fn probe(s: &Stack, role: &str, actor: &str, keys: &std::path::Path) -> String {
     let data = s.dir.join(format!("probe-{role}"));
@@ -655,8 +656,9 @@ fn probe(s: &Stack, role: &str, actor: &str, keys: &std::path::Path) -> String {
 /// works through its node held to the host class, which `han host` and the probe build the same way
 /// (`rolenode::start`): every command that approves, governs or claims is refused before it reaches the node,
 /// and the agent's own work still runs (the first turn finishes).
+#[cfg(feature = "conformance")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+#[ignore = "end to end: run with --ignored --features conformance (the nightly full workflow does)"]
 async fn a_host_cannot_approve_or_govern_and_still_does_its_work() {
     let s = Stack::up("simple", &[]);
     let out = probe(&s, "host", &s.agent(), &s.person_data());
@@ -679,8 +681,9 @@ async fn a_host_cannot_approve_or_govern_and_still_does_its_work() {
 /// Bug class: an executor could approve. It claims and reports, and nothing else: approvals, policy and
 /// membership are refused before the node sees them, and the approved push still lands once the executor is
 /// back (the executor's own work).
+#[cfg(feature = "conformance")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+#[ignore = "end to end: run with --ignored --features conformance (the nightly full workflow does)"]
 async fn an_executor_cannot_approve_or_govern() {
     let s = Stack::up("propose", &[]);
     s.dev(&["stop", "exec"]);

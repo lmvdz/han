@@ -292,7 +292,7 @@ SR §10 asks for isolation between sessions, and between sessions and the runner
   they reach the node, whatever the process asks. This holds the same for an agent that runs as another OS
   user. The `-host` and `-exec` pipes of `han node` exist, but roles do not use them yet: the person's node
   signs as the person, so a role cannot work as its agent through it until a connection can be bound to an
-  actor. `han role-probe host|exec` (hidden) shows the refusals.
+  actor. `han role-probe host|exec` (conformance builds only) shows the refusals.
 
 - **Clean-up** (SR-87): after a session ends, its worktree, temp directory, proxy and credentials are removed;
   shared package caches are mounted read-only into sandboxes.
