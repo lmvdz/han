@@ -74,7 +74,11 @@ async fn lane_items_reach_the_host_through_the_node() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    assert_eq!(seen.len(), 1, "the lane's one change, and not its lane item: {seen:?}");
+    assert_eq!(
+        seen.len(),
+        1,
+        "the lane's one change, and not its lane item: {seen:?}"
+    );
     assert_eq!(seen[0].proposal, "E-1");
     assert_eq!(seen[0].state, "queued");
     assert_eq!(seen[0].position, Some(1));

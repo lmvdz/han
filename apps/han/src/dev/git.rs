@@ -126,9 +126,9 @@ impl Git for GitCli {
     }
 
     fn unlanded(&self, base: &str, tip: &str, after: Option<&str>) -> Res<Vec<Commit>> {
-        Ok(han_vcs::parse_cherry(&self.run(&han_vcs::cherry_args(
-            base, tip, after,
-        ))?))
+        Ok(han_vcs::parse_cherry(
+            &self.run(&han_vcs::cherry_args(base, tip, after))?,
+        ))
     }
 
     fn is_dirty(&self, dir: &Path, untracked: bool) -> Res<bool> {

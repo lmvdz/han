@@ -473,10 +473,7 @@ impl Flow {
                 .map(|l| l.chars().filter(|c| !c.is_control()).collect::<String>())
         };
         let from_ask = self.ask.as_deref().and_then(line).map(|l| {
-            match l
-                .strip_prefix("Work on ")
-                .and_then(|r| r.split_once(": "))
-            {
+            match l.strip_prefix("Work on ").and_then(|r| r.split_once(": ")) {
                 Some((issue, text)) if !text.trim().is_empty() => {
                     format!("{} ({issue})", text.trim())
                 }
@@ -508,7 +505,9 @@ impl Flow {
                     .proposals
                     .iter()
                     .find(|p| p.proposal == old)
-                    .ok_or_else(|| format!("rebaseOf names {old}, which this session did not propose"))?;
+                    .ok_or_else(|| {
+                        format!("rebaseOf names {old}, which this session did not propose")
+                    })?;
                 if !o.failed() {
                     return Err(format!(
                         "{old} is {}: only a rejected, cancelled or reverted proposal is proposed again with rebaseOf",
@@ -969,8 +968,8 @@ impl Flow {
         if let Err(e) = self.vcs.remove_workspace(&self.workspace) {
             // A directory the OS keeps (the agent's working directory, on Windows) may stay behind empty: the
             // work is gone, and the empty directory is not worth another look.
-            let emptied = !dir.exists()
-                || std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none());
+            let emptied =
+                !dir.exists() || std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none());
             if !emptied {
                 tracing::warn!("land: cannot remove {}: {e}", dir.display());
                 return Pruned::Waiting("the workspace could not be removed");
@@ -1025,7 +1024,9 @@ impl Flow {
     }
 
     fn tip(&self) -> Result<String, String> {
-        self.vcs.head(&self.workspace.dir).map_err(|e| e.to_string())
+        self.vcs
+            .head(&self.workspace.dir)
+            .map_err(|e| e.to_string())
     }
 
     /// The workspace's directory.

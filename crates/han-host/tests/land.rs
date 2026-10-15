@@ -131,7 +131,13 @@ fn rig(finish: FinishSpec) -> Rig {
     let origin = root.join("origin.git");
     git(
         root,
-        &["clone", "-q", "--bare", seed.to_str().unwrap(), origin.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            seed.to_str().unwrap(),
+            origin.to_str().unwrap(),
+        ],
     );
     let session_dir = root.join("s1");
     std::fs::create_dir_all(&session_dir).unwrap();
@@ -312,7 +318,11 @@ fn the_land_flow_proposes_a_correct_plan() {
     // the digest is the delta's digest, and the commit is the workspace's head
     let to = a["to"].as_str().unwrap();
     assert_eq!(r.vcs.head(&r.dir()).unwrap(), to);
-    assert_eq!(r.vcs.is_dirty(&r.dir()).ok(), Some(false), "the workspace is committed");
+    assert_eq!(
+        r.vcs.is_dirty(&r.dir()).ok(),
+        Some(false),
+        "the workspace is committed"
+    );
     let delta = r.vcs.delta(&r.dir(), &r.base, to).unwrap();
     assert_eq!(delta.entries.len(), 2);
     assert_eq!(a["deltaDigest"], delta.digest().unwrap().as_str());
@@ -327,13 +337,7 @@ fn the_land_flow_proposes_a_correct_plan() {
     assert_eq!(d.plan["argsBlob"]["type"], han_vcs::BUNDLE_MEDIA_TYPE);
     let exec_vcs = GitVcs::new(r.session_dir.join("exec-objects"));
     let imported = exec_vcs
-        .import_bundle(
-            &r.origin.to_string_lossy(),
-            None,
-            &d.bundle,
-            &r.base,
-            to,
-        )
+        .import_bundle(&r.origin.to_string_lossy(), None, &d.bundle, &r.base, to)
         .expect("the bundle imports");
     assert_eq!(
         exec_vcs
@@ -426,7 +430,10 @@ fn a_commit_after_proposing_does_not_change_the_proposed_plan() {
     let still = r.flow.proposals();
     assert_eq!(still, frozen);
     assert_eq!(still[0].to, to1);
-    assert_eq!(still[0].delta_digest, args(&plan1)["deltaDigest"].as_str().unwrap());
+    assert_eq!(
+        still[0].delta_digest,
+        args(&plan1)["deltaDigest"].as_str().unwrap()
+    );
     // and the proposal's own commits are still exactly base..to1
     let delta = r.vcs.delta(&r.dir(), &r.base, &to1).unwrap();
     assert_eq!(delta.digest().unwrap(), still[0].delta_digest);
@@ -618,7 +625,10 @@ fn a_stalled_change_is_blocked_and_says_why() {
     });
     tokio_block(r.flow.poll()).unwrap();
     let (line, blocked) = r.flow.status_line().unwrap();
-    assert!(blocked && line.contains("stalled: no required check appeared"), "{line}");
+    assert!(
+        blocked && line.contains("stalled: no required check appeared"),
+        "{line}"
+    );
     assert_eq!(r.flow.notices()[0]["stalled"], "no required check appeared");
 }
 
@@ -634,7 +644,11 @@ fn a_conflict_rejection_gives_the_agent_the_conflict_record() {
     });
     let bytes = serde_json::to_vec(&record).unwrap();
     let hash = han_core::ids::sha256_hex(&bytes);
-    r.feed.blobs.lock().unwrap().push((hash.clone(), bytes.clone()));
+    r.feed
+        .blobs
+        .lock()
+        .unwrap()
+        .push((hash.clone(), bytes.clone()));
     r.feed.changes.lock().unwrap().push(LaneChange {
         proposal: "P1".into(),
         state: "rejected".into(),
@@ -649,10 +663,16 @@ fn a_conflict_rejection_gives_the_agent_the_conflict_record() {
     tokio_block(r.flow.poll()).unwrap();
 
     let (line, blocked) = r.flow.status_line().unwrap();
-    assert!(blocked && line.contains("rejected") && line.contains("conflict"), "{line}");
+    assert!(
+        blocked && line.contains("rejected") && line.contains("conflict"),
+        "{line}"
+    );
     let n = &r.flow.notices()[0];
     assert_eq!(n["reason"], "conflict");
-    assert_eq!(n["conflictRecord"], record, "the record was fetched, as data");
+    assert_eq!(
+        n["conflictRecord"], record,
+        "the record was fetched, as data"
+    );
     assert!(n["next"].as_str().unwrap().contains("rebaseOf"));
     assert_eq!(n["conflict"]["hash"], hash.as_str());
 }
@@ -790,11 +810,12 @@ fn commits_after_the_proposed_head_are_reported_unlanded_and_kept() {
     assert_eq!(item["commits"][0]["subject"], "a late fix");
     assert!(item["workspace"].as_str().unwrap().ends_with("wt"));
     // the agent sees it as data, and the status says so
-    assert!(r
-        .flow
-        .notices()
-        .iter()
-        .any(|n| n["item"] == "unlanded" && n["commits"][0]["subject"] == "a late fix"));
+    assert!(
+        r.flow
+            .notices()
+            .iter()
+            .any(|n| n["item"] == "unlanded" && n["commits"][0]["subject"] == "a late fix")
+    );
     assert!(r.flow.status_line().unwrap().0.contains("never landed"));
     // reported once, not on every look
     assert!(matches!(r.flow.prune(false, true), Pruned::Waiting(_)));
@@ -826,12 +847,20 @@ fn a_late_commit_whose_patch_is_on_the_target_is_not_unlanded() {
     let other = tmp.path().join("other");
     git(
         tmp.path(),
-        &["clone", "-q", r.origin.to_str().unwrap(), other.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            r.origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
     );
     std::fs::create_dir_all(other.join("src")).unwrap();
     std::fs::write(other.join("src/late.rs"), "pub fn late() {}\n").unwrap();
     git(&other, &["add", "-A"]);
-    git(&other, &["commit", "-q", "-m", "late fix, landed by the lane"]);
+    git(
+        &other,
+        &["commit", "-q", "-m", "late fix, landed by the lane"],
+    );
     git(&other, &["push", "-q", "origin", "HEAD:main"]);
     settle_as(&r, "confirmed");
     assert_eq!(r.flow.prune(false, false), Pruned::Removed);

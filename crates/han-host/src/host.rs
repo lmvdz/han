@@ -736,7 +736,11 @@ impl HostBridge for Bridge {
     }
 
     fn land_notices(&self) -> Vec<Value> {
-        self.0.land.as_ref().map(|f| f.notices()).unwrap_or_default()
+        self.0
+            .land
+            .as_ref()
+            .map(|f| f.notices())
+            .unwrap_or_default()
     }
 
     fn node(&self) -> Arc<dyn NodeApi> {
@@ -1639,7 +1643,11 @@ async fn land_step(
             let text = format!(
                 "kept: {} commit(s) after the proposal never landed{}",
                 u.commits.len(),
-                if u.uncommitted { ", and uncommitted changes" } else { "" }
+                if u.uncommitted {
+                    ", and uncommitted changes"
+                } else {
+                    ""
+                }
             );
             shared.signal(Signal::Summary(text.clone()));
             shared.signal(Signal::Land {

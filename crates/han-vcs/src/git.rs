@@ -27,10 +27,10 @@ use sha2::{Digest, Sha256};
 
 use crate::merge::{self, parse_changes, parse_merge_tree};
 use crate::{
-    BUNDLE_REF, Candidate, Commit, parse_cherry, CandidateSource, ChangeKind, ChangeSet, Conflict, ConflictHunk,
+    BUNDLE_REF, Candidate, CandidateSource, ChangeKind, ChangeSet, Commit, Conflict, ConflictHunk,
     ConflictKind, ConflictRecord, ConflictSide, Delta, DeltaEntry, DeltaKind, FileChange,
     LandOutcome, LandSpec, LineRange, MergeSim, PathDisjoint, RebaseOutcome, Rebased, RemoteAuth,
-    Result, Vcs, VcsError, Workspace, WorkspaceSpec, changeset_digest,
+    Result, Vcs, VcsError, Workspace, WorkspaceSpec, changeset_digest, parse_cherry,
 };
 
 /// What the backend remembers about a file it hashed: size, modification time and mode, and the blob id.
@@ -2114,9 +2114,7 @@ impl Vcs for GitVcs {
         auth: Option<&RemoteAuth>,
     ) -> Result<Option<String>> {
         if !refname.starts_with("refs/") || refname.contains(':') {
-            return Err(VcsError::Invalid(format!(
-                "not a full ref name: {refname}"
-            )));
+            return Err(VcsError::Invalid(format!("not a full ref name: {refname}")));
         }
         if self.remote_ref(dir, remote, refname, auth)?.is_none() {
             return Ok(None);

@@ -35,7 +35,8 @@ async fn a_session_lands_through_the_lane_and_is_pruned_when_it_confirms() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/land-session.json");
     let session_dir = root.join("coder").join("s1");
     // gone, or an empty directory the agent's working directory keeps open (Windows)
-    let gone = |p: PathBuf| !p.exists() || std::fs::read_dir(&p).is_ok_and(|mut d| d.next().is_none());
+    let gone =
+        |p: PathBuf| !p.exists() || std::fs::read_dir(&p).is_ok_and(|mut d| d.next().is_none());
     let cfg = HostConfig {
         space: space.clone(),
         agent: CODER.into(),
