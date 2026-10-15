@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use han_exec::{ExecConfig, RepoTarget};
+use han_exec::{ExecConfig, GithubApp, RepoTarget};
 use han_node::keys::{FileKeyStore, KeyStore};
 use han_node::rpc::{RpcClient, default_endpoint};
 use han_registry::HomeRef;
@@ -64,7 +64,123 @@ enum ExecutorCmd {
         /// The executor's home: a home ticket (`han1home.…`) or a ServerName. Default: the executor's server.
         #[arg(long)]
         home: Option<HomeRef>,
+        /// The write GitHub App's id (not the read App `han-github` uses). Needs `--github-installation` and
+        /// `--github-key`; they write the `github` block of `exec.json`.
+        #[arg(long, requires_all = ["github_installation", "github_key"])]
+        github_app: Option<u64>,
+        /// The write App's installation id.
+        #[arg(long, requires_all = ["github_app", "github_key"])]
+        github_installation: Option<u64>,
+        /// The write App's private key (a PEM file readable only by you). It is copied to
+        /// `<dir>/github-app.pem` with mode 600 and never printed.
+        #[arg(long, requires_all = ["github_app", "github_installation"])]
+        github_key: Option<PathBuf>,
+        /// The id of the read App `han-github` uses; `--github-app` is refused when it is the same.
+        #[arg(long, env = "HAN_GITHUB_READ_APP")]
+        read_app: Option<u64>,
     },
+}
+
+/// The key's name in the executor's directory.
+pub const GITHUB_KEY_FILE: &str = "github-app.pem";
+
+/// The first lines a PEM private key may start with.
+const PEM_HEADERS: [&str; 3] = [
+    "-----BEGIN PRIVATE KEY-----",
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "-----BEGIN EC PRIVATE KEY-----",
+];
+
+/// Reads the App key at `path` for installing. Refuses a key that others can read (Unix) or whose first line is
+/// not a PEM private key header. Errors say which check failed and never carry the file's contents.
+fn read_pem(path: &Path) -> Res<Vec<u8>> {
+    let meta =
+        std::fs::metadata(path).map_err(|e| format!("--github-key {}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("--github-key {} is not a file", path.display()).into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "--github-key {} is readable by group or others (mode {mode:03o}): `chmod 600 {}` and run again",
+                path.display(),
+                path.display()
+            )
+            .into());
+        }
+    }
+    if meta.len() > 16 * 1024 {
+        return Err(format!("--github-key {} is too large for a PEM key", path.display()).into());
+    }
+    let bytes = std::fs::read(path)?;
+    let first = bytes
+        .split(|b| *b == b'\n')
+        .next()
+        .map(|l| String::from_utf8_lossy(l).trim().to_owned())
+        .unwrap_or_default();
+    if !PEM_HEADERS.contains(&first.as_str()) {
+        return Err(format!(
+            "--github-key {} does not start with a PEM private key header (`-----BEGIN PRIVATE KEY-----`)",
+            path.display()
+        )
+        .into());
+    }
+    Ok(bytes)
+}
+
+/// Whether `path` has exactly mode 600 (always true where there are no modes).
+fn mode_600(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o777 == 0o600)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+/// Puts `pem` at `dest` with mode 600, created that way (never readable by others, not even briefly).
+/// Returns whether anything changed.
+fn install_key(dest: &Path, pem: &[u8]) -> Res<bool> {
+    if std::fs::read(dest).ok().as_deref() == Some(pem) && mode_600(dest) {
+        return Ok(false);
+    }
+    let tmp = dest.with_extension("pem.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    {
+        use std::io::Write;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        f.write_all(pem)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, dest)?;
+    Ok(true)
+}
+
+/// `github:<owner>/<repo>` as `<owner>/<repo>`; `None` for any other repository name.
+fn github_slug(name: &str) -> Res<Option<String>> {
+    let Some(slug) = name.strip_prefix("github:") else {
+        return Ok(None);
+    };
+    match slug.split_once('/') {
+        Some((o, r)) if !o.is_empty() && !r.is_empty() && !r.contains('/') => {
+            Ok(Some(slug.to_owned()))
+        }
+        _ => Err(format!("--repo {name}: a GitHub repository is github:<owner>/<repo>").into()),
+    }
 }
 
 pub async fn run(args: ExecutorArgs) -> Res<()> {
@@ -80,7 +196,25 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
         data,
         relay,
         home,
+        github_app,
+        github_installation,
+        github_key,
+        read_app,
     } = args.cmd;
+    if github_app.is_some() && github_app == read_app {
+        return Err(format!(
+            "--github-app {} is the read App (the one `han-github` uses). The executor needs the separate write App:              the read App must never hold write permissions, and its key must stay with `han-github` (docs/runner.md §10)",
+            github_app.unwrap_or_default()
+        )
+        .into());
+    }
+    // everything that can be refused is, before anything is written
+    let pem = github_key.as_deref().map(read_pem).transpose()?;
+    let mut slugs = Vec::new();
+    for spec in &repo {
+        let (rname, _) = spec.split_once('=').ok_or("--repo is <name>=<remote>")?;
+        slugs.push(github_slug(rname)?);
+    }
     let server = match (&server, operator.rsplit_once(':')) {
         (Some(s), _) => s.clone(),
         (None, Some((_, s))) => s.to_owned(),
@@ -126,22 +260,50 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
         }
         Err(e) => return Err(format!("{}: {e}", cfg_path.display()).into()),
     };
-    for spec in &repo {
+    for (spec, slug) in repo.iter().zip(&slugs) {
         let (rname, remote) = spec.split_once('=').ok_or("--repo is <name>=<remote>")?;
         match cfg.repos.iter_mut().find(|r| r.name == rname) {
-            Some(r) if r.remote == remote => {}
             Some(r) => {
-                r.remote = remote.to_owned();
-                cfg_changed = true;
+                if r.remote != remote {
+                    r.remote = remote.to_owned();
+                    cfg_changed = true;
+                }
+                if slug.is_some() && r.github != *slug {
+                    r.github.clone_from(slug);
+                    cfg_changed = true;
+                }
             }
             None => {
                 cfg.repos.push(RepoTarget {
                     name: rname.to_owned(),
                     remote: remote.to_owned(),
-                    github: None,
+                    github: slug.clone(),
                 });
                 cfg_changed = true;
             }
+        }
+    }
+    if let (Some(pem), Some(app_id), Some(installation_id)) =
+        (&pem, github_app, github_installation)
+    {
+        let dest = dir.join(GITHUB_KEY_FILE);
+        std::fs::create_dir_all(&dir)?;
+        if install_key(&dest, pem)? {
+            println!("  changed:   github app key {}", dest.display());
+        } else {
+            println!("  unchanged: github app key {}", dest.display());
+        }
+        let private_key = std::path::absolute(&dest)?.to_string_lossy().into_owned();
+        let api_base = cfg.github.as_ref().and_then(|g| g.api_base.clone());
+        let block = GithubApp {
+            app_id,
+            installation_id,
+            api_base,
+            private_key,
+        };
+        if cfg.github.as_ref() != Some(&block) {
+            cfg.github = Some(block);
+            cfg_changed = true;
         }
     }
     if cfg_changed {
@@ -281,4 +443,85 @@ fn unit_state() {
             &enabled
         }
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PEM: &str = "-----BEGIN PRIVATE KEY-----\nTESTONLYNOTAKEY\n-----END PRIVATE KEY-----\n";
+
+    fn key_file(dir: &Path, name: &str, text: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        p
+    }
+
+    #[test]
+    fn read_pem_takes_a_private_key_and_refuses_anything_else() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_pem(&key_file(d.path(), "ok.pem", PEM)).unwrap(),
+            PEM.as_bytes()
+        );
+        let bad = key_file(
+            d.path(),
+            "bad.pem",
+            "SECRETCONTENT\n-----BEGIN PRIVATE KEY-----\n",
+        );
+        let e = read_pem(&bad).unwrap_err().to_string();
+        assert!(e.contains("PEM private key header"), "{e}");
+        assert!(!e.contains("SECRETCONTENT"));
+        let public = key_file(d.path(), "pub.pem", "-----BEGIN PUBLIC KEY-----\nx\n");
+        assert!(read_pem(&public).is_err());
+        assert!(read_pem(&d.path().join("none.pem")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_pem_refuses_a_key_others_can_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = key_file(d.path(), "k.pem", PEM);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let e = read_pem(&p).unwrap_err().to_string();
+        assert!(e.contains("readable by group or others"), "{e}");
+        assert!(!e.contains("TESTONLYNOTAKEY"));
+    }
+
+    #[test]
+    fn install_key_is_mode_600_and_idempotent() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join(GITHUB_KEY_FILE);
+        assert!(install_key(&dest, PEM.as_bytes()).unwrap());
+        assert!(mode_600(&dest));
+        assert_eq!(std::fs::read(&dest).unwrap(), PEM.as_bytes());
+        assert!(!install_key(&dest, PEM.as_bytes()).unwrap());
+        assert!(install_key(&dest, b"other").unwrap());
+        assert!(!d.path().join("github-app.pem.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(
+                install_key(&dest, b"other").unwrap(),
+                "a loose mode is repaired"
+            );
+            assert!(mode_600(&dest));
+        }
+    }
+
+    #[test]
+    fn github_slug_maps_only_github_names() {
+        assert_eq!(github_slug("github:o/r").unwrap().as_deref(), Some("o/r"));
+        assert_eq!(github_slug("/srv/repo").unwrap(), None);
+        assert!(github_slug("github:o").is_err());
+        assert!(github_slug("github:o/r/x").is_err());
+        assert!(github_slug("github:/r").is_err());
+    }
 }
