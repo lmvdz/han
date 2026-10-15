@@ -15,14 +15,8 @@ pub struct Worktree {
     pub branch: String,
 }
 
-/// A commit named by its short id and subject.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Commit {
-    /// The first 8 hex digits.
-    pub id: String,
-    /// The first line of the message.
-    pub subject: String,
-}
+/// A commit named by its short id and subject (the host's workspace pruning reports the same).
+pub use han_vcs::Commit;
 
 /// The git operations of the pruner, all on the repository of the main checkout.
 pub trait Git {
@@ -132,20 +126,9 @@ impl Git for GitCli {
     }
 
     fn unlanded(&self, base: &str, tip: &str, after: Option<&str>) -> Res<Vec<Commit>> {
-        let mut args = vec!["cherry", "-v", base, tip];
-        args.extend(after);
-        Ok(self
-            .run(&args)?
-            .lines()
-            .filter_map(|l| {
-                let rest = l.strip_prefix("+ ")?;
-                let (id, subject) = rest.split_once(' ').unwrap_or((rest, ""));
-                Some(Commit {
-                    id: id.chars().take(8).collect(),
-                    subject: subject.to_owned(),
-                })
-            })
-            .collect())
+        Ok(han_vcs::parse_cherry(&self.run(&han_vcs::cherry_args(
+            base, tip, after,
+        ))?))
     }
 
     fn is_dirty(&self, dir: &Path, untracked: bool) -> Res<bool> {

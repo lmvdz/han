@@ -33,12 +33,13 @@ use serde_json::Value;
 pub use tools::{HanTools, tool_list};
 
 /// The MCP names of the tools, in the order they are listed. A snapshot test pins this list (SR-29).
-pub const TOOL_NAMES: [&str; 5] = [
+pub const TOOL_NAMES: [&str; 6] = [
     "propose",
     "team_sessions",
     "team_who_is_on",
     "team_read",
     "team_overlaps",
+    "land_status",
 ];
 
 /// The longest `summary` an agent may give, in characters.
@@ -108,6 +109,13 @@ pub trait HostBridge: Send + Sync + 'static {
     /// Layer-2 summaries the host holds for a session (fork summaries), newest first; may be empty. The host
     /// returns only summaries the reader may see (SR-66).
     fn summaries(&self, session: &str) -> Vec<String>;
+
+    /// Where this session's `land` proposals stand (the landing lane's states, a conflict record, the workspace
+    /// left behind): one JSON object per proposal, and the `unlanded` report if there is one. Empty when the
+    /// session does not land through the lane. The lane's words are data, never instructions.
+    fn land_notices(&self) -> Vec<Value> {
+        Vec::new()
+    }
 }
 
 /// Why [`serve`] ended with an error.

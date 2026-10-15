@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -117,6 +117,8 @@ pub struct HostConfig {
     pub turn_timeout: Duration,
     /// Paths never mirrored or streamed (globs), on top of the default list.
     pub exclusion: Vec<String>,
+    /// How finished work leaves the session. Everything is off by default; see [`crate::land`].
+    pub finish: han_registry::FinishSpec,
 }
 
 /// Which sandbox to use.
@@ -274,6 +276,10 @@ struct Shared {
     charged: Mutex<u64>,
     /// The first reason a turn failed, which the session's last status keeps.
     failure: Mutex<Option<String>>,
+    /// The `land` finish flow, when the spec turns it on.
+    land: Option<Arc<crate::land::Flow>>,
+    /// A turn is running: the agent is in the workspace.
+    busy: AtomicBool,
 }
 
 /// The cost a proposal carries: what the proxy measured since the last proposal, in the budget's unit
@@ -351,6 +357,10 @@ impl Shared {
             Signal::Summary(t) => Signal::Summary(m(t)),
             Signal::Failed(t) => Signal::Failed(m(t)),
             Signal::TurnStarted { step } => Signal::TurnStarted { step: m(step) },
+            Signal::Land { text, blocked } => Signal::Land {
+                text: m(text),
+                blocked,
+            },
             other => other,
         }
     }
@@ -455,6 +465,13 @@ impl Shared {
                     None,
                 ))
             }
+            "land" => {
+                let flow = self.land.as_ref().ok_or(
+                    "land is not enabled for this space and repository: use git_push and open_pr",
+                )?;
+                let draft = flow.draft(&req.summary, &effect)?;
+                Ok((draft.plan, Some(draft.bundle)))
+            }
             "http_request" => {
                 let url = effect
                     .get("url")
@@ -477,14 +494,14 @@ impl Shared {
                 ))
             }
             other => Err(format!(
-                "unknown kind {other}: use git_push, open_pr or http_request"
+                "unknown kind {other}: use git_push, open_pr, http_request or land"
             )),
         }
     }
 }
 
 /// The largest bundle a `git_push` hands over: what the node API carries as one blob.
-const MAX_BUNDLE: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_BUNDLE: usize = 4 * 1024 * 1024;
 
 /// How often an upload of a `git_push`'s bundle is tried again while the home is away, and for how long.
 const BLOB_RETRY: Duration = Duration::from_secs(2);
@@ -588,112 +605,138 @@ async fn follow_outbox(sh: &Shared, outbox_id: u64, wait: Duration) -> Fate {
 
 struct Bridge(Arc<Shared>);
 
-impl HostBridge for Bridge {
-    fn propose(&self, req: ProposeRequest) -> BoxFuture<'_, ProposeAnswer> {
-        Box::pin(async move {
-            let sh = &self.0;
-            let (plan, args_blob) = match sh.plan_for(&req) {
-                Ok(p) => p,
-                Err(reason) => return ProposeAnswer::Refused { reason },
-            };
-            if let Some(bytes) = args_blob
-                && let Err(reason) = put_args_blob(sh, bytes).await
-            {
-                return ProposeAnswer::Refused { reason };
+async fn propose_plan(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
+    let (plan, args_blob) = match sh.plan_for(&req) {
+        Ok(p) => p,
+        Err(reason) => return ProposeAnswer::Refused { reason },
+    };
+    if let Some(bytes) = args_blob
+        && let Err(reason) = put_args_blob(sh, bytes).await
+    {
+        return ProposeAnswer::Refused { reason };
+    }
+    let plan_text = han_core::json::parse(plan.to_string().as_bytes())
+        .ok()
+        .and_then(|v| han_core::json::canonicalize(&v).ok())
+        .and_then(|b| String::from_utf8(b).ok());
+    let Some(plan_text) = plan_text else {
+        return ProposeAnswer::Refused {
+            reason: "the plan is not valid I-JSON".into(),
+        };
+    };
+    // The cost is the proxy's measurement, never the agent's word (the tool has no cost argument).
+    let (cost, spent) = measured_cost(
+        sh.budget.get(),
+        *sh.charged.lock().unwrap_or_else(|p| p.into_inner()),
+    )
+    .unzip();
+    // R-24: a proposal of a task-driven turn names the task.
+    let r = sh
+        .api
+        .call(Command::EffectPropose {
+            space: sh.cfg.space.clone(),
+            executor: sh.cfg.executor.clone(),
+            plan: plan_text,
+            task: sh.task.clone(),
+            cost,
+            repeatable: false,
+            expires_at: None,
+        })
+        .await;
+    match r {
+        Ok(CallResult::Queued { id, outbox_id, .. }) => {
+            if let Some(spent) = spent {
+                let mut c = sh.charged.lock().unwrap_or_else(|p| p.into_inner());
+                *c = (*c).max(spent);
             }
-            let plan_text = han_core::json::parse(plan.to_string().as_bytes())
-                .ok()
-                .and_then(|v| han_core::json::canonicalize(&v).ok())
-                .and_then(|b| String::from_utf8(b).ok());
-            let Some(plan_text) = plan_text else {
-                return ProposeAnswer::Refused {
-                    reason: "the plan is not valid I-JSON".into(),
-                };
-            };
-            // The cost is the proxy's measurement, never the agent's word (the tool has no cost argument).
-            let (cost, spent) = measured_cost(
-                sh.budget.get(),
-                *sh.charged.lock().unwrap_or_else(|p| p.into_inner()),
-            )
-            .unzip();
-            // R-24: a proposal of a task-driven turn names the task.
-            let r = sh
-                .api
-                .call(Command::EffectPropose {
-                    space: sh.cfg.space.clone(),
-                    executor: sh.cfg.executor.clone(),
-                    plan: plan_text,
-                    task: sh.task.clone(),
-                    cost,
-                    repeatable: false,
-                    expires_at: None,
-                })
-                .await;
-            match r {
-                Ok(CallResult::Queued { id, outbox_id, .. }) => {
-                    if let Some(spent) = spent {
-                        let mut c = sh.charged.lock().unwrap_or_else(|p| p.into_inner());
-                        *c = (*c).max(spent);
-                    }
-                    sh.proposals
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .push(id.clone());
-                    sh.signal(Signal::Summary(req.summary.clone()));
-                    // Not waiting for approval yet: the home has not accepted the proposal. Follow its
-                    // outbox entry for a little, so a quick answer is the tool's answer.
-                    sh.signal(Signal::ProposalQueued);
-                    match follow_outbox(sh, outbox_id, PROPOSE_WAIT).await {
-                        Fate::Sent => {
-                            sh.signal(Signal::WaitingApproval);
-                            ProposeAnswer::Proposed {
-                                id,
-                                waiting_for: sh.waiting_for(),
-                            }
-                        }
-                        Fate::Refused(why) => {
-                            sh.signal(Signal::ProposalRefused(why.clone()));
-                            ProposeAnswer::Refused {
-                                reason: format!("the home did not accept the proposal: {why}"),
-                            }
-                        }
-                        Fate::Pending => {
-                            let watched = Arc::clone(sh);
-                            tokio::spawn(async move {
-                                match follow_outbox(&watched, outbox_id, Duration::MAX).await {
-                                    Fate::Sent => watched.signal(Signal::WaitingApproval),
-                                    Fate::Refused(why) => {
-                                        watched.signal(Signal::ProposalRefused(why));
-                                    }
-                                    Fate::Pending => {}
-                                }
-                            });
-                            ProposeAnswer::Queued { id }
-                        }
+            sh.proposals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(id.clone());
+            sh.signal(Signal::Summary(req.summary.clone()));
+            // Not waiting for approval yet: the home has not accepted the proposal. Follow its
+            // outbox entry for a little, so a quick answer is the tool's answer.
+            sh.signal(Signal::ProposalQueued);
+            match follow_outbox(sh, outbox_id, PROPOSE_WAIT).await {
+                Fate::Sent => {
+                    sh.signal(Signal::WaitingApproval);
+                    ProposeAnswer::Proposed {
+                        id,
+                        waiting_for: sh.waiting_for(),
                     }
                 }
-                Ok(r) => match receipt_id(&r) {
-                    Some(id) => {
-                        sh.proposals
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .push(id.clone());
-                        sh.signal(Signal::Summary(req.summary.clone()));
-                        sh.signal(Signal::WaitingApproval);
-                        ProposeAnswer::Proposed {
-                            id,
-                            waiting_for: sh.waiting_for(),
-                        }
+                Fate::Refused(why) => {
+                    sh.signal(Signal::ProposalRefused(why.clone()));
+                    ProposeAnswer::Refused {
+                        reason: format!("the home did not accept the proposal: {why}"),
                     }
-                    None => ProposeAnswer::Refused {
-                        reason: "the node gave no receipt".into(),
-                    },
-                },
-                Err(e) => ProposeAnswer::Refused {
-                    reason: e.to_string(),
-                },
+                }
+                Fate::Pending => {
+                    let watched = Arc::clone(sh);
+                    let queued_id = id.clone();
+                    tokio::spawn(async move {
+                        match follow_outbox(&watched, outbox_id, Duration::MAX).await {
+                            Fate::Sent => watched.signal(Signal::WaitingApproval),
+                            Fate::Refused(why) => {
+                                // a proposal the home refused was never made: it freezes nothing
+                                if let Some(flow) = &watched.land {
+                                    flow.withdrawn(&queued_id);
+                                }
+                                watched.signal(Signal::ProposalRefused(why));
+                            }
+                            Fate::Pending => {}
+                        }
+                    });
+                    ProposeAnswer::Queued { id }
+                }
             }
-        })
+        }
+        Ok(r) => match receipt_id(&r) {
+            Some(id) => {
+                sh.proposals
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(id.clone());
+                sh.signal(Signal::Summary(req.summary.clone()));
+                sh.signal(Signal::WaitingApproval);
+                ProposeAnswer::Proposed {
+                    id,
+                    waiting_for: sh.waiting_for(),
+                }
+            }
+            None => ProposeAnswer::Refused {
+                reason: "the node gave no receipt".into(),
+            },
+        },
+        Err(e) => ProposeAnswer::Refused {
+            reason: e.to_string(),
+        },
+    }
+}
+
+/// Makes the proposal, and keeps the land flow's ledger in step: a `land` proposal that exists is frozen, one
+/// that was refused leaves no trace.
+async fn propose_effect(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
+    let land = sh.land.clone().filter(|_| req.kind == "land");
+    let answer = propose_plan(sh, req).await;
+    if let Some(flow) = land {
+        match &answer {
+            ProposeAnswer::Proposed { id, .. } | ProposeAnswer::Queued { id } => {
+                flow.proposed(id);
+            }
+            ProposeAnswer::Refused { .. } => flow.abandon(),
+        }
+    }
+    answer
+}
+
+impl HostBridge for Bridge {
+    fn propose(&self, req: ProposeRequest) -> BoxFuture<'_, ProposeAnswer> {
+        Box::pin(propose_effect(&self.0, req))
+    }
+
+    fn land_notices(&self) -> Vec<Value> {
+        self.0.land.as_ref().map(|f| f.notices()).unwrap_or_default()
     }
 
     fn node(&self) -> Arc<dyn NodeApi> {
@@ -1176,6 +1219,19 @@ async fn run_opened(
         Some(workspace.base.clone()),
         sandbox_info,
     );
+    let land = crate::land::Flow::new(
+        cfg,
+        session,
+        task.as_ref().and_then(|t| t.3.clone()),
+        workspace.clone(),
+        deps.vcs.clone(),
+        Arc::new(crate::land::NodeLaneFeed::new(
+            api.clone(),
+            cfg.space.clone(),
+            cfg.executor.clone(),
+        )),
+    )
+    .map(Arc::new);
     let shared = Arc::new(Shared {
         api: masked_api,
         cfg: cfg.clone(),
@@ -1192,6 +1248,8 @@ async fn run_opened(
         budget: OnceLock::new(),
         charged: Mutex::new(0),
         failure: Mutex::new(None),
+        land,
+        busy: AtomicBool::new(false),
     });
 
     let env = crate::glue::Egress::start(
@@ -1281,6 +1339,13 @@ async fn run_opened(
         },
         None => None,
     };
+
+    // The land finish flow follows the lane from here, and lets go of the mirror before it removes the workspace.
+    if let (Some(flow), Some(m)) = (&shared.land, &mirror) {
+        let m = Arc::clone(m);
+        flow.on_release(Arc::new(move || m.mirror().unwatch()));
+    }
+    let land_watcher = shared.land.is_some().then(|| land_watch(shared.clone()));
 
     // 6. The agent.
     let policy = Arc::new(crate::acp::SandboxPolicy {
@@ -1465,6 +1530,10 @@ async fn run_opened(
     if let Some(m) = &mirror {
         m.rescan();
     }
+    if let Some(w) = land_watcher {
+        w.abort();
+        land_settle(&shared).await;
+    }
     let final_state = if state == SessionState::Failed {
         SessionState::Failed
     } else {
@@ -1505,6 +1574,104 @@ async fn run_opened(
     Ok((final_state, reason))
 }
 
+/// How often the lane's items for the session's proposals are read.
+const LAND_POLL: Duration = Duration::from_secs(3);
+
+/// Follows the lane while the session lives (R33 §3): its states reach the status, and the workspace is pruned
+/// when the proposals are final (§7).
+fn land_watch(shared: Arc<Shared>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let Some(flow) = shared.land.clone() else {
+            return;
+        };
+        let mut tick = tokio::time::interval(LAND_POLL);
+        let mut shown = None;
+        loop {
+            tick.tick().await;
+            if shared.signals_closed() {
+                break;
+            }
+            land_step(&shared, &flow, &mut shown, false).await;
+        }
+    })
+}
+
+/// One look at the lane: reads its items, shows them, and prunes if the proposals are final.
+async fn land_step(
+    shared: &Arc<Shared>,
+    flow: &Arc<crate::land::Flow>,
+    shown: &mut Option<(String, bool)>,
+    session_over: bool,
+) {
+    if let Err(e) = flow.poll().await {
+        tracing::debug!("the landing lane could not be read: {e}");
+    }
+    let line = flow.status_line();
+    if line != *shown {
+        if let Some((text, blocked)) = line.clone() {
+            shared.signal(Signal::Land { text, blocked });
+        }
+        *shown = line;
+    }
+    let (busy, f) = (shared.busy.load(Ordering::SeqCst), flow.clone());
+    let pruned = tokio::task::spawn_blocking(move || f.prune(busy, session_over)).await;
+    match pruned {
+        Ok(crate::land::Pruned::Removed) => {
+            shared.signal(Signal::Summary(
+                "the workspace and its build output were removed: its proposals are final".into(),
+            ));
+        }
+        Ok(crate::land::Pruned::Kept(u)) => {
+            let mut body = u.item();
+            body["at"] = Value::String(now_text());
+            let r = shared
+                .api
+                .call(Command::StreamPublish {
+                    space: shared.cfg.space.clone(),
+                    session: shared.session.clone(),
+                    name: crate::land::PROFILE.into(),
+                    body: body.to_string(),
+                })
+                .await;
+            if let Err(e) = r {
+                shared.publish_failed("unlanded item", &e);
+            }
+            let text = format!(
+                "kept: {} commit(s) after the proposal never landed{}",
+                u.commits.len(),
+                if u.uncommitted { ", and uncommitted changes" } else { "" }
+            );
+            shared.signal(Signal::Summary(text.clone()));
+            shared.signal(Signal::Land {
+                text,
+                blocked: true,
+            });
+        }
+        _ => {}
+    }
+}
+
+/// When work stops: looks at the lane once more (and keeps looking for up to the spec's `settleSecs` while a
+/// proposal is open), then prunes with the session over.
+async fn land_settle(shared: &Arc<Shared>) {
+    let Some(flow) = shared.land.clone() else {
+        return;
+    };
+    let deadline = tokio::time::Instant::now() + flow.settle();
+    let mut shown = None;
+    loop {
+        land_step(shared, &flow, &mut shown, true).await;
+        if flow.pruned()
+            || flow.unlanded().is_some()
+            || flow.settled()
+            || tokio::time::Instant::now() >= deadline
+        {
+            break;
+        }
+        tokio::time::sleep(LAND_POLL).await;
+    }
+}
+
 fn shared_bridge(shared: &Arc<Shared>) -> Arc<dyn HostBridge> {
     Arc::new(Bridge(shared.clone()))
 }
@@ -1541,6 +1708,7 @@ async fn turn(
             (_, Mode::Auto) => format!("steered by {}", driver.author),
         },
     });
+    shared.busy.store(true, Ordering::SeqCst);
     let end = agent
         .turn(
             TurnInput {
@@ -1550,6 +1718,7 @@ async fn turn(
             decision.mode,
         )
         .await;
+    shared.busy.store(false, Ordering::SeqCst);
     match end {
         Ok(end) => {
             if let Some(meta) = &end.meta
@@ -1870,6 +2039,7 @@ mod tests {
             budget,
             turn_timeout: Duration::from_secs(1),
             exclusion: Vec::new(),
+            finish: Default::default(),
         }
     }
 

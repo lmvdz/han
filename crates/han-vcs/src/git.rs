@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 
 use crate::merge::{self, parse_changes, parse_merge_tree};
 use crate::{
-    BUNDLE_REF, Candidate, CandidateSource, ChangeKind, ChangeSet, Conflict, ConflictHunk,
+    BUNDLE_REF, Candidate, Commit, parse_cherry, CandidateSource, ChangeKind, ChangeSet, Conflict, ConflictHunk,
     ConflictKind, ConflictRecord, ConflictSide, Delta, DeltaEntry, DeltaKind, FileChange,
     LandOutcome, LandSpec, LineRange, MergeSim, PathDisjoint, RebaseOutcome, Rebased, RemoteAuth,
     Result, Vcs, VcsError, Workspace, WorkspaceSpec, changeset_digest,
@@ -179,7 +179,8 @@ fn unquote(s: &str) -> String {
 }
 
 /// Removes a directory tree, clearing read-only bits (git's object files) when the first attempt fails.
-fn remove_tree(p: &Path) -> std::io::Result<()> {
+/// Removes a directory tree, read-only files included. One that is not there is done.
+pub fn remove_tree(p: &Path) -> std::io::Result<()> {
     if !p.exists() {
         return Ok(());
     }
@@ -2073,6 +2074,84 @@ impl Vcs for GitVcs {
             delta,
             path_disjoint: false,
         }))
+    }
+
+    fn is_ancestor(&self, dir: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+        if !is_hex_id(ancestor) || !(is_hex_id(descendant) || descendant == "HEAD") {
+            return Err(VcsError::Invalid(
+                "ancestry is asked by full commit ids (or HEAD for the descendant)".into(),
+            ));
+        }
+        let out = self
+            .git(Some(dir))?
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .run_codes(&[1])?;
+        Ok(out.status.code() == Some(0))
+    }
+
+    fn head(&self, dir: &Path) -> Result<String> {
+        self.commit_of(dir, "HEAD")
+    }
+
+    fn is_dirty(&self, dir: &Path) -> Result<bool> {
+        // The tree of everything in the workspace, built without filters (the way `commit_all` builds it), against
+        // the tree of HEAD: no command that applies the workspace's own configuration runs (SR-72).
+        let (tree, tmp, _skip) = self.worktree_tree(dir)?;
+        let _ = std::fs::remove_file(&tmp);
+        let head = self
+            .git(Some(dir))?
+            .args(["rev-parse", "--verify", "--quiet", "HEAD^{tree}"])
+            .text()
+            .unwrap_or_default();
+        Ok(tree != head)
+    }
+
+    fn fetch_target(
+        &self,
+        dir: &Path,
+        remote: &str,
+        refname: &str,
+        auth: Option<&RemoteAuth>,
+    ) -> Result<Option<String>> {
+        if !refname.starts_with("refs/") || refname.contains(':') {
+            return Err(VcsError::Invalid(format!(
+                "not a full ref name: {refname}"
+            )));
+        }
+        if self.remote_ref(dir, remote, refname, auth)?.is_none() {
+            return Ok(None);
+        }
+        self.git_auth(Some(dir), remote, auth)?
+            .args([
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--end-of-options",
+                remote,
+                &format!("+{refname}:refs/han/target"),
+            ])
+            .run()?;
+        self.commit_of(dir, "refs/han/target").map(Some)
+    }
+
+    fn unlanded(
+        &self,
+        dir: &Path,
+        target: &str,
+        tip: &str,
+        after: Option<&str>,
+    ) -> Result<Vec<Commit>> {
+        for id in [target, tip].into_iter().chain(after) {
+            if !is_hex_id(id) {
+                return Err(VcsError::Invalid("unlanded takes full commit ids".into()));
+            }
+        }
+        let out = self
+            .git(Some(dir))?
+            .args(crate::cherry_args(target, tip, after))
+            .text()?;
+        Ok(parse_cherry(&out))
     }
 
     fn remove_workspace(&self, ws: &Workspace) -> Result<()> {

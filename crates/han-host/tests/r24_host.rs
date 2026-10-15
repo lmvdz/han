@@ -114,6 +114,7 @@ async fn steering_a_guarded_agent_runs_strict_and_taints_it() {
         budget: None,
         turn_timeout: Duration::from_secs(60),
         exclusion: Vec::new(),
+        finish: Default::default(),
     };
     let deps = HostDeps {
         api: Arc::new(coder.clone()),

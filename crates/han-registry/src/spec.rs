@@ -71,6 +71,63 @@ pub struct WorkSpec {
     /// Run the session guarded.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub guarded: bool,
+    /// How the work finishes (PLAN §6 "Finish flow"), per space and repository. Off when absent.
+    #[serde(default, skip_serializing_if = "FinishSpec::is_default")]
+    pub finish: FinishSpec,
+}
+
+/// How finished work leaves the session. The node resolves the space's and the repository's settings into
+/// this one value; every option is off by default, so a spec without it keeps today's flow (the agent proposes
+/// `git_push` and `open_pr`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FinishSpec {
+    /// Land through the landing lane (R33): the agent may propose `land`, and the host proposes one `vcs.land`
+    /// to the executor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<LandFinish>,
+}
+
+impl FinishSpec {
+    fn is_default(&self) -> bool {
+        self == &FinishSpec::default()
+    }
+}
+
+/// The `land` finish flow.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LandFinish {
+    /// The ref to land on (a full branch ref). Default: the work's `defaultBranch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<String>,
+    /// Path rules for the informative tier of a proposal: the space's rules first, then the repository's. A
+    /// change gets the highest tier of any rule that matches a path it touches, or 1 when none does. Policy
+    /// derives the real tier (R33).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tier_rules: Vec<TierRule>,
+    /// The repository has no post-merge (`full`) stage, so `landed` is final and the host prunes on it. Default
+    /// false: `confirmed` is final.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_full_stage: bool,
+    /// After the session ends, how long the host keeps following its proposals so that it can prune on the
+    /// final one, in seconds. 0: it follows only while the session lives.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub settle_secs: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// One path rule of the informative tier.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TierRule {
+    /// A glob over repository paths (`crates/han-core/**`, `*.lock`).
+    pub path: String,
+    /// The tier, 0 to 3.
+    pub tier: u8,
 }
 
 impl Default for WorkSpec {
@@ -83,6 +140,7 @@ impl Default for WorkSpec {
             task: None,
             executor: None,
             guarded: false,
+            finish: FinishSpec::default(),
         }
     }
 }
@@ -342,6 +400,17 @@ mod tests {
                 task: Some("t1".into()),
                 executor: Some("@exec:han.example".into()),
                 guarded: true,
+                finish: FinishSpec {
+                    land: Some(LandFinish {
+                        target_ref: Some("refs/heads/trunk".into()),
+                        tier_rules: vec![TierRule {
+                            path: "crates/han-core/**".into(),
+                            tier: 3,
+                        }],
+                        no_full_stage: true,
+                        settle_secs: 600,
+                    }),
+                },
             },
             sandbox: SandboxPolicy {
                 backend: "bwrap".into(),
@@ -417,6 +486,9 @@ mod tests {
         assert_eq!(spec.work, WorkSpec::default());
         assert_eq!(spec.work.base, "HEAD");
         assert_eq!(spec.work.default_branch, "main");
+        // the land finish flow is off unless the spec turns it on
+        assert_eq!(spec.work.finish.land, None);
+        assert!(!serde_json::to_string(&spec).unwrap().contains("finish"));
         assert_eq!(spec.sandbox, SandboxPolicy::default());
         assert_eq!(spec.sandbox.backend, "auto");
         assert!(spec.toolchains.is_empty());
