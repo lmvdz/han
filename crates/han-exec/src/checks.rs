@@ -25,6 +25,10 @@ use serde_json::Value;
 use crate::RepoTarget;
 use crate::github::GithubMinter;
 
+pub mod warm;
+
+pub use warm::{RoutedChecks, WarmChecks};
+
 /// Which stage of a repository's checks a request is about (R33 §4 "Two stages").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -185,6 +189,13 @@ pub struct CheckError(pub String);
 pub trait Checks: Send + Sync + 'static {
     /// The backend's name, recorded in the evidence (`github-actions`, `warm-runner`).
     fn name(&self) -> &'static str;
+
+    /// The backend's name for evidence about `repo`. A backend that routes between others answers per repository;
+    /// the default is [`Checks::name`].
+    fn name_for(&self, repo: &RepoTarget) -> &'static str {
+        let _ = repo;
+        self.name()
+    }
 
     /// Asks the backend to run the checks of `req` on `req.commit`, once the lane has made the commit
     /// available (pushed). Backends that run by themselves on a push (GitHub Actions) do nothing. Calling it

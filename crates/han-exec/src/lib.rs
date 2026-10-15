@@ -284,6 +284,17 @@ impl RepoTarget {
     }
 }
 
+/// Where a repository's checks run (R33 §4 "Where checks run").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecksBackend {
+    /// GitHub Actions, read through the App ([`checks::GithubChecks`]).
+    #[default]
+    Github,
+    /// The executor's warm runner ([`checks::WarmChecks`]); the only backend for a repository with no GitHub side.
+    Warm,
+}
+
 /// The checks a repository's landing lane gates on (R33 §4 "Two stages").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -295,6 +306,9 @@ pub struct ChecksConfig {
     /// post-merge). Default empty: a repository with no `full` set treats `landed` as `confirmed`.
     #[serde(default)]
     pub full: Vec<String>,
+    /// Where the checks run: GitHub Actions (default) or the executor's own warm runner.
+    #[serde(default)]
+    pub backend: ChecksBackend,
     /// Seconds between two reads of a backend (default 30).
     #[serde(default = "default_poll_secs")]
     pub poll_secs: u64,
@@ -325,6 +339,7 @@ impl Default for ChecksConfig {
         ChecksConfig {
             required: default_required(),
             full: Vec::new(),
+            backend: ChecksBackend::default(),
             poll_secs: default_poll_secs(),
             appear_secs: default_appear_secs(),
             rerun: 0,

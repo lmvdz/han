@@ -205,6 +205,7 @@ impl Rig {
                 poll_secs: 0,
                 appear_secs: 300,
                 rerun: 0,
+                ..ChecksConfig::default()
             },
             ..RepoTarget::new("local:origin", w.remote.to_string_lossy().into_owned())
         };

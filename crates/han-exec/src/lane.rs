@@ -1385,7 +1385,7 @@ impl Lane {
                 .map(|(n, _)| (*n).clone())
                 .collect()
         };
-        let evidence = ChecksEvidence::new(&p.commit, self.checks.name(), &runs);
+        let evidence = ChecksEvidence::new(&p.commit, self.checks.name_for(repo), &runs);
         let evidence_text = evidence
             .canonical()
             .ok()
@@ -1644,7 +1644,7 @@ impl Lane {
                 return Ok(());
             }
         };
-        let evidence = ChecksEvidence::new(&p.commit, self.checks.name(), &runs)
+        let evidence = ChecksEvidence::new(&p.commit, self.checks.name_for(repo), &runs)
             .canonical()
             .ok()
             .and_then(|b| String::from_utf8(b).ok());
