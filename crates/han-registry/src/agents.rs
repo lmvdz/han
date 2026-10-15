@@ -3,13 +3,15 @@
 //!
 //! * `harness/<name>.json` (written by `han agent setup-harness`): the node executable and the adapter
 //!   package directory of an installed harness.
-//! * `agents.json` (written by `han agent add` and `han agent set`): the sandbox to use, the toolchains and, on
-//!   Linux, the OS user an agent runs as (SR-83).
+//! * `agents.json` (written by `han agent add`, `han agent set` and `han agent finish`): the sandbox to use, the
+//!   toolchains, on Linux the OS user an agent runs as (SR-83), and the finish flow of each space and repository.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::spec::{LandFinish, TierRule};
 
 /// The directory inside an agent's data directory that holds its own harness login (the harness's config
 /// directory, `CLAUDE_CONFIG_DIR` for Claude Code).
@@ -169,6 +171,78 @@ pub struct AgentEdit {
     pub model_key_file: Option<PathBuf>,
 }
 
+/// One layer of the `land` finish flow in `agents.json`: a space's, or one repository's within it. Whatever is
+/// absent is inherited from the space, and from the defaults of [`LandFinish`] after that.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LandSetting {
+    /// Whether the flow is on. Absent: the space's setting, and off when the space has none (the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The full branch ref to land on (`refs/heads/main`); absent: the work's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<String>,
+    /// Path rules of the informative tier. A repository's come after the space's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tier_rules: Vec<TierRule>,
+    /// The repository has no post-merge stage, so `landed` is final.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_full_stage: Option<bool>,
+    /// How long the host follows its proposals after its session ends, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle_secs: Option<u64>,
+}
+
+/// The finish flow of one space: its own setting, and per repository overrides (keyed by the repository as a
+/// session names it, `github:owner/repo`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpaceFinish {
+    /// The space's `land` setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<LandSetting>,
+    /// Per repository overrides of it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub repos: BTreeMap<String, LandSetting>,
+}
+
+impl LandSetting {
+    /// Refuses a value no host could use, so a typo is found now and not at the next start.
+    pub fn check(&self) -> Result<(), String> {
+        if let Some(r) = &self.target_ref
+            && !(r.starts_with("refs/heads/") && r.len() > "refs/heads/".len())
+        {
+            return Err(format!(
+                "{r:?} is not a full branch ref (for example refs/heads/main)"
+            ));
+        }
+        for t in &self.tier_rules {
+            if t.path.is_empty() || t.tier > 3 {
+                return Err(format!(
+                    "tier rule {:?}={}: a path glob and a tier from 0 to 3",
+                    t.path, t.tier
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A change to one layer of the `land` flow (`han agent finish`): what is `Some` is set, the rest stays.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LandEdit {
+    /// Turn the flow on or off.
+    pub enabled: Option<bool>,
+    /// The ref to land on.
+    pub target_ref: Option<String>,
+    /// Replaces this layer's tier rules.
+    pub tier_rules: Option<Vec<TierRule>>,
+    /// The repository has no post-merge stage.
+    pub no_full_stage: Option<bool>,
+    /// Seconds to follow after the session ends.
+    pub settle_secs: Option<u64>,
+}
+
 /// The sandboxes `han` knows.
 pub const SANDBOXES: [&str; 4] = ["auto", "mxc", "bwrap", "none"];
 
@@ -215,6 +289,10 @@ pub struct AgentsFile {
     /// Per-agent settings, by actor (`@coder:han.example`).
     #[serde(default)]
     pub agents: BTreeMap<String, AgentSettings>,
+    /// The finish flow of each space (`s1:han.example`) and its repositories. Absent: every flow is off and an
+    /// agent proposes `git_push` and `open_pr` as before. `han agent finish` writes it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub finish: BTreeMap<String, SpaceFinish>,
 }
 
 impl AgentsFile {
@@ -269,6 +347,104 @@ impl AgentsFile {
         }
         self.agents.insert(actor.to_owned(), now);
         Ok(true)
+    }
+
+    /// Applies `edit` to the `land` setting of `space`, or of its repository `repo`; only what the edit names
+    /// changes. Says whether anything did.
+    pub fn set_land(
+        &mut self,
+        space: &str,
+        repo: Option<&str>,
+        edit: &LandEdit,
+    ) -> Result<bool, String> {
+        if space.is_empty() {
+            return Err("give the space".into());
+        }
+        if repo.is_some_and(str::is_empty) {
+            return Err("--repo is empty".into());
+        }
+        let mut now = self
+            .finish
+            .get(space)
+            .and_then(|e| match repo {
+                Some(r) => e.repos.get(r),
+                None => e.land.as_ref(),
+            })
+            .cloned()
+            .unwrap_or_default();
+        if let Some(e) = edit.enabled {
+            now.enabled = Some(e);
+        }
+        if let Some(r) = &edit.target_ref {
+            now.target_ref = Some(r.clone());
+        }
+        if let Some(t) = &edit.tier_rules {
+            now.tier_rules.clone_from(t);
+        }
+        if let Some(n) = edit.no_full_stage {
+            now.no_full_stage = Some(n);
+        }
+        if let Some(s) = edit.settle_secs {
+            now.settle_secs = Some(s);
+        }
+        now.check()?;
+        let slot = self.finish.get(space).and_then(|e| match repo {
+            Some(r) => e.repos.get(r),
+            None => e.land.as_ref(),
+        });
+        if slot == Some(&now) || (slot.is_none() && now == LandSetting::default()) {
+            return Ok(false);
+        }
+        let entry = self.finish.entry(space.to_owned()).or_default();
+        match repo {
+            Some(r) => {
+                entry.repos.insert(r.to_owned(), now);
+            }
+            None => entry.land = Some(now),
+        }
+        Ok(true)
+    }
+
+    /// Removes the `land` setting of `space`, or of its repository `repo`. Says whether there was one.
+    pub fn clear_land(&mut self, space: &str, repo: Option<&str>) -> bool {
+        let Some(entry) = self.finish.get_mut(space) else {
+            return false;
+        };
+        let removed = match repo {
+            Some(r) => entry.repos.remove(r).is_some(),
+            None => entry.land.take().is_some(),
+        };
+        if entry.land.is_none() && entry.repos.is_empty() {
+            self.finish.remove(space);
+        }
+        removed
+    }
+
+    /// The `land` finish flow for a session in `space` on `repo`: the repository's setting over the space's, or
+    /// `None` when neither turns it on (the default).
+    pub fn land_for(&self, space: &str, repo: Option<&str>) -> Option<LandFinish> {
+        let entry = self.finish.get(space)?;
+        let over = repo.and_then(|r| entry.repos.get(r));
+        let base = entry.land.as_ref();
+        let pick = |f: fn(&LandSetting) -> Option<bool>| over.and_then(f).or(base.and_then(f));
+        if !pick(|l| l.enabled).unwrap_or(false) {
+            return None;
+        }
+        let mut tier_rules = base.map(|l| l.tier_rules.clone()).unwrap_or_default();
+        tier_rules.extend(over.map(|l| l.tier_rules.clone()).unwrap_or_default());
+        Some(LandFinish {
+            target_ref: over
+                .and_then(|l| l.target_ref.clone())
+                .or(base.and_then(|l| l.target_ref.clone())),
+            tier_rules,
+            no_full_stage: pick(|l| l.no_full_stage).unwrap_or(false),
+            settle_secs: over
+                .and_then(|l| l.settle_secs)
+                .or(base.and_then(|l| l.settle_secs))
+                .unwrap_or(0),
+            // The host's backstop is on with the flow (no setting turns it off yet).
+            ..LandFinish::default()
+        })
     }
 
     /// Turns the toolchain `tool` on for every agent and records where it lives (`han runner setup --toolchain`):
@@ -427,5 +603,101 @@ mod tests {
         assert!(!f.set_toolchain("rust", paths).unwrap());
         assert_eq!(f.toolchains, ["rust"]);
         assert!(f.set_toolchain("go", BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn the_land_flow_is_off_by_default_and_a_repository_overrides_its_space() {
+        let space = "s1:x";
+        let mut f = AgentsFile::default();
+        assert_eq!(f.land_for(space, Some("github:o/r")), None);
+        let rule = |p: &str, t| TierRule {
+            path: p.into(),
+            tier: t,
+        };
+        // a space with the flow on: every repository lands
+        let on = LandEdit {
+            enabled: Some(true),
+            target_ref: Some("refs/heads/main".into()),
+            tier_rules: Some(vec![rule("docs/**", 0)]),
+            ..LandEdit::default()
+        };
+        assert!(f.set_land(space, None, &on).unwrap());
+        assert!(!f.set_land(space, None, &on).unwrap());
+        let got = f.land_for(space, Some("github:o/r")).unwrap();
+        assert_eq!(got.target_ref.as_deref(), Some("refs/heads/main"));
+        assert_eq!(got.tier_rules, [rule("docs/**", 0)]);
+        assert!(f.land_for(space, None).is_some());
+        assert_eq!(f.land_for("other:x", None), None);
+        // a repository adds rules after the space's, and takes its own ref and stage
+        let over = LandEdit {
+            target_ref: Some("refs/heads/trunk".into()),
+            tier_rules: Some(vec![rule("crates/core/**", 3)]),
+            no_full_stage: Some(true),
+            settle_secs: Some(600),
+            ..LandEdit::default()
+        };
+        assert!(f.set_land(space, Some("github:o/r"), &over).unwrap());
+        let got = f.land_for(space, Some("github:o/r")).unwrap();
+        assert_eq!(got.target_ref.as_deref(), Some("refs/heads/trunk"));
+        assert_eq!(
+            got.tier_rules,
+            [rule("docs/**", 0), rule("crates/core/**", 3)]
+        );
+        assert!(got.no_full_stage);
+        assert_eq!(got.settle_secs, 600);
+        // another repository still gets the space's
+        let other = f.land_for(space, Some("github:o/q")).unwrap();
+        assert_eq!(other.target_ref.as_deref(), Some("refs/heads/main"));
+        assert!(!other.no_full_stage);
+        // a repository turns it off; the space stays on
+        let off = LandEdit {
+            enabled: Some(false),
+            ..LandEdit::default()
+        };
+        assert!(f.set_land(space, Some("github:o/r"), &off).unwrap());
+        assert_eq!(f.land_for(space, Some("github:o/r")), None);
+        assert!(f.land_for(space, Some("github:o/q")).is_some());
+        // a repository on its own, in a space with no setting
+        let solo = LandEdit {
+            enabled: Some(true),
+            ..LandEdit::default()
+        };
+        assert!(f.set_land("s2:x", Some("github:o/r"), &solo).unwrap());
+        assert!(f.land_for("s2:x", Some("github:o/r")).is_some());
+        assert_eq!(f.land_for("s2:x", Some("github:o/q")), None);
+        assert_eq!(f.land_for("s2:x", None), None);
+        // reset removes the layer and, with the last one, the space
+        assert!(f.clear_land("s2:x", Some("github:o/r")));
+        assert!(!f.clear_land("s2:x", Some("github:o/r")));
+        assert!(!f.finish.contains_key("s2:x"));
+        // it round-trips through the file
+        let text = serde_json::to_string(&f).unwrap();
+        assert_eq!(serde_json::from_str::<AgentsFile>(&text).unwrap(), f);
+    }
+
+    #[test]
+    fn a_land_value_no_host_could_use_is_refused_and_nothing_changes() {
+        let mut f = AgentsFile::default();
+        for bad in [
+            LandEdit {
+                target_ref: Some("main".into()),
+                ..LandEdit::default()
+            },
+            LandEdit {
+                target_ref: Some("refs/heads/".into()),
+                ..LandEdit::default()
+            },
+            LandEdit {
+                tier_rules: Some(vec![TierRule {
+                    path: "x".into(),
+                    tier: 4,
+                }]),
+                ..LandEdit::default()
+            },
+        ] {
+            assert!(f.set_land("s1:x", None, &bad).is_err());
+        }
+        assert!(f.set_land("", None, &LandEdit::default()).is_err());
+        assert_eq!(f, AgentsFile::default());
     }
 }

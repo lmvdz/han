@@ -1,0 +1,1339 @@
+{
+ "name": "gate-defaults-and-predicates",
+ "rules": [
+  "P-17",
+  "P-08"
+ ],
+ "description": "round 33: with no rule for a gated effect, tier 0 needs no approval and tier 1 and above need an owner; a rule with a tier predicate does not apply to an effect with no gate; a rule change decides at the claim, a tier does not change",
+ "profiles": {
+  "@rev:a.example": {
+   "actorKind": "agent",
+   "operator": "@o:a.example",
+   "operatorConfirmed": true,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@h3:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "16fbfc681a5be1e9dfcc2294c8d774002606f9f98ff28cc5350119e89c625d60",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@rev:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-mr",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "be42d958550f244126651786998ff156a791e2282db7ddbdae3efa4d8e145f47",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "f1b3219f2b0f5f2a7669b18ecf7941b1267aac6ef03b0b3f34fada70dfbf976b",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "7fd989fe858e879d12e3c273c058b5b1b65032b2ac42adb3cabd089044fe9456",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/a.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "6c2f5a5ce8a3ffdf7d717a8c841b10bb4fd05b7a9abbc335e88d315aa2dd3ca0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "be42d958550f244126651786998ff156a791e2282db7ddbdae3efa4d8e145f47",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow",
+   "note": "tier 0: no rule, no approval"
+  },
+  {
+   "entry": {
+    "id": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "4908bc8c620a12b93f0d97937e4a1a10808a53c5e8cc49af30d801cf0664a277",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "542fe73c346009ec78f51d4082d3c272d9c5d5b2a0f38fa67d80b2060c0122ad",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "70f5c0d726f13f7804b3718482da9a898f7d396cca5e51898c4fa45ea44e1e2c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "denied",
+   "note": "tier 1: no rule, an owner is needed"
+  },
+  {
+   "entry": {
+    "id": "ac8615dd7197fab13a31fb4d710047cc0009967d83120cdd658a84a81e6d4324",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "planDigest": "4908bc8c620a12b93f0d97937e4a1a10808a53c5e8cc49af30d801cf0664a277"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "denied",
+   "note": "a member is not an owner"
+  },
+  {
+   "entry": {
+    "id": "0c8fc195688607896aff8052671ab73b7ce850d8cf612f76e7fe8dce75eed6a8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@rev:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "planDigest": "4908bc8c620a12b93f0d97937e4a1a10808a53c5e8cc49af30d801cf0664a277",
+     "evidence": {
+      "kind": "han.review/1",
+      "over": "542fe73c346009ec78f51d4082d3c272d9c5d5b2a0f38fa67d80b2060c0122ad"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "denied",
+   "note": "nor is a reviewer, evidence or not"
+  },
+  {
+   "entry": {
+    "id": "b48c10c34d5304f2af0916a32a89d1d1f57e4ab82392800dff3181f044d6e655",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "planDigest": "4908bc8c620a12b93f0d97937e4a1a10808a53c5e8cc49af30d801cf0664a277"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "35fe1889f0f1bcdbe52c3e25d926a5ee4ed0b4c4c0bdee8c6bc8d1e26cce2a56",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct1b",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "9f100d10636fcf23971c72aa944a1a4e504553e478727f5edd950b421668a821",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "5d15c8d2f1bb4b141f73d6ad0f79d0dc7ae0022d9d92cfec57dbbe592b2b9858",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/a.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "365aa1da5a81db0e3eb356c45a989153c9566e7a9aebeb7b7c0665fa692a629c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "planDigest": "9f100d10636fcf23971c72aa944a1a4e504553e478727f5edd950b421668a821"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "bf0f841ebe63029d735727da5400954b8c47121efc690cdb657d9f5d36ff43c0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "allow",
+   "note": "tier 2: an owner"
+  },
+  {
+   "entry": {
+    "id": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "0fff19446598a53a41a9d323ca04bc0c83ed1d484b82501b1c697535d9d109a0",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "7a4f30b76376f67dee1038a9ddbceb072e4a6db2630b176cd0994f56853d59d3",
+      "total": 1,
+      "files": [
+       {
+        "path": "auth/a.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "b39ee89c358af7b51ec6e3c16246d6dee8c1790862dfd4b4f36f0e53c48378c2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "planDigest": "0fff19446598a53a41a9d323ca04bc0c83ed1d484b82501b1c697535d9d109a0"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "37fcbed5901a03a9ef58c4f07c6aa1a52c5daf14d0cbbb38a0baa147db3efae4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "denied",
+   "note": "tier 3: two humans, whatever the rules say"
+  },
+  {
+   "entry": {
+    "id": "c6d295b1fe76160522729b2a0d06f52e0be578e2ed2a92b5e4e95dcef1a1df94",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "planDigest": "0fff19446598a53a41a9d323ca04bc0c83ed1d484b82501b1c697535d9d109a0"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "denied",
+   "note": "a member is not an owner (the default rule)"
+  },
+  {
+   "entry": {
+    "id": "eac92321e3f0c3fa7ecb32271c7ebd64ac688efa21e034b433c468cb77381765",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@h3:a.example",
+     "role": "owner"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1319598c47985cb8a985799932b136029fdf4ce0b5389d9023d17e36f227642e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@h3:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "planDigest": "0fff19446598a53a41a9d323ca04bc0c83ed1d484b82501b1c697535d9d109a0"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-x7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "77f227873d8d14a3f8c1143bedafb8e6d7dddf93e4918b62709e150e8e525a95",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct3b",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "allow",
+   "check": {
+    "effects.cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3.claims.0.coApprovals": [
+     "1319598c47985cb8a985799932b136029fdf4ce0b5389d9023d17e36f227642e"
+    ]
+   },
+   "note": "a second owner"
+  },
+  {
+   "entry": {
+    "id": "dd6a7866c1cefcfd8deafadc22642e59fe813a581e019b075b4f3a022af2b94b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "maxTier": 1,
+        "approvers": [
+         "@rev:a.example",
+         "owner"
+        ],
+        "evidence": "han.review/1"
+       },
+       {
+        "action": "vcs.land",
+        "maxTier": 2,
+        "approvers": [
+         "@path-owner",
+         "owner"
+        ],
+        "humans": true
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner",
+         "member"
+        ],
+        "humans": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "55aa054b5faa407d9aeb45ef75cc1a31ebc25c4c0383e24ed1400c8be1169ec5",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "c4273b5bc4c761dae051cfd974f2af5fb13caff2f4d43a40ce9708c9160d5028",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "allow",
+   "check": {
+    "effects.ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21.gate.tier": 1
+   }
+  },
+  {
+   "entry": {
+    "id": "33472bdf27153eb867c696914e458ef7a3cf4edc0a4a269759beea7deb8779af",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@rev:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+     "planDigest": "55aa054b5faa407d9aeb45ef75cc1a31ebc25c4c0383e24ed1400c8be1169ec5",
+     "evidence": {
+      "kind": "han.review/1",
+      "over": "c4273b5bc4c761dae051cfd974f2af5fb13caff2f4d43a40ce9708c9160d5028"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-y1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a85222d1ddd0b3ca9f2b14761da2559873fde954f1a31e086c73779137da7c03",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "maxTier": 1,
+        "approvers": [
+         "owner"
+        ],
+        "evidence": "han.review/1"
+       },
+       {
+        "action": "vcs.land",
+        "maxTier": 2,
+        "approvers": [
+         "@path-owner",
+         "owner"
+        ],
+        "humans": true
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner",
+         "member"
+        ],
+        "humans": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fa1fe5ead2652f1a4c7bc751c040bc3adf267536db40eaef92b9c19ded705e06",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:28Z",
+   "expect": "denied",
+   "note": "the reviewer is no longer listed: its approval counts for nothing now"
+  },
+  {
+   "entry": {
+    "id": "e8e66c3b0166397187e699cf75d0cd9effaca61b8c36927b96246236fc4bbd4e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+     "planDigest": "55aa054b5faa407d9aeb45ef75cc1a31ebc25c4c0383e24ed1400c8be1169ec5"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-y2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:29Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "2264ce1456873e470f6672c75c9f3dd3fe210ba599a67c7645dc94c75d944e1a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct4b",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:30Z",
+   "expect": "allow",
+   "check": {
+    "effects.ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21.claims.0.approval": "e8e66c3b0166397187e699cf75d0cd9effaca61b8c36927b96246236fc4bbd4e"
+   },
+   "note": "and an owner's evidence-free approval does"
+  },
+  {
+   "entry": {
+    "id": "8f656f99a2f406514fdcc3c7089e68af20226aa4d9ce252d2b11c9038b72764f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "maxTier": 1,
+        "approvers": [
+         "@o:a.example"
+        ]
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "@m:a.example"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:31Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "7b8ef205ca5e665cd0b0497340c34e8fac0c19a15b32f16e43fa64ffdebb1ce5",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "01cc0a0e8d9c1ce10a4afc3c4617881229d4a1e60f711944f92f0a7b58ad372e",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-u1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:32Z",
+   "expect": "allow",
+   "check": {
+    "effects.1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198.gate": "<missing>"
+   },
+   "note": "no gates in the policy: no gate on the effect"
+  },
+  {
+   "entry": {
+    "id": "ed45348eb719b5207d2df3f5cc5bb3ce3762ac2087b3dea0573e80680f689e95",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+     "planDigest": "7b8ef205ca5e665cd0b0497340c34e8fac0c19a15b32f16e43fa64ffdebb1ce5"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-z1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:33Z",
+   "expect": "denied",
+   "note": "the tier rule does not apply to an effect with no gate"
+  },
+  {
+   "entry": {
+    "id": "c38f9125332a7fb5a6db54423e279543237821e9dd3530dbe6f852deb268fc0e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+     "planDigest": "7b8ef205ca5e665cd0b0497340c34e8fac0c19a15b32f16e43fa64ffdebb1ce5"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-z2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:34Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "c1ff8d2498ae2223551ea48e9c02e7cafe7e762cfc9c18453b4a0e7a481e04d5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cu1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "allow",
+   "note": "the next rule does"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "ct0": "6c2f5a5ce8a3ffdf7d717a8c841b10bb4fd05b7a9abbc335e88d315aa2dd3ca0",
+  "ct1": "70f5c0d726f13f7804b3718482da9a898f7d396cca5e51898c4fa45ea44e1e2c",
+  "ct1b": "35fe1889f0f1bcdbe52c3e25d926a5ee4ed0b4c4c0bdee8c6bc8d1e26cce2a56",
+  "ct2": "bf0f841ebe63029d735727da5400954b8c47121efc690cdb657d9f5d36ff43c0",
+  "ct3": "37fcbed5901a03a9ef58c4f07c6aa1a52c5daf14d0cbbb38a0baa147db3efae4",
+  "ct3b": "77f227873d8d14a3f8c1143bedafb8e6d7dddf93e4918b62709e150e8e525a95",
+  "ct4": "fa1fe5ead2652f1a4c7bc751c040bc3adf267536db40eaef92b9c19ded705e06",
+  "ct4b": "2264ce1456873e470f6672c75c9f3dd3fe210ba599a67c7645dc94c75d944e1a",
+  "cu1": "c1ff8d2498ae2223551ea48e9c02e7cafe7e762cfc9c18453b4a0e7a481e04d5",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "m9": "eac92321e3f0c3fa7ecb32271c7ebd64ac688efa21e034b433c468cb77381765",
+  "mr": "16fbfc681a5be1e9dfcc2294c8d774002606f9f98ff28cc5350119e89c625d60",
+  "pol": "dd6a7866c1cefcfd8deafadc22642e59fe813a581e019b075b4f3a022af2b94b",
+  "pol3": "a85222d1ddd0b3ca9f2b14761da2559873fde954f1a31e086c73779137da7c03",
+  "pol4": "8f656f99a2f406514fdcc3c7089e68af20226aa4d9ce252d2b11c9038b72764f",
+  "t0": "be42d958550f244126651786998ff156a791e2282db7ddbdae3efa4d8e145f47",
+  "t1": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+  "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+  "t3": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+  "t4": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+  "u1": "1f6620091de56462a558231c814ec3d5761e8b3936c6301c4eba7dedf0d45198",
+  "x1": "ac8615dd7197fab13a31fb4d710047cc0009967d83120cdd658a84a81e6d4324",
+  "x2": "0c8fc195688607896aff8052671ab73b7ce850d8cf612f76e7fe8dce75eed6a8",
+  "x3": "b48c10c34d5304f2af0916a32a89d1d1f57e4ab82392800dff3181f044d6e655",
+  "x4": "365aa1da5a81db0e3eb356c45a989153c9566e7a9aebeb7b7c0665fa692a629c",
+  "x5": "b39ee89c358af7b51ec6e3c16246d6dee8c1790862dfd4b4f36f0e53c48378c2",
+  "x6": "c6d295b1fe76160522729b2a0d06f52e0be578e2ed2a92b5e4e95dcef1a1df94",
+  "x7": "1319598c47985cb8a985799932b136029fdf4ce0b5389d9023d17e36f227642e",
+  "y1": "33472bdf27153eb867c696914e458ef7a3cf4edc0a4a269759beea7deb8779af",
+  "y2": "e8e66c3b0166397187e699cf75d0cd9effaca61b8c36927b96246236fc4bbd4e",
+  "z1": "ed45348eb719b5207d2df3f5cc5bb3ce3762ac2087b3dea0573e80680f689e95",
+  "z2": "c38f9125332a7fb5a6db54423e279543237821e9dd3530dbe6f852deb268fc0e"
+ }
+}

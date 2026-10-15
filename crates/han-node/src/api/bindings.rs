@@ -3,7 +3,7 @@
 
 use ts_rs::{Config, TS};
 
-use super::command::EvidenceRef;
+use super::command::{ApprovalEvidence, EvidenceRef};
 
 use super::{
     ActorKind, AdmissionRow, AgentText, ApprovalRow, BoardRow, BoardTotals, BudgetStatus,
@@ -39,6 +39,7 @@ pub fn typescript() -> String {
         Pending,
         HomeRef,
         EvidenceRef,
+        ApprovalEvidence,
         Command,
         CallResult,
         Filter,

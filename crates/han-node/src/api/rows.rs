@@ -769,6 +769,11 @@ pub struct EffectRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plan: Option<String>,
+    /// `sha256(JCS(change))` of the change summary the proposal's body carries, the one Policy derived the tier
+    /// from (P-17). An executor checks that it is the plan's `args.change` (X-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub change_digest: Option<String>,
     /// The task it is charged to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

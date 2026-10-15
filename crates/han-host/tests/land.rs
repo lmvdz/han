@@ -348,6 +348,19 @@ fn the_land_flow_proposes_a_correct_plan() {
     // the title comes from the task, not from the proposal's summary
     assert_eq!(a["title"], "Fix the login (github:o/r#12)");
     assert!(a.get("dependsOn").is_none() && a.get("rebaseOf").is_none());
+    // the summary Policy derives the tier from (P-17): the delta's paths and sizes, for the plan's target
+    let change = &a["change"];
+    assert_eq!(change["repo"], REPO);
+    assert_eq!(change["deltaDigest"], a["deltaDigest"]);
+    let paths: Vec<&str> = change["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["README.md", "src/auth.rs"]);
+    assert_eq!(change["total"], 2);
+    assert!(change.get("truncated").is_none());
 
     // the digest is the delta's digest, and the commit is the workspace's head
     let to = a["to"].as_str().unwrap();

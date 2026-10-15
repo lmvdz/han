@@ -706,6 +706,7 @@ async fn invites_and_approvals_take_the_times_a_face_collects() {
         proposal: proposal.clone(),
         expires_at,
         note: None,
+        evidence: None,
     };
     for bad in [at(0), "soon".to_owned()] {
         let e = alice.call(approve(Some(bad))).await.unwrap_err();

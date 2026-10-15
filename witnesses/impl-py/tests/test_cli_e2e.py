@@ -47,6 +47,20 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     await han(env, "ana", "cancel", S, pid2)
     assert f"{pid2[:8]} cancelled" in await han(env, "ana", "status", S)
     assert "denied" in (await han(env, "bob", "member", "set", S, "@bob:a.localhost", "owner", ok=False))[2]
+    # P-07a, G-01: the executor refuses its own open effect with a reason and an evidence file; a bystander's cancel is denied;
+    # the stored cancel carries both in its content and the blob is then readable by a member
+    await han(env, "ana", "member", "set", S, "@exec:a.localhost", "member")
+    ev = tmp_path / "why.json"; ev.write_text('{"why": "the checks failed"}')
+    pid3 = last_id(await han(env, "ana", "propose", S, "--executor", "@exec:a.localhost", "--plan", str(plan)))
+    code, _, err = await han(env, "bob", "cancel", S, pid3[:10], "--reason", "no", ok=False)
+    assert code == 1 and "denied" in err
+    code, _, err = await han(env, "exec", "cancel", S, pid3[:10], "--reason", "x" * 1025, ok=False)
+    assert code == 1 and "1,024" in err
+    await han(env, "exec", "cancel", S, pid3[:10], "--reason", "cannot run this", "--evidence", str(ev))
+    assert f"{pid3[:8]} cancelled" in await han(env, "ana", "status", S)
+    rec = [json.loads(l) for l in (await han(env, "bob", "read", S, "--json")).splitlines()][-1]
+    assert rec["entry"]["kind"] == "effect.cancel" and rec["content"]["reason"] == "cannot run this"
+    assert json.loads(await (await env.client("bob")).blob_get(rec["content"]["evidence"], S)) == {"why": "the checks failed"}
 
 async def test_task_and_read_json(env):
     """6.3, 3: `task` assigns work with an ask, `read --json` prints the records as JSON lines."""

@@ -398,3 +398,134 @@ async fn a_rerun_finds_the_ref_already_there() {
     assert!(matches!(again, Outcome::Succeeded { .. }), "{again:?}");
     assert_eq!(w.tip(), first);
 }
+
+// ───────────────────────── the change summary (P-17, X-13) ─────────────────────────
+
+impl World {
+    /// The summary of the approved change as a host builds it.
+    fn change(&self) -> han_vcs::Change {
+        let d = self.vcs.delta(&self.work, &self.base, &self.to).unwrap();
+        let n = self
+            .vcs
+            .delta_lines(&self.work, &self.base, &self.to, &d)
+            .unwrap();
+        han_vcs::land_change("local:origin", &d, &n).unwrap()
+    }
+
+    fn plan_with(&self, change: &han_vcs::Change) -> Value {
+        let mut plan = self.plan();
+        plan["args"]["change"] = serde_json::to_value(change).unwrap();
+        plan
+    }
+}
+
+#[tokio::test]
+async fn a_summary_of_the_change_passes_the_plan_check_and_the_bundle() {
+    let w = World::new();
+    let change = w.change();
+    assert_eq!(
+        (change.total, change.files.len(), change.truncated),
+        (1, 1, None)
+    );
+    assert_eq!(
+        (change.files[0].path.as_str(), change.files[0].lines),
+        ("a.txt", 2)
+    );
+    let plan = w.plan_with(&change);
+    VcsLand.plan_check(&plan, &w.config).unwrap();
+    VcsLand.preflight(&plan, &w.ctx(None, true)).await.unwrap();
+    // The digest the executor compares with the body's is the plan's `args.change`.
+    assert_eq!(
+        han_exec::actions::change_digest(&plan),
+        Some(change.digest())
+    );
+    // A host that lists fewer paths than the change has, and says so, is accepted: Policy makes it tier 3.
+    let mut cut = change.clone();
+    cut.files.clear();
+    cut.truncated = Some(true);
+    let plan = w.plan_with(&cut);
+    VcsLand.plan_check(&plan, &w.config).unwrap();
+    VcsLand.preflight(&plan, &w.ctx(None, true)).await.unwrap();
+    // A larger size than the change has only raises the tier.
+    let mut more = change.clone();
+    more.files[0].lines = 50;
+    VcsLand
+        .preflight(&w.plan_with(&more), &w.ctx(None, true))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_summary_that_understates_or_misdescribes_the_change_is_refused() {
+    let w = World::new();
+    let good = w.change();
+    let cases: Vec<(&str, han_vcs::Change)> = vec![
+        ("understates", {
+            let mut c = good.clone();
+            c.files[0].lines = 1;
+            c
+        }),
+        ("is not the change's", {
+            let mut c = good.clone();
+            c.files[0].path = "b.txt".into();
+            c
+        }),
+        ("is not the change's", {
+            let mut c = good.clone();
+            c.files[0].kind = han_vcs::FileKind::Add;
+            c
+        }),
+        ("not a valid summary", {
+            let mut c = good.clone();
+            c.files.clear(); // left out and not said
+            c
+        }),
+        ("not a valid summary", {
+            let mut c = good.clone();
+            c.truncated = Some(true); // said, with everything listed
+            c
+        }),
+        ("not a valid summary", {
+            let mut c = good.clone();
+            c.total = 2;
+            c
+        }),
+    ];
+    for (needle, c) in cases {
+        let plan = w.plan_with(&c);
+        match VcsLand.preflight(&plan, &w.ctx(None, true)).await {
+            Err(PlanError::Changeset(m) | PlanError::Schema(m)) => {
+                assert!(m.contains(needle), "{m}")
+            }
+            other => panic!("expected a refusal naming {needle:?}, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_summary_that_is_not_one_or_is_for_another_plan_fails_the_plan_check() {
+    let w = World::new();
+    let good = w.change();
+    let schema = |plan: Value, needle: &str| match VcsLand.plan_check(&plan, &w.config) {
+        Err(PlanError::Schema(m)) => assert!(m.contains(needle), "{m}"),
+        other => panic!("expected a schema refusal naming {needle:?}, got {other:?}"),
+    };
+    let mut c = good.clone();
+    c.repo = "local:elsewhere".into();
+    schema(w.plan_with(&c), "is for local:elsewhere");
+    let mut c = good.clone();
+    c.delta_digest = "f".repeat(64);
+    schema(w.plan_with(&c), "deltaDigest");
+    // Not a summary at all: an unknown member, a repeated path, a path that climbs out.
+    let mut plan = w.plan_with(&good);
+    plan["args"]["change"]["tier"] = json!(0);
+    schema(plan, "not a valid summary");
+    let mut c = good.clone();
+    let f = c.files[0].clone();
+    c.files = vec![f.clone(), f];
+    c.total = 2;
+    schema(w.plan_with(&c), "not a valid summary");
+    let mut plan = w.plan_with(&good);
+    plan["args"]["change"]["files"][0]["path"] = json!("../a.txt");
+    schema(plan, "not a valid summary");
+}

@@ -829,6 +829,13 @@ pub(crate) fn check_plan(
     if plan.get("action").and_then(Value::as_str) != Some(row.action.as_str()) {
         return Err(PlanError::Schema("the plan names another action".into()));
     }
+    // X-13: Policy read the proposal's `change`; it must be the summary the plan carries, which the action
+    // checks against the bundle. Both absent is fine (a policy with gates then makes it tier 3).
+    if row.action == "vcs.land" && row.change_digest != crate::actions::change_digest(&plan) {
+        return Err(PlanError::Schema(
+            "the proposal's change summary is not the plan's".into(),
+        ));
+    }
     action.plan_check(&plan, config)?;
     Ok((text.to_owned(), plan))
 }

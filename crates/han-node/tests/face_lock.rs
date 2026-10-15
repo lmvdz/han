@@ -361,6 +361,7 @@ async fn approvals_ask_per_action_and_hosts_cannot_unlock() {
             proposal: "nothing".into(),
             expires_at: None,
             note: None,
+            evidence: None,
         })
         .await;
     assert!(!presence_required(&r), "{r:?}");
@@ -571,6 +572,7 @@ async fn a_headless_service_node_starts_agents_without_a_prompt_and_a_persons_no
             proposal: "nothing".into(),
             expires_at: None,
             note: None,
+            evidence: None,
         })
         .await;
     assert!(!presence_required(&approve), "{approve:?}");

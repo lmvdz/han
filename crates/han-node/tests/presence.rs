@@ -147,6 +147,7 @@ fn approve(s: &Stage) -> Command {
         proposal: s.proposal.clone(),
         expires_at: None,
         note: None,
+        evidence: None,
     }
 }
 
@@ -322,6 +323,7 @@ fn host_child_sends_an_approval() {
                 proposal: spec.work.task.clone().unwrap(),
                 expires_at: None,
                 note: None,
+                evidence: None,
             })
             .await
         });

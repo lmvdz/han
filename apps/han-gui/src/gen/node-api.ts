@@ -69,6 +69,20 @@ size: number,
  */
 media_type: string, };
 
+export type ApprovalEvidence = { 
+/**
+ * The record's schema, for example `han.review/1`.
+ */
+kind: string, 
+/**
+ * The delta digest the record is over (the plan's `deltaDigest`).
+ */
+over: string, 
+/**
+ * The record, a blob already uploaded (content `evidence`, readable under G-01).
+ */
+record: EvidenceRef, };
+
 export type Command = { "type": "space_create", 
 /**
  * The home that will sequence it (default: the home of this device's actor).
@@ -344,7 +358,11 @@ expires_at?: string,
 /**
  * A note.
  */
-note?: string, } | { "type": "effect_cancel", 
+note?: string, 
+/**
+ * The record the approval rests on, for a rule that asks for evidence (P-17).
+ */
+evidence?: ApprovalEvidence, } | { "type": "effect_cancel", 
 /**
  * The space.
  */
@@ -1466,6 +1484,11 @@ plan_digest: string,
  * The plan as JSON text, from the proposal's content (absent when redacted or not delivered).
  */
 plan?: string, 
+/**
+ * `sha256(JCS(change))` of the change summary the proposal's body carries, the one Policy derived the tier
+ * from (P-17). An executor checks that it is the plan's `args.change` (X-13).
+ */
+change_digest?: string, 
 /**
  * The task it is charged to.
  */

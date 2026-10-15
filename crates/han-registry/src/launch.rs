@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::agents::{AgentsFile, HarnessInstall};
 use crate::home::HomeRef;
 use crate::spec::{
-    BudgetSpec, Dirs, HarnessSpec, HostSpec, PriceSpec, ProxySpec, SandboxPolicy, WorkSpec,
+    BudgetSpec, Dirs, FinishSpec, HarnessSpec, HostSpec, PriceSpec, ProxySpec, SandboxPolicy,
+    WorkSpec,
 };
 
 /// The file of model prices in a node's data directory.
@@ -217,6 +218,9 @@ impl Registry {
                 issue: launch.issue.clone(),
                 task: launch.task.clone(),
                 executor: Some(launch.executor.clone()),
+                finish: FinishSpec {
+                    land: file.land_for(&launch.space, launch.repo.as_deref()),
+                },
                 ..WorkSpec::default()
             },
             sandbox: SandboxPolicy {
@@ -360,6 +364,47 @@ mod tests {
         none.harness = None;
         none.agent = "@other:a.localhost".into();
         assert!(matches!(r.resolve(&none), Err(LaunchError::Invalid(_))));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn the_finish_flow_of_the_space_and_the_repository_ends_up_in_the_spec() {
+        let d = dir("finish");
+        let r = Registry::open(&d);
+        let l = launch("/etc/han/driver.toml");
+        // off unless set: the spec does not even mention it
+        assert_eq!(
+            r.resolve(&l).unwrap().spec.work.finish,
+            FinishSpec::default()
+        );
+        std::fs::write(
+            d.join("agents.json"),
+            r#"{"finish":{"s1:a.localhost":{
+                "land":{"enabled":true,"targetRef":"refs/heads/main","tierRules":[{"path":"docs/**","tier":0}]},
+                "repos":{"github:o/r":{"settleSecs":300,"tierRules":[{"path":"crates/core/**","tier":3}]}}}}}"#,
+        )
+        .unwrap();
+        let land = r.resolve(&l).unwrap().spec.work.finish.land.unwrap();
+        assert_eq!(land.target_ref.as_deref(), Some("refs/heads/main"));
+        assert_eq!(land.settle_secs, 300);
+        assert_eq!(land.tier_rules.len(), 2);
+        // a repository the space does not name gets the space's
+        let mut other = launch("/etc/han/driver.toml");
+        other.repo = Some("github:o/other".into());
+        assert_eq!(
+            r.resolve(&other)
+                .unwrap()
+                .spec
+                .work
+                .finish
+                .land
+                .unwrap()
+                .settle_secs,
+            0
+        );
+        // another space has none
+        other.space = "s2:a.localhost".into();
+        assert_eq!(r.resolve(&other).unwrap().spec.work.finish.land, None);
         let _ = std::fs::remove_dir_all(d);
     }
 

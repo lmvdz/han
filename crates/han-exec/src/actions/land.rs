@@ -7,6 +7,9 @@
 //! * `base`, `to`: the approved change is `base..to`; `deltaDigest` is its [`han_vcs::Delta`] digest, which
 //!   does not depend on the base. The approval binds the plan, so these are what a person approved;
 //! * `tier`: the risk tier 0 to 3, informative (Policy derives its own);
+//! * `change`: the summary Policy derives the tier from (architecture.md P-17), optional: `{repo, deltaDigest,
+//!   total, files, truncated?}`. The executor checks it against the bundle (X-13) before it claims, and the
+//!   claim checks that it is the one the proposal's body carries ([`crate::executor::check_plan`]);
 //! * `rebase`: `"path-disjoint"` lets the lane land the change on a later tip of `ref` when the delta is
 //!   path-disjoint from it; `"none"` lands only on `base` itself;
 //! * `dependsOn`: other proposals (`{repo, proposal}`) to land first; ordering is the lane's job, the plan
@@ -58,6 +61,8 @@ struct Args {
     tier: u8,
     rebase: Rebase,
     #[serde(default)]
+    change: Option<Value>,
+    #[serde(default)]
     depends_on: Vec<Dep>,
     #[serde(default)]
     rebase_of: Option<String>,
@@ -104,6 +109,29 @@ pub fn bundle_base(plan: &Value) -> String {
         .find_map(|k| a.and_then(|a| a.get(*k)).and_then(Value::as_str))
         .unwrap_or_default()
         .to_owned()
+}
+
+/// The plan's `change` as a valid summary (architecture.md P-17): the shape and the bounds Policy checks.
+fn change_of(c: &Value) -> Result<han_vcs::Change, PlanError> {
+    let text = serde_json::to_string(c).map_err(|e| PlanError::Schema(e.to_string()))?;
+    let v = han_core::json::parse(text.as_bytes())
+        .map_err(|e| PlanError::Schema(format!("the change summary: {e}")))?;
+    if !han_core::policy::change_summary(&v) {
+        return Err(PlanError::Schema(
+            "the change summary is not a valid summary (at most 64 files in byte order, 12,288 bytes)"
+                .into(),
+        ));
+    }
+    serde_json::from_value(c.clone()).map_err(|e| PlanError::Schema(e.to_string()))
+}
+
+/// The digest of a plan's `args.change`: what the proposal's body must carry (X-13). `None` when the plan has
+/// none or it is not Json the protocol can digest.
+pub fn change_digest(plan: &Value) -> Option<String> {
+    let c = plan.get("args")?.get("change")?;
+    let text = serde_json::to_string(c).ok()?;
+    let v = han_core::json::parse(text.as_bytes()).ok()?;
+    han_core::ids::json_digest(&v).ok()
 }
 
 fn args(plan: &Value) -> Result<Args, PlanError> {
@@ -289,6 +317,20 @@ impl Action for VcsLand {
         if a.tier > 3 {
             return Err(PlanError::Schema("tier is 0 to 3".into()));
         }
+        if let Some(c) = &a.change {
+            let change = change_of(c)?;
+            if change.repo != target {
+                return Err(PlanError::Schema(format!(
+                    "the change summary is for {}, not {target}",
+                    change.repo
+                )));
+            }
+            if change.delta_digest != a.delta_digest {
+                return Err(PlanError::Schema(
+                    "the change summary's deltaDigest is not the plan's".into(),
+                ));
+            }
+        }
         // A plan sees only itself: what is a cycle on its face is a dependency named twice, or a
         // dependency on the proposal this one replaces (the lane checks its whole graph, `depends_cycle`).
         let mut seen = BTreeSet::new();
@@ -351,6 +393,22 @@ impl Action for VcsLand {
                 short(&a.base),
                 short(&a.to)
             )));
+        }
+        // X-13: what Policy derived the tier from is the change the bundle holds
+        if let Some(c) = &a.change {
+            let claimed = change_of(c)?;
+            let lines = ctx
+                .vcs
+                .delta_lines(&dir, &a.base, &a.to, &delta)
+                .map_err(|e| PlanError::Preflight(e.to_string()))?;
+            han_vcs::check_land_change(
+                &claimed,
+                crate::plan_target(plan),
+                &a.delta_digest,
+                &delta,
+                &lines,
+            )
+            .map_err(|why| PlanError::Changeset(format!("the change summary: {why}")))?;
         }
         Ok(())
     }

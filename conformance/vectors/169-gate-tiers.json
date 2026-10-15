@@ -1,0 +1,1585 @@
+{
+ "name": "gate-tiers",
+ "rules": [
+  "P-17"
+ ],
+ "description": "round 33: Policy derives a vcs.land's tier from its change summary and the policy's gates: path classes, sizes, the built-in never-auto paths, renames, repo-scoped rules, and a summary that is missing or truncated fails closed; the proposer states no tier",
+ "profiles": {
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "7f0d86e6e5a175521da35410e3f89256d90c0ec10df37a724a9b5510895c92c2",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "0c02dc4ec4742c13205edcb66d78ae467f89a79e05b684cbfb1da39ac887b438",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/guide.md",
+        "kind": "modify",
+        "lines": 5
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow",
+   "check": {
+    "effects.85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364.gate.tier": 0,
+    "effects.85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364.gate.deltaDigest": "0c02dc4ec4742c13205edcb66d78ae467f89a79e05b684cbfb1da39ac887b438",
+    "effects.85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364.gate.changeDigest": "3d6d6675e645a8bcf838580a6c48a6559b9e1d498fe8da025cf4444ef002aff9"
+   },
+   "note": "docs only, small"
+  },
+  {
+   "entry": {
+    "id": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "c571f9a045dd55b6816cc94b9d763894ecbc28ebac20c98b435c559e068a2862",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "7b392de72b9f44b57374b5b3f9b96f6188c79a81fb1cb1f233659a409c650972",
+      "total": 2,
+      "files": [
+       {
+        "path": "gen/x.rs",
+        "kind": "add",
+        "lines": 10
+       },
+       {
+        "path": "src/tests/t.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-b",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow",
+   "check": {
+    "effects.2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56.gate.tier": 0
+   },
+   "note": "generated and tests, small"
+  },
+  {
+   "entry": {
+    "id": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "06a4ed6882bb826b434155c41777deadea774316ac5a48725fe47c4b46019b95",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "d9a345519e51098b5d3d4d0e1f5de083595b57b881747415c562f94c48655d2f",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/g.md",
+        "kind": "modify",
+        "lines": 20
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow",
+   "check": {
+    "effects.a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d.gate.tier": 0
+   },
+   "note": "20 lines is small"
+  },
+  {
+   "entry": {
+    "id": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "b13a3afd127c9a91e60ef7f7ff86ff1742f9a01311ac1aeafeb91650fb0ce824",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "e4e235693a77eff0f384ae00c2c8a1e11ebc8018a14ef1c6d3593427631c1699",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/g.md",
+        "kind": "modify",
+        "lines": 21
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow",
+   "check": {
+    "effects.3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7.gate.tier": 1
+   },
+   "note": "21 lines is not"
+  },
+  {
+   "entry": {
+    "id": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "86db113363ddd25e77629dfba5537a71f5e7f9a41f61dd61054624e7626e4393",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "272c6fe7b5faa06dec5f0f415cd872e007f7930278e3d96dfe993e68b03dd672",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/lib.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-d",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow",
+   "check": {
+    "effects.1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020.gate.tier": 1
+   },
+   "note": "ordinary code"
+  },
+  {
+   "entry": {
+    "id": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "491f33c13aa4ebf97cc4bf89c4683c08aa060b7ed7507c6f72e989ffaf2b0f67",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "12a8ccdb26dce063086645d4cf0b9c3794b8f11d57e1243506f3b285a26df634",
+      "total": 2,
+      "files": [
+       {
+        "path": "docs/g.md",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "src/lib.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-e",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow",
+   "check": {
+    "effects.4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de.gate.tier": 1
+   },
+   "note": "docs and code"
+  },
+  {
+   "entry": {
+    "id": "270d42c6f2fbe7dd57dc7efd5f326d8c4aa46cc50fd5204ac1162d8fefbb2746",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "b114f798a4ae1a7ae28fff1a4a27610827b6400eb6071d21f407758929b80d8c",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "19ff684c7647cf699afcaa76fb8ad1f3403888a6cc2d5f3dd23d539fd63cdd74",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/pay.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-f1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow",
+   "check": {
+    "effects.270d42c6f2fbe7dd57dc7efd5f326d8c4aa46cc50fd5204ac1162d8fefbb2746.gate.tier": 2
+   },
+   "note": "a sensitive path"
+  },
+  {
+   "entry": {
+    "id": "28ca870b4fbe0d16fa51710d39fb2893a3d7c3fa2bb56b497691165fe9f579f7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "a6e04ea88007066577079046670f8c28b47e68f9bd3c3b0019c552d2cb28790c",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "e117bae922c7fd27763ff25e3a8cbd90d60f9d47fa0aebda5cabc3162242fa18",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/NOTES.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-f2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow",
+   "check": {
+    "effects.28ca870b4fbe0d16fa51710d39fb2893a3d7c3fa2bb56b497691165fe9f579f7.gate.tier": 2
+   },
+   "note": "the first matching rule decides: payments comes before *.md"
+  },
+  {
+   "entry": {
+    "id": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "5e6c2029a457ab09c46aa36a384a40ff99a6ef2518871ed088410d298ab2b57d",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "f720fb88d3825088224b776faaa083247ea6de28205570b4870d13b675b6aec7",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 500
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "allow",
+   "check": {
+    "effects.907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4.gate.tier": 1
+   },
+   "note": "500 lines is not large"
+  },
+  {
+   "entry": {
+    "id": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "115037759ca68fecabd2621e9761bc53401626192119841d4b21ec99593ab449",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "99a151976f32e9f8b00fda99d94c765d1ba13323ce6b192b102f6960b3deba76",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 501
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "effects.c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96.gate.tier": 2
+   },
+   "note": "501 lines is"
+  },
+  {
+   "entry": {
+    "id": "732c743afda2f0146cac1be08c075fec6ee7e5e4d0728dfa1b3459558cd38ad8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "19853157f7cb6201c308190baaf0eba363f7179ba92a5f070a6a2709a667f6f9",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "26e7923b4a434bfa2e7b888722d96ef4799338be3e3422811acbae1e9d8bb7ed",
+      "total": 2,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 300
+       },
+       {
+        "path": "src/b.rs",
+        "kind": "add",
+        "lines": 300
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow",
+   "check": {
+    "effects.732c743afda2f0146cac1be08c075fec6ee7e5e4d0728dfa1b3459558cd38ad8.gate.tier": 2
+   },
+   "note": "sizes add up"
+  },
+  {
+   "entry": {
+    "id": "7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "9b5ec3a53fa67d523b05290270adc923d41cfe49280b63110c4d7607658b0595",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "2702054359df1825b95bb3dc07bbb1a9b7712265763086fc75979f14c3ed9d30",
+      "total": 1,
+      "files": [
+       {
+        "path": "migrations/001.sql",
+        "kind": "add",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-h1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "allow",
+   "check": {
+    "effects.7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374.gate.tier": 3
+   },
+   "note": "a critical path"
+  },
+  {
+   "entry": {
+    "id": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "834c4e55137913bccf8c8619c7b251c0a74442e7cb08bfef963ca78535e99e3b",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "fd53f6a97f16e4cfa7951025a2c77ffdc31409a643814ef53fef24c78f2fd1ba",
+      "total": 2,
+      "files": [
+       {
+        "path": "auth/a.rs",
+        "kind": "modify",
+        "lines": 1
+       },
+       {
+        "path": "payments/p.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-h2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow",
+   "check": {
+    "effects.028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a.gate.tier": 3
+   },
+   "note": "the highest path decides"
+  },
+  {
+   "entry": {
+    "id": "0e3464834437ffcda57a3e43bc96660ac8def57b2728c739a962f0811ee09490",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "78e1037154e74d49113d75a197f2c0f65803c3db269eadf66639d507f9250bae",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "6e68922aa1404c1155b1a2deaaf931992f54622af150c5764b77ed9a80b80f2f",
+      "total": 1,
+      "files": [
+       {
+        "path": ".github/workflows/ci.yml",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "allow",
+   "check": {
+    "effects.0e3464834437ffcda57a3e43bc96660ac8def57b2728c739a962f0811ee09490.gate.tier": 2
+   },
+   "note": "never auto: a rule that calls CI docs can't lower it"
+  },
+  {
+   "entry": {
+    "id": "31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "17f83c95888ec29ad772fd5f0449c5b88063df2ff88361c04cd7aab344ae3981",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "6f4448423e91fd4f05fb45a4ff68f2d8e333228ea361d4a391a8bd2d6fe9a71c",
+      "total": 1,
+      "files": [
+       {
+        "path": "Cargo.lock",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "allow",
+   "check": {
+    "effects.31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749.gate.tier": 2
+   },
+   "note": "never auto: a lockfile called generated"
+  },
+  {
+   "entry": {
+    "id": "8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "c88fa0210ca57681493059167ec0ce06b7c41326485d851dc4e2f6d40eda3a99",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "5552b54f2d4297a7758dbbc943047361abaa9ff826cbf18b900480fd5366d54e",
+      "total": 1,
+      "files": [
+       {
+        "path": "crates/x/Cargo.toml",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow",
+   "check": {
+    "effects.8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6.gate.tier": 2
+   },
+   "note": "never auto: a dependency manifest"
+  },
+  {
+   "entry": {
+    "id": "0b21422edf191bb2e5cf364c3b0ad30dde388735dd6208764c8728a9ef05cf00",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "3f37c21b6be4a647e7fa3d01b93d128efe9efedebcd1249e0a6757fd967c553e",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "523c176f8a41cce594e3a88aed153d0e3f0604dc07286cfea5b4bfddb9e1038e",
+      "total": 1,
+      "files": [
+       {
+        "path": "deploy/.env",
+        "kind": "add",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "allow",
+   "check": {
+    "effects.0b21422edf191bb2e5cf364c3b0ad30dde388735dd6208764c8728a9ef05cf00.gate.tier": 2
+   },
+   "note": "never auto: credentials"
+  },
+  {
+   "entry": {
+    "id": "dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "d83501498b1e48122179f4584095083d0975ca6468f9f67627c4e09c15ceb21f",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "a58146e2e8641ee54ecabe8b2d3a2bf31bc0328e724af46c1b68a826df656513",
+      "total": 1,
+      "files": [
+       {
+        "path": "keys/server.pem",
+        "kind": "add",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "allow",
+   "check": {
+    "effects.dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26.gate.tier": 2
+   },
+   "note": "never auto: a key"
+  },
+  {
+   "entry": {
+    "id": "62af4248f00cec842ffae54db8e7d97a976837e154b514d2ff6243af945c8079",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "274fda5ef4f42390e9957f365e5ac86204cf02de49df60bd926d77aeec9ea479",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "1ed185e605ecb044bb194a7dd9c973f90d2493eb321931afce7b7d737efd1bd1",
+      "total": 1,
+      "files": [
+       {
+        "path": ".han/policy.json",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-i6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "allow",
+   "check": {
+    "effects.62af4248f00cec842ffae54db8e7d97a976837e154b514d2ff6243af945c8079.gate.tier": 2
+   },
+   "note": "never auto: HAN's own config"
+  },
+  {
+   "entry": {
+    "id": "aa3ab42b9fc149f4104f53061cb7f759a35249a7da42c88316c66ec94346c3f3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "28991de42029be1b4983daae589273f67cf5143dd9bed45e87ee0807681f349f",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "eac941fe29346e6b451eb90c3d6a3efc174afd1fd838e40dcc665964f8de01a7",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/new.md",
+        "kind": "rename",
+        "lines": 0,
+        "fromPath": "payments/old.md"
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-j1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "allow",
+   "check": {
+    "effects.aa3ab42b9fc149f4104f53061cb7f759a35249a7da42c88316c66ec94346c3f3.gate.tier": 2
+   },
+   "note": "a rename is judged on both of its paths"
+  },
+  {
+   "entry": {
+    "id": "b822e8664c5725e74d71317bc1006d9bee4242b1650f76951ee929212d30fe53",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "94b3546fbe827dd5c66dab298c12ad7e4e9526542fc696767b67a36f431ec5a4",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "399558e4538277104b8ae3ba12578fec612fe15b8196fefa6450fc71480be60b",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/new.rs",
+        "kind": "rename",
+        "lines": 0,
+        "fromPath": "docs/old.md"
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-j2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "allow",
+   "check": {
+    "effects.b822e8664c5725e74d71317bc1006d9bee4242b1650f76951ee929212d30fe53.gate.tier": 2
+   },
+   "note": "and on the new path"
+  },
+  {
+   "entry": {
+    "id": "69d698db7b546cebae552ef12a0e59e2c4f05ac424a40368e50ac545dba272aa",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "0c770aa9955ee863a1c45f38e51e677a94425144a234536a6d0000cba1083ed9",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/b",
+      "deltaDigest": "ec673aafe3d145f042421bb4cbe24a836931871b159b191b1875bd500e8f8c39",
+      "total": 1,
+      "files": [
+       {
+        "path": "only-b/x.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-k1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "allow",
+   "check": {
+    "effects.69d698db7b546cebae552ef12a0e59e2c4f05ac424a40368e50ac545dba272aa.gate.tier": 3
+   },
+   "note": "a rule scoped to a repo applies in that repo"
+  },
+  {
+   "entry": {
+    "id": "d5d49e979d29d55e47683e22fe82606b0e2e41b854774267d06eebbb7c42c274",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "3f8ca258c365ca1a065ee4b8d7b5d28807dbc37bf069d72b6aec220abfc22abc",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "8f1b5a1d2a62b0125aa0720a385f167d1c2efc85b9da8ca7c5b40f7b59e1f9e7",
+      "total": 1,
+      "files": [
+       {
+        "path": "only-b/x.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-k2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "allow",
+   "check": {
+    "effects.d5d49e979d29d55e47683e22fe82606b0e2e41b854774267d06eebbb7c42c274.gate.tier": 1
+   },
+   "note": "and in no other"
+  },
+  {
+   "entry": {
+    "id": "2fd6e39955857264c6953f8b8aed8d2272536c216df0ad90d6f67563eb498ec5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "53e2c8a0dad092d5300914dc3fb35b6839788cbf057525ce18394e8bd4aa9be3",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "8f60e40082774455f544a90de072f56cf494bc007aa3c265e3bd50078c0080db",
+      "total": 3,
+      "files": [
+       {
+        "path": "docs/a.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ],
+      "truncated": true
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-l",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:28Z",
+   "expect": "allow",
+   "check": {
+    "effects.2fd6e39955857264c6953f8b8aed8d2272536c216df0ad90d6f67563eb498ec5.gate.tier": 3
+   },
+   "note": "files left out: fails closed"
+  },
+  {
+   "entry": {
+    "id": "57b7906e24c2d405ae072d006ef8d0156da8b6b06428be7b7bab7b28675eeed4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "3245689b0dec8e94adb27aa2219f358b1a1f2413dcfb6865980ea1d7ca2fb597",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:29Z",
+   "expect": "allow",
+   "check": {
+    "effects.57b7906e24c2d405ae072d006ef8d0156da8b6b06428be7b7bab7b28675eeed4.gate": {
+     "tier": 3
+    }
+   },
+   "note": "no change summary: fails closed, and nothing to name evidence over"
+  },
+  {
+   "entry": {
+    "id": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "e14b6f631fd95c63be030c1203a222f0a78459ad3832740403676894df423b08",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-n",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:30Z",
+   "expect": "allow",
+   "check": {
+    "effects.fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a.gate": "<missing>"
+   },
+   "note": "another action has no gate"
+  },
+  {
+   "entry": {
+    "id": "db0b3f081804acbb30d4c40efca51f0f75284f23839c302dc40f2a91246f4c7d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "1f621d2602237cf08ce541fa935e73de86e9ebc638f90ba0e578001ef3b96943",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "673845081fcc24c5317847ff421874dd4ab48c5aff88d79071f394723382c32e",
+      "total": 0,
+      "files": [
+       {
+        "path": "docs/a.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-o",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:31Z",
+   "expect": "invalid",
+   "note": "total below the files listed"
+  },
+  {
+   "entry": {
+    "id": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "da1cbe976f523891155352874773d0aad8fabc287c0ee0b265a2b403442c544d",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "3a04da39d0e92b818f399a5f2b866a500b3c5abd786449cbd370c59dcfec6fc3",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/a.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     },
+     "tier": 0
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-q",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:32Z",
+   "expect": "invalid",
+   "note": "a proposer states no tier: the body is closed"
+  },
+  {
+   "entry": {
+    "id": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "30a49980d52bc67a72008eafa67d000adeaa5e6aadcfd1aba693ca5344693c8a",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "05b98364a61b165f63991dadf36c71c07ef60ab44a717487a4507dbd14078bd3",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/a.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-r",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:33Z",
+   "expect": "invalid",
+   "note": "a change summary belongs to a vcs.land"
+  },
+  {
+   "entry": {
+    "id": "dd6a7866c1cefcfd8deafadc22642e59fe813a581e019b075b4f3a022af2b94b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "docs/**",
+         "class": "critical"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:34Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "d74f4d4fd42d124e64d3ff176ab25823252a6a4c0baf0f147d1d2a4ee7b77d17",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "37602d2823a48089508bf76e27f77053a6ecf63935bc857b3e9274ba579855d7",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/g.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-s",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "allow",
+   "check": {
+    "effects.ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af.gate.tier": 3
+   },
+   "note": "the new policy applies to a new proposal"
+  },
+  {
+   "entry": {
+    "id": "2cf12316d6bd9be5097f453aa239282a9fad1217f7209f0aca40eb0c0db71dce",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:36Z",
+   "expect": "allow",
+   "check": {
+    "effects.85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364.gate.tier": 0,
+    "effects.ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af.gate.tier": 3
+   },
+   "note": "a tier is fixed at the proposal: a later policy changes none"
+  },
+  {
+   "entry": {
+    "id": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "484ca90e73d8ef647527ff5792d82d2c88d78601e369cd090844958b164a8a33",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "0fbec4f89ad4f115c107f4ee9b09c1347998dc03d0307d97fac1530bfe1b322a",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/g.md",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:37Z",
+   "expect": "allow",
+   "check": {
+    "effects.2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815.gate": "<missing>"
+   },
+   "note": "a policy without gates derives none"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a": "85a0aaf389421026f26783df3f9d08f2cca4b4ab27fa9c37d4212982acfc2364",
+  "b": "2ccc16c1ba90c04eb9a746d99e893ffe4e50fe52153757ab38dd3996d2c9ec56",
+  "c1": "a115946252c98d549a2d71da21047f98e0c62123ffc2baed156c7f3c5faa274d",
+  "c2": "3233a4d232c23d3f06a7ab03e776535bde4a633484567ca0bdeb97ddf5d3a3d7",
+  "d": "1e86b7434ff16245566f34c9583d28842f7e7b561e7b266aaee11f1109f21020",
+  "e": "4b82447857c438cfbf5d50dd41e3114ce411fa51fc1da3b4ba0ec789cec058de",
+  "f1": "270d42c6f2fbe7dd57dc7efd5f326d8c4aa46cc50fd5204ac1162d8fefbb2746",
+  "f2": "28ca870b4fbe0d16fa51710d39fb2893a3d7c3fa2bb56b497691165fe9f579f7",
+  "g1": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+  "g2": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
+  "g3": "732c743afda2f0146cac1be08c075fec6ee7e5e4d0728dfa1b3459558cd38ad8",
+  "h1": "7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374",
+  "h2": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+  "i1": "0e3464834437ffcda57a3e43bc96660ac8def57b2728c739a962f0811ee09490",
+  "i2": "31241ee540d82fc945c280e323a92547a04378aef4a080eb811dd1115a537749",
+  "i3": "8caf42e59cfcf030916165bf95b78705207fc0aa1045008ad99ba7e594eec9b6",
+  "i4": "0b21422edf191bb2e5cf364c3b0ad30dde388735dd6208764c8728a9ef05cf00",
+  "i5": "dc217779ef68b30413794a3c5388865985e312f4ddee2d076526b79758d93d26",
+  "i6": "62af4248f00cec842ffae54db8e7d97a976837e154b514d2ff6243af945c8079",
+  "j1": "aa3ab42b9fc149f4104f53061cb7f759a35249a7da42c88316c66ec94346c3f3",
+  "j2": "b822e8664c5725e74d71317bc1006d9bee4242b1650f76951ee929212d30fe53",
+  "k1": "69d698db7b546cebae552ef12a0e59e2c4f05ac424a40368e50ac545dba272aa",
+  "k2": "d5d49e979d29d55e47683e22fe82606b0e2e41b854774267d06eebbb7c42c274",
+  "l": "2fd6e39955857264c6953f8b8aed8d2272536c216df0ad90d6f67563eb498ec5",
+  "m": "57b7906e24c2d405ae072d006ef8d0156da8b6b06428be7b7bab7b28675eeed4",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "n": "fcb0a0eb7f7b4bac75f1764e594aff10d5ab7f48bdba5646982b629484d1a71a",
+  "o": "db0b3f081804acbb30d4c40efca51f0f75284f23839c302dc40f2a91246f4c7d",
+  "pol": "dd6a7866c1cefcfd8deafadc22642e59fe813a581e019b075b4f3a022af2b94b",
+  "pol2": "2cf12316d6bd9be5097f453aa239282a9fad1217f7209f0aca40eb0c0db71dce",
+  "q": "6be8766ba143fca34a4be0cc594825c714d88f6ae6857a06988e7897d531b021",
+  "r": "ba0c7186c08bd0bc588e8d13aaee2d977fc9a31fe46107d7b3561c30ea68f9bf",
+  "s": "ddb942ccf8200fd16b2b333b779771311de60db6a55bd45b3e99a3c8ac8652af",
+  "t": "2aafd63c88f0063db8568f35c660a7ab2a0234d486bebcf31522a8a6304ad815"
+ }
+}

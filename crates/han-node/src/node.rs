@@ -1811,6 +1811,7 @@ impl<T: Transport> Node<T> {
                 proposal,
                 expires_at,
                 note,
+                evidence,
             } => {
                 let found = inner.engine().approval_subject(&space, &proposal);
                 let Some(subject) = found else {
@@ -1832,6 +1833,17 @@ impl<T: Transport> Node<T> {
                         ));
                     }
                     body.push(("expiresAt", s(t)));
+                }
+                let mut content = BTreeMap::new();
+                if let Some(n) = &note {
+                    content.insert("note".to_owned(), s(n));
+                }
+                if let Some(e) = &evidence {
+                    body.push((
+                        "evidence",
+                        obj([("kind", s(&e.kind)), ("over", s(&e.over))]),
+                    ));
+                    content.insert("evidence".to_owned(), evidence_ref(&e.record));
                 }
                 // A person confirms on this device, out of band, before anything is signed (SR-106).
                 inner
@@ -1856,7 +1868,7 @@ impl<T: Transport> Node<T> {
                     &space,
                     "effect.approve",
                     Value::Object(body.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
-                    note.map(|n| obj([("note", s(&n))])),
+                    (!content.is_empty()).then_some(Value::Object(content)),
                 )
                 .await
             }
@@ -1895,6 +1907,12 @@ impl<T: Transport> Node<T> {
                 }
                 if let Some(x) = &expires_at {
                     body.push(("expiresAt", s(x)));
+                }
+                // P-17: Policy reads the body, never the plan, so a landing's summary is copied into it
+                if action == "vcs.land"
+                    && let Some(c) = plan.get("args").and_then(|a| a.get("change"))
+                {
+                    body.push(("change", c.clone()));
                 }
                 self.append(
                     &space,

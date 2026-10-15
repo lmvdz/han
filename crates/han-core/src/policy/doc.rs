@@ -151,14 +151,88 @@ pub enum SteerMode {
     Guarded,
 }
 
-/// One approval rule: the first rule whose `action` matches (or is `*`) applies (P-08).
+/// One approval rule: the first rule whose `action` matches (or is `*`) and whose tier predicate holds applies
+/// (P-08, P-17).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ApprovalRule {
     /// An action name, or `*`.
     pub action: String,
-    /// Role names (`owner`, `member`, `guest`) and actor ids.
+    /// Role names (`owner`, `member`, `guest`), actor ids and `@path-owner`.
     pub approvers: Vec<String>,
+    /// The rule applies only to an effect whose gate has at least this tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_tier: Option<u8>,
+    /// The rule applies only to an effect whose gate has at most this tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tier: Option<u8>,
+    /// Only human approvals count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub humans: Option<bool>,
+    /// A non-human approval counts only with evidence of this kind over the effect's delta digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    /// Distinct approvals a claim consumes, 1 to 3 (at tier 3, at least 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<u8>,
+}
+
+/// The class of a path (P-17); its tier floor is docs, tests and generated 0, code 1, sensitive 2, critical 3.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PathClass {
+    /// Documentation.
+    Docs,
+    /// Tests.
+    Tests,
+    /// Generated files.
+    Generated,
+    /// Ordinary code (the default).
+    Code,
+    /// Sensitive paths.
+    Sensitive,
+    /// Releases, infrastructure, secrets, auth and crypto, migrations.
+    Critical,
+}
+
+/// A path-class rule: the first whose glob matches a path (in its repo) gives the path its class.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathRule {
+    /// The path glob.
+    pub glob: String,
+    /// The class.
+    pub class: PathClass,
+    /// The repository it applies to; absent means every repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+/// A path-owner rule: the first whose glob matches a path (in its repo) names the path's owners.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerRule {
+    /// The path glob.
+    pub glob: String,
+    /// One to eight owners.
+    pub owners: Vec<ActorId>,
+    /// The repository it applies to; absent means every repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+/// Semantic gates and risk tiers (P-17).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatesDoc {
+    /// A change of at most this many lines, in tier-0 classes only, is tier 0.
+    pub small: u64,
+    /// A change of more than this many lines is at least tier 2.
+    pub large: u64,
+    /// Path classes, first match wins per path.
+    pub paths: Vec<PathRule>,
+    /// Path owners, first match wins per path.
+    pub owners: Vec<OwnerRule>,
 }
 
 /// The session rights of a policy (P-15).
@@ -216,6 +290,9 @@ pub struct PolicyDoc {
     pub sessions: SessionsDoc,
     /// Denied servers.
     pub servers: ServersDoc,
+    /// Semantic gates and risk tiers (P-17). Absent means no tiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gates: Option<GatesDoc>,
 }
 
 impl PolicyDoc {

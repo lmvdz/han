@@ -94,6 +94,11 @@ async fn mock_github(seen: Arc<Mutex<Seen>>) -> String {
                             201,
                             json!({"number": 6, "html_url": "https://example/pr/6"}),
                         )
+                    } else if method == "GET" && path == "/app/installations/7" {
+                        (
+                            200,
+                            json!({"id": 7, "permissions": {"contents": "write", "checks": "read", "metadata": "read"}}),
+                        )
                     } else if method == "POST" && path == "/hook" {
                         (204, Value::Null)
                     } else {
@@ -218,6 +223,21 @@ async fn open_pr_mints_a_scoped_token_and_opens_once() {
             );
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_installations_permissions_are_read_with_the_app_jwt_and_no_token_is_made() {
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let api = mock_github(seen.clone()).await;
+    let (_rig, minter) = github_rig(&api);
+    let perms = minter.installation_permissions().await.unwrap();
+    assert_eq!(perms["contents"], "write");
+    assert_eq!(perms["checks"], "read");
+    assert!(!perms.contains_key("statuses"));
+    let st = seen.lock().unwrap();
+    assert_eq!(st.requests.len(), 1);
+    assert_eq!(st.requests[0].1, "/app/installations/7");
+    assert_eq!(st.requests[0].2, "Bearer test-app-jwt");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

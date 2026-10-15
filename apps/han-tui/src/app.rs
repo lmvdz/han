@@ -1254,6 +1254,7 @@ impl App {
                             proposal: row.proposal,
                             expires_at: None,
                             note: None,
+                            evidence: None,
                         },
                     )]
                 }

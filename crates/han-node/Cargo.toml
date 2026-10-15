@@ -49,6 +49,8 @@ rusqlite_migration = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 widestring = { version = "1", optional = true }
+# The current user's SID from the process token, with no child process (`rpc/winsid.rs`).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # The doubles that allow a prompt exist only for tests; a release build of the node never has them.
@@ -60,5 +62,10 @@ rusqlite.workspace = true
 proptest = "1"
 tokio = { workspace = true, features = ["test-util"] }
 
-[lints]
-workspace = true
+[lints.rust]
+# Reading the process token calls the Win32 API and needs `unsafe`; `rpc/winsid.rs` is the only module that allows it.
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

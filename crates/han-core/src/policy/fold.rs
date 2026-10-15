@@ -8,9 +8,10 @@ use super::body::{
 };
 use super::decide::find_claim;
 use super::doc::{Role, SteerMode};
+use super::gate::gate_of;
 use super::guard::{
-    approval_candidates, approval_dead, approval_rule, effect_guarded_for, effect_source, expired,
-    guard_approval, guards_of, is_human, pick_approval, rebudget, role_of, server_of, space_unit,
+    approval_candidates, approval_dead, effect_guarded_for, effect_source, expired, guard_approval,
+    guards_of, is_human, pick_approval, rebudget, role_of, rule_for, server_of, space_unit,
     task_guarded_for, task_source,
 };
 use super::state::{
@@ -171,6 +172,8 @@ pub fn fold(state: Option<&SpaceState>, record: &Record, ctx: &Ctx) -> Result<Sp
                 cancel_requested: false,
                 // P-15: fixed now, never shrinks
                 guarded_for: effect_guarded_for(&s, ctx, author, &b.executor, b.task.as_deref()),
+                // P-17: fixed now, from the policy in force
+                gate: gate_of(&s.policy, &b.action, b.change.as_ref(), ctx, author),
                 expires_at: b.expires_at.clone(),
                 approvals: Vec::new(),
                 claims: Vec::new(),
@@ -409,6 +412,7 @@ fn fold_approve(
         actor_kind,
         expires_at: b.expires_at.clone(),
         consumed_by: None,
+        evidence: b.evidence.clone(),
     });
     if let Some(eff) = s.effects.get_mut(&b.proposal) {
         eff.approvals = approvals;
@@ -431,6 +435,7 @@ fn fold_claim(
         time: record.time.clone(),
         window: b.window,
         approval: None,
+        co_approvals: None,
         guard_approvals: None,
         reserved: None,
         source: None,
@@ -439,11 +444,18 @@ fn fold_claim(
         started: None,
     };
     let mut chosen: Vec<(String, String)> = Vec::new(); // (approval id, author)
-    if approval_rule(&s.policy, &eff.action).is_some()
-        && let (_, Some(a)) = pick_approval(s, eff, ctx)
-    {
-        chosen.push((a.id.clone(), a.author.clone()));
-        c.approval = Some(a.id.clone());
+    if rule_for(s, eff).is_some() {
+        let picked = pick_approval(s, eff, ctx).1;
+        for (i, a) in picked.iter().enumerate() {
+            chosen.push((a.id.clone(), a.author.clone()));
+            if i == 0 {
+                c.approval = Some(a.id.clone());
+            } else {
+                c.co_approvals
+                    .get_or_insert_with(Vec::new)
+                    .push(a.id.clone());
+            }
+        }
     }
     for g in guards_of(s, ctx, eff).into_iter().flatten() {
         let found = chosen
@@ -503,6 +515,7 @@ fn fold_outcome(s: &mut SpaceState, b: &Outcome, author: &str, key_id: &str) -> 
         let c = &s.effects[&pid].claims[i];
         let mut back: BTreeSet<String> = c.guard_approvals.iter().flatten().cloned().collect();
         back.extend(c.approval.clone());
+        back.extend(c.co_approvals.iter().flatten().cloned());
         let mut gone: Vec<String> = Vec::new();
         let mut approvals = s.effects[&pid].approvals.clone();
         for ai in 0..approvals.len() {

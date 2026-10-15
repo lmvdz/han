@@ -115,6 +115,31 @@ impl Repo {
         git(&self.main, &["fetch", "-q", "origin"]);
     }
 
+    /// What `gh pr update-branch` does: in the second clone, merges origin/main into `tip` (after base moved on)
+    /// and publishes the result as `refs/pull/<number>/head` of origin only. Returns the merge commit, which
+    /// the main repository does not have.
+    fn update_branch_on_github(&self, tip: &str, number: u64) -> String {
+        let other = self.path("other");
+        git(&other, &["pull", "-q"]);
+        Self::commit(&other, "moved.txt", "base moved on");
+        git(&other, &["push", "-q", "origin", "main"]);
+        git(&other, &["fetch", "-q", &self.main.to_string_lossy(), tip]);
+        git(&other, &["checkout", "-q", "-b", "pr-head", tip]);
+        git(&other, &["merge", "-q", "--no-edit", "origin/main"]);
+        let m = git(&other, &["rev-parse", "HEAD"]);
+        git(
+            &other,
+            &[
+                "push",
+                "-q",
+                "origin",
+                &format!("HEAD:refs/pull/{number}/head"),
+            ],
+        );
+        git(&other, &["checkout", "-q", "main"]);
+        m
+    }
+
     /// Lands one commit of the main repository on origin/main as a patch-equivalent copy.
     fn cherry_pick_land(&self, sha: &str) {
         let other = self.path("other");
@@ -533,6 +558,9 @@ impl Git for Flaky {
     fn fetch(&self) -> Res<()> {
         self.inner.fetch()
     }
+    fn fetch_pr_head(&self, number: u64) -> Res<()> {
+        self.inner.fetch_pr_head(number)
+    }
     fn prune_worktrees(&self) -> Res<()> {
         self.inner.prune_worktrees()
     }
@@ -629,4 +657,58 @@ fn a_failed_removal_is_reported_and_keeps_the_branch() {
         r.branch_exists("feat/f"),
         "a failed prune never drops the branch"
     );
+}
+
+#[test]
+fn a_branch_inside_the_updated_head_of_a_merged_pr_is_pruned() {
+    let r = Repo::new();
+    let wt = r.worktree("feat/upd", "wt-upd");
+    Repo::commit(&wt, "u1.txt", "u1");
+    let tip = Repo::commit(&wt, "u2.txt", "u2");
+    let m = r.update_branch_on_github(&tip, 9);
+    assert!(
+        !GitCli {
+            main: r.main.clone()
+        }
+        .is_ancestor(&tip, &m),
+        "the merge commit is not known locally yet"
+    );
+    r.squash_land("feat/upd");
+    let out = r.sweep(vec![rec("feat/upd", PrState::Merged, &m, 9)]);
+    assert_eq!(kinds(&out), [(Kind::Pruned, "feat/upd".into())], "{out:?}");
+    assert!(!wt.exists());
+    assert!(!r.branch_exists("feat/upd"));
+}
+
+#[test]
+fn a_branch_inside_the_updated_head_of_a_closed_pr_is_kept() {
+    let r = Repo::new();
+    let wt = r.worktree("feat/cupd", "wt-cupd");
+    let tip = Repo::commit(&wt, "c1.txt", "c1");
+    let m = r.update_branch_on_github(&tip, 10);
+    let out = r.sweep(vec![rec("feat/cupd", PrState::Closed, &m, 10)]);
+    assert_eq!(
+        kinds(&out),
+        [(Kind::Unlanded, "feat/cupd".into())],
+        "{out:?}"
+    );
+    assert!(wt.exists());
+    assert!(r.branch_exists("feat/cupd"));
+}
+
+#[test]
+fn commits_after_the_updated_head_are_still_unlanded() {
+    let r = Repo::new();
+    let wt = r.worktree("feat/lateupd", "wt-lateupd");
+    let tip = Repo::commit(&wt, "l1.txt", "l1");
+    let m = r.update_branch_on_github(&tip, 11);
+    r.squash_land("feat/lateupd");
+    Repo::commit(&wt, "l2.txt", "after the update");
+    let out = r.sweep(vec![rec("feat/lateupd", PrState::Merged, &m, 11)]);
+    assert_eq!(
+        kinds(&out),
+        [(Kind::Unlanded, "feat/lateupd".into())],
+        "{out:?}"
+    );
+    assert!(wt.exists());
 }

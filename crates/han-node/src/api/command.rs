@@ -19,6 +19,18 @@ pub struct EvidenceRef {
     pub media_type: String,
 }
 
+/// The record an approval rests on (architecture.md P-17): the body carries `kind` and `over`, the content the
+/// `record`, a blob already uploaded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ApprovalEvidence {
+    /// The record's schema, for example `han.review/1`.
+    pub kind: String,
+    /// The delta digest the record is over (the plan's `deltaDigest`).
+    pub over: String,
+    /// The record, a blob already uploaded (content `evidence`, readable under G-01).
+    pub record: EvidenceRef,
+}
+
 /// Something a face asks of the device. Commands that write the log end as a receipt (or are queued in the
 /// outbox when the home cannot be reached); the verdict of Policy comes back as a [`super::NodeError`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -286,6 +298,10 @@ pub enum Command {
         #[serde(default)]
         #[ts(optional)]
         note: Option<String>,
+        /// The record the approval rests on, for a rule that asks for evidence (P-17).
+        #[serde(default)]
+        #[ts(optional)]
+        evidence: Option<ApprovalEvidence>,
     },
     /// Cancels a proposed effect. The effect's executor may cancel it too while it is `open` (round 33,
     /// P-07a): it refuses an effect for good, and says why.
@@ -304,7 +320,9 @@ pub enum Command {
         evidence: Option<EvidenceRef>,
     },
     /// Proposes an effect (`effect.propose`): the only way an agent's work reaches the world. The node
-    /// computes `planDigest = sha256(JCS(plan))` and puts the plan in the content.
+    /// computes `planDigest = sha256(JCS(plan))` and puts the plan in the content. For a `vcs.land` it copies
+    /// the plan's `args.change` into the body, where Policy reads it (P-17); the executor checks that the two
+    /// are the same (X-13).
     EffectPropose {
         /// The space.
         space: String,

@@ -13,6 +13,10 @@ use crate::json::{self, MAX_SAFE_INT, Value};
 use crate::limits::{
     MAX_BLOB_BYTES, MAX_CONTENT_BYTES, MAX_DENIED_SERVERS, MAX_HEADER_BYTES, MAX_LIST,
 };
+use crate::policy::gate::{
+    MAX_CHANGE_BYTES, MAX_CHANGE_FILES, MAX_GATE_RULES, PATH_OWNER, is_evidence_kind, is_glob,
+    is_repo_name, is_repo_path,
+};
 use crate::sign::PublicKey;
 use crate::types::{BlobRef, Entry, Link, LogRecord, Receipt};
 
@@ -176,19 +180,169 @@ fn plan(v: &Value) -> bool {
 const READ_ROLES: [&str; 3] = ["owner", "member", "guest"];
 const SESSION_LEVELS: [&str; 4] = ["guest", "member", "owner", "nobody"]; // least to most restrictive
 
+/// The members of an object that has the `required` keys and no keys outside `allowed`.
+fn within<'a>(
+    v: &'a Value,
+    required: &[&str],
+    allowed: &[&str],
+) -> Option<&'a BTreeMap<String, Value>> {
+    let m = v.as_object()?;
+    (required.iter().all(|n| m.contains_key(*n)) && m.keys().all(|k| allowed.contains(&k.as_str())))
+        .then_some(m)
+}
+
 fn approval_rule(v: &Value) -> bool {
-    exactly(v, &["action", "approvers"]).is_some_and(|m| {
-        m["action"]
-            .as_str()
-            .is_some_and(|a| a == "*" || g::is_action(a))
-            && m["approvers"].as_array().is_some_and(|a| {
-                (1..=MAX_LIST).contains(&a.len())
-                    && a.iter().all(|x| {
-                        x.as_str()
-                            .is_some_and(|s| READ_ROLES.contains(&s) || g::is_actor_id(s))
+    let Some(m) = within(
+        v,
+        &["action", "approvers"],
+        &[
+            "action",
+            "approvers",
+            "minTier",
+            "maxTier",
+            "humans",
+            "evidence",
+            "needs",
+        ],
+    ) else {
+        return false;
+    };
+    let tier = |k: &str| {
+        m.get(k)
+            .is_none_or(|t| matches!(t, Value::Int(i) if (0..=3).contains(i)))
+    };
+    let bound = |k: &str| match m.get(k) {
+        Some(Value::Int(i)) => Some(*i),
+        _ => None,
+    };
+    m["action"]
+        .as_str()
+        .is_some_and(|a| a == "*" || g::is_action(a))
+        && m["approvers"].as_array().is_some_and(|a| {
+            (1..=MAX_LIST).contains(&a.len())
+                && a.iter().all(|x| {
+                    x.as_str().is_some_and(|s| {
+                        READ_ROLES.contains(&s) || s == PATH_OWNER || g::is_actor_id(s)
                     })
-            })
-    })
+                })
+        })
+        && tier("minTier")
+        && tier("maxTier")
+        && bound("minTier")
+            .zip(bound("maxTier"))
+            .is_none_or(|(lo, hi)| lo <= hi)
+        && m.get("humans").is_none_or(boolean)
+        && m.get("evidence")
+            .is_none_or(|e| str_with(e, is_evidence_kind))
+        && m.get("needs")
+            .is_none_or(|n| matches!(n, Value::Int(i) if (1..=3).contains(i)))
+}
+
+fn rule_repo(m: &BTreeMap<String, Value>) -> bool {
+    m.get("repo").is_none_or(|r| str_with(r, is_repo_name))
+}
+
+fn gates_doc(v: &Value) -> bool {
+    let Some(m) = exactly(v, &["small", "large", "paths", "owners"]) else {
+        return false;
+    };
+    let path_rule = |r: &Value| {
+        within(r, &["glob", "class"], &["glob", "class", "repo"]).is_some_and(|r| {
+            str_with(&r["glob"], is_glob)
+                && is_one_of(
+                    &r["class"],
+                    &[
+                        "docs",
+                        "tests",
+                        "generated",
+                        "code",
+                        "sensitive",
+                        "critical",
+                    ],
+                )
+                && rule_repo(r)
+        })
+    };
+    let owner_rule = |r: &Value| {
+        within(r, &["glob", "owners"], &["glob", "owners", "repo"]).is_some_and(|r| {
+            str_with(&r["glob"], is_glob)
+                && r["owners"].as_array().is_some_and(|o| {
+                    (1..=8).contains(&o.len())
+                        && o.iter().all(actor)
+                        && o.iter().enumerate().all(|(i, x)| !o[..i].contains(x))
+                })
+                && rule_repo(r)
+        })
+    };
+    int(&m["small"])
+        && int(&m["large"])
+        && matches!((&m["small"], &m["large"]), (Value::Int(s), Value::Int(l)) if s <= l)
+        && list_of(&m["paths"], MAX_GATE_RULES, path_rule)
+        && list_of(&m["owners"], MAX_GATE_RULES, owner_rule)
+}
+
+/// P-17: the summary of a change (`effect.propose.change`, and the plan's `args.change`).
+pub fn change_summary(v: &Value) -> bool {
+    let Some(m) = within(
+        v,
+        &["repo", "deltaDigest", "total", "files"],
+        &["repo", "deltaDigest", "total", "files", "truncated"],
+    ) else {
+        return false;
+    };
+    let (Value::Int(total), Some(files)) = (&m["total"], m["files"].as_array()) else {
+        return false;
+    };
+    if !(str_with(&m["repo"], is_repo_name)
+        && hex(&m["deltaDigest"])
+        && int(&m["total"])
+        && files.len() <= MAX_CHANGE_FILES)
+    {
+        return false;
+    }
+    if m.get("truncated").is_some_and(|t| *t != Value::Bool(true)) {
+        return false;
+    }
+    let mut last: Option<&str> = None;
+    for f in files {
+        let Some(f) = within(
+            f,
+            &["path", "kind", "lines"],
+            &["path", "kind", "lines", "fromPath"],
+        ) else {
+            return false;
+        };
+        let (Some(path), true) = (f["path"].as_str(), int(&f["lines"])) else {
+            return false;
+        };
+        if !is_repo_path(path) {
+            return false;
+        }
+        match f["kind"].as_str() {
+            Some("rename") => {
+                let from = f.get("fromPath").and_then(Value::as_str);
+                if !from.is_some_and(|p| is_repo_path(p) && p != path) {
+                    return false;
+                }
+            }
+            Some("add" | "modify" | "delete") if !f.contains_key("fromPath") => {}
+            _ => return false,
+        }
+        if last.is_some_and(|l| path.as_bytes() <= l.as_bytes()) {
+            return false; // strictly ascending by UTF-8 bytes: one entry per path
+        }
+        last = Some(path);
+    }
+    let listed = files.len() as i64;
+    if (*total > listed) != m.contains_key("truncated") || *total < listed {
+        return false; // truncated exactly when files are left out
+    }
+    json::canonicalize(v).is_ok_and(|b| b.len() <= MAX_CHANGE_BYTES)
+}
+
+fn evidence_ref(v: &Value) -> bool {
+    exactly(v, &["kind", "over"])
+        .is_some_and(|m| str_with(&m["kind"], is_evidence_kind) && hex(&m["over"]))
 }
 
 fn sessions_doc(v: &Value) -> bool {
@@ -221,27 +375,26 @@ fn sessions_doc(v: &Value) -> bool {
 }
 
 fn policy_doc(v: &Value) -> bool {
-    let Some(m) = exactly(
-        v,
-        &[
-            "visibility",
-            "join",
-            "membersMayInvite",
-            "allowAgents",
-            "approvals",
-            "separateApprover",
-            "budget",
-            "maxDelegationDepth",
-            "minDurability",
-            "launchWindow",
-            "extensionsMinRole",
-            "sessions",
-            "servers",
-        ],
-    ) else {
+    const FIELDS: [&str; 13] = [
+        "visibility",
+        "join",
+        "membersMayInvite",
+        "allowAgents",
+        "approvals",
+        "separateApprover",
+        "budget",
+        "maxDelegationDepth",
+        "minDurability",
+        "launchWindow",
+        "extensionsMinRole",
+        "sessions",
+        "servers",
+    ];
+    let Some(m) = within(v, &FIELDS, &[&FIELDS[..], &["gates"]].concat()) else {
         return false;
     };
-    is_one_of(&m["visibility"], &["members", "public"])
+    m.get("gates").is_none_or(gates_doc)
+        && is_one_of(&m["visibility"], &["members", "public"])
         && is_one_of(&m["join"], &["invite", "open", "closed"])
         && boolean(&m["membersMayInvite"])
         && boolean(&m["separateApprover"])
@@ -346,11 +499,13 @@ fn body_schema(kind: &str) -> Option<Vec<Field>> {
             req("repeatable", boolean),
             opt("task", hex),
             opt("expiresAt", time),
+            opt("change", change_summary),
         ],
         "effect.approve" => vec![
             req("proposal", hex),
             req("planDigest", hex),
             opt("expiresAt", time),
+            opt("evidence", evidence_ref),
         ],
         "effect.claim" => vec![
             req("proposal", hex),
@@ -396,7 +551,7 @@ fn content_schema(kind: &str) -> Option<Vec<Field>> {
         ],
         "task.update" => vec![opt("text", max_bytes::<32768>), opt("blobs", blobs)],
         "effect.propose" => vec![req("plan", plan)],
-        "effect.approve" => vec![opt("note", max_bytes::<4096>)],
+        "effect.approve" => vec![opt("note", max_bytes::<4096>), opt("evidence", blob_ref)],
         "effect.cancel" => vec![opt("reason", max_bytes::<1024>), opt("evidence", blob_ref)],
         "effect.outcome" => vec![opt("evidence", blob_ref)],
         "effect.resolve" => vec![req("evidence", blob_ref)],

@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::body::{EffectResult, Started, TaskState};
 use super::doc::{ActorKind, PolicyDoc, Role, SteerMode};
+use super::gate::{Evidence, Gate};
 use crate::types::{ActorId, Budget, EntryId, KeyId, Seq, SpaceId, Time};
 
 /// A set of actors. On the wire it is a map whose every value is `true`.
@@ -172,6 +173,9 @@ pub struct Approval {
     /// The claim that consumed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consumed_by: Option<EntryId>,
+    /// The evidence it cited (P-17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Evidence>,
 }
 
 /// A claim of an effect (P-07).
@@ -191,6 +195,9 @@ pub struct ClaimState {
     /// The approval it consumed under the approval rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<EntryId>,
+    /// The further approvals it consumed when the rule needs more than one (P-17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub co_approvals: Option<Vec<EntryId>>,
     /// The guards' approvals it consumed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_approvals: Option<Vec<EntryId>>,
@@ -240,6 +247,9 @@ pub struct Effect {
     pub cancel_requested: bool,
     /// The guarded agents whose guards must approve a claim; fixed at the proposal.
     pub guarded_for: Vec<ActorId>,
+    /// The tier and path owners Policy derived from the proposal's change (P-17); fixed at the proposal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<Gate>,
     /// No claim at or after this time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<Time>,

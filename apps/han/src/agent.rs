@@ -10,6 +10,10 @@
 //! * `han agent set @coder:han.example --os-user han-agent1 --sandbox bwrap --toolchains rust --harness claude`
 //!   changes how an agent is launched (`agents.json`) and nothing else; it needs no running node, never hand-edit
 //!   the file. Prints `changed:` or `unchanged:`.
+//! * `han agent finish s1:han.example --repo github:o/r land --target-ref refs/heads/main --tier-rule 'docs/**=0'`
+//!   turns on the `land` finish flow for a space (or, with `--repo`, one repository of it); `off` turns it off,
+//!   `reset` removes the setting, `show` prints what a session would get. It is written to `agents.json`, needs
+//!   no running node and takes effect for the sessions started after it. Default: off.
 //! * `han agent stop @coder:han.example` stops its sessions.
 //! * `han agent setup-harness claude|pi` installs the pinned ACP adapter into the data directory, so `start`
 //!   needs no flags; `han agent login @coder:han.example` logs the agent in to Claude Code once, in its own
@@ -21,7 +25,7 @@ use clap::{Args, Subcommand};
 use han_node::NodeApi;
 use han_node::api::{CallResult, Command};
 use han_node::rpc::{RpcClient, default_endpoint};
-use han_registry::{AgentEdit, HomeRef};
+use han_registry::{AgentEdit, AgentsFile, HomeRef, LandEdit, TierRule};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -185,11 +189,54 @@ enum AgentCmd {
         #[arg(long)]
         model_key_file: Option<PathBuf>,
     },
+    /// Sets how finished work leaves the sessions of a space (or one of its repositories): through the landing
+    /// lane (`land`), or as before. Written to `<data>/agents.json`; needs no running node; sessions started
+    /// afterwards use it. A repository's setting is laid over its space's.
+    Finish {
+        /// The space.
+        space: String,
+        /// Only this repository of the space, `github:owner/repo` as the session names it.
+        #[arg(long)]
+        repo: Option<String>,
+        #[command(subcommand)]
+        action: FinishAction,
+    },
     /// Stops an agent's sessions, or one `host-<agent>#<issue>`.
     Stop {
         /// The agent or session name.
         target: String,
     },
+}
+
+/// What `han agent finish` does.
+#[derive(Subcommand)]
+enum FinishAction {
+    /// Turns the `land` flow on: the agent proposes `land` and the host proposes one `vcs.land` to the
+    /// executor. Only what is given changes.
+    Land {
+        /// The full branch ref to land on. Default: the work's default branch (`refs/heads/main`). The
+        /// executor must list it in the repository's `landing_refs` (`han executor set --landing-refs`).
+        #[arg(long)]
+        target_ref: Option<String>,
+        /// A path rule of the informative tier, `<glob>=<0-3>` (`'docs/**=0'`). Repeatable; given at all, they
+        /// replace this layer's. Policy derives the real tier.
+        #[arg(long = "tier-rule")]
+        tier_rules: Vec<String>,
+        /// The repository has no post-merge (`full`) checks, so `landed` is final and the host prunes on it
+        /// (`--no-full-stage`, or `--no-full-stage=false`).
+        #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+        no_full_stage: Option<bool>,
+        /// After the session ends, keep following its proposals for this many seconds, to prune on the final
+        /// one.
+        #[arg(long)]
+        settle_secs: Option<u64>,
+    },
+    /// Turns the `land` flow off here (a repository can turn it off in a space that has it on).
+    Off,
+    /// Removes the setting of this layer, so the space's (or the default, off) applies again.
+    Reset,
+    /// Prints what a session on the space (and repository) would get.
+    Show,
 }
 
 pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -227,6 +274,14 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                 toolchains: toolchains.as_deref().map(split_list),
             };
             println!("{}", set(&args.data, agent, &edit)?);
+            return Ok(());
+        }
+        AgentCmd::Finish {
+            space,
+            repo,
+            action,
+        } => {
+            println!("{}", finish(&args.data, space, repo.as_deref(), action)?);
             return Ok(());
         }
         AgentCmd::SetupHarness { harness, dir, node } => {
@@ -342,7 +397,10 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
             println!("started a session of {agent}");
         }
-        AgentCmd::Login { .. } | AgentCmd::SetupHarness { .. } | AgentCmd::Set { .. } => {}
+        AgentCmd::Login { .. }
+        | AgentCmd::SetupHarness { .. }
+        | AgentCmd::Set { .. }
+        | AgentCmd::Finish { .. } => {}
         AgentCmd::Stop { target } => {
             client.call(Command::AgentStop { target }).await?;
             println!("stopped");
@@ -380,6 +438,122 @@ fn set(data: &Path, agent: &str, edit: &AgentEdit) -> Res<String> {
     } else {
         format!("unchanged: {agent} in {}", path.display())
     })
+}
+
+/// `<glob>=<tier>` as a path rule.
+fn tier_rule(text: &str) -> Res<TierRule> {
+    let bad = || format!("--tier-rule {text:?}: give <glob>=<tier>, for example 'docs/**=0'");
+    let (path, tier) = text.rsplit_once('=').ok_or_else(bad)?;
+    let tier: u8 = tier.trim().parse().map_err(|_| bad())?;
+    if path.trim().is_empty() || tier > 3 {
+        return Err(bad().into());
+    }
+    Ok(TierRule {
+        path: path.trim().to_owned(),
+        tier,
+    })
+}
+
+/// `han agent finish`: applies `action` to the `land` setting of `space` (or of its `repo`) in
+/// `<data>/agents.json` and says what happened.
+fn finish(data: &Path, space: &str, repo: Option<&str>, action: &FinishAction) -> Res<String> {
+    let mut file = AgentsFile::load(data)?;
+    let what = match repo {
+        Some(r) => format!("{space} {r}"),
+        None => space.to_owned(),
+    };
+    let path = data.join("agents.json");
+    let edit = match action {
+        FinishAction::Show => return Ok(show_land(&file, space, repo)),
+        FinishAction::Reset => {
+            let changed = file.clear_land(space, repo);
+            if changed {
+                file.save(data)?;
+            }
+            return Ok(format!(
+                "{} the land setting of {what} in {}",
+                if changed {
+                    "changed: removed"
+                } else {
+                    "unchanged: no"
+                },
+                path.display()
+            ));
+        }
+        FinishAction::Off => LandEdit {
+            enabled: Some(false),
+            ..LandEdit::default()
+        },
+        FinishAction::Land {
+            target_ref,
+            tier_rules,
+            no_full_stage,
+            settle_secs,
+        } => LandEdit {
+            enabled: Some(true),
+            target_ref: target_ref.clone(),
+            tier_rules: if tier_rules.is_empty() {
+                None
+            } else {
+                Some(
+                    tier_rules
+                        .iter()
+                        .map(|t| tier_rule(t))
+                        .collect::<Res<Vec<_>>>()?,
+                )
+            },
+            no_full_stage: *no_full_stage,
+            settle_secs: *settle_secs,
+        },
+    };
+    let changed = file.set_land(space, repo, &edit)?;
+    if changed {
+        file.save(data)?;
+    }
+    let mut out = format!(
+        "{}: land {} for {what} in {}",
+        if changed { "changed" } else { "unchanged" },
+        if edit.enabled == Some(true) {
+            "on"
+        } else {
+            "off"
+        },
+        path.display()
+    );
+    if edit.enabled == Some(true) {
+        out.push('\n');
+        out.push_str(&show_land(&file, space, repo));
+        out.push_str(
+            "\nsessions started from now on use it; a running one keeps its settings.\nthe executor must allow the ref: han executor set <repo> --landing-refs <ref> (han doctor checks the whole setup)",
+        );
+    }
+    Ok(out)
+}
+
+/// What `land` resolves to for `space` and `repo`.
+fn show_land(file: &AgentsFile, space: &str, repo: Option<&str>) -> String {
+    let at = repo.map(|r| format!(" {r}")).unwrap_or_default();
+    match file.land_for(space, repo) {
+        None => format!("land: off for {space}{at}"),
+        Some(l) => {
+            let rules: Vec<String> = l
+                .tier_rules
+                .iter()
+                .map(|t| format!("{}={}", t.path, t.tier))
+                .collect();
+            format!(
+                "land: on for {space}{at}: target {}, tier rules [{}], {}, settle {}s",
+                l.target_ref.as_deref().unwrap_or("the default branch"),
+                rules.join(", "),
+                if l.no_full_stage {
+                    "no full stage"
+                } else {
+                    "full stage as the executor has it"
+                },
+                l.settle_secs
+            )
+        }
+    }
 }
 
 /// `han agent confirm` and `han actor confirm`.
@@ -557,6 +731,60 @@ mod tests {
                 .unwrap()
                 .starts_with("unchanged: ")
         );
+    }
+
+    #[test]
+    fn finish_land_is_off_until_set_and_repeats_as_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let land = FinishAction::Land {
+            target_ref: Some("refs/heads/main".into()),
+            tier_rules: vec!["docs/**=0".into(), "crates/core/**=3".into()],
+            no_full_stage: None,
+            settle_secs: Some(120),
+        };
+        let show = |d: &Path| finish(d, "s1:x", Some("github:o/r"), &FinishAction::Show).unwrap();
+        assert!(show(d.path()).starts_with("land: off"));
+        let first = finish(d.path(), "s1:x", Some("github:o/r"), &land).unwrap();
+        assert!(
+            first.starts_with("changed: land on for s1:x github:o/r"),
+            "{first}"
+        );
+        assert!(
+            first.contains("refs/heads/main") && first.contains("docs/**=0"),
+            "{first}"
+        );
+        let again = finish(d.path(), "s1:x", Some("github:o/r"), &land).unwrap();
+        assert!(again.starts_with("unchanged: "), "{again}");
+        // the repository's own setting is in effect; the space has none
+        let file = AgentsFile::load(d.path()).unwrap();
+        assert!(file.land_for("s1:x", Some("github:o/r")).is_some());
+        assert_eq!(file.land_for("s1:x", None), None);
+        // off, then reset
+        let off = finish(d.path(), "s1:x", Some("github:o/r"), &FinishAction::Off).unwrap();
+        assert!(off.starts_with("changed: land off"), "{off}");
+        assert!(show(d.path()).starts_with("land: off"));
+        let reset = finish(d.path(), "s1:x", Some("github:o/r"), &FinishAction::Reset).unwrap();
+        assert!(reset.starts_with("changed: removed"), "{reset}");
+        let reset = finish(d.path(), "s1:x", Some("github:o/r"), &FinishAction::Reset).unwrap();
+        assert!(reset.starts_with("unchanged: no"), "{reset}");
+        assert!(AgentsFile::load(d.path()).unwrap().finish.is_empty());
+    }
+
+    #[test]
+    fn finish_refuses_what_no_host_could_use() {
+        let d = tempfile::tempdir().unwrap();
+        let land = |target: Option<&str>, rules: &[&str]| FinishAction::Land {
+            target_ref: target.map(Into::into),
+            tier_rules: rules.iter().map(|r| (*r).to_owned()).collect(),
+            no_full_stage: None,
+            settle_secs: None,
+        };
+        assert!(finish(d.path(), "s1:x", None, &land(Some("main"), &[])).is_err());
+        assert!(finish(d.path(), "s1:x", None, &land(None, &["docs/**"])).is_err());
+        assert!(finish(d.path(), "s1:x", None, &land(None, &["docs/**=9"])).is_err());
+        assert!(finish(d.path(), "s1:x", None, &land(None, &["=1"])).is_err());
+        assert!(!d.path().join("agents.json").exists());
+        assert_eq!(tier_rule("a=b/c=2").unwrap().path, "a=b/c");
     }
 
     #[test]

@@ -133,8 +133,8 @@ def main():
         if tb != bodies.get(k): errs.append(f"{k}: §5 body {tb} != han.ts {bodies.get(k)}")
         if tc != contents.get(k, "<missing>"): errs.append(f"{k}: §5 content {tc} != han.ts {contents.get(k, '<missing>')}")
     pd = top_fields(ts_block(src, "PolicyDoc"))
-    req = P.POLICY_FIELDS
-    if set(pd) != req or not all(pd.values()): errs.append(f"PolicyDoc fields {sorted(pd)} != ref {sorted(req)}")
+    req = dict.fromkeys(P.POLICY_FIELDS, True) | {"gates": False}     # `gates?` (round 33, P-17) is the one optional member
+    if pd != req: errs.append(f"PolicyDoc fields {sorted(pd.items())} != ref {sorted(req.items())}")
     n_states = check_states(src, errs)
     errs = list(dict.fromkeys(errs))
     for e in errs: print("MISMATCH", e)

@@ -234,6 +234,7 @@ export function validateContent(kind: string, content: any, body?: any): string 
       return null;
     });
     case "effect.approve": return need([], ["note"], (c) => ("note" in c && !strMax(c.note, 4096)) ? "note" : null);
+    case "effect.cancel": return need([], ["reason", "evidence"], (c) => ("reason" in c && !strMax(c.reason, 1024)) ? "reason" : ("evidence" in c && validBlobRef(c.evidence)) || null);
     case "effect.outcome": return need([], ["evidence"], (c) => ("evidence" in c && validBlobRef(c.evidence)) || null);
     case "effect.resolve": return need(["evidence"], [], (c) => validBlobRef(c.evidence));
     case "checkpoint": return need(["blobs"], [], (c) => blobs(c.blobs));
@@ -241,7 +242,7 @@ export function validateContent(kind: string, content: any, body?: any): string 
     case "session.open": return need([], ["title"], (c) => ("title" in c && !strMax(c.title, 256)) ? "title" : null);
     case "session.input": return need(["text"], ["blobs"], (c) => !strMax(c.text, 32768) ? "text" : ("blobs" in c && blobs(c.blobs)) || null);
     case "member.set": case "policy.set": case "key.add": case "key.revoke": case "task.cancel": case "effect.claim":
-    case "effect.cancel": case "space.move": case "session.close": case "agent.unguard":
+    case "space.move": case "session.close": case "agent.unguard":
       return none ? null : "content not allowed";
     default: // extension: opaque Json with integer numbers
       if (none) return null;

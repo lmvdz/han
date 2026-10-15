@@ -272,6 +272,8 @@ pub(crate) struct EffectInfo {
     phase: Phase,
     /// The plan from the proposal's content, as JSON text.
     pub plan: Option<String>,
+    /// The digest of the body's change summary (P-17).
+    pub change_digest: Option<String>,
     /// The task it is charged to.
     pub task: Option<String>,
     /// Claims so far, and the latest.
@@ -866,6 +868,7 @@ impl SpaceModel {
                         repeatable: p.repeatable,
                         phase: Phase::Open,
                         plan,
+                        change_digest: p.change.as_ref().map(han_core::policy::Change::digest),
                         plan_ok,
                         task: p.task,
                         claims: 0,
@@ -2277,6 +2280,7 @@ impl SpaceModel {
                         action: e.action.clone(),
                         plan_digest: e.plan_digest.clone(),
                         plan: e.plan.clone(),
+                        change_digest: e.change_digest.clone(),
                         task: e.task.clone(),
                         phase: phase.into(),
                         approvals: e.approvals.clone(),
