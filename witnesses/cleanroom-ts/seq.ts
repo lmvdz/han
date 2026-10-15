@@ -818,7 +818,7 @@ export class Sequencer {
     const c: A = r.content, out: A[] = [];
     if (Array.isArray(c.blobs)) out.push(...c.blobs);
     if (c.plan?.argsBlob) out.push(c.plan.argsBlob);
-    if (c.evidence && (r.entry.kind === "effect.outcome" || r.entry.kind === "effect.resolve")) out.push(c.evidence);
+    if (c.evidence && (r.entry.kind === "effect.cancel" || r.entry.kind === "effect.outcome" || r.entry.kind === "effect.resolve")) out.push(c.evidence);
     return out;
   }
   private doBlobGet(conn: Conn, a: A) {

@@ -461,7 +461,8 @@ export function decide(state: SpaceState | undefined, entry: Entry, ctx: PolicyC
       if (!ef) return inv("not a proposal");
       if (!holds(s, a)) return deny("no role");
       const may = ef.proposer === a || isOwner(s, a) || guardsOf(s, ctx, ef).includes(a)
-        || (!guardStatus(s, ctx, a).guarded && ef.approvals.some((x: A) => x.author === a && (x.consumedBy || openApproval(x, ctx.time))));   // a guarded author's approval grants no cancel right (P-04)
+        || (!guardStatus(s, ctx, a).guarded && ef.approvals.some((x: A) => x.author === a && (x.consumedBy || openApproval(x, ctx.time))))   // a guarded author's approval grants no cancel right (P-04)
+        || (ef.phase === "open" && ef.executor === a);   // P-07a: the executor, only while the effect is open
       if (!may) return deny("not allowed to cancel");
       if (ef.phase === "open") return ok;
       if (ef.phase === "claimed" || ef.phase === "unknown") return ef.cancelRequested ? deny("cancel already requested") : ok;
