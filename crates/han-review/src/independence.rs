@@ -117,8 +117,24 @@ fn neutral_harness(harness: &str) -> bool {
     )
 }
 
-/// `Ok` when the reviewer is independent of the author, else the first refusal.
-pub fn independent(author: &AuthorInfo, reviewer: &ReviewerInfo) -> Result<(), Refusal> {
+/// How much independence a review needs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Independence {
+    /// The vendor rules and the operator-chain rule (PLAN.md §12). The default.
+    #[default]
+    Strict,
+    /// The dogfood, where one person operates every agent: a different actor and a different vendor. Only
+    /// the operator-chain rule is dropped; the vendor rules stay. A record made under it says so.
+    DogfoodRelaxed,
+}
+
+/// `Ok` when the reviewer is independent of the author under `mode`, else the first refusal.
+pub fn independent(
+    author: &AuthorInfo,
+    reviewer: &ReviewerInfo,
+    mode: Independence,
+) -> Result<(), Refusal> {
     let rv = vendor_of(&reviewer.model).ok_or_else(|| Refusal::UnknownVendor {
         what: "reviewer model",
         name: reviewer.model.clone(),
@@ -146,6 +162,12 @@ pub fn independent(author: &AuthorInfo, reviewer: &ReviewerInfo) -> Result<(), R
             reviewer: reviewer.model.clone(),
             of: "model",
         });
+    }
+    if mode == Independence::DogfoodRelaxed {
+        if reviewer.actor == author.actor {
+            return Err(Refusal::ReviewerIsAuthorSide(reviewer.actor.clone()));
+        }
+        return Ok(());
     }
     let author_side = |a: &str| a == author.actor || author.operator_chain.iter().any(|o| o == a);
     if author_side(&reviewer.actor) {

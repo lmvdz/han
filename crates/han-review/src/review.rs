@@ -10,7 +10,7 @@ use std::path::Path;
 use han_vcs::Vcs;
 
 use crate::backend::{BackendError, ModelBackend, ModelRequest};
-use crate::independence::{AuthorInfo, Refusal, ReviewerInfo, independent};
+use crate::independence::{AuthorInfo, Independence, Refusal, ReviewerInfo, independent};
 use crate::parse::{needs_human, parse_review};
 use crate::record::{
     RECORD_SCHEMA, Review, ReviewRecord, Usage, Verdict, output_schema, schema_hash,
@@ -55,6 +55,8 @@ pub struct ReviewerConfig {
     /// Whether an `approve` may be turned into an `effect.approve` ([`Reviewer::disposition`]). Default off:
     /// until Policy can confine the approval to tier 1, a recorded review is only evidence.
     pub authority: bool,
+    /// How much independence a review needs. Default strict; the record says which was used.
+    pub independence: Independence,
     /// The reviewer actor and its operator chain.
     pub reviewer: ReviewerInfo,
     /// The output ceiling asked of the model. Set it explicitly for the route in use: for the agy Gemini
@@ -72,6 +74,7 @@ impl ReviewerConfig {
         ReviewerConfig {
             enabled: false,
             authority: false,
+            independence: Independence::Strict,
             reviewer,
             max_tokens,
             max_diff_bytes: 200_000,
@@ -181,7 +184,7 @@ impl<'a> Reviewer<'a> {
         if i.tier > MAX_TIER {
             return Err(ReviewError::Tier(i.tier));
         }
-        independent(i.author, &self.cfg.reviewer)?;
+        independent(i.author, &self.cfg.reviewer, self.cfg.independence)?;
         let delta = self
             .vcs
             .delta(i.repo, i.base, i.to)
@@ -254,6 +257,7 @@ impl<'a> Reviewer<'a> {
             schema: RECORD_SCHEMA.into(),
             proposal: i.proposal.to_owned(),
             delta_digest: computed,
+            independence: self.cfg.independence,
             verdict,
             findings,
             confidence,

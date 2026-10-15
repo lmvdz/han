@@ -5,10 +5,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use han_review::Independence::Strict;
 use han_review::{
-    AuthorInfo, Disposition, FakeBackend, ModelReply, Refusal, ReviewError, ReviewInput,
-    ReviewRecord, Reviewer, ReviewerConfig, ReviewerInfo, Severity, UNRESOLVED, Verdict,
-    independent, prompt_hash, vendor_of,
+    AuthorInfo, Disposition, FakeBackend, Independence, ModelReply, Refusal, ReviewError,
+    ReviewInput, ReviewRecord, Reviewer, ReviewerConfig, ReviewerInfo, Severity, UNRESOLVED,
+    Verdict, independent, prompt_hash, vendor_of,
 };
 use han_vcs::{GitVcs, Vcs};
 
@@ -227,35 +228,35 @@ fn vendor_rules_cover_harness_model_and_chain() {
     // a harness the table does not know fails closed; one of the reviewer's vendor is refused
     a.harness = "mystery-cli".into();
     assert!(matches!(
-        independent(&a, &r),
+        independent(&a, &r, Strict),
         Err(Refusal::UnknownVendor { .. })
     ));
     a.harness = "google/gemini-cli".into();
     assert!(matches!(
-        independent(&a, &r),
+        independent(&a, &r, Strict),
         Err(Refusal::SameVendor { of: "harness", .. })
     ));
     // claude-code is Anthropic's harness: fine against Gemini, refused against Claude
     a.harness = "claude-code".into();
-    assert_eq!(independent(&a, &r), Ok(()));
+    assert_eq!(independent(&a, &r, Strict), Ok(()));
     let mut r2 = r.clone();
     r2.model = "claude-haiku".into();
     assert!(matches!(
-        independent(&a, &r2),
+        independent(&a, &r2, Strict),
         Err(Refusal::SameVendor { .. })
     ));
     // the author's own operator reviewing
     let mut r3 = r.clone();
     r3.actor = "lars".into();
     assert_eq!(
-        independent(&a, &r3),
+        independent(&a, &r3, Strict),
         Err(Refusal::ReviewerIsAuthorSide("lars".into()))
     );
     // the reviewer's operator is the author's operator: the dogfood case, where one human runs everything
     let mut r4 = r;
     r4.operator_chain = vec!["lars".into()];
     assert_eq!(
-        independent(&a, &r4),
+        independent(&a, &r4, Strict),
         Err(Refusal::SharedOperator("lars".into()))
     );
     assert_eq!(vendor_of("agy/gemini-flash"), Some("google"));
@@ -375,4 +376,51 @@ async fn off_by_default_tier_limited_and_authority_gated() {
     let mut rc = rec;
     rc.verdict = Verdict::RequestChanges;
     assert_eq!(with.disposition(&rc, true), Disposition::Post);
+}
+
+#[tokio::test]
+async fn dogfood_relaxed_drops_only_the_operator_rule_and_says_so() {
+    let f = fixture();
+    let mut shared = config();
+    shared.reviewer.operator_chain = vec!["lars".into()];
+
+    // strict refuses the shared operator
+    let fake = FakeBackend::answering(APPROVE, Some("m"));
+    assert!(matches!(
+        run(&f, shared.clone(), &fake).await,
+        Err(ReviewError::Refused(Refusal::SharedOperator(_)))
+    ));
+    assert_eq!(config().independence, Strict);
+
+    // relaxed accepts it and records the relaxation in the canonical blob
+    shared.independence = Independence::DogfoodRelaxed;
+    let fake = FakeBackend::answering(APPROVE, Some("m"));
+    let r = run(&f, shared.clone(), &fake).await.unwrap();
+    assert_eq!(r.independence, Independence::DogfoodRelaxed);
+    let text = String::from_utf8(r.to_blob().unwrap()).unwrap();
+    assert!(
+        text.contains(r#""independence":"dogfood_relaxed""#),
+        "{text}"
+    );
+    assert_eq!(ReviewRecord::from_blob(text.as_bytes()).unwrap(), r);
+    let strict = run(&f, config(), &FakeBackend::answering(APPROVE, Some("m")))
+        .await
+        .unwrap();
+    assert_eq!(strict.independence, Strict);
+
+    // relaxed still refuses the same vendor, an unknown vendor and the author itself
+    for tweak in [
+        |c: &mut ReviewerConfig| c.reviewer.model = "anthropic/claude-sonnet".into(),
+        |c: &mut ReviewerConfig| c.reviewer.model = "mystery-9".into(),
+        |c: &mut ReviewerConfig| c.reviewer.actor = "agent-claude".into(),
+    ] {
+        let mut c = shared.clone();
+        tweak(&mut c);
+        let fake = FakeBackend::answering(APPROVE, Some("m"));
+        assert!(matches!(
+            run(&f, c, &fake).await,
+            Err(ReviewError::Refused(_))
+        ));
+        assert!(fake.requests().is_empty());
+    }
 }

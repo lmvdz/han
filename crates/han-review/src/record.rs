@@ -79,6 +79,9 @@ pub struct ReviewRecord {
     pub proposal: String,
     /// The changeset's delta digest, checked against the bundle before the model saw anything.
     pub delta_digest: String,
+    /// The independence rules the review was made under: `strict`, or `dogfood_relaxed` (no operator-chain
+    /// rule), which anyone reading the evidence must be able to see.
+    pub independence: crate::independence::Independence,
     /// The verdict.
     pub verdict: Verdict,
     /// The findings.

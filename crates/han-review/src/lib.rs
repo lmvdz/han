@@ -26,7 +26,7 @@ pub mod record;
 pub mod review;
 
 pub use backend::{FakeBackend, KeyStyle, ModelBackend, ModelReply, ModelRequest, OpenAiCompat};
-pub use independence::{AuthorInfo, Refusal, ReviewerInfo, independent, vendor_of};
+pub use independence::{AuthorInfo, Independence, Refusal, ReviewerInfo, independent, vendor_of};
 pub use record::{Finding, Review, ReviewRecord, Severity, Usage, Verdict};
 pub use review::{
     Disposition, MAX_TIER, ReviewError, ReviewInput, Reviewer, ReviewerConfig, SYSTEM_PROMPT,
