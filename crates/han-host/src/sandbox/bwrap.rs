@@ -27,7 +27,21 @@ fn find(program: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// `HAN_BWRAP_FORCE_UNAVAILABLE=1` makes the probe of this process report bwrap as unable to create
+/// namespaces, as it does in a unit with `RestrictNamespaces=yes`; it can only refuse.
+pub const FORCE_UNAVAILABLE: &str = "HAN_BWRAP_FORCE_UNAVAILABLE";
+
 pub(super) fn probe() -> BackendAvailability {
+    if std::env::var(FORCE_UNAVAILABLE).is_ok_and(|v| v == "1") {
+        return BackendAvailability {
+            backend: SandboxBackend::Bwrap,
+            loopback_blocked: false,
+            available: false,
+            detail: format!(
+                "bwrap cannot create namespaces: bwrap: Can't read /proc/sys/kernel/overflowuid: No such file or directory ({FORCE_UNAVAILABLE}=1 is set)"
+            ),
+        };
+    }
     let Some(bwrap) = find("bwrap") else {
         return BackendAvailability {
             backend: SandboxBackend::Bwrap,

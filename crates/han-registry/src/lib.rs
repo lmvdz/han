@@ -20,6 +20,6 @@ pub use agents::{
 pub use home::{HomeRef, TICKET_PREFIX};
 pub use launch::{Launch, LaunchError, PRICES_FILE, Registry, Resolved, RunAs};
 pub use spec::{
-    BudgetSpec, Dirs, HarnessSpec, HostSpec, PriceSpec, ProxySpec, SandboxPolicy, WorkSpec,
-    spec_file, unit_spec_file,
+    BudgetSpec, Dirs, HarnessSpec, HostAdmission, HostSpec, PriceSpec, ProxySpec, RefusalKind,
+    SandboxPolicy, WorkSpec, spec_file, unit_admission_file, unit_spec_file,
 };

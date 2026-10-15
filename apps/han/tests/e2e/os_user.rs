@@ -15,7 +15,7 @@ use std::time::Duration;
 use han_node::NodeApi;
 use han_node::api::{Command as Call, EffectRow, Query, Row, Window};
 
-use crate::stack::{HAN, Stack, han, rows, until};
+use crate::stack::{HAN, Stack, han, rows, run, until};
 
 const AGENT_USER: &str = "han-agent1";
 const EXEC_USER: &str = "han-exec";
@@ -262,4 +262,91 @@ async fn an_os_user_agents_push_lands_through_an_executor_that_cannot_read_its_w
         plan["args"].get("source").is_none(),
         "and no host path: {plan}"
     );
+}
+
+/// Bug (#99): the node probed bwrap in its own process before it started any host. On the runner the node's
+/// unit forbids namespaces (`RestrictNamespaces=yes`), so every OS-user agent was refused ("bwrap: Can't read
+/// /proc/sys/kernel/overflowuid"), though the agent's own unit, `han-agent@`, can run bwrap. The node here
+/// cannot use bwrap at all (`HAN_BWRAP_FORCE_UNAVAILABLE`, standing in for its hardened unit). The start must
+/// not be refused by that: the host checks in its own unit and refuses in its own words. This container has no
+/// bubblewrap, so the host's refusal is "bwrap is not installed", which the node's hook text never says; it
+/// reaches `han agent start`'s error and the node's problems, and no agent starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end, as root in a systemd container: run with --ignored and HAN_E2E_OS_USERS=1"]
+async fn an_os_user_agents_sandbox_is_checked_by_its_host_not_by_the_node() {
+    if std::env::var_os("HAN_E2E_OS_USERS").is_none() || !cfg!(target_os = "linux") {
+        eprintln!("skipped: needs HAN_E2E_OS_USERS=1, Linux, root and systemd");
+        return;
+    }
+    han(&["runner", "setup", "--agents", "1"]);
+    let s = Stack::up_confined("propose", &[], &[("HAN_BWRAP_FORCE_UNAVAILABLE", "1")]);
+    let space = s.space();
+    let ticket = s.ticket();
+    let data = s.person_data().to_string_lossy().into_owned();
+    han(&[
+        "agent",
+        "add",
+        "coder3",
+        "--operator",
+        &s.person(),
+        "--os-user",
+        AGENT_USER,
+        "--space",
+        &space,
+        "--home",
+        &ticket,
+        "--home-data",
+        &s.home_data().to_string_lossy(),
+        "--data",
+        &data,
+        "--harness",
+        "fake",
+        "--sandbox",
+        "bwrap",
+    ]);
+    let agent = format!("@coder3:{}", s.get("server"));
+    let (ok, out, err) = run(&[
+        "agent",
+        "start",
+        "--space",
+        &space,
+        "--agent",
+        &agent,
+        "--repo",
+        &s.remote().to_string_lossy(),
+        "--issue",
+        &s.get("issue"),
+        "--home",
+        &ticket,
+        "--data",
+        &data,
+    ]);
+    let _ = Command::new("systemctl")
+        .args(["stop", &format!("han-agent@{AGENT_USER}")])
+        .status();
+    assert!(
+        !ok,
+        "the host's own refusal must fail the start:\n{out}\n{err}"
+    );
+    assert!(
+        err.contains("bwrap is not installed"),
+        "the refusal is the host's, from its own unit: {err}"
+    );
+    assert!(
+        !err.contains("HAN_BWRAP_FORCE_UNAVAILABLE"),
+        "the node must not have probed its own process: {err}"
+    );
+    let c = s.client().await;
+    until("the node's problems carry the host's refusal", 60, || async {
+        rows(
+            &c,
+            Query::NodeStatus {
+                window: Window::default(),
+            },
+        )
+        .await
+        .into_iter()
+        .any(|r| matches!(r, Row::NodeStatus(n) if n.problems.iter().any(|p| p.contains("refused to start") && p.contains("bwrap is not installed"))))
+    })
+    .await;
 }

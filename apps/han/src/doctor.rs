@@ -190,6 +190,10 @@ pub struct Facts {
     /// Why MXC cannot give a container a loopback port on this machine (the sandbox self-test's finding), when
     /// it cannot and some agent would use MXC.
     pub mxc_loopback_blocked: Option<String>,
+    /// By actor: why `han agent start` would refuse the agent's sandbox, from the same decision the node makes
+    /// (`sandbox::admit_for`). An OS-user agent is never here for a backend that does not work in this process:
+    /// its host checks where it runs, and a refusal there is in the node's problems.
+    pub sandbox_refusals: BTreeMap<String, String>,
     pub stale: Vec<StaleFact>,
     /// `None` when there is no executor on this machine.
     pub executor: Option<ExecutorFacts>,
@@ -245,6 +249,7 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     agent_findings(f, &data, &mut out);
     toolchain_findings(f, &data, &mut out);
     sandbox_findings(f, &data, &mut out);
+    refusal_findings(f, &data, &mut out);
     if let Some(p) = &f.presence {
         presence_findings(p, &data, f.linux, &mut out);
     }
@@ -606,6 +611,20 @@ fn sandbox_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
     ));
 }
 
+/// An agent whose sandbox the node would refuse at `han agent start`.
+fn refusal_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
+    for (actor, why) in &f.sandbox_refusals {
+        out.push(finding(
+            "sandbox.unavailable",
+            actor.as_str(),
+            format!("`han agent start` refuses this agent: {why}"),
+            format!(
+                "install what the sandbox needs here, or `han agent set {actor} --sandbox <auto|bwrap|mxc|none> --data {data}` (`--allow-advisory` runs with no confinement; not recommended)"
+            ),
+        ));
+    }
+}
+
 fn toolchain_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
     let t = &f.toolchain;
     if !t.enabled {
@@ -907,6 +926,7 @@ pub async fn gather(
     let mut os_users = BTreeMap::new();
     let mut toolchain = ToolchainFacts::default();
     let mut mxc_loopback_blocked = None;
+    let mut sandbox_refusals = BTreeMap::new();
     if let Ok(file) = &agents {
         if cfg!(windows)
             && file
@@ -919,6 +939,26 @@ pub async fn gather(
                 .into_iter()
                 .find(|b| b.loopback_blocked)
                 .map(|b| b.detail);
+        }
+        if let Ok(shim) = han_host::sandbox::ShimCommand::of_current_exe() {
+            for (actor, a) in &file.agents {
+                // The node's own decision: an OS-user agent's host checks in its own unit, not here.
+                let own_unit = linux && a.os_user.is_some();
+                match han_host::sandbox::admit_for(
+                    &file.sandbox_of(actor),
+                    a.allow_advisory,
+                    own_unit,
+                    &shim,
+                ) {
+                    // said by `sandbox.mxc.loopback`, with its own fix
+                    Err(han_host::sandbox::SandboxError::LoopbackBlocked(_)) | Ok(_) => {}
+                    // a name no launch could use is `registry.sandbox`
+                    Err(han_host::sandbox::SandboxError::Invalid(_)) => {}
+                    Err(e) => {
+                        sandbox_refusals.insert(actor.clone(), e.to_string());
+                    }
+                }
+            }
         }
         for (actor, a) in &file.agents {
             if let Some(u) = &a.os_user
@@ -960,6 +1000,7 @@ pub async fn gather(
         presence: presence_facts(data),
         toolchain,
         mxc_loopback_blocked,
+        sandbox_refusals,
         stale: stale_processes(),
         executor: executor_facts(exec_dir),
     }
@@ -1031,6 +1072,7 @@ mod tests {
             presence: None,
             toolchain: ToolchainFacts::default(),
             mxc_loopback_blocked: None,
+            sandbox_refusals: BTreeMap::new(),
             stale: Vec::new(),
             executor: None,
         }
@@ -1128,6 +1170,31 @@ mod tests {
         assert_eq!(all.len(), 2, "{all:#?}");
         assert_eq!(all[0].fix, "han outbox retry 7 --data /d");
         assert_eq!(all[1].fix, "han outbox list s2:x --data /d");
+    }
+
+    #[test]
+    fn an_agent_start_would_refuse_is_a_finding_and_an_os_user_agent_is_left_to_its_host() {
+        let mut f = healthy();
+        f.sandbox_refusals.insert(
+            "@a:x".into(),
+            "sandbox backend unavailable: Bwrap: no".into(),
+        );
+        let all = analyze(&f);
+        assert_eq!(all.len(), 1, "{all:#?}");
+        assert_eq!(all[0].id, "sandbox.unavailable");
+        assert!(all[0].cause.contains("Bwrap: no"), "{}", all[0].cause);
+        // a refusal the OS user's own host left is the node's problem, said once by the generic row
+        f.sandbox_refusals.clear();
+        f.node.as_mut().unwrap().problems.push(
+            "host-@b:x refused to start (SandboxUnavailable, checked by its own host): no".into(),
+        );
+        let all = analyze(&f);
+        assert_eq!(all.len(), 1, "{all:#?}");
+        assert!(
+            all[0].cause.contains("refused to start"),
+            "{}",
+            all[0].cause
+        );
     }
 
     #[test]

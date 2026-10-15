@@ -9,10 +9,12 @@ use std::time::Duration;
 use clap::Args;
 use han_host::driver::{DriverConfig, builtin};
 use han_host::host::{HostConfig, HostDeps, RepoConfig, SandboxChoice, run_session};
-use han_host::sandbox::ShimCommand;
+use han_host::sandbox::{self, SandboxError, ShimCommand};
 use han_host::toolchain;
 use han_node::api::ConnectionClass;
-use han_registry::{HarnessSpec, HostSpec};
+use han_registry::{
+    HarnessSpec, HostAdmission, HostSpec, RefusalKind, unit_admission_file, unit_spec_file,
+};
 use han_vcs::GitVcs;
 
 use crate::rolenode;
@@ -56,8 +58,44 @@ fn repo(spec: Option<&str>, base: &str, default_branch: &str) -> RepoConfig {
     }
 }
 
+/// The sandbox, checked in this process: the place the agent will run. A host in its own `han-agent@` unit is
+/// the only one the node could not check for it (the node's unit forbids namespaces), so it says what it found
+/// in its admission file, which the node reads for its start, its status and its problems. Whatever the answer,
+/// no agent has started yet; on a refusal none does.
+fn admit_sandbox(args: &HostArgs, spec: &HostSpec) -> Result<(), Box<dyn std::error::Error>> {
+    // The unit reads `<state>/spawn/host.json`; the node looks for the answer beside it.
+    let unit_file = Path::new(&args.spec);
+    let in_unit = unit_file.file_name() == unit_spec_file(Path::new("")).file_name();
+    let shim = ShimCommand::of_current_exe()?;
+    let found = sandbox::gate(&spec.sandbox.backend, spec.sandbox.allow_advisory, &shim);
+    if in_unit {
+        let admission = match &found {
+            Ok(()) => HostAdmission::Admitted,
+            Err(e) => HostAdmission::Refused {
+                kind: match e {
+                    SandboxError::LoopbackBlocked(_) => RefusalKind::LoopbackBlocked,
+                    _ => RefusalKind::SandboxUnavailable,
+                },
+                message: e.to_string(),
+            },
+        };
+        if let Err(e) = admission.write(
+            &unit_file.with_file_name(
+                unit_admission_file(Path::new(""))
+                    .file_name()
+                    .unwrap_or_default(),
+            ),
+        ) {
+            // The node then waits in vain and the host's exit still says no: never start on a guess.
+            eprintln!("han host: cannot leave its admission: {e}");
+        }
+    }
+    Ok(found?)
+}
+
 pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
     let spec = HostSpec::read(&args.spec)?;
+    admit_sandbox(&args, &spec)?;
     let driver = driver(&spec.harness)?;
     let mut tools = spec.toolchains.clone();
     toolchain::validate(&tools.enabled)?;

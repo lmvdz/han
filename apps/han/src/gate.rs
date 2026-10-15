@@ -1,7 +1,15 @@
-//! The node's supervisor with a sandbox gate: an agent whose sandbox cannot work on this machine is refused
-//! before a host is started, with the reason, instead of starting and losing its tools mid-session. The
-//! decision is `han_host::sandbox::admit`; this only asks it for the agent's recorded sandbox and tells the
-//! node's status what it found.
+//! The node's supervisor with a sandbox gate: an agent whose sandbox cannot work is refused before its agent
+//! starts, with the reason, instead of starting and losing its tools mid-session. The decision is
+//! `han_host::sandbox::admit_for`, and the probe runs where the host will:
+//!
+//! - a host that is the node's own child (same OS user) is probed here, in the node's process: that is MXC on
+//!   Windows, which must fail fast;
+//! - a host in its own `han-agent@` unit (an `osUser` agent) is NOT probed here. The node's unit is hardened
+//!   (`RestrictNamespaces=yes`, `ProcSubset=pid`, ...) so bwrap can never work in this process, by design, while
+//!   it works in the host's unit. The host probes at its own start (`han host`) and, when its sandbox is
+//!   unavailable, leaves a typed refusal that [`ProcessSpawner`] turns into the start's error and a node problem.
+//!
+//! There is no advisory fallback on either path: advisory needs `allow_advisory`, decided the same way.
 
 use std::sync::{Arc, OnceLock};
 
@@ -40,8 +48,13 @@ impl GatedSpawner {
 impl Supervisor for GatedSpawner {
     fn start(&self, spec: RoleSpec) -> Result<(), SupervisorError> {
         let s = &spec.spec.sandbox;
-        sandbox::gate(&s.backend, s.allow_advisory, &self.shim)
-            .map_err(|e| SupervisorError::SandboxUnavailable(e.to_string()))?;
+        sandbox::admit_for(
+            &s.backend,
+            s.allow_advisory,
+            spec.run_as.is_some(),
+            &self.shim,
+        )
+        .map_err(|e| SupervisorError::SandboxUnavailable(e.to_string()))?;
         self.inner.start(spec)
     }
 
@@ -54,12 +67,13 @@ impl Supervisor for GatedSpawner {
     }
 
     fn problems(&self) -> Vec<String> {
-        match self.loopback.get() {
-            Some(Some(why)) => vec![format!(
+        let mut out = self.inner.problems();
+        if let Some(Some(why)) = self.loopback.get() {
+            out.push(format!(
                 "sandbox mxc unavailable: {why}; fix: {}",
                 sandbox::LOOPBACK_FIX
-            )],
-            _ => Vec::new(),
+            ));
         }
+        out
     }
 }

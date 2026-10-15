@@ -5,8 +5,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use han_registry::{HostSpec, RunAs, spec_file, unit_spec_file};
+use han_registry::{
+    HostAdmission, HostSpec, RunAs, spec_file, unit_admission_file, unit_spec_file,
+};
 use tokio::process::{Child, Command};
 
 /// What to start: one agent host.
@@ -133,8 +136,10 @@ pub struct ProcessSpawner {
     /// The host-class endpoint of the node, given to every host this spawner starts as the node's own user.
     host_endpoint: Option<String>,
     children: Mutex<HashMap<String, Child>>,
-    /// Hosts running as another OS user, by name: their unit.
-    units: Mutex<HashMap<String, String>>,
+    /// Hosts running as another OS user, by name: their unit and the state directory their admission is in.
+    units: Mutex<HashMap<String, (String, PathBuf)>>,
+    /// How long a start waits for the unit's host to say whether its sandbox works.
+    admission_wait: Duration,
 }
 
 impl ProcessSpawner {
@@ -147,7 +152,15 @@ impl ProcessSpawner {
             host_endpoint: None,
             children: Mutex::new(HashMap::new()),
             units: Mutex::new(HashMap::new()),
+            admission_wait: Duration::from_secs(5),
         }
+    }
+
+    /// Waits this long (at most) after starting a unit for its host's admission; the host checks its sandbox
+    /// first thing, so a refusal normally arrives in well under a second.
+    pub fn with_admission_wait(mut self, wait: Duration) -> Self {
+        self.admission_wait = wait;
+        self
     }
 
     /// Puts these arguments in front of the spec file instead of `host --spec` (for a test that runs
@@ -205,6 +218,9 @@ impl ProcessSpawner {
             return Err(SupervisorError::Running(spec.name));
         }
         let file = unit_spec_file(&run_as.state_dir);
+        // An earlier host's word is not this one's.
+        let admission = unit_admission_file(&run_as.state_dir);
+        let _ = std::fs::remove_file(&admission);
         let spawn = |e: std::io::Error| SupervisorError::Spawn(format!("{}: {e}", file.display()));
         spec.spec.write(&file).map_err(spawn)?;
         // The unit runs as the OS user, who shares the state directory's group (and nothing else of ours).
@@ -231,8 +247,34 @@ impl ProcessSpawner {
         self.units
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(spec.name, unit);
+            .insert(spec.name, (unit.clone(), run_as.state_dir.clone()));
+        // The host checks its sandbox where it runs, under its own unit (this process cannot: its unit forbids
+        // namespaces). A refusal is the answer to this start; it also stays in `problems`.
+        let deadline = Instant::now() + self.admission_wait;
+        loop {
+            let active = self.unit_active(&unit);
+            match HostAdmission::read(&admission) {
+                Some(HostAdmission::Refused { message, .. }) => {
+                    return Err(SupervisorError::SandboxUnavailable(message));
+                }
+                Some(HostAdmission::Admitted) => break,
+                None => {}
+            }
+            if !active || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         Ok(())
+    }
+
+    fn unit_list(&self) -> Vec<(String, (String, PathBuf))> {
+        self.units
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(n, u)| (n.clone(), u.clone()))
+            .collect()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Child>> {
@@ -279,7 +321,7 @@ impl Supervisor for ProcessSpawner {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(name);
-        if let Some(unit) = unit {
+        if let Some((unit, _)) = unit {
             let out = self
                 .systemctl(&["stop", &unit])
                 .map_err(|e| SupervisorError::Spawn(format!("systemctl: {e}")))?;
@@ -314,14 +356,7 @@ impl Supervisor for ProcessSpawner {
             })
             .collect();
         drop(children);
-        let units: Vec<(String, String)> = self
-            .units
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-            .map(|(n, u)| (n.clone(), u.clone()))
-            .collect();
-        for (name, unit) in units {
+        for (name, (unit, _)) in self.unit_list() {
             let status = if self.unit_active(&unit) {
                 RoleStatus::Running
             } else {
@@ -330,6 +365,23 @@ impl Supervisor for ProcessSpawner {
             out.push((name, status));
         }
         out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    fn problems(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .unit_list()
+            .into_iter()
+            .filter_map(|(name, (_, state))| {
+                match HostAdmission::read(&unit_admission_file(&state))? {
+                    HostAdmission::Refused { kind, message } => Some(format!(
+                        "{name} refused to start ({kind:?}, checked by its own host): {message}"
+                    )),
+                    HostAdmission::Admitted => None,
+                }
+            })
+            .collect();
+        out.sort();
         out
     }
 }
