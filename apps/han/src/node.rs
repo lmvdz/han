@@ -256,7 +256,15 @@ async fn status(
 
 pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
     match args.cmd {
-        None => serve_node(args.opts).await,
+        None => {
+            // A node started by the service has no console to show why it stopped: the log has it.
+            let data = args.opts.data.clone();
+            let result = serve_node(args.opts).await;
+            if let Err(e) = &result {
+                log_line(&data, &format!("the node stopped: {e}"));
+            }
+            result
+        }
         Some(NodeCmd::Presence {
             data,
             require,
@@ -306,10 +314,26 @@ fn os_user_agents(data: &std::path::Path) -> Vec<(String, RunAs)> {
         .collect()
 }
 
+/// Appends a line to `<data>/node.log`, the record of how a node start went. A failure to write it is ignored.
+fn log_line(data: &std::path::Path, line: &str) {
+    use std::io::Write as _;
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data.join("node.log"))
+    {
+        let _ = writeln!(f, "{at} {line}");
+    }
+}
+
 async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     let actor = args.actor()?.to_owned();
     let actor = actor.as_str();
     std::fs::create_dir_all(&args.data)?;
+    log_line(&args.data, "the node is starting");
     let keys: Arc<dyn KeyStore> = if args.file_keys {
         Arc::new(FileKeyStore::new(args.data.join("keys")))
     } else {
@@ -357,6 +381,10 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let server = serve_roles(Arc::new(node.clone()), &endpoint)?;
+    log_line(
+        &args.data,
+        &format!("the node serves {}", server.endpoint()),
+    );
     println!("actor {}", node.actor());
     println!("node {}", transport.node_id());
     println!("endpoint {}", server.endpoint());

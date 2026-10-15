@@ -2021,6 +2021,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "widestring",
+ "windows",
 ]
 
 [[package]]

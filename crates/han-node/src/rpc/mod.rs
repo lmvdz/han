@@ -14,6 +14,8 @@
 mod client;
 #[cfg(feature = "runtime")]
 mod server;
+#[cfg(all(feature = "runtime", windows))]
+mod winsid;
 
 use std::io;
 
