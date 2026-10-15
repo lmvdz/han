@@ -2175,6 +2175,27 @@ v.step(claim("c0b", "p0"), "allow", profiles={BOT: dict(UNCONF, operatorConfirme
 v.step(prop("p3", author=BOT, cost=USD(5), task="t"), "allow")
 add(v.done())
 
+v = V("executor-refusal", ["P-07a", "P-04", "§6.4"], "round 33: the executor may cancel an effect it is the executor of while the effect is open, holding a role; not in phase claimed or unknown, not for another's effect, not without a role")
+team(v)
+v.step(ms("m4", O, G, "guest"), "allow")
+v.step(prop("p1"), "allow").step(E("x1", "effect.cancel", X, {"proposal": "p1"}), "allow", check={"effects.p1.phase": "cancelled", "effects.p1.cancelRequested": True}, note="the executor refuses an open effect")
+v.step(claim("c1", "p1"), "denied", note="cancelled for good")
+v.step(E("x1b", "effect.cancel", X, {"proposal": "p1"}), "denied", note="final")
+v.step(prop("p2"), "allow").step(E("x2", "effect.cancel", M, {"proposal": "p2"}), "denied", note="M is not the executor, proposer, approver or owner")
+v.step(prop("p3", executor=M), "allow").step(E("x3", "effect.cancel", X, {"proposal": "p3"}), "denied", note="another executor's effect")
+v.step(E("x3b", "effect.cancel", M, {"proposal": "p3"}), "allow", check={"effects.p3.phase": "cancelled"}, note="its own executor may")
+v.step(prop("p4"), "allow").step(claim("c4", "p4"), "allow")
+v.step(E("x4", "effect.cancel", X, {"proposal": "p4"}), "denied", note="claimed: the executor has no cancel right of its own", check={"effects.p4.phase": "claimed", "effects.p4.cancelRequested": False})
+v.step(outc("o4", "c4", "succeeded", "yes"), "allow", check={"effects.p4.phase": "succeeded"})
+v.step(prop("p5", repeatable=True), "allow").step(claim("c5", "p5"), "allow").step(outc("o5", "c5", "failed", "yes"), "allow", check={"effects.p5.phase": "open"})
+v.step(E("x5", "effect.cancel", X, {"proposal": "p5"}), "allow", check={"effects.p5.phase": "cancelled", "effects.p5.cancelRequested": True}, note="a repeatable effect that went back to open")
+v.step(prop("p6"), "allow").step(claim("c6", "p6"), "allow").step(outc("o6", "c6", "unknown", "yes"), "allow", check={"effects.p6.phase": "unknown"})
+v.step(E("x6", "effect.cancel", X, {"proposal": "p6"}), "denied", note="unknown: only the usual authors", check={"effects.p6.phase": "unknown", "effects.p6.cancelRequested": False})
+v.step(prop("p7", executor=Z), "allow").step(E("x7", "effect.cancel", Z, {"proposal": "p7"}), "denied", note="the executor holds no role")
+v.step(prop("p8", executor=G), "allow").step(E("x8", "effect.cancel", G, {"proposal": "p8"}), "allow", check={"effects.p8.phase": "cancelled"}, note="a guest executor holds a role")
+v.step(prop("p9"), "allow").step(ms("b1", O, X, "banned"), "allow").step(E("x9", "effect.cancel", X, {"proposal": "p9"}), "denied", note="banned: no role")
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",

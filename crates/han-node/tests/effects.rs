@@ -4,7 +4,9 @@
 mod common;
 
 use common::{World, call, confirm_operator, id_of, space_of, until};
-use han_node::api::{CallResult, Command, CommandClass, NodeApi, NodeError, Query, Row, Window};
+use han_node::api::{
+    CallResult, Command, CommandClass, EvidenceRef, NodeApi, NodeError, Query, Row, Window,
+};
 
 const ALICE: &str = "@alice:a.localhost";
 const CODER: &str = "@coder:a.localhost";
@@ -210,6 +212,7 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
             result: "failed".into(),
             started: "no".into(),
             cost: None,
+            evidence: None,
         },
     )
     .await;
@@ -245,6 +248,7 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
             result: "succeeded".into(),
             started: "yes".into(),
             cost: None,
+            evidence: None,
         },
     )
     .await;
@@ -330,4 +334,209 @@ async fn an_agent_that_opens_a_guarded_session_is_guarded() {
         .await
         .unwrap_err();
     assert!(matches!(bad, NodeError::Invalid { .. }));
+}
+
+/// P-07a: the executor of an `open` effect refuses it for good with `effect.cancel`, with a reason and a blob as
+/// evidence; the blob is then readable by the space's members (G-01). A claimed effect is out of its reach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_executor_refuses_its_open_effect_with_a_reason_and_evidence() {
+    let world = World::new(&[(ALICE, 61)]);
+    world
+        .home
+        .register(CODER, "agent", "d1", &common::pubkey(62), Some(ALICE))
+        .unwrap();
+    world
+        .home
+        .register(EXEC, "service", "d1", &common::pubkey(63), Some(ALICE))
+        .unwrap();
+    let alice = world.node(ALICE, 61);
+    let coder = world.node(CODER, 62);
+    let exec = world.node(EXEC, 63);
+    let space = space_of(
+        &call(
+            &alice,
+            Command::SpaceCreate {
+                home: world.home_ref.clone(),
+                name: "team".into(),
+                visibility: "members".into(),
+                join: "invite".into(),
+            },
+        )
+        .await,
+    );
+    confirm_operator(&world, &alice, ALICE, CODER).await;
+    confirm_operator(&world, &alice, ALICE, EXEC).await;
+    for who in [CODER, EXEC] {
+        call(
+            &alice,
+            Command::MemberSet {
+                space: space.clone(),
+                actor: who.into(),
+                role: "member".into(),
+            },
+        )
+        .await;
+    }
+    for node in [&coder, &exec] {
+        call(
+            node,
+            Command::SpaceFollow {
+                home: world.home_ref.clone(),
+                space: space.clone(),
+            },
+        )
+        .await;
+    }
+    let propose = |n: u32| Command::EffectPropose {
+        space: space.clone(),
+        executor: EXEC.into(),
+        plan: format!(
+            r#"{{"action":"git_push","target":"github:o/r","args":{{"branch":"han/{n}-coder","to":"abc"}}}}"#
+        ),
+        task: None,
+        cost: None,
+        repeatable: false,
+        expires_at: None,
+    };
+    let refused = id_of(&call(&coder, propose(1)).await);
+    let running = id_of(&call(&coder, propose(2)).await);
+    until("the executor sees both proposals", || {
+        let seen = effects(&exec, EXEC, false);
+        [&refused, &running]
+            .iter()
+            .all(|p| seen.iter().any(|e| &e.proposal == *p && e.plan.is_some()))
+    })
+    .await;
+
+    // The proof goes up first, as the author's own upload.
+    let proof = br#"{"why":"the checks failed"}"#;
+    let CallResult::BlobRef {
+        hash,
+        size,
+        media_type,
+    } = call(
+        &exec,
+        Command::BlobPut {
+            space: space.clone(),
+            media_type: "application/json".into(),
+            data: han_core::base64url::encode(proof),
+        },
+    )
+    .await
+    else {
+        panic!("a blob reference")
+    };
+    let cancel =
+        |proposal: &str, reason: String, evidence: Option<EvidenceRef>| Command::EffectCancel {
+            space: space.clone(),
+            proposal: proposal.to_owned(),
+            reason: Some(reason),
+            evidence,
+        };
+
+    // A reason beyond 1,024 bytes is refused before it is sent.
+    let e = exec
+        .call(cancel(&refused, "x".repeat(1025), None))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, NodeError::Invalid { .. }), "{e:?}");
+
+    // The executor cancels its open effect; the effect ends.
+    let out = call(
+        &exec,
+        cancel(
+            &refused,
+            "test: required checks failed".into(),
+            Some(EvidenceRef {
+                hash: hash.clone(),
+                size,
+                media_type: media_type.clone(),
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(out, CallResult::Receipt { .. }));
+    until("the effect is done, never claimed", || {
+        effects(&exec, EXEC, true)
+            .iter()
+            .any(|e| e.proposal == refused && e.phase == "done" && e.claims == 0)
+    })
+    .await;
+    assert!(
+        effects(&exec, EXEC, false)
+            .iter()
+            .all(|e| e.proposal != refused)
+    );
+
+    // The evidence is referenced by that record: a member reads it (G-01).
+    let mut read = None;
+    for _ in 0..250 {
+        read = alice
+            .call(Command::BlobFetch {
+                space: space.clone(),
+                hash: hash.clone(),
+                size,
+                media_type: media_type.clone(),
+            })
+            .await
+            .ok();
+        if read.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let Some(CallResult::Blob { data, .. }) = read else {
+        panic!("alice could not read the evidence");
+    };
+    assert_eq!(han_core::base64url::decode(&data).unwrap(), proof);
+
+    // A claimed effect is out of the executor's reach: Policy refuses its cancel.
+    let claim = id_of(
+        &call(
+            &exec,
+            Command::EffectClaim {
+                space: space.clone(),
+                proposal: running.clone(),
+                attempt: 1,
+                window: 30,
+            },
+        )
+        .await,
+    );
+    let e = exec
+        .call(cancel(&running, "late".into(), None))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, NodeError::Conflict { .. } | NodeError::Denied { .. }),
+        "{e:?}"
+    );
+    until("the claim stands", || {
+        effects(&exec, EXEC, false)
+            .iter()
+            .any(|e| e.proposal == running && e.phase == "claimed")
+    })
+    .await;
+    call(
+        &exec,
+        Command::EffectOutcome {
+            space: space.clone(),
+            claim,
+            result: "succeeded".into(),
+            started: "yes".into(),
+            cost: None,
+            evidence: Some(EvidenceRef {
+                hash,
+                size,
+                media_type,
+            }),
+        },
+    )
+    .await;
+    until("the running effect is done", || {
+        effects(&exec, EXEC, true)
+            .iter()
+            .any(|e| e.proposal == running && e.phase == "done" && e.claims == 1)
+    })
+    .await;
 }

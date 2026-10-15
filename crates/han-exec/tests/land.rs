@@ -147,6 +147,7 @@ impl World {
                 onto: onto.into(),
                 commit: commit.into(),
                 repository: self.work.clone(),
+                evidence: None,
             }),
         }
     }

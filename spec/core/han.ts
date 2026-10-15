@@ -106,7 +106,7 @@ export interface Contents {
   "effect.propose": { plan: Plan };
   "effect.approve": { note?: string };
   "effect.claim": null;
-  "effect.cancel": null;
+  "effect.cancel": { reason?: string; evidence?: BlobRef };   // round 33: the executor's refusal says why (reason ≤ 1024 bytes) and may point at the proof (G-01)
   "effect.outcome": { evidence?: BlobRef };
   "effect.resolve": { evidence: BlobRef };
   "checkpoint": { blobs: BlobRef[] };

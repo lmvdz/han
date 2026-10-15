@@ -309,6 +309,43 @@ impl Rig {
         self.items(proposal).pop().expect("an item")
     }
 
+    /// The `effect.cancel`s the executor sent: `(proposal, reason, evidence)`.
+    fn cancels(&self) -> Vec<(String, String, Option<han_node::api::EvidenceRef>)> {
+        self.node
+            .state()
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                han_node::api::Command::EffectCancel {
+                    proposal,
+                    reason,
+                    evidence,
+                    ..
+                } => Some((
+                    proposal.clone(),
+                    reason.clone().unwrap_or_default(),
+                    evidence.clone(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The evidence of each `effect.outcome` the executor sent: `(claim, evidence)`.
+    fn outcome_evidence(&self) -> Vec<(String, Option<han_node::api::EvidenceRef>)> {
+        self.node
+            .state()
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                han_node::api::Command::EffectOutcome {
+                    claim, evidence, ..
+                } => Some((claim.clone(), evidence.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The JSON a `BlobRef` of an item points at, from the space.
     fn blob(&self, r: &Value) -> Value {
         let hash = r["hash"].as_str().unwrap();
@@ -385,6 +422,14 @@ async fn happy_path_queued_testing_landing_landed_confirmed() {
     let at = han_core::grammar::epoch_seconds("2026-10-15T10:00:00Z").unwrap();
     assert!(info.contains(&format!("|{at}|")), "{info}");
     assert!(info.contains("HAN-Proposal: p1"), "{info}");
+    // The outcome carries the same checks evidence, a blob of the space (G-01).
+    let sent = rig.outcome_evidence();
+    assert_eq!(sent.len(), 1);
+    let sent = sent[0].1.clone().expect("the outcome carries evidence");
+    let shown = &rig.items(&p)[2]["evidence"];
+    assert_eq!(shown["hash"], sent.hash.as_str());
+    assert_eq!(shown["size"], sent.size);
+    assert_eq!(shown["type"], sent.media_type.as_str());
     // The claim went through the normal path and the home heard the outcome.
     assert_eq!(rig.node.claims(), 1);
     assert_eq!(
@@ -468,6 +513,18 @@ async fn the_ref_moving_by_an_overlapping_change_rejects_with_a_conflict_record(
     assert_eq!(record["reason"], "merge_conflict");
     assert_eq!(rig.node.claims(), 0);
     assert_eq!(rig.w.show("main", "a.txt"), "a, edited by someone else");
+    // The rejection ends the effect: the executor cancels it, with the reason and the conflict record.
+    let cancels = rig.cancels();
+    assert_eq!(cancels.len(), 1, "{cancels:?}");
+    assert_eq!(cancels[0].0, p);
+    assert!(cancels[0].1.starts_with("conflict: "), "{:?}", cancels[0]);
+    let proof = cancels[0].2.clone().expect("the conflict record");
+    assert_eq!(proof.hash, last["conflict"]["hash"].as_str().unwrap());
+    assert_eq!(rig.node.row(&p).phase, "done");
+    // Told once.
+    rig.wall.advance(1);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.cancels().len(), 1);
 }
 
 #[tokio::test]
@@ -569,6 +626,14 @@ async fn a_red_required_check_rejects_with_the_evidence() {
     assert_eq!(evidence["checks"][1]["url"], "https://ci.invalid/quick");
     assert_eq!(rig.node.claims(), 0);
     assert_ne!(rig.w.tip(), rig.items(&p)[1]["commit"].as_str().unwrap());
+    let cancels = rig.cancels();
+    assert_eq!(cancels.len(), 1, "{cancels:?}");
+    assert!(cancels[0].1.starts_with("test: "), "{:?}", cancels[0]);
+    assert!(cancels[0].1.contains("quick"), "{:?}", cancels[0]);
+    assert_eq!(
+        cancels[0].2.as_ref().expect("the failing checks").hash,
+        last["evidence"]["hash"].as_str().unwrap()
+    );
 }
 
 #[tokio::test]
@@ -677,6 +742,80 @@ async fn a_change_past_a_states_deadline_is_stalled() {
     let rep = lane.pass().await.unwrap();
     assert!(rep.stalled[0].1.contains("the backend is down"), "{rep:?}");
     assert_eq!(rig.last(&p)["state"], "testing");
+}
+
+#[tokio::test]
+async fn a_stalled_head_past_its_deadline_yields_then_times_out() {
+    let rig = Rig::with(|r| {
+        r.deadlines = Deadlines {
+            testing_secs: 600,
+            stall_secs: 1000,
+            ..Deadlines::default()
+        };
+    });
+    rig.checks.fast(vec![run("quick", "in_progress")]);
+    let one = rig.land("one", "a.txt", "a, edited\n");
+    let two = rig.land("two", "b.txt", "b, edited\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    // The head holds the slot while it is within its deadline.
+    assert_eq!(rig.last(&one)["state"], "testing");
+    assert_eq!(rig.last(&two)["state"], "queued");
+    assert_eq!(rig.last(&two)["detail"], "waiting for the lane's slot");
+    rig.wall.advance(601);
+    lane.pass().await.unwrap();
+    // Stalled past its deadline, the head steps aside: the change behind it is tested, and the head stays
+    // visible as stalled.
+    assert!(rig.last(&one)["stalled"].is_string());
+    assert_eq!(rig.last(&one)["state"], "testing");
+    assert_eq!(rig.last(&two)["state"], "testing");
+    assert!(rig.cancels().is_empty());
+
+    // Still stalled at the hard bound (a pass later than the stall began): rejected, `timeout`.
+    rig.wall.advance(1000);
+    lane.pass().await.unwrap();
+    let last = rig.last(&one);
+    assert_eq!(last["state"], "rejected");
+    assert_eq!(last["reason"], "timeout");
+    let cancels = rig.cancels();
+    assert_eq!(cancels.len(), 1, "{cancels:?}");
+    assert_eq!(cancels[0].0, one);
+    assert!(cancels[0].1.starts_with("timeout: "), "{:?}", cancels[0]);
+    assert_eq!(rig.node.row(&one).phase, "done");
+    // The change behind it was never held up: it lands.
+    rig.checks.fast(green());
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&two)["state"], "confirmed");
+}
+
+#[tokio::test]
+async fn a_stalled_head_that_unstalls_resumes_and_lands() {
+    let rig = Rig::with(|r| {
+        r.deadlines = Deadlines {
+            testing_secs: 600,
+            stall_secs: 100_000,
+            ..Deadlines::default()
+        };
+    });
+    rig.checks.fast(vec![run("quick", "in_progress")]);
+    let one = rig.land("one", "a.txt", "a, edited\n");
+    let two = rig.land("two", "b.txt", "b, edited\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    rig.wall.advance(601);
+    lane.pass().await.unwrap();
+    assert!(rig.last(&one)["stalled"].is_string());
+    assert_eq!(rig.last(&two)["state"], "testing");
+    // The head's checks turn green before the bound: it lands first, the change behind it prepares again on
+    // the new tip, and both land. Nothing was rejected or cancelled.
+    rig.checks.fast(green());
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&one)["state"], "confirmed");
+    assert!(rig.last(&one).get("stalled").is_none());
+    assert_eq!(rig.last(&two)["state"], "confirmed");
+    assert_eq!(rig.w.show("main", "a.txt"), "a, edited");
+    assert_eq!(rig.w.show("main", "b.txt"), "b, edited");
+    assert!(rig.cancels().is_empty());
 }
 
 #[tokio::test]
@@ -936,6 +1075,24 @@ async fn depends_on_orders_the_changes_and_a_rejected_dependency_rejects() {
     assert_eq!(last["reason"], "dependency");
     assert!(last["detail"].as_str().unwrap().contains("p1"), "{last}");
     assert_eq!(rig.node.claims(), 0);
+    let mut reasons: Vec<(String, String)> = rig
+        .cancels()
+        .into_iter()
+        .map(|(p, r, e)| {
+            (
+                p,
+                r.split(':').next().unwrap().to_owned() + if e.is_some() { "+proof" } else { "" },
+            )
+        })
+        .collect();
+    reasons.sort();
+    assert_eq!(
+        reasons,
+        [
+            (pa.clone(), "conflict+proof".to_owned()),
+            (pb.clone(), "dependency".to_owned())
+        ]
+    );
 }
 
 #[tokio::test]

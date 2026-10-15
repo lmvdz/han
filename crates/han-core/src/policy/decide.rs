@@ -721,10 +721,13 @@ fn cancel(
             .approvals
             .iter()
             .any(|x| x.author == a && (x.consumed_by.is_some() || !expired(x, ctx.secs)));
+    // round 33: the executor may refuse an effect no attempt is running on
+    let refusal = a == eff.executor && eff.phase == Phase::Open;
     if !(a == eff.proposer
         || role == Some(Role::Owner)
         || in_guards(&guards_of(state, ctx, eff), a)
-        || approved)
+        || approved
+        || refusal)
     {
         return deny("not proposer/approver/owner");
     }

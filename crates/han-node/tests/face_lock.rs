@@ -405,6 +405,23 @@ async fn approvals_ask_per_action_and_hosts_cannot_unlock() {
     if let Err(NodeError::Denied { message }) = exec.call(put).await {
         assert!(!message.contains("may not send"), "{message}");
     }
+    // ...and refuse an effect it will not run (P-07a): the policy decides whose effect and when, not the class
+    let cancel = Command::EffectCancel {
+        space: s.space.clone(),
+        proposal: "nothing".into(),
+        reason: Some("test: it fails".into()),
+        evidence: None,
+    };
+    let e = exec.call(cancel.clone()).await.unwrap_err();
+    assert!(
+        !matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
+        "in process it reaches the node: {e:?}"
+    );
+    let e = own.call(cancel).await.unwrap_err();
+    assert!(
+        matches!(&e, NodeError::Denied { message } if message.contains("may not send")),
+        "a host may not: {e:?}"
+    );
     assert!(script.prompts().is_empty());
 }
 

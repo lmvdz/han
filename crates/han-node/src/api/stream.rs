@@ -45,7 +45,7 @@ pub trait NodeApi: Send + Sync + 'static {
 /// (as its own actor) holds this and never the node itself, so the class bounds what it can send however it
 /// asks (SR-06, SR-106). The same bound the role endpoints put on a connection, plus the one Face-class
 /// command a role needs in process: a host uploads its `git_push` changeset (`BlobPut`), an executor fetches
-/// it (`BlobFetch`) and uploads the evidence and conflict records its landing lane publishes (`BlobPut`); and a host may send `SessionInput` (an agent steering another session, as the policy
+/// it (`BlobFetch`) and uploads the evidence and conflict records its landing lane publishes (`BlobPut`) and refuses an effect it will not run (`EffectCancel`, P-07a: Policy lets only the effect's own executor do that, and only while it is open); and a host may send `SessionInput` (an agent steering another session, as the policy
 /// allows): only in process, never on the host endpoint. Views are not bounded.
 pub struct ClassApi {
     inner: Arc<dyn NodeApi>,
@@ -67,7 +67,9 @@ impl ClassApi {
                     Command::BlobPut { .. } | Command::SessionInput { .. }
                 ) | (
                     ConnectionClass::Executor,
-                    Command::BlobFetch { .. } | Command::BlobPut { .. }
+                    Command::BlobFetch { .. }
+                        | Command::BlobPut { .. }
+                        | Command::EffectCancel { .. }
                 )
             )
     }

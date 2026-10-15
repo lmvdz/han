@@ -442,6 +442,7 @@ impl Executor {
                     result: rep.result.clone(),
                     started: rep.started.clone(),
                     cost: None,
+                    evidence: a.lane.as_ref().and_then(|l| l.evidence.clone()),
                 })
                 .await;
             match sent {

@@ -604,7 +604,8 @@ def _cancel(state, entry, ctx, role):
     if role not in READ_ROLES: return deny("author holds no role")
     approved = not guard_status(state, ctx, a)["guarded"] and any(          # a guarded author's approval grants no cancel right (P-04, Z1)
         x["author"] == a for x in eff["approvals"] if x.get("consumedBy") or x in open_approvals(eff, ctx["time"]))
-    if not (a == eff["proposer"] or role == "owner" or a in guards_of(state, ctx, eff) or approved):
+    refusal = a == eff["executor"] and eff["phase"] == "open"              # round 33: the executor may refuse an effect no attempt is running on
+    if not (a == eff["proposer"] or role == "owner" or a in guards_of(state, ctx, eff) or approved or refusal):
         return deny("not proposer/approver/owner")
     if eff["phase"] in FINAL: return deny("already final")
     if eff["phase"] in ("claimed", "unknown") and eff["cancelRequested"]: return deny("already requested")
