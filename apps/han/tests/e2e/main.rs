@@ -941,7 +941,16 @@ async fn a_local_process_cannot_govern_or_steer_until_a_person_confirms() {
         !ok && err.contains("not unlocked") && err.contains("no presence check"),
         "the CLI is refused: {err}"
     );
-    let refused = c.call(steer.clone()).await.unwrap_err();
+    // the CLI's refusal spaced the next prompt out; the refusal says how long, and this waits exactly that
+    let refused = loop {
+        match c.call(steer.clone()).await.unwrap_err() {
+            NodeError::Unavailable {
+                retry_after_ms: Some(ms),
+                ..
+            } => tokio::time::sleep(Duration::from_millis(ms)).await,
+            e => break e,
+        }
+    };
     assert!(
         matches!(&refused, NodeError::Denied { message } if message.starts_with("not unlocked: ")),
         "{refused:?}"

@@ -479,8 +479,11 @@ async fn a_headless_service_node_starts_agents_without_a_prompt_and_a_persons_no
         home: None,
     };
     let script = Scripted::new();
-    let markers = std::env::temp_dir().join(format!("han-headless-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&markers);
+    // (the marker's folder and its parent must be owned by the user standing in for root and not writable by
+    // others, so not directly in the shared temp folder)
+    let base = std::env::temp_dir().join(format!("han-headless-{}", std::process::id()));
+    let markers = base.join("headless.d");
+    let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&markers).unwrap();
     let owner = std::fs::metadata(&markers).unwrap().uid();
     let headless = stage_with(script.clone(), None, |data, c| {
@@ -550,5 +553,5 @@ async fn a_headless_service_node_starts_agents_without_a_prompt_and_a_persons_no
     assert!(presence_required(
         &raw.call(start("@coder:a.localhost", &person.space)).await
     ));
-    let _ = std::fs::remove_dir_all(&markers);
+    let _ = std::fs::remove_dir_all(&base);
 }
