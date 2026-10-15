@@ -34,3 +34,4 @@ Conversations already have good open networks, such as Matrix. HAN doesn't repla
 - Not a consensus system: each room has one sequencer at a time. A cheating sequencer is *detectable* (signed receipts), not *prevented*. If a sequencer dies, its log stays verifiable and work continues in a fork, without inherited authority.
 - Not an agent framework or a model API: how an agent thinks is its host's business.
 - Not exactly-once in the world: HAN guarantees *at most one launch per claim*, no second attempt after an uncertain one unless someone explicitly records that it failed (or the proposer declared the action `repeatable`, i.e. harmless to repeat), and an honest outcome. It can't make the outside world cooperate.
+
