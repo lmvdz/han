@@ -27,6 +27,7 @@ jobs:
     outputs:
       rust: ${{ steps.scope.outputs.rust }}
       packages: ${{ steps.scope.outputs.packages }}
+      doc_packages: ${{ steps.scope.outputs.doc_packages }}
       spec: ${{ steps.scope.outputs.spec }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,8 +119,10 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Doc-tests
+        # only crates with a library target: `cargo test --doc` refuses a bin-only crate such as `han`
+        if: needs.scope.outputs.doc_packages != 'none'
         env:
-          PACKAGES: ${{ needs.scope.outputs.packages }}
+          PACKAGES: ${{ needs.scope.outputs.doc_packages }}
         run: cargo test --doc ${PACKAGES:---workspace} --locked
 
   # The spec checks need no Rust: policy vectors, the three-way consistency of the entry kinds, and (when a Markdown file
