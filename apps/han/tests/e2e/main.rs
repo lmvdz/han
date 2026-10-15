@@ -234,6 +234,54 @@ async fn the_issue_text_reaches_the_agent_as_a_data_block() {
     );
 }
 
+/// Bug: `han agent start --issue` for an issue with no task started an agent that had only "work on <issue>"
+/// and no network to fetch the text. It is refused, with the reason, and nothing starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn a_start_for_an_issue_with_no_task_is_refused() {
+    let s = Stack::up("simple", &[]);
+    let (ok, out, err) = s.start_agent_with(&["--issue", "github:o/r#999"]);
+    assert!(!ok, "started without the issue text: {out}");
+    assert!(
+        err.contains("github:o/r#999") && err.contains("han-github creates one"),
+        "{err}"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        s.agent_events().is_empty(),
+        "an agent ran: {:?}",
+        s.agent_events()
+    );
+}
+
+/// `--task` names the task whose data block carries the issue text; the issue is the task's own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn a_start_by_task_delivers_the_text_as_a_data_block() {
+    let s = Stack::up("simple", &[]);
+    let c = s.client().await;
+    let task = s.issue_task(&c).await;
+    let (ok, out, err) = s.start_agent_with(&["--task", &task]);
+    assert!(
+        ok,
+        "{err}
+{out}"
+    );
+    s.board_until(&c, "the first turn to finish", 120, idle)
+        .await;
+    let log = s.agent_log();
+    let data = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["event"] == "prompt")
+        .expect("the agent got a prompt")["prompt"]
+        .to_string();
+    assert!(
+        data.contains("DEV-ISSUE-MARKER") && data.contains("untrusted"),
+        "{data}"
+    );
+}
+
 /// Bugs: (a) the host showed "waiting-approval" for a proposal the home had not accepted; (b) the executor
 /// claimed or pushed more than once. The proposal is accepted, shows in the person's Approvals, nothing lands
 /// before the approval, the approval lands one push, and an executor restart pushes nothing again.

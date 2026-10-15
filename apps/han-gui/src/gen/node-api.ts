@@ -159,9 +159,17 @@ harness?: string,
  */
 repo?: string, 
 /**
- * The issue, `github:owner/repo#123`.
+ * The issue, `github:owner/repo#123`. The session works the open task for the issue that is addressed
+ * to the agent (han-github creates one for each agent-ready issue; its data block carries the issue's
+ * title and body). With no such task the start is refused, since the agent has no network to fetch
+ * the text.
  */
 issue?: string, 
+/**
+ * The task to work. Without `issue`, the task's own issue is used; with it, the task must be for
+ * that issue.
+ */
+task?: string, 
 /**
  * The agent's home, when the node does not follow the agent's profile yet: the node pins it (a
  * ticket), follows `profile:<agent>` there, and takes the operator from it.

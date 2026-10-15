@@ -28,6 +28,8 @@ pub struct Launch {
     pub repo: Option<String>,
     /// The issue.
     pub issue: Option<String>,
+    /// The task to work: the open task for the issue, which carries the issue's text.
+    pub task: Option<String>,
     /// The space's home, as the host's node reaches it.
     pub home: HomeRef,
     /// The executor of approved effects.
@@ -213,6 +215,7 @@ impl Registry {
             work: WorkSpec {
                 repo: launch.repo.clone(),
                 issue: launch.issue.clone(),
+                task: launch.task.clone(),
                 executor: Some(launch.executor.clone()),
                 ..WorkSpec::default()
             },
@@ -257,6 +260,7 @@ mod tests {
             harness: Some(harness.into()),
             repo: Some("github:o/r".into()),
             issue: Some("github:o/r#1".into()),
+            task: None,
             home: HomeRef::Server("a.localhost".into()),
             executor: "@exec:a.localhost".into(),
             budget: None,

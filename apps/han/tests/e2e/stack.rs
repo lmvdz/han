@@ -204,22 +204,46 @@ impl Stack {
 
     /// Starts the agent's session on the stack's issue, as the person.
     pub fn start_agent(&self) {
-        han(&[
-            "agent",
-            "start",
-            "--space",
-            &self.space(),
-            "--agent",
-            &self.agent(),
-            "--repo",
-            &self.remote().to_string_lossy(),
-            "--issue",
-            &self.get("issue"),
-            "--home",
-            &self.ticket(),
-            "--data",
-            &self.person_data().to_string_lossy(),
-        ]);
+        let issue = self.get("issue");
+        let (ok, out, err) = self.start_agent_with(&["--issue", &issue]);
+        assert!(
+            ok,
+            "han agent start failed: {err}
+{out}"
+        );
+    }
+
+    /// `han agent start` with `work` (`--issue`, `--task`) as the person; returns how it ended.
+    pub fn start_agent_with(&self, work: &[&str]) -> (bool, String, String) {
+        let (space, agent) = (self.space(), self.agent());
+        let (remote, ticket) = (self.remote().to_string_lossy().into_owned(), self.ticket());
+        let data = self.person_data().to_string_lossy().into_owned();
+        let mut args = vec![
+            "agent", "start", "--space", &space, "--agent", &agent, "--repo", &remote, "--home",
+            &ticket, "--data", &data,
+        ];
+        args.extend_from_slice(work);
+        run(&args)
+    }
+
+    /// The id of the open task for the stack's issue.
+    pub async fn issue_task(&self, client: &RpcClient) -> String {
+        let issue = self.get("issue");
+        rows(
+            client,
+            Query::Tasks {
+                space: self.space(),
+                assignee: None,
+                window: Window::default(),
+            },
+        )
+        .await
+        .into_iter()
+        .find_map(|r| match r {
+            Row::Task(t) if t.open && t.external.as_deref() == Some(issue.as_str()) => Some(t.task),
+            _ => None,
+        })
+        .expect("the stack has a task for its issue")
     }
 
     /// A client of the person's node.

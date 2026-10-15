@@ -840,23 +840,32 @@ async fn find_or_claim_task(
 ) -> Result<Option<TaskInfo>, HostError> {
     wait_synced(cfg, api, Duration::from_secs(30)).await;
     if let Some(t) = &cfg.task {
-        let rows = snapshot(
-            api,
-            Query::Tasks {
-                space: cfg.space.clone(),
-                assignee: Some(cfg.agent.clone()),
-                window: Window::default(),
-            },
-        )
-        .await?;
-        let (author, ask) = rows
-            .iter()
-            .find_map(|r| match r {
+        // The node chose this task, so its row is the space's: wait for the host's own node to have it rather
+        // than start without the ask, which is the only place the issue's text is.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let rows = snapshot(
+                api,
+                Query::Tasks {
+                    space: cfg.space.clone(),
+                    assignee: Some(cfg.agent.clone()),
+                    window: Window::default(),
+                },
+            )
+            .await?;
+            if let Some((author, ask)) = rows.iter().find_map(|r| match r {
                 Row::Task(x) if &x.task == t => Some((x.author.clone(), x.ask.clone())),
                 _ => None,
-            })
-            .unwrap_or_else(|| (cfg.agent.clone(), None));
-        return Ok(Some((t.clone(), author, cfg.issue.clone(), ask)));
+            }) {
+                return Ok(Some((t.clone(), author, cfg.issue.clone(), ask)));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(HostError::Agent(format!(
+                    "task {t} has not reached this host's node, so its text cannot be given to the agent"
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
     let Some(issue) = &cfg.issue else {
         return Ok(None);
