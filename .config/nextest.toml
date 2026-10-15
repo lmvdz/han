@@ -9,3 +9,9 @@ e2e-stack = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = "binary_id(han::e2e)"
 test-group = "e2e-stack"
+
+# CI prints every test's time, so the slowest tests can be read off the log.
+[profile.ci]
+status-level = "pass"
+final-status-level = "slow"
+slow-timeout = { period = "30s" }
