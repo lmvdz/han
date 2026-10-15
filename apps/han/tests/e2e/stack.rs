@@ -59,6 +59,7 @@ pub fn advisory() -> bool {
 
 pub fn run(args: &[&str]) -> (bool, String, String) {
     let out = Command::new(HAN)
+        .env("HAN_PRESENCE_LIVE", "1")
         .args(args)
         .env("HAN_RELAY", "none")
         .stdin(Stdio::null())
@@ -112,6 +113,7 @@ impl Stack {
         // Output goes to a file, not a pipe: the stack's services outlive `dev up` and must not hold a pipe
         // that the test would wait on.
         let status = Command::new(HAN)
+            .env("HAN_PRESENCE_LIVE", "1")
             .args(&args)
             .envs(env.iter().copied())
             .stdin(Stdio::null())
@@ -191,6 +193,7 @@ impl Stack {
         ));
         let file = std::fs::File::create(&out).unwrap();
         let status = Command::new(HAN)
+            .env("HAN_PRESENCE_LIVE", "1")
             .args(&a)
             .stdin(Stdio::null())
             .stdout(file.try_clone().unwrap())
@@ -204,22 +207,58 @@ impl Stack {
 
     /// Starts the agent's session on the stack's issue, as the person.
     pub fn start_agent(&self) {
-        han(&[
-            "agent",
-            "start",
-            "--space",
-            &self.space(),
-            "--agent",
-            &self.agent(),
-            "--repo",
-            &self.remote().to_string_lossy(),
-            "--issue",
-            &self.get("issue"),
-            "--home",
-            &self.ticket(),
-            "--data",
-            &self.person_data().to_string_lossy(),
-        ]);
+        let issue = self.get("issue");
+        let (ok, out, err) = self.start_agent_with(&["--issue", &issue]);
+        assert!(
+            ok,
+            "han agent start failed: {err}
+{out}"
+        );
+    }
+
+    /// `han agent start` with `work` (`--issue`, `--task`) as the person; returns how it ended.
+    pub fn start_agent_with(&self, work: &[&str]) -> (bool, String, String) {
+        let (space, agent) = (self.space(), self.agent());
+        let (remote, ticket) = (self.remote().to_string_lossy().into_owned(), self.ticket());
+        let data = self.person_data().to_string_lossy().into_owned();
+        let mut args = vec![
+            "agent", "start", "--space", &space, "--agent", &agent, "--repo", &remote, "--home",
+            &ticket, "--data", &data,
+        ];
+        args.extend_from_slice(work);
+        run(&args)
+    }
+
+    /// Kills the agent's host outright (SIGKILL: no chance to close its session), as a stop timeout or the OOM
+    /// killer would.
+    #[cfg(unix)]
+    pub fn kill_host(&self) {
+        let pattern = format!("host --spec {}", self.dir.display());
+        let status = Command::new("pkill")
+            .args(["-KILL", "-f", &pattern])
+            .status()
+            .expect("pkill runs");
+        assert!(status.success(), "no host process matched {pattern:?}");
+    }
+
+    /// The id of the open task for the stack's issue.
+    pub async fn issue_task(&self, client: &RpcClient) -> String {
+        let issue = self.get("issue");
+        rows(
+            client,
+            Query::Tasks {
+                space: self.space(),
+                assignee: None,
+                window: Window::default(),
+            },
+        )
+        .await
+        .into_iter()
+        .find_map(|r| match r {
+            Row::Task(t) if t.open && t.external.as_deref() == Some(issue.as_str()) => Some(t.task),
+            _ => None,
+        })
+        .expect("the stack has a task for its issue")
     }
 
     /// A client of the person's node.
@@ -341,6 +380,7 @@ impl Drop for Stack {
     fn drop(&mut self) {
         let dir = self.dir.to_string_lossy().into_owned();
         let _ = Command::new(HAN)
+            .env("HAN_PRESENCE_LIVE", "1")
             .args(["dev", "down", "--dir", &dir])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

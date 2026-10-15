@@ -44,6 +44,9 @@ pub struct PresencePrompt {
 }
 
 impl PresencePrompt {
+    /// The action of a prompt that unlocks a face connection for governing and steering, not an approval.
+    pub const UNLOCK: &'static str = "unlock";
+
     /// How many characters of the digest the prompt shows.
     pub const DIGEST_CHARS: usize = 12;
 
@@ -54,6 +57,12 @@ impl PresencePrompt {
 
     /// The text of the system prompt: one line, so every backend can show it.
     pub fn message(&self) -> String {
+        if self.action == Self::UNLOCK {
+            return format!(
+                "Unlock governing and steering for a local connection on {} (changes who may do what, and sends input to sessions)",
+                clip(&self.space),
+            );
+        }
         format!(
             "Approve {} on {} (plan {}) in {}, proposed by {}",
             clip(&self.action),
@@ -155,6 +164,10 @@ pub enum BackendChoice {
     Polkit,
     /// No check: approvals that require presence fail.
     None,
+    /// Confirms every prompt at once. Exists only in builds with `test-doubles` (the `conformance` builds of
+    /// the test rigs); a release build neither parses nor builds it.
+    #[cfg(feature = "test-doubles")]
+    TestAllow,
 }
 
 impl BackendChoice {
@@ -166,6 +179,8 @@ impl BackendChoice {
             BackendChoice::TouchId => "touch-id",
             BackendChoice::Polkit => "polkit",
             BackendChoice::None => "none",
+            #[cfg(feature = "test-doubles")]
+            BackendChoice::TestAllow => "test-allow",
         }
     }
 
@@ -212,6 +227,8 @@ impl BackendChoice {
                 }
             }
             BackendChoice::None => <dyn Presence>::deny_all(),
+            #[cfg(feature = "test-doubles")]
+            BackendChoice::TestAllow => Arc::new(testing::AllowAll),
         }
     }
 }
@@ -239,6 +256,8 @@ impl FromStr for BackendChoice {
             "touch-id" => BackendChoice::TouchId,
             "polkit" => BackendChoice::Polkit,
             "none" => BackendChoice::None,
+            #[cfg(feature = "test-doubles")]
+            "test-allow" => BackendChoice::TestAllow,
             other => {
                 return Err(format!(
                     "presence.backend: {other:?} is not auto, windows-hello, touch-id, polkit or none"

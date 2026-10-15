@@ -1166,3 +1166,16 @@ fn squash_rebase_agrees_with_plain_git_on_random_histories() {
         "{n_disjoint} {n_clean} {n_conflict}"
     );
 }
+
+#[test]
+fn diff_text_is_the_plain_unified_diff_between_two_commits() {
+    let r = repo();
+    let base = r.commit(None, &[put("a.txt", "one\ntwo\n"), put("gone.txt", "x\n")]);
+    let head = r.commit(Some(&base), &[put("a.txt", "one\n2\n"), rm("gone.txt")]);
+    let d = r.vcs.diff_text(&r.dir, &base, &head).unwrap();
+    assert!(d.contains("--- a/a.txt\n+++ b/a.txt\n"), "{d}");
+    assert!(d.contains("-two\n+2\n"), "{d}");
+    assert!(d.contains("deleted file mode 100644"), "{d}");
+    assert!(!d.contains('\u{1b}'), "no colour: {d}");
+    assert_eq!(r.vcs.diff_text(&r.dir, &base, &base).unwrap(), "");
+}

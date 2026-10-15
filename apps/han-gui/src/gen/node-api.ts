@@ -25,7 +25,11 @@ retry_after_ms: number | null,
 /**
  * What the request waits for, when it is state that is on its way (a space still syncing).
  */
-pending?: Pending, } | { "code": "conflict", 
+pending?: Pending, } | { "code": "presence_required", 
+/**
+ * Free text.
+ */
+message: string, } | { "code": "conflict", 
 /**
  * Free text.
  */
@@ -50,6 +54,20 @@ session: string, } | { "what": "profile",
 actor: string, };
 
 export type HomeRef = { "ticket": string } | { "server": string };
+
+export type EvidenceRef = { 
+/**
+ * `sha256` of the bytes, lowercase hex.
+ */
+hash: string, 
+/**
+ * The size in bytes.
+ */
+size: number, 
+/**
+ * The media type.
+ */
+media_type: string, };
 
 export type Command = { "type": "space_create", 
 /**
@@ -159,9 +177,17 @@ harness?: string,
  */
 repo?: string, 
 /**
- * The issue, `github:owner/repo#123`.
+ * The issue, `github:owner/repo#123`. The session works the open task for the issue that is addressed
+ * to the agent (han-github creates one for each agent-ready issue; its data block carries the issue's
+ * title and body). With no such task the start is refused, since the agent has no network to fetch
+ * the text.
  */
 issue?: string, 
+/**
+ * The task to work. Without `issue`, the task's own issue is used; with it, the task must be for
+ * that issue.
+ */
+task?: string, 
 /**
  * The agent's home, when the node does not follow the agent's profile yet: the node pins it (a
  * ticket), follows `profile:<agent>` there, and takes the operator from it.
@@ -326,7 +352,15 @@ space: string,
 /**
  * The proposal's entry id.
  */
-proposal: string, } | { "type": "effect_propose", 
+proposal: string, 
+/**
+ * Why (content `reason`, at most 1,024 bytes).
+ */
+reason?: string, 
+/**
+ * The proof, a blob already uploaded (content `evidence`, readable under G-01).
+ */
+evidence?: EvidenceRef, } | { "type": "effect_propose", 
 /**
  * The space.
  */
@@ -390,7 +424,11 @@ started: string,
 /**
  * What it cost, with `started: yes` only.
  */
-cost?: [string, number], } | { "type": "outbox_retry", 
+cost?: [string, number], 
+/**
+ * What the attempt showed, a blob already uploaded (content `evidence`, readable under G-01).
+ */
+evidence?: EvidenceRef, } | { "type": "outbox_retry", 
 /**
  * The outbox id (`Queued` and the `Outbox` view carry it).
  */
@@ -1447,6 +1485,15 @@ cost?: [string, number],
  */
 expires_at?: string, 
 /**
+ * The seq of the entry that gave the open approvals their latest member: the order a landing lane
+ * takes changes in (R33 §4). Absent while nothing is approved.
+ */
+approved_seq?: number, 
+/**
+ * The receipt time of that entry: the time of the commit a landing lane makes.
+ */
+approved_at?: string, 
+/**
  * The seq of the proposal.
  */
 seq: number, 
@@ -1553,6 +1600,11 @@ ask?: string,
  * Whether it is still open.
  */
 open: boolean, 
+/**
+ * How it was closed: the final state that closed it (`done`, `failed`, `declined`, `cancelled`; a
+ * `task.cancel` counts as `cancelled`). Absent while open.
+ */
+closed_as?: string, 
 /**
  * P-15: the agents whose guarding the task carries, fixed when it was created: its parent's list, then
  * the guards of its author. An assignee that accepts the task answers to their guards.
@@ -1793,7 +1845,13 @@ recent_errors: Array<ErrorNote>,
  * What is stuck right now, as sentences: a link whose setup does not fit its home, a space whose outbox
  * is held by an entry the home will not take ("space X blocked by outbox entry N: reason").
  */
-problems: Array<string>, };
+problems: Array<string>, 
+/**
+ * Root made this node headless (a service node): nobody sits at it, so it has no unlock for governing and
+ * steering and never approves; the operating system's boundary, who can run as its user, is the
+ * authority.
+ */
+headless: boolean, };
 
 export type TimelinePointRow = { 
 /**

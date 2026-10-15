@@ -171,6 +171,9 @@ jobs:
         run: |
           sudo podman exec -w /srv han-os-users bash -c "mkdir -p /srv/tmp && TMPDIR=/srv/tmp HAN_E2E_OS_USERS=1 $(cat /srv/han-target/e2e-path) --ignored --exact os_user::an_os_user_agents_push_lands_through_an_executor_that_cannot_read_its_workspace --nocapture"
           sudo podman exec -w /srv han-os-users bash -c "mkdir -p /srv/tmp && TMPDIR=/srv/tmp HAN_E2E_OS_USERS=1 $(cat /srv/han-target/e2e-path) --ignored --exact os_user::an_os_user_agents_sandbox_is_checked_by_its_host_not_by_the_node --nocapture"
+          # Last: the second test needs the container to have no bubblewrap, this one needs it.
+          sudo podman exec han-os-users bash -c 'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap'
+          sudo podman exec -w /srv han-os-users bash -c "mkdir -p /srv/tmp && TMPDIR=/srv/tmp HAN_E2E_OS_USERS=1 $(cat /srv/han-target/e2e-path) --ignored --exact os_user::the_host_admits_its_sandbox_under_the_agent_units_directives --nocapture"
 
   # Known-vulnerable and unmaintained dependencies. A new advisory can appear without any change of ours, which is
   # why this runs on a schedule. Failing here is a signal to look, not a merge blocker.

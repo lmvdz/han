@@ -78,3 +78,22 @@ impl Elapsed for SystemElapsed {
         }
     }
 }
+
+/// Wall-clock time, for what must outlive the process: a lane state's deadline counts from the moment it was
+/// entered, which a restart does not change. Injected so tests can move it.
+pub trait Wall: Send + Sync + 'static {
+    /// Seconds since 1970-01-01T00:00:00Z.
+    fn now_secs(&self) -> i64;
+}
+
+/// The system clock.
+pub struct SystemWall;
+
+impl Wall for SystemWall {
+    fn now_secs(&self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+            .unwrap_or(0)
+    }
+}

@@ -217,6 +217,8 @@ async fn a_proposal_cancelled_while_the_person_confirms_is_not_signed() {
             .block_on(alice.call(Command::EffectCancel {
                 space: space.clone(),
                 proposal: proposal.clone(),
+                reason: None,
+                evidence: None,
             }))
             .unwrap();
     });

@@ -1,0 +1,9 @@
+{
+  "agent": {"name": "pi-acp", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

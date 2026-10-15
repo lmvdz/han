@@ -68,6 +68,8 @@ han space list
 
 `han space member <space> <actor> <role>` sets a role (`owner`, `member`, `guest`, `banned` or `none`; setting a role someone holds already changes nothing), and `han space policy <space> <file>` replaces the space's policy with a JSON policy document. A new space admits an agent or a service only once its operator has confirmed it (`allowAgents: "with-operator"`; `han agent add` and `han executor add` do that when the operator runs them), and an agent whose operator withdraws stops proposing and claiming. `han dev up` uses a policy that makes `git_push`, `open_pr` and `http_request` wait for an owner's approval.
 
+Any program that runs as your OS user can open the node's local pipe, so the node does not take the pipe as proof that you are there. A connection starts **locked** for what governs (members, policy, invites, devices, agent keys, pinning a home), for starting an agent and for steering a session. The first such command on a connection makes the node ask your operating system to confirm you (Windows Hello, Touch ID or polkit), the same check as for approvals, and then that connection may govern and steer for ten minutes. `han space member` and the other commands ask once per command; `han tui` asks at your first steering input and not again for ten minutes. A program that cannot answer the prompt is refused with `presence_required`. `han node presence --unlock-secs <10-3600>` sets the window, and `--require` lists the action kinds that need you (`effect.approve`, `effect.cancel`, `face.unlock`; `all` by default). Changing either needs you at the device, too, and a running node keeps the settings it started with, so restart it to apply a change. If you set an explicit `--require` list, add `face.unlock` to it, or the pipe stays open to any program of your OS user (`han doctor` says so). Reading the board, publishing an agent's own status and creating tasks do not need a confirmation.
+
 ## 5. Add an agent
 
 Every agent is its own actor with a human operator. One command does the whole job where it can:
@@ -100,6 +102,8 @@ han agent start --space <space> --agent @me-coder:han.home.arpa --repo github:ow
 han tui <space>
 ```
 
+`--issue` starts the session on the open task for that issue that is addressed to the agent (`han-github` creates one for every agent-ready issue). The issue's title and body reach the agent in that task, as a data block marked untrusted; the agent has no network to fetch them. With no such task the start is refused ("no open task for github:owner/repo#12 ... carries the issue text"); `--task <id>` names a task directly, and its own issue is used.
+
 `--harness` defaults to the one `han agent add` recorded; it is `pi` (with an API key the egress proxy injects; the agent only holds a dummy) or `claude` (the official Claude Code client through `claude-agent-acp`, on a Claude subscription). The session runs in a sandbox whose only way out is the egress proxy, and its only way to act on the outside world is `propose`.
 
 **Build and test inside the sandbox.** An agent has no Rust toolchain unless the node gives it one. `han agent set @coder:<server> --toolchains rust` turns it on for that agent (the file-wide default is the `"toolchains"` list of `agents.json`, in the node's data directory, `%LOCALAPPDATA%\han` on Windows). The agent then gets your `%USERPROFILE%\.rustup` and `.cargo\bin` read-only (on Windows also the MSVC linker and Windows SDK it finds), a cache of its own for downloaded crates, and `crates.io` on its proxy allow-list; `"toolchainPaths": {"rust": {"rustupHome": "...", "cargoBin": "..."}}` points elsewhere. Install the toolchains your repository pins (`rust-toolchain.toml`) first; the sandbox never downloads one. On a Linux runner `sudo han runner setup --toolchain rust --repo <path>` does the installing and writes `toolchainPaths` ([runner.md](runner.md) section 7.2).
@@ -130,12 +134,15 @@ Two commands for the people and agents who land HAN's own pull requests. They us
 
 | Line | Meaning |
 |---|---|
-| `MERGED #n`, `CLOSED #n` | a PR seen open in this run has merged or closed without a merge; `han dev prune` then runs |
+| `MERGED #n`, `CLOSED #n` | a PR seen open in this run has merged or closed without a merge; `han dev prune` then runs on that PR's head branch only (other sessions' worktrees are left alone; a full sweep is an explicit `han dev prune`) |
 | `CONFLICT #n …` | the head conflicts with the base. GitHub runs no `pull_request` CI on a conflicting PR, so its required check would never appear; this is reported at once |
 | `CI_FAILED #n checks` | the named checks failed, were cancelled or timed out |
 | `STALLED #n reason` | nothing is pending and the last push is older than `--grace` (default 900 s); also when auto-merge was switched off or `update-branch` failed |
+| `RETRIGGERED #n` | not an exit: auto-merge was switched off and on again, see below |
 | `GH_ERROR msg` | GitHub could not be asked |
 | `IDLE no open auto-merge PRs`, `OK watching: …` | nothing is watched; or `--once` found nothing to report |
+
+GitHub sometimes never fires an auto-merge that is ready. When a PR has auto-merge on, mergeState `CLEAN`, no pending and no failed checks, and its last push is older than `--grace`, `han dev prs` switches auto-merge off and on again with the same merge method (`gh pr merge --disable-auto`, then `--auto` with the method GitHub reports), prints `RETRIGGERED #n` (`{"event":"RETRIGGERED","pr":n}`) and keeps watching. It never merges directly; branch protection still applies. If the PR is still open and idle one more grace period after the retrigger, it is `STALLED` as above and the command exits. If re-enabling fails, auto-merge is left off and the `STALLED` line says `auto-merge is now OFF`. The retrigger time is kept in memory for the run only.
 
 A PR that is `BEHIND` its base gets `gh pr update-branch`. Run it in the background and read its output when it exits. `--json` prints one JSON object per line (`{"event":"CI_FAILED","pr":7,"detail":"lint","checks":["lint"]}`), and ends with `{"event":"WATCHING","prs":[…]}`.
 

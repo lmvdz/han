@@ -308,9 +308,13 @@ The node never needs root at run time. It starts a host as another user through 
 sudo han runner setup --agents 2            # add --dry-run to see the plan and change nothing
 ```
 
-It makes the OS users (`han`, `han-exec`, `han-agent1` … `han-agent<N>`, each with a locked password), the agents directory `/var/lib/han-agents` (mode 755) with one state directory per agent (`2770`, setgid, in the agent's own group; the node's user joins that group and no other agent's), and installs `han-agent@.service`, `han-exec.service` (installed, **left disabled**), `/etc/polkit-1/rules.d/50-han-agent.rules` (the node's user may start and stop `han-agent@han-agent<N>` and nothing else) and the node's drop-in `/etc/systemd/system/han-node.service.d/10-agents.conf` (`UMask=0007`, `ReadWritePaths=/var/lib/han/node /var/lib/han-agents`), then reloads systemd. Each step says `changed:` or `unchanged:`, so a second run reports no change. The unit files are in `integrations/runner/`; `install-agent-user.sh` and `install-executor.sh` there are thin wrappers around the command.
+It makes the OS users (`han`, `han-exec`, `han-agent1` … `han-agent<N>`, each with a locked password), the `han-github` directory `/var/lib/han/github` (mode 700, owned by `han`), the agents directory `/var/lib/han-agents` (mode 755) with one state directory per agent (`2770`, setgid, in the agent's own group; the node's user joins that group and no other agent's), and installs `han-agent@.service`, `han-exec.service` and `han-github.service` (both installed, **left disabled**; `han-github` also does not start until its config exists), `/etc/polkit-1/rules.d/50-han-agent.rules` (the node's user may start and stop `han-agent@han-agent<N>` and nothing else) and the node's drop-in `/etc/systemd/system/han-node.service.d/10-agents.conf` (`UMask=0007`, `ReadWritePaths=/var/lib/han/node /var/lib/han-agents`), then reloads systemd. Each step says `changed:` or `unchanged:`, so a second run reports no change. The unit files are in `integrations/runner/`; `install-agent-user.sh` and `install-executor.sh` there are thin wrappers around the command.
 
-It also looks at the running services. If `han-seq` or `han-node` runs a binary that has since been replaced on disk (after you installed a new `han`), or the node has not yet picked up its new group, it says which and how to restart it, or restarts it with `--restart-stale`. A home that kept running the old binary has no admin socket, and everything that registers profiles fails against it; this is how you find out before that.
+It also looks at the running services. If `han-seq`, `han-node`, `han-exec`, `han-github` or a running `han-agent@<user>` unit runs a binary that has since been replaced on disk (after you installed a new `han`), or the node has not yet picked up its new group, it says which and how to restart it, or restarts it with `--restart-stale`. A home that kept running the old binary has no admin socket, and everything that registers profiles fails against it; this is how you find out before that. An agent unit that has a session running (its cgroup holds more than the host) is reported as `busy:` and not restarted, even with `--restart-stale`: restarting would kill the session, so restart it when the session ends. Each restarted unit is waited for until it serves (an agent unit: until its host has written a fresh admission file).
+
+An agent unit outlives a restart of `han-node`, and the restarted node takes it back: at start it looks, for each agent of `agents.json` that has an `osUser`, whether `han-agent@<user>` is active, reads the spawn file the node left for it and lists the host again under its old name (`adopted host-… (its unit was already running)` in the node's log). So `han agent stop`, the node's roles and the board are right after `--restart-stale`.
+
+A host that exits without closing its session (a `kill`, a stop that ran into systemd's timeout, the OOM killer) leaves the session open with its last status, `idle`. The node watches the roles (its own children, and the `han-agent@` units by systemd's state): ten seconds after a host has gone, and if the session's own `session.close` has not arrived by then, the board shows that session as `failed` with the reason `host exited` (`state_reason`). This is the node's reading, not a log entry (only the agent signs its session), and a `session.close` that arrives later wins. A host asked to stop (SIGINT, as the units send, or SIGTERM) closes its session on the way out; one that fails says why in the session's last status and in its own log (`session … ended Failed: <reason>`).
 
 Per agent, as the node's user (no root):
 
@@ -403,6 +407,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - Windows: whether MXC can give a container a working loopback port (`sandbox.mxc.loopback`, see 7.3);
 - sandboxes: the decision `han agent start` makes, per agent (`sandbox.unavailable`), made where the host runs: an OS-user agent is left to its own host, whose refusal shows as a node problem (7.3);
 - the Rust toolchain the sandboxes get: enabled but not installed, or a `--repo` whose `rust-toolchain.toml` pins a toolchain that is not installed;
+- `han-github` (`/var/lib/han/github`, or `--github-dir`; checked when the directory exists): prints whether it is configured and running. A config without an `[app] private_key`, a missing key file, a key readable by group or others, or a configured service that is not running is a finding (`github.config-invalid`, `github.key-missing`, `github.key-mode`, `github.not-running`; `github.config-missing` when the service runs without a config). Unconfigured and disabled, as `han runner setup` leaves it, is not a problem;
 - the executor (`/var/lib/han-exec`, or `--exec-dir`): `exec.json` names repositories but has no `github` block, or the write App's key file is missing or not mode 600 (the fix is the `han executor add … --github-app … --github-installation … --github-key …` of 9);
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).
 
@@ -424,7 +429,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 }
 ```
 
-`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it.
+`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`, `github.config-invalid`, `github.config-missing`, `github.key-missing`, `github.key-mode`, `github.not-running`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it.
 
 ### 8.2 By hand
 
@@ -544,6 +549,35 @@ permissions** on the write App, for the repositories it is installed on:
 Nothing else: no `workflows`, no `administration`, no `issues` write. Changing App permissions makes GitHub ask
 the installation's owner to accept them, and the executor does nothing until they do. This repository never
 changes the App; that is the owner's decision.
+
+### 10.1 Running `han-github` as a service
+
+`sudo han runner setup` (§7.1) makes `/var/lib/han/github` (mode 700, owned by `han`) and installs `han-github.service` (`integrations/runner/han-github.service`), **disabled**. The unit has `ConditionPathExists=/var/lib/han/github/han-github.toml`, so it does not start until it is configured.
+
+It runs as `han`, not as a user of its own: it reaches the node through the node's owner-only socket (`/var/lib/han/node/node.sock`), which only `han` can open. Its sandbox is the same family as `han-seq`: no capabilities, `ProtectSystem=strict` (it writes nothing), no namespaces, `AF_INET`/`AF_INET6`/`AF_UNIX` only, a system call filter. The runner's node is headless (§7), which does not matter to it: `han-github` only reads the space's tasks, makes tasks and publishes `github.issue/1` items.
+
+The key is the **read** App's (5309257, Issues and Metadata read-only), never the executor's write App. It sits in the same directory, which no agent user can enter:
+
+```sh
+sudo -u han install -m 600 <read-app.pem> /var/lib/han/github/app.pem      # then delete the source
+sudo -u han tee /var/lib/han/github/han-github.toml >/dev/null <<'TOML'
+space = "!abc:home.example"
+data_dir = "/var/lib/han/node"
+repos = ["lmvdz/han"]
+[app]
+app_id = 5309257
+installation_id = <installation-id>
+private_key = "/var/lib/han/github/app.pem"
+[tasks]
+pool = ["@runner-agent1:home.example"]
+TOML
+sudo install -m 755 <path>/han-github /usr/local/bin/han-github
+sudo systemctl enable --now han-github
+```
+
+`han doctor` (§8.1) says whether it is configured and running. The service restarts itself: `han-github` has no reconnect, so after three polls in a row that fail at the node (a restarted node) it exits and systemd starts it again.
+
+Which tasks it makes: an open issue with the trigger label and **no open task** gets one, also when the issue has not changed since (every poll looks at every known agent-ready issue, not only the changed ones). If the issue's earlier tasks all closed without landing (`failed`, `declined`, `cancelled`, or an owner's force-close of a dead session), it gets a new one, at most three such tasks in all (`MAX_ATTEMPTS`). A task that closed as `done` while the issue is still open waits for a person: they close the issue, or ask for a new task with `han-github request`. See `integrations/han-github/README.md`.
 
 ## 11. A person's device
 

@@ -12,6 +12,7 @@ members = [
     "crates/han-mcp",
     "crates/han-exec",
     "crates/han-host",
+    "crates/han-review",
     "apps/han",
     "apps/han-tui",
     "apps/han-faces",

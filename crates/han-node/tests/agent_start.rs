@@ -5,7 +5,7 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use common::{World, call, pubkey, space_of};
+use common::{World, call, confirm_operator, id_of, pubkey, space_of};
 use han_net::{HomeTicket, NodeAddr};
 use han_node::api::{CallResult, Command, NodeApi, NodeError, Pending};
 use han_node::supervisor::{RoleSpec, RoleStatus, Supervisor, SupervisorError};
@@ -37,6 +37,8 @@ struct Setup {
     sup: Arc<Recording>,
     data: std::path::PathBuf,
     space: String,
+    /// The task han-github made for `github:o/r#1`, addressed to the agent.
+    task: String,
 }
 
 /// Bob's node, with a space; the agent's profile (operator: alice) is registered at the home.
@@ -63,12 +65,40 @@ async fn setup() -> Setup {
         )
         .await,
     );
+    // an agent holds a role in a space only once its operator confirmed it (section 4.3)
+    let alice = world.node(ALICE, 31);
+    confirm_operator(&world, &alice, ALICE, AGENT).await;
+    call(
+        &bob,
+        Command::MemberSet {
+            space: space.clone(),
+            actor: AGENT.into(),
+            role: "member".into(),
+        },
+    )
+    .await;
+    let task = id_of(
+        &call(
+            &bob,
+            Command::TaskCreate {
+                space: space.clone(),
+                to: vec![AGENT.into()],
+                ask: "Fix the thing
+
+the body"
+                    .into(),
+                external: Some("github:o/r#1".into()),
+            },
+        )
+        .await,
+    );
     Setup {
         world,
         bob,
         sup,
         data,
         space,
+        task,
     }
 }
 
@@ -79,6 +109,7 @@ fn start(space: &str, harness: &str) -> Command {
         harness: Some(harness.into()),
         repo: Some("github:o/r".into()),
         issue: Some("github:o/r#1".into()),
+        task: None,
         home: None,
     }
 }
@@ -179,6 +210,7 @@ async fn start_names_the_profiles_operator_and_passes_the_install() {
     assert_eq!(h.agent, AGENT);
     assert_eq!(h.space, s.space);
     assert_eq!(h.work.issue.as_deref(), Some("github:o/r#1"));
+    assert_eq!(h.work.task.as_deref(), Some(s.task.as_str()));
     assert_eq!(h.work.executor.as_deref(), Some("@exec:a.localhost"));
     assert_eq!(h.dirs.keys, s.data);
     assert!(
@@ -336,4 +368,79 @@ async fn space_await_answers_typed_not_followed_and_not_arrived() {
     follow_profile(&s).await;
     let r = s.bob.call(wait(30_000)).await.unwrap();
     assert!(matches!(r, CallResult::Space { .. }), "{r:?}");
+}
+
+/// Bug: the agent got "work on <issue>" and no issue text, because the session did not start on the task han-github
+/// made for the issue. The node finds that task, or refuses and says why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_session_starts_on_the_task_that_carries_the_issue_text() {
+    let s = setup().await;
+    follow_profile(&s).await;
+    s.bob
+        .call(Command::SpaceAwait {
+            space: format!("profile:{AGENT}"),
+            timeout_ms: Some(30_000),
+        })
+        .await
+        .unwrap();
+    let go = |issue: Option<&str>, task: Option<&str>| Command::AgentStart {
+        space: s.space.clone(),
+        agent: AGENT.into(),
+        harness: Some("/etc/han/driver.toml".into()),
+        repo: Some("github:o/r".into()),
+        issue: issue.map(Into::into),
+        task: task.map(Into::into),
+        home: None,
+    };
+
+    // an issue nobody made a task for: refused, naming the issue and what makes the task
+    let e = s
+        .bob
+        .call(go(Some("github:o/r#9"), None))
+        .await
+        .unwrap_err();
+    let msg = e.to_string();
+    assert!(matches!(e, NodeError::NotFound { .. }), "{e:?}");
+    assert!(
+        msg.contains("github:o/r#9") && msg.contains("han-github creates one"),
+        "{msg}"
+    );
+    assert!(s.sup.0.lock().unwrap().is_empty());
+
+    // --task for another issue, or for a task that does not exist
+    let e = s
+        .bob
+        .call(go(Some("github:o/r#9"), Some(&s.task)))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, NodeError::Invalid { .. }), "{e:?}");
+    let e = s.bob.call(go(None, Some("nope"))).await.unwrap_err();
+    assert!(matches!(e, NodeError::NotFound { .. }), "{e:?}");
+    assert!(s.sup.0.lock().unwrap().is_empty());
+
+    // --task alone: the task's issue is the session's
+    s.bob.call(go(None, Some(&s.task))).await.unwrap();
+    {
+        let specs = s.sup.0.lock().unwrap();
+        let w = &specs.last().unwrap().spec.work;
+        assert_eq!(w.task.as_deref(), Some(s.task.as_str()));
+        assert_eq!(w.issue.as_deref(), Some("github:o/r#1"));
+    }
+
+    // a closed task is not worked
+    call(
+        &s.bob,
+        Command::TaskUpdate {
+            space: s.space.clone(),
+            task: s.task.clone(),
+            state: "done".into(),
+        },
+    )
+    .await;
+    let e = s
+        .bob
+        .call(go(Some("github:o/r#1"), None))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, NodeError::NotFound { .. }), "{e:?}");
 }

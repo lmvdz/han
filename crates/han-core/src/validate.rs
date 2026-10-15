@@ -397,6 +397,7 @@ fn content_schema(kind: &str) -> Option<Vec<Field>> {
         "task.update" => vec![opt("text", max_bytes::<32768>), opt("blobs", blobs)],
         "effect.propose" => vec![req("plan", plan)],
         "effect.approve" => vec![opt("note", max_bytes::<4096>)],
+        "effect.cancel" => vec![opt("reason", max_bytes::<1024>), opt("evidence", blob_ref)],
         "effect.outcome" => vec![opt("evidence", blob_ref)],
         "effect.resolve" => vec![req("evidence", blob_ref)],
         "checkpoint" => vec![req("blobs", blobs)],

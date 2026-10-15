@@ -113,6 +113,67 @@ impl Launched {
     }
 }
 
+/// `path` without its `.` and `..` components (the files named need not exist yet to compare).
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The object stores a session's git needs read-only, at the same path inside the sandbox: the store the
+/// workspace was made from and every object directory the worktree's `.git/objects/info/alternates` names
+/// (and those directories' own alternates). The alternates file is what git reads, so it is the truth: a
+/// worktree that a restarted host picks up again has no `shared_store`, and without the bind every git
+/// command fails with `bad object HEAD`. The worktree's own `.git/objects` stays writable (it is under the
+/// worktree), so commits land there, and the shared store is never written by the agent.
+pub fn store_binds(workspace: &Workspace) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut add = |p: PathBuf| {
+        if p.exists() && !p.starts_with(&workspace.dir) && !out.contains(&p) {
+            out.push(p);
+        }
+    };
+    if let Some(store) = &workspace.shared_store {
+        add(store.clone());
+    }
+    let mut pending = vec![workspace.dir.join(".git").join("objects")];
+    let mut seen = 0;
+    while let Some(objects) = pending.pop() {
+        // a chain of alternates is short; a loop or a long one is not followed further
+        seen += 1;
+        if seen > 8 {
+            break;
+        }
+        let Ok(text) = std::fs::read_to_string(objects.join("info").join("alternates")) else {
+            continue;
+        };
+        for line in text.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let path = Path::new(line);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                objects.join(path)
+            };
+            let path = lexical(&path);
+            pending.push(path.clone());
+            add(path);
+        }
+    }
+    out
+}
+
 /// What the sandbox must let an installed adapter read: the outermost `node_modules` above its package
 /// directory, where npm put its dependencies (and, for Claude Code, the `claude` executable the Agent SDK
 /// starts). Node resolves a package's imports through every `node_modules` above it, so the package directory
@@ -280,9 +341,7 @@ impl Egress {
         if !cfg.adapter_dir.as_os_str().is_empty() {
             ro.push(adapter_read_root(&cfg.adapter_dir));
         }
-        if let Some(store) = &workspace.shared_store {
-            ro.push(store.clone());
-        }
+        ro.extend(store_binds(workspace));
         ro.extend(cfg.sandbox.ro.iter().cloned());
         let mut env = prepared.env.clone();
         let mut rw = vec![workspace.dir.clone(), agent_dir.to_path_buf(), temp.clone()];

@@ -173,6 +173,8 @@ async fn scenario() {
         config.flush_every = Duration::from_millis(100);
         config.connect_wait = Duration::from_secs(5);
         config.fetcher = fetcher.clone();
+        // the person at the device unlocks the face connection for governing
+        config.set_presence(Arc::new(han_presence::testing::AllowAll));
         (config, store)
     };
     let mut faces = Vec::new();

@@ -40,6 +40,9 @@ pub struct DoctorArgs {
     /// The executor's directory, if it is not `/var/lib/han-exec` (Linux; checked when `exec.json` is there).
     #[arg(long)]
     exec_dir: Option<PathBuf>,
+    /// The `han-github` directory, if it is not `/var/lib/han/github` (Linux).
+    #[arg(long)]
+    github_dir: Option<PathBuf>,
 }
 
 /// One thing that is wrong.
@@ -124,6 +127,13 @@ pub enum HarnessFact {
 pub struct PresenceFacts {
     /// `presence.require` covers approvals.
     pub required: bool,
+    /// `presence.require` is `all` or names `face.unlock`: a face connection is locked for governing and
+    /// steering until a person confirms.
+    pub locks_connections: bool,
+    /// `presence.require` as written.
+    pub require: String,
+    /// Root made the node headless (`han runner setup`): nobody sits at it.
+    pub headless: bool,
     /// `presence.backend`.
     pub choice: String,
     /// The backend that choice builds on this platform (`none` when there is no check).
@@ -170,6 +180,26 @@ pub struct ExecutorFacts {
     pub key_mode: Option<u32>,
 }
 
+/// Where `han runner setup` puts the config and the read-only App's key of `han-github`.
+pub const GITHUB_DIR: &str = "/var/lib/han/github";
+
+/// The `han-github` service: its config (`han-github.toml`) and the read-only App's key.
+#[derive(Clone, Debug)]
+pub struct GithubFacts {
+    pub dir: PathBuf,
+    /// The config file exists.
+    pub configured: bool,
+    /// Why the config cannot be used, when it exists but names no `[app] private_key`.
+    pub config_error: Option<String>,
+    /// The key path in the config.
+    pub key: Option<PathBuf>,
+    pub key_exists: bool,
+    /// The key file's permission bits (Unix).
+    pub key_mode: Option<u32>,
+    /// systemd's answer to `is-active han-github` (`None`: no systemd to ask, or no such unit).
+    pub active: Option<bool>,
+}
+
 /// Everything [`analyze`] looks at.
 #[derive(Clone, Debug)]
 pub struct Facts {
@@ -197,6 +227,8 @@ pub struct Facts {
     pub stale: Vec<StaleFact>,
     /// `None` when there is no executor on this machine.
     pub executor: Option<ExecutorFacts>,
+    /// `None` when `han runner setup` has not made the `han-github` directory on this machine.
+    pub github: Option<GithubFacts>,
 }
 
 // ───────────────────────── analysis ─────────────────────────
@@ -255,6 +287,9 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     }
     if let Some(e) = &f.executor {
         executor_findings(e, &mut out);
+    }
+    if let Some(g) = &f.github {
+        github_findings(g, &mut out);
     }
     for s in &f.stale {
         out.push(finding(
@@ -318,6 +353,128 @@ fn executor_findings(e: &ExecutorFacts, out: &mut Vec<Finding>) {
             fix,
         ));
     }
+}
+
+/// What `han-github` needs: a config that names the read App's key, the key (mode 600), and a running unit once it
+/// is configured. Unconfigured and not running is how `han runner setup` leaves it: not a problem.
+fn github_findings(g: &GithubFacts, out: &mut Vec<Finding>) {
+    let subject = g.dir.to_string_lossy().into_owned();
+    let fix_config = "write the config and install the read-only App's key as in docs/runner.md 10, then: sudo systemctl enable --now han-github";
+    if !g.configured {
+        if g.active == Some(true) {
+            out.push(finding(
+                "github.config-missing",
+                subject.clone(),
+                "han-github is running but its config (han-github.toml) is gone",
+                fix_config,
+            ));
+        }
+        return;
+    }
+    if let Some(e) = &g.config_error {
+        out.push(finding(
+            "github.config-invalid",
+            subject.clone(),
+            format!("han-github.toml cannot be used: {e}"),
+            fix_config,
+        ));
+        return;
+    }
+    let key = g
+        .key
+        .as_ref()
+        .map(|k| k.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !g.key_exists {
+        out.push(finding(
+            "github.key-missing",
+            subject.clone(),
+            format!("the read-only App's private key {key} does not exist"),
+            fix_config,
+        ));
+    } else if g.key_mode.is_some_and(|m| m & 0o077 != 0) {
+        out.push(finding(
+            "github.key-mode",
+            subject.clone(),
+            format!(
+                "the read-only App's private key {key} has mode {:03o}; only its service may read it",
+                g.key_mode.unwrap_or_default()
+            ),
+            format!("chmod 600 {}", q(&key)),
+        ));
+    }
+    if g.active == Some(false) {
+        out.push(finding(
+            "github.not-running",
+            subject.clone(),
+            "han-github is configured but its service is not running",
+            "sudo systemctl enable --now han-github   (journalctl -u han-github shows why it stopped)",
+        ));
+    }
+}
+
+/// Reads the `han-github` directory, when `han runner setup` made one.
+fn github_facts(dir: Option<&Path>) -> Option<GithubFacts> {
+    let dir = match dir {
+        Some(d) => d.to_path_buf(),
+        None if cfg!(target_os = "linux") => PathBuf::from(GITHUB_DIR),
+        None => return None,
+    };
+    if !dir.is_dir() {
+        return None;
+    }
+    let text = std::fs::read_to_string(dir.join("han-github.toml")).ok();
+    let (mut config_error, mut key) = (None, None);
+    if let Some(t) = &text {
+        match t.parse::<toml::Table>() {
+            Err(e) => config_error = Some(e.message().to_owned()),
+            Ok(v) => match v
+                .get("app")
+                .and_then(|a| a.get("private_key"))
+                .and_then(|k| k.as_str())
+            {
+                Some(k) => key = Some(PathBuf::from(k)),
+                None => config_error = Some("it has no [app] private_key".to_owned()),
+            },
+        }
+    }
+    let meta = key.as_ref().and_then(|k| std::fs::metadata(k).ok());
+    #[cfg(unix)]
+    let key_mode = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.as_ref().map(|m| m.permissions().mode() & 0o777)
+    };
+    #[cfg(not(unix))]
+    let key_mode = None;
+    let active = if cfg!(target_os = "linux") {
+        std::process::Command::new("systemctl")
+            .args(["is-active", "han-github"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
+    } else {
+        None
+    };
+    Some(GithubFacts {
+        dir,
+        configured: text.is_some(),
+        config_error,
+        key,
+        key_exists: meta.is_some(),
+        key_mode,
+        active,
+    })
+}
+
+/// One line for a person on whether `han-github` is set up and running.
+fn github_note(g: &GithubFacts) -> String {
+    let state = match (g.configured, g.active) {
+        (false, _) => "not configured (docs/runner.md 10)",
+        (true, Some(true)) => "configured and running",
+        (true, Some(false)) => "configured, not running",
+        (true, None) => "configured",
+    };
+    format!("note: han-github is {state}")
 }
 
 /// Reads the executor's directory, when there is one.
@@ -703,6 +860,24 @@ fn presence_findings(
             return;
         }
     };
+    // a headless node asks for no person and never approves: nothing to suggest
+    if p.headless {
+        return;
+    }
+    if !p.locks_connections && !p.require.is_empty() {
+        out.push(finding(
+            "presence.unlock",
+            "presence",
+            format!(
+                "presence.require is {:?} and does not name face.unlock, so any program of your OS user can govern (members, policy, invites, devices, agent keys) and steer sessions over the node's pipe without a person",
+                p.require
+            ),
+            format!(
+                "han node presence --require {},face.unlock --data {data}",
+                p.require
+            ),
+        ));
+    }
     if !p.required {
         return;
     }
@@ -816,6 +991,13 @@ fn presence_facts(data: &Path) -> Option<Result<PresenceFacts, String>> {
         let (require, backend) = han_node::presence::settings(&db).map_err(|e| e.to_string())?;
         Ok(PresenceFacts {
             required: require.covers(han_node::presence::EFFECT_APPROVE),
+            locks_connections: require.covers(han_node::presence::FACE_UNLOCK),
+            require: require.to_string(),
+            headless: han_node::presence::headless_marker(
+                Path::new(han_node::presence::HEADLESS_DIR),
+                &han_node::presence::seal_name(data),
+                0,
+            ),
             choice: backend.to_string(),
             effective: backend.build().name().to_owned(),
             pkcheck: on_path("pkcheck"),
@@ -917,6 +1099,7 @@ pub async fn gather(
     endpoint: &str,
     repos: &[PathBuf],
     exec_dir: Option<&Path>,
+    github_dir: Option<&Path>,
 ) -> Facts {
     let linux = cfg!(target_os = "linux");
     let node = node_facts(endpoint).await;
@@ -1003,6 +1186,7 @@ pub async fn gather(
         sandbox_refusals,
         stale: stale_processes(),
         executor: executor_facts(exec_dir),
+        github: github_facts(github_dir),
     }
 }
 
@@ -1039,11 +1223,26 @@ pub async fn run(args: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
         .endpoint
         .clone()
         .unwrap_or_else(|| default_endpoint(&args.data));
-    let facts = gather(&args.data, &endpoint, &args.repos, args.exec_dir.as_deref()).await;
+    let facts = gather(
+        &args.data,
+        &endpoint,
+        &args.repos,
+        args.exec_dir.as_deref(),
+        args.github_dir.as_deref(),
+    )
+    .await;
     let r = report(&args.data, analyze(&facts));
     if args.json {
         println!("{}", serde_json::to_string_pretty(&r)?);
     } else {
+        if matches!(&facts.presence, Some(Ok(p)) if p.headless) {
+            println!(
+                "note: this node is headless (root's marker): nobody sits at it, so it asks for no person to govern or steer and never approves"
+            );
+        }
+        if let Some(g) = &facts.github {
+            println!("{}", github_note(g));
+        }
         println!("{}", render(&r));
     }
     if !r.healthy {
@@ -1075,6 +1274,7 @@ mod tests {
             sandbox_refusals: BTreeMap::new(),
             stale: Vec::new(),
             executor: None,
+            github: None,
         }
     }
 
@@ -1378,6 +1578,9 @@ mod tests {
         let facts = |required, effective: &str, pkcheck| {
             Some(Ok(PresenceFacts {
                 required,
+                locks_connections: true,
+                require: "all".into(),
+                headless: false,
                 choice: "auto".into(),
                 effective: effective.into(),
                 pkcheck,
@@ -1397,6 +1600,30 @@ mod tests {
         assert!(analyze(&f).is_empty());
         f.presence = Some(Err("node.db: bad".into()));
         assert_eq!(only(&f).id, "presence.settings");
+        // an explicit list without face.unlock leaves the pipe open to any program of the user
+        f.presence = Some(Ok(PresenceFacts {
+            required: true,
+            locks_connections: false,
+            require: "effect.approve,effect.cancel".into(),
+            headless: false,
+            choice: "auto".into(),
+            effective: "polkit".into(),
+            pkcheck: true,
+        }));
+        let x = only(&f);
+        assert_eq!(x.id, "presence.unlock");
+        // root made the node headless: nobody sits at it, and there is nothing to suggest
+        if let Some(Ok(p)) = &mut f.presence {
+            p.headless = true;
+        }
+        assert!(analyze(&f).is_empty());
+        if let Some(Ok(p)) = &mut f.presence {
+            p.headless = false;
+        }
+        assert_eq!(
+            x.fix,
+            "han node presence --require effect.approve,effect.cancel,face.unlock --data /d"
+        );
     }
 
     #[test]
@@ -1460,6 +1687,91 @@ mod tests {
         let x = only(&f);
         assert_eq!(x.id, "executor.github.key-mode");
         assert!(x.cause.contains("644"));
+    }
+
+    fn github_facts_ok() -> GithubFacts {
+        GithubFacts {
+            dir: PathBuf::from("/g"),
+            configured: true,
+            config_error: None,
+            key: Some(PathBuf::from("/g/app.pem")),
+            key_exists: true,
+            key_mode: Some(0o600),
+            active: Some(true),
+        }
+    }
+
+    #[test]
+    fn han_github_is_reported_when_configured_but_broken_or_stopped() {
+        let mut f = healthy();
+        f.github = Some(github_facts_ok());
+        assert!(analyze(&f).is_empty());
+        assert_eq!(
+            github_note(&github_facts_ok()),
+            "note: han-github is configured and running"
+        );
+        // as `han runner setup` leaves it: nothing to report
+        let mut g = github_facts_ok();
+        g.configured = false;
+        g.active = Some(false);
+        f.github = Some(g.clone());
+        assert!(analyze(&f).is_empty());
+        assert!(github_note(&g).contains("not configured"));
+        // configured and stopped
+        let mut g = github_facts_ok();
+        g.active = Some(false);
+        f.github = Some(g);
+        assert_eq!(only(&f).id, "github.not-running");
+        // the key
+        let mut g = github_facts_ok();
+        g.key_exists = false;
+        f.github = Some(g);
+        assert_eq!(only(&f).id, "github.key-missing");
+        let mut g = github_facts_ok();
+        g.key_mode = Some(0o640);
+        f.github = Some(g);
+        let x = only(&f);
+        assert_eq!(x.id, "github.key-mode");
+        assert_eq!(x.fix, "chmod 600 /g/app.pem");
+        let mut g = github_facts_ok();
+        g.config_error = Some("it has no [app] private_key".into());
+        f.github = Some(g);
+        assert_eq!(only(&f).id, "github.config-invalid");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn han_github_facts_read_the_config_and_the_key_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("han-doctor-gh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = github_facts(Some(&dir)).unwrap();
+        assert!(!g.configured);
+        let key = dir.join("app.pem");
+        std::fs::write(&key, "x").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::write(
+            dir.join("han-github.toml"),
+            format!(
+                "[app]
+private_key = {:?}
+",
+                key.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let g = github_facts(Some(&dir)).unwrap();
+        assert!(g.configured && g.config_error.is_none() && g.key_exists);
+        assert_eq!(g.key_mode, Some(0o644));
+        std::fs::write(
+            dir.join("han-github.toml"),
+            "space = \"s\"
+",
+        )
+        .unwrap();
+        assert!(github_facts(Some(&dir)).unwrap().config_error.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

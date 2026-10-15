@@ -7,6 +7,18 @@ use super::rows::StatusBody;
 
 pub use han_registry::HomeRef;
 
+/// A reference to a blob already uploaded (`BlobPut` answers with one), as the `evidence` of an
+/// `effect.outcome` or `effect.cancel`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct EvidenceRef {
+    /// `sha256` of the bytes, lowercase hex.
+    pub hash: String,
+    /// The size in bytes.
+    pub size: u64,
+    /// The media type.
+    pub media_type: String,
+}
+
 /// Something a face asks of the device. Commands that write the log end as a receipt (or are queued in the
 /// outbox when the home cannot be reached); the verdict of Policy comes back as a [`super::NodeError`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -119,10 +131,18 @@ pub enum Command {
         #[serde(default)]
         #[ts(optional)]
         repo: Option<String>,
-        /// The issue, `github:owner/repo#123`.
+        /// The issue, `github:owner/repo#123`. The session works the open task for the issue that is addressed
+        /// to the agent (han-github creates one for each agent-ready issue; its data block carries the issue's
+        /// title and body). With no such task the start is refused, since the agent has no network to fetch
+        /// the text.
         #[serde(default)]
         #[ts(optional)]
         issue: Option<String>,
+        /// The task to work. Without `issue`, the task's own issue is used; with it, the task must be for
+        /// that issue.
+        #[serde(default)]
+        #[ts(optional)]
+        task: Option<String>,
         /// The agent's home, when the node does not follow the agent's profile yet: the node pins it (a
         /// ticket), follows `profile:<agent>` there, and takes the operator from it.
         #[serde(default)]
@@ -267,12 +287,21 @@ pub enum Command {
         #[ts(optional)]
         note: Option<String>,
     },
-    /// Cancels a proposed effect.
+    /// Cancels a proposed effect. The effect's executor may cancel it too while it is `open` (round 33,
+    /// P-07a): it refuses an effect for good, and says why.
     EffectCancel {
         /// The space.
         space: String,
         /// The proposal's entry id.
         proposal: String,
+        /// Why (content `reason`, at most 1,024 bytes).
+        #[serde(default)]
+        #[ts(optional)]
+        reason: Option<String>,
+        /// The proof, a blob already uploaded (content `evidence`, readable under G-01).
+        #[serde(default)]
+        #[ts(optional)]
+        evidence: Option<EvidenceRef>,
     },
     /// Proposes an effect (`effect.propose`): the only way an agent's work reaches the world. The node
     /// computes `planDigest = sha256(JCS(plan))` and puts the plan in the content.
@@ -325,6 +354,10 @@ pub enum Command {
         #[serde(default)]
         #[ts(optional)]
         cost: Option<(String, u64)>,
+        /// What the attempt showed, a blob already uploaded (content `evidence`, readable under G-01).
+        #[serde(default)]
+        #[ts(optional)]
+        evidence: Option<EvidenceRef>,
     },
     /// Queues an outbox entry that `failed` (delivery gave up) again and tries to send it at once. The answer
     /// is that of the entry: its receipt, its refusal, or `Queued`.
@@ -369,12 +402,16 @@ pub enum CommandClass {
 /// What a connection to the node API is, which the node knows from the endpoint it came in on and not from
 /// anything the peer says. It bounds the commands the connection may send (SR-06, SR-106): only a
 /// [`ConnectionClass::Face`] may send a [`CommandClass::Face`] command, so an agent's host or an executor can
-/// never approve, however it asks.
+/// never approve, however it asks. A face connection is also **locked** for the commands that govern or steer
+/// ([`Command::needs_presence`]) until the person confirms their presence on that connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionClass {
-    /// A face acting for the device's person: every command.
+    /// A face acting for the device's person: every command; the ones that govern or steer once the person
+    /// has confirmed their presence on the connection.
     Face,
-    /// An agent's host and tools: [`CommandClass::Agent`] commands.
+    /// An agent's host and tools, and any other local client that is not a face (an integration): its own
+    /// sessions, tasks, status, leases and proposals ([`CommandClass::Agent`] commands) and reads. It can never
+    /// approve, govern or steer, and it has no way to unlock. Its endpoint is `role_endpoint(.., Host)`.
     Host,
     /// An executor: [`CommandClass::Agent`] and [`CommandClass::Executor`] commands.
     Executor,
@@ -417,17 +454,68 @@ impl Command {
             | Command::EffectApprove { .. }
             | Command::EffectCancel { .. }
             | Command::OutboxRetry { .. }
-            | Command::PolicySet { .. } => CommandClass::Face,
+            | Command::PolicySet { .. }
+            // Steering is a face command: `<endpoint>-host` signs as the node's actor, so a command there
+            // could steer as the person. An agent's own in-process node (`ClassApi`) may send it, and the
+            // policy decides (session rights, guarding).
+            | Command::SessionInput { .. } => CommandClass::Face,
             Command::TaskCreate { .. }
             | Command::TaskUpdate { .. }
             | Command::SessionOpen { .. }
             | Command::SessionClose { .. }
-            | Command::SessionInput { .. }
             | Command::StatusPublish { .. }
             | Command::StreamPublish { .. }
             | Command::LeaseSet { .. }
             | Command::EffectPropose { .. } => CommandClass::Agent,
             Command::EffectClaim { .. } | Command::EffectOutcome { .. } => CommandClass::Executor,
+        }
+    }
+
+    /// Whether the command governs (membership, policy, invites, devices, agent keys, trust in a home) or steers
+    /// a session. A face connection sends these only after the person confirmed their presence on it
+    /// (SR-106): any process of the person's OS user can open the face pipe, so the pipe alone proves nothing.
+    /// Approvals are not listed: they ask for a person at each action, bound to the plan. The match has no
+    /// wildcard arm, so a new variant must be decided before the crate builds.
+    pub fn needs_presence(&self) -> bool {
+        match self {
+            Command::SpaceJoin { .. }
+            | Command::HomePin { .. }
+            | Command::Invite { .. }
+            | Command::MemberSet { .. }
+            | Command::AgentCreate { .. }
+            // starts a tool-using agent on any repository or harness
+            | Command::AgentStart { .. }
+            | Command::DeviceOffer
+            | Command::DevicePair { .. }
+            | Command::DeviceRevoke { .. }
+            | Command::PolicySet { .. }
+            | Command::SessionInput { .. } => true,
+            // a home given by ticket is pinned (its node and receipt keys become the trust anchor of its
+            // server), which is `HomePin` by another door
+            Command::SpaceCreate { home, .. } | Command::SpaceFollow { home, .. } => {
+                matches!(home, Some(HomeRef::Ticket(_)))
+            }
+            // Tasks stay open to a face connection on purpose: a task is data, not a prompt (SR-54), and the
+            // policy decides who may create or cancel one.
+            Command::SpaceAwait { .. }
+            | Command::SessionAwait { .. }
+            | Command::AgentStop { .. }
+            | Command::TaskCreate { .. }
+            | Command::TaskUpdate { .. }
+            | Command::TaskCancel { .. }
+            | Command::BlobFetch { .. }
+            | Command::BlobPut { .. }
+            | Command::SessionOpen { .. }
+            | Command::SessionClose { .. }
+            | Command::StatusPublish { .. }
+            | Command::LeaseSet { .. }
+            | Command::EffectApprove { .. }
+            | Command::EffectCancel { .. }
+            | Command::EffectPropose { .. }
+            | Command::EffectClaim { .. }
+            | Command::EffectOutcome { .. }
+            | Command::OutboxRetry { .. }
+            | Command::StreamPublish { .. } => false,
         }
     }
 

@@ -23,6 +23,9 @@ runtime = [
     "dep:widestring",
 ]
 
+# Test rigs only: a presence backend (`test-allow`) that confirms every prompt. Off in release builds.
+conformance = ["han-presence?/test-doubles"]
+
 [dependencies]
 futures-core = "0.3"
 han-registry.workspace = true

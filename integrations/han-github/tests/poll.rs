@@ -99,6 +99,7 @@ impl NodeApi for Node {
                 resyncs: 0,
                 recent_errors: vec![],
                 problems: vec![],
+                headless: false,
             })],
             other => panic!("unexpected view {other:?}"),
         };
@@ -126,6 +127,7 @@ fn task_row(external: &str) -> TaskRow {
         external: Some(external.into()),
         ask: None,
         open: false,
+        closed_as: Some("cancelled".into()),
         guarded_for: vec![],
         accepted: vec![],
         budget: None,
@@ -337,7 +339,10 @@ async fn the_label_makes_a_task_once_and_only_for_open_issues() {
         .mount(&server)
         .await;
     let node = Arc::new(Node::default());
-    node.tasks.lock().unwrap().push(task_row("github:o/r#2"));
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(open_task("t2", "github:o/r#2", ME, &[]));
     let mut s = rig(&server, "\"@bot:h\"", &node);
 
     let t = s.poll("o/r").await.unwrap();
@@ -477,6 +482,7 @@ fn open_task(task: &str, external: &str, author: &str, accepted: &[&str]) -> Tas
         task: task.into(),
         author: author.into(),
         open: true,
+        closed_as: None,
         accepted: accepted.iter().map(|a| (*a).to_owned()).collect(),
         budget: None,
         ..task_row(external)
@@ -657,4 +663,98 @@ async fn a_changed_body_does_not_rewrite_the_existing_task() {
     let asks = asks(&node);
     assert_eq!(asks.len(), 1);
     assert!(asks[0].contains("first") && !asks[0].contains("second"));
+}
+
+fn closed_task(task: &str, external: &str, closed_as: &str) -> TaskRow {
+    TaskRow {
+        task: task.into(),
+        closed_as: Some(closed_as.into()),
+        ..task_row(external)
+    }
+}
+
+/// The dogfood bug: issue 5 is open and agent-ready, its only task closed (its agent's session died), and the
+/// issue did not change, so nothing made a new task.
+#[tokio::test]
+async fn a_closed_task_of_a_still_open_agent_ready_issue_gets_a_new_task() {
+    let server = MockServer::start().await;
+    mock_tokens(&server).await;
+    serve_issues(
+        &server,
+        vec![issue(5, "Stuck", &["agent-ready"], "2026-10-05T00:00:00Z")],
+    )
+    .await;
+    let node = Arc::new(Node::default());
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(closed_task("t-old", "github:o/r#5", "failed"));
+    let mut s = rig(&server, "\"@bot:h\"", &node);
+
+    let t = s.poll("o/r").await.unwrap();
+    assert_eq!(t.tasks, ["github:o/r#5"]);
+
+    // The node shows the new task as open: the next polls (the issue is unchanged) make no second one.
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(open_task("t-new", "github:o/r#5", ME, &[]));
+    assert!(s.poll("o/r").await.unwrap().tasks.is_empty());
+    assert!(s.poll("o/r").await.unwrap().tasks.is_empty());
+    assert_eq!(node.task_externals(), ["github:o/r#5"]);
+
+    // That task closes without landing: the unchanged issue gets another one.
+    node.tasks.lock().unwrap().retain(|t| !t.open);
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(closed_task("t-new", "github:o/r#5", "cancelled"));
+    assert_eq!(s.poll("o/r").await.unwrap().tasks, ["github:o/r#5"]);
+    assert_eq!(node.task_externals().len(), 2);
+}
+
+#[tokio::test]
+async fn a_done_task_leaves_the_open_issue_to_a_person_until_they_request_one() {
+    let server = MockServer::start().await;
+    mock_tokens(&server).await;
+    serve_issues(
+        &server,
+        vec![issue(6, "Landed", &["agent-ready"], "2026-10-05T00:00:00Z")],
+    )
+    .await;
+    let node = Arc::new(Node::default());
+    node.tasks
+        .lock()
+        .unwrap()
+        .push(closed_task("t-done", "github:o/r#6", "done"));
+    let mut s = rig(&server, "\"@bot:h\"", &node);
+
+    assert!(s.poll("o/r").await.unwrap().tasks.is_empty());
+    assert!(node.task_externals().is_empty());
+    assert!(s.request("github:o/r#6", "Again").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn repeated_failures_stop_the_retries() {
+    let server = MockServer::start().await;
+    mock_tokens(&server).await;
+    serve_issues(
+        &server,
+        vec![issue(
+            7,
+            "Hopeless",
+            &["agent-ready"],
+            "2026-10-05T00:00:00Z",
+        )],
+    )
+    .await;
+    let node = Arc::new(Node::default());
+    for n in 0..han_github::sync::MAX_ATTEMPTS {
+        node.tasks
+            .lock()
+            .unwrap()
+            .push(closed_task(&format!("t{n}"), "github:o/r#7", "failed"));
+    }
+    let mut s = rig(&server, "\"@bot:h\"", &node);
+    assert!(s.poll("o/r").await.unwrap().tasks.is_empty());
 }

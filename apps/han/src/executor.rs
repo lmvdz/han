@@ -275,9 +275,8 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
             }
             None => {
                 cfg.repos.push(RepoTarget {
-                    name: rname.to_owned(),
-                    remote: remote.to_owned(),
                     github: slug.clone(),
+                    ..RepoTarget::new(rname, remote)
                 });
                 cfg_changed = true;
             }

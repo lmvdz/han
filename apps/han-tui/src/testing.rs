@@ -293,6 +293,7 @@ pub fn node_status(actor: &str) -> Row {
         resyncs: 0,
         recent_errors: vec![],
         problems: vec![],
+        headless: false,
     })
 }
 

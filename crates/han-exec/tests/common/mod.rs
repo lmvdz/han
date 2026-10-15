@@ -3,8 +3,9 @@
 
 #![allow(dead_code, missing_docs)]
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -44,6 +45,27 @@ impl Elapsed for TestClock {
     }
 }
 
+/// A wall clock a test moves.
+pub struct TestWall(pub AtomicI64);
+
+impl Default for TestWall {
+    fn default() -> Self {
+        TestWall(AtomicI64::new(1_792_000_000))
+    }
+}
+
+impl TestWall {
+    pub fn advance(&self, secs: i64) {
+        self.0.fetch_add(secs, Ordering::SeqCst);
+    }
+}
+
+impl han_exec::Wall for TestWall {
+    fn now_secs(&self) -> i64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 // ───────────────────────── the node ─────────────────────────
 
 /// How a call misbehaves once.
@@ -68,6 +90,12 @@ pub struct NodeState {
     pub outcome_faults: Vec<Fault>,
     /// Advance this clock by this much when a claim is appended (a stalled executor).
     pub stall_on_claim: Option<(Arc<TestClock>, u64)>,
+    /// Blobs of the space, by hash.
+    pub blobs: HashMap<String, Vec<u8>>,
+    /// Profile stream items published: `(session, profile name, body)`.
+    pub published: Vec<(String, String, Value)>,
+    /// Runs once, just before the next claim is applied (the world moves under the claim).
+    pub on_claim: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Default, Clone)]
@@ -109,6 +137,8 @@ impl FakeNode {
             repeatable: false,
             cost: None,
             expires_at: None,
+            approved_seq: None,
+            approved_at: None,
             seq,
             head: seq,
         });
@@ -116,11 +146,17 @@ impl FakeNode {
     }
 
     pub fn approve(&self, proposal: &str) {
+        self.approve_at(proposal, "2026-10-15T10:00:00Z");
+    }
+
+    pub fn approve_at(&self, proposal: &str, time: &str) {
         let mut st = self.state();
         st.head += 1;
         let head = st.head;
         let r = st.rows.iter_mut().find(|r| r.proposal == proposal).unwrap();
         r.approvals.push("@lars:a.localhost".into());
+        r.approved_seq = Some(head);
+        r.approved_at = Some(time.into());
         for r in &mut st.rows {
             r.head = head;
         }
@@ -151,7 +187,30 @@ impl FakeNode {
         }
     }
 
+    /// Puts a blob into the space; returns its hash.
+    pub fn put_blob(&self, bytes: &[u8]) -> String {
+        let hash = han_core::ids::sha256_hex(bytes);
+        self.state().blobs.insert(hash.clone(), bytes.to_vec());
+        hash
+    }
+
+    /// The profile items published on the lane's stream with this profile name, in order.
+    pub fn items(&self, name: &str) -> Vec<Value> {
+        self.state()
+            .published
+            .iter()
+            .filter(|(_, n, _)| n == name)
+            .map(|(_, _, b)| b.clone())
+            .collect()
+    }
+
     fn apply(&self, cmd: &Command) -> Result<CallResult, NodeError> {
+        if let Command::EffectClaim { .. } = cmd {
+            let hook = self.state().on_claim.take();
+            if let Some(h) = hook {
+                h();
+            }
+        }
         let mut st = self.state();
         st.commands.push(cmd.clone());
         match cmd {
@@ -176,6 +235,8 @@ impl FakeNode {
                 let id = format!("c{}-{}", r.proposal, r.claims);
                 r.last_claim = Some(id.clone());
                 r.phase = "claimed".into();
+                r.approved_seq = None;
+                r.approved_at = None;
                 let taken = std::mem::take(&mut r.approvals);
                 let p = r.proposal.clone();
                 st.saved_approvals.push((p, taken));
@@ -206,6 +267,10 @@ impl FakeNode {
                 let proposal = st.rows[idx].proposal.clone();
                 let phase = match (result.as_str(), started.as_str()) {
                     ("failed" | "cancelled", "no") => {
+                        // The approvals return with the effect (P-09); their order and time with them.
+                        let head = st.head;
+                        st.rows[idx].approved_seq = Some(head);
+                        st.rows[idx].approved_at = Some("2026-10-15T10:00:00Z".into());
                         let back = st
                             .saved_approvals
                             .iter()
@@ -229,6 +294,74 @@ impl FakeNode {
                     time: String::new(),
                 })
             }
+            Command::EffectCancel { proposal, .. } => {
+                // P-07a: the executor may cancel its own effect while it is open.
+                let r = st
+                    .rows
+                    .iter_mut()
+                    .find(|r| &r.proposal == proposal)
+                    .ok_or_else(|| NodeError::not_found("proposal"))?;
+                if r.phase != "open" {
+                    return Err(NodeError::conflict("the proposal is no longer open"));
+                }
+                r.phase = "done".into();
+                Self::bump(&mut st);
+                Ok(CallResult::Receipt {
+                    space: SPACE.into(),
+                    seq: st.head,
+                    id: format!("x{}", st.head),
+                    time: String::new(),
+                })
+            }
+            Command::BlobFetch {
+                hash, media_type, ..
+            } => {
+                let data = st
+                    .blobs
+                    .get(hash)
+                    .ok_or_else(|| NodeError::not_found("blob"))?;
+                Ok(CallResult::Blob {
+                    hash: hash.clone(),
+                    media_type: media_type.clone(),
+                    data: han_core::base64url::encode(data),
+                })
+            }
+            Command::BlobPut {
+                media_type, data, ..
+            } => {
+                let bytes = han_core::base64url::decode(data)
+                    .map_err(|_| NodeError::invalid("base64url"))?;
+                let hash = han_core::ids::sha256_hex(&bytes);
+                let size = bytes.len() as u64;
+                st.blobs.insert(hash.clone(), bytes);
+                Ok(CallResult::BlobRef {
+                    hash,
+                    size,
+                    media_type: media_type.clone(),
+                })
+            }
+            Command::SessionOpen { .. } => {
+                st.head += 1;
+                Ok(CallResult::Receipt {
+                    space: SPACE.into(),
+                    seq: st.head,
+                    id: "lane-stream".into(),
+                    time: String::new(),
+                })
+            }
+            Command::StreamPublish {
+                session,
+                name,
+                body,
+                ..
+            } => {
+                let v: Value =
+                    serde_json::from_str(body).map_err(|_| NodeError::invalid("body"))?;
+                st.published.push((session.clone(), name.clone(), v));
+                Ok(CallResult::Status {
+                    n: st.published.len() as u64,
+                })
+            }
             other => Err(NodeError::denied(format!(
                 "not an executor command: {other:?}"
             ))),
@@ -239,12 +372,17 @@ impl FakeNode {
 impl NodeApi for FakeNode {
     fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
         Box::pin(async move {
+            if !matches!(
+                cmd,
+                Command::EffectClaim { .. } | Command::EffectOutcome { .. }
+            ) {
+                return self.apply(&cmd);
+            }
             let fault = {
                 let mut st = self.state();
                 let list = match &cmd {
                     Command::EffectClaim { .. } => &mut st.claim_faults,
-                    Command::EffectOutcome { .. } => &mut st.outcome_faults,
-                    _ => return self.apply(&cmd),
+                    _ => &mut st.outcome_faults,
                 };
                 if list.is_empty() {
                     None
@@ -465,11 +603,7 @@ impl Rig {
             dir: tempfile::tempdir().unwrap(),
             actions,
             config: ExecConfig {
-                repos: vec![RepoTarget {
-                    name: "repo".into(),
-                    remote: "remote".into(),
-                    github: None,
-                }],
+                repos: vec![RepoTarget::new("repo", "remote")],
                 branch_prefixes: vec!["han/".into()],
                 ..ExecConfig::default()
             },

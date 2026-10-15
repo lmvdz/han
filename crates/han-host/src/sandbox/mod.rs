@@ -231,8 +231,7 @@ pub fn probe(shim: &ShimCommand) -> Vec<BackendAvailability> {
         }
         #[cfg(target_os = "linux")]
         {
-            let _ = shim;
-            Some(bwrap::probe())
+            Some(bwrap::probe(shim))
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {

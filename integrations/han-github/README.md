@@ -3,6 +3,8 @@
 HAN's GitHub integration (PLAN §6.7, milestone M5). A separate process and an actor over the node API
 (`RpcClient`, the local pipe): it holds no key of the space and no write access to GitHub.
 
+On a runner it is a service, `han-github.service`, installed disabled by `han runner setup` (docs/runner.md 10.1).
+
 ```
 han-github run --config han-github.toml
 han-github request --config han-github.toml github:owner/repo#42 --title "Fix the parser"
@@ -13,10 +15,24 @@ han-github request --config han-github.toml github:owner/repo#42 --title "Fix th
 1. Every `poll_secs` (default 60) it reads each configured repository's issues with a conditional request
    (`If-None-Match`). A `304` costs one request and changes nothing.
 2. What changed becomes `github.issue/1` items on a session stream (below).
-3. An **open** issue that has the trigger label (default `agent-ready`) gets one
-   `TaskCreate { external: "github:owner/repo#N", to: tasks.pool + tasks.to }`, once. `han-github request` does the same
-   for one issue on a human's say-so. A task is never created for closed issues, for pull requests, or when
-   the space already has a task with that `external` (open or not), so a restart creates no duplicates.
+3. An **open** issue that has the trigger label (default `agent-ready`) and **no open task** gets
+   `TaskCreate { external: "github:owner/repo#N", to: tasks.pool + tasks.to }`. This is checked on every poll against
+   every known agent-ready issue, not only the ones that changed (a task closing does not change its issue, and a
+   `304` does not skip it). `han-github request` makes one for a single issue on a human's say-so. A task is never
+   created for closed issues or pull requests, and a restart creates no duplicates because an open task (or one
+   made a moment ago that the Tasks view does not show yet) stops it.
+
+   A task that already closed counts by *how* it closed (`closed_as` of the Tasks view, from the final
+   `task.update` state, or `cancelled` for a `task.cancel`):
+
+   | the issue's earlier tasks | new task? |
+   |---|---|
+   | one is open | no |
+   | one closed as `done` (the agent says it finished) while the issue is still open | **no**: a person decides (close the issue, or `han-github request`) |
+   | all closed as `failed`, `declined` or `cancelled` (an owner's force-close of a dead session too) | yes |
+   | three such tasks closed without landing (`MAX_ATTEMPTS`) | no: a person looks at why |
+
+   `han-github request` ignores the last two rows; it only refuses when a task is open.
 4. It cancels its own open task (`TaskCancel`) when the issue is closed, or loses the trigger label, before any agent
    accepted the task. Only tasks whose author is this process's node count (only the author may cancel), a task an
    agent already accepted is left to its assignee, and a task a human asked for with `request` (while the process that made it runs) is not governed by the

@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use futures_core::Stream;
 
@@ -21,13 +22,31 @@ pub trait NodeApi: Send + Sync + 'static {
 
     /// Watches something: a snapshot of the window, then diffs, until the stream is dropped.
     fn view(&self, query: Query) -> ViewStream;
+
+    /// Whether a face connection must confirm a person before it governs or steers
+    /// ([`Command::needs_presence`]). The RPC server asks at each such command; the node answers from its
+    /// presence setting. An implementation with no device behind it (a test double) needs nobody.
+    fn presence_required(&self) -> Result<bool, NodeError> {
+        Ok(false)
+    }
+
+    /// Asks the person, on this device, to unlock a face connection, and returns how long the unlock lasts.
+    /// `client` names the asking process (its name and pid), when the system says. The RPC server calls it
+    /// for one connection and keeps the window on that connection alone.
+    fn confirm_unlock(
+        &self,
+        _client: Option<String>,
+    ) -> BoxFuture<'_, Result<Duration, NodeError>> {
+        Box::pin(async { Err(NodeError::unavailable("this node has no presence check")) })
+    }
 }
 
 /// A role process's own node, as the role may use it: a host or an executor that runs its own node in process
 /// (as its own actor) holds this and never the node itself, so the class bounds what it can send however it
 /// asks (SR-06, SR-106). The same bound the role endpoints put on a connection, plus the one Face-class
 /// command a role needs in process: a host uploads its `git_push` changeset (`BlobPut`), an executor fetches
-/// it (`BlobFetch`). Views are not bounded.
+/// it (`BlobFetch`) and uploads the evidence and conflict records its landing lane publishes (`BlobPut`) and refuses an effect it will not run (`EffectCancel`, P-07a: Policy lets only the effect's own executor do that, and only while it is open); and a host may send `SessionInput` (an agent steering another session, as the policy
+/// allows): only in process, never on the host endpoint. Views are not bounded.
 pub struct ClassApi {
     inner: Arc<dyn NodeApi>,
     class: ConnectionClass,
@@ -43,8 +62,15 @@ impl ClassApi {
         self.class.permits(cmd.class())
             || matches!(
                 (self.class, cmd),
-                (ConnectionClass::Host, Command::BlobPut { .. })
-                    | (ConnectionClass::Executor, Command::BlobFetch { .. })
+                (
+                    ConnectionClass::Host,
+                    Command::BlobPut { .. } | Command::SessionInput { .. }
+                ) | (
+                    ConnectionClass::Executor,
+                    Command::BlobFetch { .. }
+                        | Command::BlobPut { .. }
+                        | Command::EffectCancel { .. }
+                )
             )
     }
 }

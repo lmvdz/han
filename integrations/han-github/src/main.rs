@@ -6,8 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use han_github::{Config, Reader, Syncer};
+use han_github::{Config, Reader, SyncError, Syncer};
 use han_node::rpc::RpcClient;
+
+/// Polls in a row that fail at the node before `run` gives up (see there).
+const MAX_NODE_FAILURES: u32 = 3;
 
 #[derive(Parser)]
 #[command(name = "han-github", version, about = "HAN's GitHub integration")]
@@ -59,19 +62,37 @@ async fn real_main(cli: Cli) -> Result<(), String> {
             let mut syncer = connect(&cfg).await?;
             let mut tick = tokio::time::interval(Duration::from_secs(cfg.poll_secs));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The client does not reconnect: a node that restarted leaves every call failing, so after a few
+            // ticks in a row that failed on the node's side, exit and let the service manager start us again.
+            let mut node_failures = 0u32;
+            let mut gone = false;
             loop {
                 tokio::select! {
                     _ = tick.tick() => {
+                        let mut node_failed = false;
                         for repo in syncer.repos() {
                             match syncer.poll(&repo).await {
-                                Ok(t) if t.not_modified => tracing::debug!(%repo, "not modified"),
+                                Ok(t) if t.not_modified && t.tasks.is_empty() => tracing::debug!(%repo, "not modified"),
                                 Ok(t) => tracing::info!(%repo, published = t.published, tasks = t.tasks.len(), cancelled = t.cancelled.len(), "polled"),
-                                Err(e) => tracing::warn!(%repo, error = %e, "poll failed"),
+                                Err(e) => {
+                                    node_failed |= matches!(e, SyncError::Node(_));
+                                    tracing::warn!(%repo, error = %e, "poll failed");
+                                }
                             }
+                        }
+                        node_failures = if node_failed { node_failures + 1 } else { 0 };
+                        if node_failures >= MAX_NODE_FAILURES {
+                            gone = true;
+                            break;
                         }
                     }
                     _ = tokio::signal::ctrl_c() => break,
                 }
+            }
+            if gone {
+                return Err(format!(
+                    "the node failed {MAX_NODE_FAILURES} polls in a row"
+                ));
             }
             syncer.close().await;
             Ok(())

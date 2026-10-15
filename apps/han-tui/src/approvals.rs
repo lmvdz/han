@@ -300,6 +300,11 @@ impl ApprovalsState {
                 format!("The approval was malformed: {message}. This is a bug."),
                 false,
             ),
+            NodeError::PresenceRequired { .. } => (
+                "Governing and steering need a person at the device; confirm there and try again."
+                    .to_owned(),
+                true,
+            ),
             NodeError::NotFound { .. } => (
                 "This effect no longer exists in the space.".to_owned(),
                 false,

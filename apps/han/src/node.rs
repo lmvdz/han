@@ -17,7 +17,7 @@ use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore, KeyringStore};
 use han_node::rpc::{default_endpoint, role_endpoint, serve_roles};
 use han_node::supervisor::ProcessSpawner;
 use han_node::{Node, NodeConfig, NodeParts, WellKnownKeys};
-use han_registry::HomeRef;
+use han_registry::{AgentsFile, HomeRef, RunAs};
 use han_seq::SystemClock;
 
 use crate::gate::GatedSpawner;
@@ -50,18 +50,26 @@ enum NodeCmd {
     },
     /// Removes the background service.
     UninstallService,
-    /// Shows or sets this device's human-presence check for approvals (stored in `node.db`, read at each
-    /// approval). While approvals require a person, changing it needs one to confirm.
+    /// Shows or sets this device's human-presence check for approvals and for unlocking governing and steering
+    /// on a connection (stored in `node.db`, read at each use). While either requires a person, changing it
+    /// needs one to confirm.
     Presence {
         /// The data directory of the node.
         #[arg(long, env = "HAN_DATA", default_value = "han-data")]
         data: PathBuf,
-        /// `all`, or a comma-separated list of action kinds (`effect.approve`); the empty list requires nothing.
+        /// `all`, or a comma-separated list of action kinds (`effect.approve`, `effect.cancel`, `face.unlock`);
+        /// the empty list requires nothing.
         #[arg(long)]
         require: Option<String>,
         /// `auto`, `windows-hello`, `touch-id`, `polkit` or `none`.
         #[arg(long)]
         backend: Option<String>,
+        /// How many seconds one unlock of a connection to govern and steer lasts (10 to 3600, default 600).
+        #[arg(long)]
+        unlock_secs: Option<u64>,
+        /// The node keeps its keys in files (`han node --file-keys`), which is where the settings' seal key is.
+        #[arg(long)]
+        file_keys: bool,
     },
     /// Says whether the node is running, who it acts as, and how its links stand.
     Status {
@@ -145,33 +153,64 @@ impl NodeOpts {
 /// `han node presence`: the settings, after a change if one is asked for.
 async fn presence(
     data: &std::path::Path,
+    file_keys: bool,
     require: Option<String>,
     backend: Option<String>,
+    unlock_secs: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use han_node::presence::{BackendChoice, Require, change, settings};
+    use han_node::presence::{
+        BackendChoice, HEADLESS_DIR, Require, change, headless_marker, load, seal_name,
+    };
     let require = require.map(|r| r.parse::<Require>()).transpose()?;
     let backend = backend.map(|b| b.parse::<BackendChoice>()).transpose()?;
     std::fs::create_dir_all(data)?;
     let db = han_node::db::NodeDb::open(&data.join("node.db"))?;
-    let changing = require.is_some() || backend.is_some();
+    // the settings are sealed with a key from the store the node uses
+    let keys: Arc<dyn KeyStore> = if file_keys {
+        Arc::new(FileKeyStore::new(data.join("keys")))
+    } else {
+        Arc::new(KeyringStore::new("han"))
+    };
+    let name = seal_name(data);
+    let seal = Some((&*keys, name.as_str()));
+    let changing = require.is_some() || backend.is_some() || unlock_secs.is_some();
+    // root made this node headless (`han runner setup`): its settings are not a person's to change here
+    let marker = std::path::Path::new(HEADLESS_DIR).join(&name);
+    if headless_marker(std::path::Path::new(HEADLESS_DIR), &name, 0) {
+        if changing {
+            return Err(format!(
+                "this node is headless: nobody sits at it, so its presence settings are root's. They come from {}; as root, `han runner setup` writes it and removing it makes the node a person's again",
+                marker.display()
+            )
+            .into());
+        }
+        println!(
+            "headless: nobody sits at this node. It asks for no person to govern or steer, and it never approves. The operating system's boundary (who can run as this node's user) is the authority; root's marker is {}",
+            marker.display()
+        );
+        return Ok(());
+    }
     if changing {
         println!("confirm on this device if asked…");
-    }
-    let (require, backend) = tokio::task::block_in_place(|| {
-        if changing {
+        tokio::task::block_in_place(|| {
             change(
                 &db,
+                seal,
                 require,
                 backend,
+                unlock_secs,
                 None,
                 han_node::presence::DEFAULT_TIMEOUT,
             )
-        } else {
-            settings(&db)
-        }
-    })?;
-    println!("presence.require {require}");
-    println!("presence.backend {backend}");
+        })?;
+    }
+    let now = load(&db, seal);
+    println!("presence.require {}", now.require);
+    println!("presence.backend {}", now.backend);
+    println!("presence.unlock_secs {}", now.unlock.as_secs());
+    if changing {
+        println!("a running node keeps the settings it started with: restart it to apply this");
+    }
     Ok(())
 }
 
@@ -222,7 +261,9 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
             data,
             require,
             backend,
-        }) => presence(&data, require, backend).await,
+            unlock_secs,
+            file_keys,
+        }) => presence(&data, file_keys, require, backend, unlock_secs).await,
         Some(NodeCmd::Status { data, endpoint }) => status(&data, endpoint).await,
         Some(NodeCmd::UninstallService) => {
             println!("{}", service::uninstall()?);
@@ -244,6 +285,25 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     }
+}
+
+/// The agents of `agents.json` that run as another OS user, with where their unit's spawn file is.
+fn os_user_agents(data: &std::path::Path) -> Vec<(String, RunAs)> {
+    let Ok(file) = AgentsFile::load(data) else {
+        return Vec::new();
+    };
+    file.agents
+        .iter()
+        .filter_map(|(actor, a)| {
+            Some((
+                actor.clone(),
+                RunAs {
+                    os_user: a.os_user.clone()?,
+                    state_dir: file.state_dir(data, actor),
+                },
+            ))
+        })
+        .collect()
 }
 
 async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
@@ -268,6 +328,12 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = NodeConfig::new(actor);
     config.key_id = args.key_id;
     config.data_dir = Some(args.data.clone());
+    let spawner = ProcessSpawner::new(std::env::current_exe()?)
+        .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host));
+    // Hosts in `han-agent@` units outlive this node: take back the ones still running.
+    for name in spawner.adopt(&os_user_agents(&args.data)) {
+        println!("adopted {name} (its unit was already running)");
+    }
     let node = Node::start(NodeParts {
         config,
         transport: transport.clone(),
@@ -276,11 +342,7 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         server_keys: Arc::new(WellKnownKeys::new(Fetcher::new())),
         // Hosts are told the host endpoint and no other (SR-107).
         // and are started only where the agent's sandbox works (the gate says why not).
-        supervisor: Arc::new(GatedSpawner::new(
-            ProcessSpawner::new(std::env::current_exe()?)
-                .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host)),
-            ShimCommand::of_current_exe()?,
-        )),
+        supervisor: Arc::new(GatedSpawner::new(spawner, ShimCommand::of_current_exe()?)),
     })?;
 
     // A home named by ticket is kept in the data directory, so a restart needs no flag.

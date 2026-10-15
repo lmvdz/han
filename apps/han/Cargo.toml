@@ -7,8 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# `han seq --test-mode` and `han conform`: a test-mode home for the wire conformance vectors. Off in release builds.
-conformance = ["han-net/conformance"]
+# `han seq --test-mode` and `han conform`: a test-mode home for the wire conformance vectors, and the `test-allow`
+# presence backend for the end-to-end rigs. Off in release builds.
+conformance = ["han-net/conformance", "han-node/conformance"]
 
 [dependencies]
 clap.workspace = true
@@ -27,6 +28,7 @@ interprocess = { version = "2.4", features = ["tokio"] }
 serde.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
+toml = "0.9"
 tokio = { workspace = true, features = ["signal"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

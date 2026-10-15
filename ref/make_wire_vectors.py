@@ -896,6 +896,48 @@ steps += put(xc, 9, e, c, r)
 r27.append(vec("N3a", "P-01: the receipt pins exactly the last relevantActors list: in `%s` (approvals by any member) alice proposes with executor x, bob then carol approve; x's claim is ordered with a receipt whose `profiles` are x, alice and bob (the E3 candidates up to and including the first with a valid key), not carol, though the first relevantActors call names her" % PN,
                steps, ["P-01", "§4.1", "R-14", "E3"], "ok x8, the claim's receipt exact", source="maker (oracle: ref/wire.py Home)"))
 
+# ───────────── probes-r33.json: P-07a (the executor's refusal: `effect.cancel` with `reason` and `evidence`) ─────────────
+r33 = []
+EC = "ec:" + SERVER
+WHY = b'{"why":"the required checks failed"}'
+REF_WHY = {"hash": hashlib.sha256(WHY).hexdigest(), "size": len(WHY), "type": "application/json"}
+ec_n = [10]
+def ec_id():
+    ec_n[0] += 1; return ec_n[0]
+def ec_propose(n, steps):
+    plan_ = {"action": "git.push", "target": f"repo/ec{n}"}
+    e, c, r = oa("alice", "effect.propose", {"executor": xc, "action": "git.push", "planDigest": hashlib.sha256(P.jcs(plan_)).hexdigest(), "repeatable": False}, {"plan": plan_}, space=EC, tag=f"ec-propose-{n}")
+    steps += put(al, ec_id(), e, c, r)
+    return r["id"]
+steps = create_space(al, EC, "refusal") + member(al, EC, "bob", "member", 3) + member(al, EC, "x", "member", 4)
+p1 = ec_propose(1, steps)
+steps += [{"conn": bo, "send": {"id": 6, "call": "blobGet", "args": {"ref": REF_WHY, "space": EC}}}, {"conn": bo, "expect": err(6, "not_found")},
+          {"conn": xc, "send": {"id": 7, "call": "blobPut", "args": {"ref": REF_WHY, "offset": 0, "data": W.b64(WHY)}}}, {"conn": xc, "expect": {"id": 7, "ok": {"have": len(WHY), "complete": True}}}]
+e, c, r = oa("x", "effect.cancel", {"proposal": p1}, {"reason": "test: the required checks failed", "evidence": REF_WHY}, space=EC, tag="ec-cancel-1")
+steps += put(xc, 8, e, c, r)
+steps += [{"conn": bo, "send": {"id": 9, "call": "blobGet", "args": {"ref": REF_WHY, "space": EC}}}, {"conn": bo, "expect": {"id": 9, "ok": {"data": W.b64(WHY), "size": len(WHY), "offset": 0}}}]
+r33.append(vec("C1", "P-07a, G-01: in `%s` alice proposes with executor x; x uploads a proof blob (bob cannot read it before anything references it) and cancels the open effect with `reason` and `evidence` in the content; the cancel is ordered with the exact receipt, and bob, a member, can now read the blob: `effect.cancel.evidence` is a reference position" % EC,
+               steps, ["P-07a", "G-01", "§5"], "ok; blobGet not_found, then ok", source="maker (oracle: ref/wire.py Home)"))
+
+steps = []
+p2 = ec_propose(2, steps)
+e, c, code, d = attempt("bob", "effect.cancel", {"proposal": p2}, space=EC, tag="ec-bob")
+steps += sent(bo, ec_id(), e, c, code, d); assert code == "denied", code
+for tag, content in (("long", {"reason": "a" * 1025}), ("ref", {"evidence": {"hash": "xyz", "size": 1, "type": "text/plain"}}), ("note", {"note": "no"}), ("extra", {"reason": "r", "evidence": REF_WHY, "x": 1})):
+    e, c, code, d = attempt("x", "effect.cancel", {"proposal": p2}, content, space=EC, tag="ec-bad-" + tag)
+    steps += sent(xc, ec_id(), e, c, code, d); assert code == "invalid", (tag, code)
+e, c, code, d = attempt("x", "effect.cancel", {"proposal": p2}, {"reason": "a" * 1024}, space=EC, tag="ec-edge")
+steps += sent(xc, ec_id(), e, c, code, d); assert code == "ok", (code, d)
+p3 = ec_propose(3, steps)
+e, c, r = oa("x", "effect.claim", {"proposal": p3, "attempt": 1, "instance": "k1", "window": SP_POLICY["launchWindow"]}, space=EC, tag="ec-claim-3")
+steps += put(xc, ec_id(), e, c, r)
+e, c, code, d = attempt("x", "effect.cancel", {"proposal": p3}, {"reason": "too late"}, space=EC, tag="ec-late")
+steps += sent(xc, ec_id(), e, c, code, d); assert code == "denied", code
+e, c, code, d = attempt("alice", "effect.cancel", {"proposal": p3}, space=EC, tag="ec-proposer")
+steps += sent(al, ec_id(), e, c, code, d); assert code == "ok", code
+r33.append(vec("C2", "P-07a: run after C1. In `%s` bob (a member, neither proposer nor executor) cannot cancel an open effect: denied; x's cancel with a `reason` of 1,025 bytes, a malformed `evidence`, a content member the kind lacks (`note`), or one more member than the kind has is invalid, and a `reason` of exactly 1,024 bytes is ordered; once x has claimed an effect its own cancel is denied (the executor's right is for an open effect only), while the proposer's cancel is still ordered as a request" % EC,
+               steps, ["P-07a", "P-04", "§5"], "denied; invalid x4; ok; denied; ok", source="maker (oracle: ref/wire.py Home)"))
+
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""
     head = json.dumps({k: v for k, v in doc.items() if k != "vectors"}, ensure_ascii=False)[:-1]
@@ -910,10 +952,11 @@ dump_vectors(os.path.join(OUT, "probes-r23.json"), {"format": "han-wire-vectors/
 dump_vectors(os.path.join(OUT, "probes-r24.json"), {"format": "han-wire-vectors/1", "kind": "r24", "note": "Round-24 coverage (DECISIONS-r24.md H3, H10 a; architecture.md section 3 state, G-09, G-11 test.limits). Run last: they lower and restore maxFrameBytes (test.limits). Every expected value is from ref/wire.py (W.Home) driven with the same entries; the cursor of a state page is exact.", "vectors": r24})
 dump_vectors(os.path.join(OUT, "probes-r25.json"), {"format": "han-wire-vectors/1", "kind": "r25", "note": "Round-25 coverage (DECISIONS-r25.md K7; architecture.md section 3 state, G-09). Run after probes-r24.json: they use its space `bc:a.localhost`. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r25})
 dump_vectors(os.path.join(OUT, "probes-r27.json"), {"format": "han-wire-vectors/1", "kind": "r27", "note": "Round-27 coverage (round-26 review N3; architecture.md P-01, section 4.1 step 4, R-14). Run after probes-r25.json. Every expected value is from ref/wire.py (W.Home) driven with the same entries; the claim's receipt is exact, so its `profiles` pins are.", "vectors": r27})
+dump_vectors(os.path.join(OUT, "probes-r33.json"), {"format": "han-wire-vectors/1", "kind": "r33", "note": "Round-33 coverage (architecture.md P-07a, G-01, section 5: the executor's `effect.cancel` with `reason` and `evidence`). Run after probes-r27.json: C2 uses the space C1 builds. Every expected value is from ref/wire.py (W.Home) driven with the same entries.", "vectors": r33})
 dump(os.path.join(OUT, "config.json"), CONFIG)
 dump(os.path.join(OUT, "probes.json"), {"format": "han-wire-vectors/1", "kind": "agreed", "note": "Error paths both reference servers answered alike. Run after the 21 operation files, in this order (each may add to the state the next relies on).", "vectors": agreed})
 dump(os.path.join(OUT, "probes-decided.json"), {"format": "han-wire-vectors/1", "kind": "decided", "note": "Paths the two reference servers answered differently (or the text left open) before round 21. DECISIONS-r21.md and architecture.md G-07..G-11 now fix them. Run after probes.json.", "vectors": dec})
-index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json", "probes-r25.json", "probes-r27.json"]
+index["files"] += ["probes.json", "probes-decided.json", "probes-r22.json", "probes-r23.json", "probes-r24.json", "probes-r25.json", "probes-r27.json", "probes-r33.json"]
 
 import run_wire_vectors as RV     # the runner's generated entries must be byte for byte the oracle's: check three of them
 _cfg = RV.Cfg()
@@ -925,5 +968,5 @@ dump(os.path.join(OUT, "index.json"), index)
 if STALE:
     print("STALE GOLDEN: the oracle's state differs from the recorded state in", ", ".join(f"{fn} (steps {s})" for fn, s in STALE.items()))
     print("  re-record the operation files with conformance/interop/run.py then conformance/interop/report.py once both servers follow the new state; until then the operation files and the probes built from them are not conformant")
-print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "round-25 probes:", len(r25), "round-27 probes:", len(r27), "head after agreed:", HEAD_AFTER_AGREED)
+print("operation files:", n, "agreed probes:", len(agreed), "decided probes:", len(dec), "round-22 probes:", len(r22), "round-23 probes:", len(r23), "round-24 probes:", len(r24), "round-25 probes:", len(r25), "round-27 probes:", len(r27), "round-33 probes:", len(r33), "head after agreed:", HEAD_AFTER_AGREED)
 sys.exit(2 if STALE else 0)

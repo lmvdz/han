@@ -58,6 +58,8 @@ pub struct NodeInfo {
     pub roles: Vec<RoleInfo>,
     /// What stops roles from starting on this machine (the supervisor's).
     pub problems: Vec<String>,
+    /// Root made the node headless: nobody sits at it (`presence::headless_marker`).
+    pub headless: bool,
 }
 
 /// Where a session's work timeline comes from. han-timeline backs it in M4; until then [`NoTimeline`] says
@@ -418,6 +420,19 @@ impl Engine {
         self.publish();
     }
 
+    /// The host of `agent` exited while its sessions were open (see `SpaceModel::host_exited`). True if any
+    /// session changed.
+    pub fn host_exited(&mut self, agent: &str, work: Option<&str>, reason: &str) -> bool {
+        let mut changed = false;
+        for m in self.spaces.values_mut() {
+            changed |= m.host_exited(agent, work, reason);
+        }
+        if changed {
+            self.publish();
+        }
+        changed
+    }
+
     /// Sets what the `NodeStatus` view shows besides the spaces.
     pub fn set_node_info(&mut self, info: NodeInfo) {
         if self.info != info {
@@ -555,6 +570,29 @@ impl Engine {
             target,
             requester: e.proposer.clone(),
         })
+    }
+
+    /// The task `task` as `(open, assignees, external)`; `None` if it is unknown.
+    pub fn task_facts(
+        &self,
+        space: &str,
+        task: &str,
+    ) -> Option<(bool, Vec<String>, Option<String>)> {
+        let t = self.spaces.get(space)?.tasks.get(task)?;
+        Some((t.open, t.to.clone(), t.external.clone()))
+    }
+
+    /// The open task that came from `issue` and is addressed to `agent`: the newest, when there are several.
+    pub fn open_task_for_issue(&self, space: &str, issue: &str, agent: &str) -> Option<String> {
+        self.spaces
+            .get(space)?
+            .tasks
+            .values()
+            .filter(|t| {
+                t.open && t.external.as_deref() == Some(issue) && t.to.iter().any(|x| x == agent)
+            })
+            .max_by_key(|t| t.seq)
+            .map(|t| t.id.clone())
     }
 
     /// Whether a task is open; `None` if it is unknown.
@@ -727,6 +765,7 @@ impl Engine {
                 resyncs: self.resyncs,
                 recent_errors: self.errors.iter().cloned().collect(),
                 problems: self.problems(),
+                headless: self.info.headless,
             }),
         )
     }

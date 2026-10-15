@@ -680,6 +680,11 @@ pub struct TaskRow {
     pub ask: Option<String>,
     /// Whether it is still open.
     pub open: bool,
+    /// How it was closed: the final state that closed it (`done`, `failed`, `declined`, `cancelled`; a
+    /// `task.cancel` counts as `cancelled`). Absent while open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closed_as: Option<String>,
     /// P-15: the agents whose guarding the task carries, fixed when it was created: its parent's list, then
     /// the guards of its author. An assignee that accepts the task answers to their guards.
     #[serde(default)]
@@ -770,6 +775,15 @@ pub struct EffectRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub expires_at: Option<String>,
+    /// The seq of the entry that gave the open approvals their latest member: the order a landing lane
+    /// takes changes in (R33 §4). Absent while nothing is approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approved_seq: Option<u64>,
+    /// The receipt time of that entry: the time of the commit a landing lane makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approved_at: Option<String>,
     /// The seq of the proposal.
     pub seq: u64,
     /// The head of the space when the row was made (an executor claims each effect at most once per head).
@@ -960,6 +974,11 @@ pub struct NodeStatusRow {
     /// is held by an entry the home will not take ("space X blocked by outbox entry N: reason").
     #[serde(default)]
     pub problems: Vec<String>,
+    /// Root made this node headless (a service node): nobody sits at it, so it has no unlock for governing and
+    /// steering and never approves; the operating system's boundary, who can run as its user, is the
+    /// authority.
+    #[serde(default)]
+    pub headless: bool,
 }
 
 /// How many errors `NodeStatusRow::recent_errors` holds.

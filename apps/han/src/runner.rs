@@ -1,6 +1,6 @@
 //! `han runner setup`: the root-level part of a shared runner (docs/runner.md), Linux only, and the only `han`
 //! command that needs root. It makes the OS users, the agents directory, installs the `han-agent@` template
-//! unit, the executor unit (left disabled), the polkit rule and the node's drop-in. Everything else
+//! unit, the executor and `han-github` units (left disabled), the polkit rule and the node's drop-in. Everything else
 //! (`han home`, `han agent add`, `han executor add`) runs without root.
 //!
 //! `han runner setup --toolchain rust` also provisions the shared Rust toolchain of docs/runner.md 7.2 (`/opt/rust`,
@@ -110,10 +110,13 @@ mod linux {
 
     const AGENT_UNIT: &str = include_str!("../../../integrations/runner/han-agent@.service");
     const EXEC_UNIT: &str = include_str!("../../../integrations/runner/han-exec.service");
+    const GITHUB_UNIT: &str = include_str!("../../../integrations/runner/han-github.service");
     const POLKIT_RULE: &str = include_str!("../../../integrations/runner/50-han-agent.rules");
     const AGENTS_ROOT: &str = "/var/lib/han-agents";
     const NODE_DATA: &str = "/var/lib/han";
     const EXEC_DIR: &str = "/var/lib/han-exec";
+    /// Where `han-github` finds its config and the read-only App's key (docs/runner.md 10).
+    const GITHUB_DIR: &str = "/var/lib/han/github";
 
     /// The shared Rust toolchain asked for.
     pub struct Rust {
@@ -209,6 +212,75 @@ mod linux {
                 &[&mode_s, path],
                 &format!("{path} is mode {mode_s}"),
             )
+        }
+
+        /// A directory that `owner` (root) owns and nobody else may write, made if it is missing. A symlink, a
+        /// file, or a directory of another user or open to writes is refused: whoever planted it could choose
+        /// what root's marker inside it says.
+        fn root_dir(&mut self, path: &str, owner: u32) -> Res<()> {
+            use std::os::unix::fs::MetadataExt as _;
+            match std::fs::symlink_metadata(path) {
+                Ok(m) => {
+                    if m.file_type().is_symlink()
+                        || !m.is_dir()
+                        || m.uid() != owner
+                        || m.mode() & 0o022 != 0
+                    {
+                        return Err(format!(
+                            "{path} is not a plain directory owned by root that nobody else can write (a symlink, a file, or another user's): remove it and run this again"
+                        )
+                        .into());
+                    }
+                    self.say("unchanged:", path);
+                    Ok(())
+                }
+                Err(_) => self.cmd(
+                    "install",
+                    &["-d", "-o", "root", "-m", "755", path],
+                    &format!("made {path}"),
+                ),
+            }
+        }
+
+        /// Writes `dir/name` as `owner`'s alone: refuses a marker that is a symlink, not a plain file, or
+        /// another user's, and writes a new file (never through a link) in `dir`, which `root_dir` vouched for,
+        /// then renames it over the old one.
+        fn root_marker(&mut self, dir: &Path, name: &str, content: &str, owner: u32) -> Res<()> {
+            use std::io::Write as _;
+            use std::os::unix::fs::MetadataExt as _;
+            let path = dir.join(name);
+            if let Ok(m) = std::fs::symlink_metadata(&path) {
+                if m.file_type().is_symlink() || !m.is_file() || m.uid() != owner {
+                    return Err(format!(
+                        "{} is not a plain file owned by root (a symlink or another user's): remove it and run this again",
+                        path.display()
+                    )
+                    .into());
+                }
+                if std::fs::read_to_string(&path).is_ok_and(|c| c == content)
+                    && m.mode() & 0o7777 == 0o644
+                {
+                    self.say("unchanged:", &path.display().to_string());
+                    return Ok(());
+                }
+            }
+            if self.dry {
+                self.say("would:", &format!("write {}", path.display()));
+                return Ok(());
+            }
+            let tmp = dir.join(format!(".{name}.tmp"));
+            let _ = std::fs::remove_file(&tmp);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .open(&tmp)?;
+            f.write_all(content.as_bytes())?;
+            drop(f);
+            std::fs::rename(&tmp, &path)?;
+            self.changed = true;
+            self.say("changed:", &format!("wrote {}", path.display()));
+            Ok(())
         }
 
         /// Writes a file when its content or mode differs.
@@ -309,6 +381,22 @@ mod linux {
             )?;
         }
         c.dir(NODE_DATA, Some(node_user), 0o700)?;
+        // Nobody sits at the runner's node to answer a presence prompt, so root says it is headless: no unlock
+        // for governing and steering, no approvals. The marker is root's alone (a process of the node's user
+        // cannot write it), which is what makes it the authority (SR-108).
+        c.root_dir("/etc/han", 0)?;
+        c.root_dir(han_node::presence::HEADLESS_DIR, 0)?;
+        c.root_marker(
+            Path::new(han_node::presence::HEADLESS_DIR),
+            &han_node::presence::seal_name(Path::new(&format!("{NODE_DATA}/node"))),
+            &format!(
+                "# han runner setup: the node with data in {NODE_DATA}/node is headless (no person sits at it).
+                 # It asks for no presence check to govern or steer, and it never approves.
+                 # Only root can write this file; remove it to make the node a person's again.
+"
+            ),
+            0,
+        )?;
 
         if user_exists(exec_user) {
             c.say("unchanged:", &format!("user {exec_user}"));
@@ -330,6 +418,10 @@ mod linux {
         for sub in ["", "/keys", "/state"] {
             c.dir(&format!("{EXEC_DIR}{sub}"), Some(exec_user), 0o700)?;
         }
+
+        // han-github reaches the node through its owner-only socket, so it runs as the node's user; its config and
+        // the read-only App's key sit in a directory only that user can read.
+        c.dir(GITHUB_DIR, Some(node_user), 0o700)?;
 
         println!("agents");
         c.dir(AGENTS_ROOT, None, 0o755)?;
@@ -376,6 +468,7 @@ mod linux {
         println!("units");
         c.reload |= c.file("/etc/systemd/system/han-agent@.service", AGENT_UNIT, 0o644)?;
         c.reload |= c.file("/etc/systemd/system/han-exec.service", EXEC_UNIT, 0o644)?;
+        c.reload |= c.file("/etc/systemd/system/han-github.service", GITHUB_UNIT, 0o644)?;
         c.file(
             "/etc/polkit-1/rules.d/50-han-agent.rules",
             POLKIT_RULE,
@@ -407,6 +500,19 @@ mod linux {
             ),
         );
 
+        let configured = Path::new(GITHUB_DIR).join("han-github.toml").exists();
+        c.say(
+            "note:",
+            &format!(
+                "han-github.service is installed, disabled, and {}; configure it as in docs/runner.md 10, then: systemctl enable --now han-github",
+                if configured {
+                    "has a config"
+                } else {
+                    "has no config yet"
+                }
+            ),
+        );
+
         if let Some(r) = rust {
             rust_toolchain(&mut c, r, node_user)?;
         }
@@ -422,7 +528,13 @@ mod linux {
                 ),
             );
         }
-        for unit in ["han-seq", "han-node"] {
+        let mut units: Vec<String> = ["han-seq", "han-node", "han-exec", "han-github"]
+            .map(str::to_owned)
+            .into();
+        units.extend(active_agent_units());
+        for unit in &units {
+            let unit = unit.as_str();
+            let agent = unit.starts_with("han-agent@");
             let active = Command::new("systemctl")
                 .args(["is-active", unit])
                 .output()
@@ -432,9 +544,21 @@ mod linux {
             }
             let stale = unit_binary_replaced(unit);
             let needs = stale || (unit == "han-node" && group_added);
+            // An agent unit's cgroup holds its sandboxed agent while a session runs: restarting then would
+            // kill it mid-session, so such a unit is reported, and restarted once idle.
+            let busy = agent && needs && unit_is_busy(unit);
             if !needs {
                 c.say("unchanged:", &format!("{unit} is running current code"));
+            } else if busy {
+                warnings = true;
+                c.say(
+                    "busy:",
+                    &format!(
+                        "{unit} runs a replaced binary and has a session running; not restarted (restart it when the session ends: systemctl restart {unit})"
+                    ),
+                );
             } else if restart_stale && !dry {
+                let since = std::time::SystemTime::now();
                 c.cmd(
                     "systemctl",
                     &["restart", unit],
@@ -449,7 +573,7 @@ mod linux {
                 )?;
                 // systemd has started the unit, which is not the same as it serving: the next command of a
                 // script would find no socket yet.
-                wait_ready(unit).await?;
+                wait_ready(unit, since).await?;
                 c.say("restarted:", &format!("{unit} (ready)"));
             } else {
                 warnings = true;
@@ -466,8 +590,35 @@ mod linux {
     }
 
     /// Waits until the restarted `unit` serves: han-seq on its admin socket, han-node on a status call.
-    async fn wait_ready(unit: &str) -> Res<()> {
+    async fn wait_ready(unit: &str, since: std::time::SystemTime) -> Res<()> {
         let timeout = crate::seqadmin::READY_TIMEOUT;
+        if let Some(name) = unit.strip_prefix("han-agent@") {
+            // The host rewrites its admission file when it starts; a file older than the restart is the last run's.
+            let file = han_registry::unit_admission_file(&Path::new(AGENTS_ROOT).join(name));
+            return Ok(crate::seqadmin::wait_until(
+                &format!(
+                    "{unit}: its host did not write {} after the restart, so it",
+                    file.display()
+                ),
+                timeout,
+                || admitted_since(&file, since),
+            )
+            .await?);
+        }
+        if unit == "han-exec" || unit == "han-github" {
+            return Ok(crate::seqadmin::wait_until(
+                &format!("{unit}: systemd does not report it active, so it"),
+                timeout,
+                || async {
+                    if unit_active(unit) {
+                        Ok(())
+                    } else {
+                        Err("not active")
+                    }
+                },
+            )
+            .await?);
+        }
         if unit == "han-seq" {
             let data = Path::new(NODE_DATA).join("seq");
             return Ok(crate::seqadmin::wait_ready(&data, timeout).await?);
@@ -479,6 +630,81 @@ mod linux {
             || node_answers(&endpoint),
         )
         .await?)
+    }
+
+    /// Whether the host's admission file at `file` was written after `since` and admits the agent.
+    async fn admitted_since(file: &Path, since: std::time::SystemTime) -> Result<(), String> {
+        let fresh = std::fs::metadata(file)
+            .and_then(|m| m.modified())
+            .map_err(|e| e.to_string())?
+            >= since;
+        if !fresh {
+            return Err("the admission file is from before the restart".into());
+        }
+        let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+        if text.contains("\"Admitted\"") {
+            Ok(())
+        } else {
+            Err(format!("the host did not admit the agent: {}", text.trim()))
+        }
+    }
+
+    fn unit_active(unit: &str) -> bool {
+        Command::new("systemctl")
+            .args(["is-active", unit])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
+    }
+
+    /// The `han-agent@<user>.service` units that are active.
+    fn active_agent_units() -> Vec<String> {
+        let out = Command::new("systemctl")
+            .args([
+                "list-units",
+                "han-agent@*",
+                "--type=service",
+                "--state=active",
+                "--plain",
+                "--no-legend",
+            ])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        parse_agent_units(&out)
+    }
+
+    /// The unit names in `systemctl list-units --plain --no-legend` output that are agent units.
+    fn parse_agent_units(listing: &str) -> Vec<String> {
+        listing
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|u| u.starts_with("han-agent@") && u.ends_with(".service"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Whether the unit has a session running: processes in its cgroup besides its main process (the host).
+    fn unit_is_busy(unit: &str) -> bool {
+        let show = |prop: &str| {
+            Command::new("systemctl")
+                .args(["show", "-p", prop, "--value", unit])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_default()
+        };
+        let (main, cgroup) = (show("MainPID"), show("ControlGroup"));
+        let procs = std::fs::read_to_string(format!("/sys/fs/cgroup{cgroup}/cgroup.procs"))
+            .unwrap_or_default();
+        // Cannot tell: treat as busy rather than kill a session.
+        cgroup.is_empty() || has_other_processes(&procs, &main)
+    }
+
+    /// Whether `cgroup_procs` lists a pid other than `main`.
+    fn has_other_processes(cgroup_procs: &str, main: &str) -> bool {
+        cgroup_procs
+            .lines()
+            .map(str::trim)
+            .any(|p| !p.is_empty() && p != main)
     }
 
     /// Whether the node at `endpoint` answers a status call.
@@ -693,5 +919,115 @@ mod linux {
             )?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn ctx() -> Ctx {
+            Ctx {
+                dry: false,
+                changed: false,
+                reload: false,
+            }
+        }
+
+        #[test]
+        fn a_planted_symlink_is_refused_for_root_s_headless_marker() {
+            use std::os::unix::fs::MetadataExt as _;
+            let base = std::env::temp_dir().join(format!("han-marker-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            let dir = base.join("headless.d");
+            std::fs::create_dir_all(&dir).unwrap();
+            // the user running the test stands in for root
+            let me = std::fs::metadata(&dir).unwrap().uid();
+            let victim = base.join("victim");
+            std::fs::write(&victim, "keep").unwrap();
+            // a marker that is a symlink to a file is refused, and the file is not written through
+            std::os::unix::fs::symlink(&victim, dir.join("node")).unwrap();
+            let e = ctx()
+                .root_marker(
+                    &dir,
+                    "node",
+                    "headless
+",
+                    me,
+                )
+                .unwrap_err();
+            assert!(e.to_string().contains("not a plain file"), "{e}");
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+            // so is a symlink where the directory should be
+            let link = base.join("link.d");
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            let e = ctx().root_dir(link.to_str().unwrap(), me).unwrap_err();
+            assert!(e.to_string().contains("not a plain directory"), "{e}");
+            // and a directory another user owns
+            let e = ctx()
+                .root_dir(dir.to_str().unwrap(), me.wrapping_add(1))
+                .unwrap_err();
+            assert!(e.to_string().contains("not a plain directory"), "{e}");
+            // a planted temp name does not redirect the write, and a plain marker is written and kept
+            std::fs::remove_file(dir.join("node")).unwrap();
+            std::os::unix::fs::symlink(&victim, dir.join(".node.tmp")).unwrap();
+            ctx()
+                .root_marker(
+                    &dir,
+                    "node",
+                    "headless
+",
+                    me,
+                )
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(dir.join("node")).unwrap(),
+                "headless
+"
+            );
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn agent_units_are_found_in_a_listing() {
+            let listing =
+                "han-agent@han-agent1.service loaded active running HAN agent host as han-agent1
+                           han-exec.service loaded active running x
+                           han-agent@a.service loaded active running y
+";
+            assert_eq!(
+                parse_agent_units(listing),
+                ["han-agent@han-agent1.service", "han-agent@a.service"]
+            );
+        }
+
+        #[test]
+        fn a_unit_with_more_than_its_host_runs_a_session() {
+            assert!(!has_other_processes(
+                "42
+", "42"
+            ));
+            assert!(!has_other_processes("", "42"));
+            assert!(has_other_processes(
+                "42
+77
+", "42"
+            ));
+        }
+
+        #[tokio::test]
+        async fn an_admission_file_from_before_the_restart_is_not_ready() {
+            let dir = std::env::temp_dir().join(format!("han-adm-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join("admission.json");
+            std::fs::write(&file, r#"{"state":"Admitted"}"#).unwrap();
+            let before = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+            let after = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+            assert!(admitted_since(&file, before).await.is_ok());
+            assert!(admitted_since(&file, after).await.is_err());
+            std::fs::write(&file, r#"{"state":"Refused"}"#).unwrap();
+            assert!(admitted_since(&file, before).await.is_err());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

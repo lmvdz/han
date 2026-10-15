@@ -29,6 +29,87 @@ pub fn unit_of(os_user: &str) -> String {
     format!("han-agent@{os_user}.service")
 }
 
+/// The name of the role that hosts `agent` on an issue or a task: `host-<agent>#<issue>`, `host-<agent>#<task>`
+/// or `host-<agent>`. `agent stop` and the board find a role by it.
+pub fn host_name(agent: &str, issue: Option<&str>, task: Option<&str>) -> String {
+    match (issue, task) {
+        (Some(i), _) => format!("host-{agent}#{i}"),
+        (None, Some(t)) => format!("host-{agent}#{t}"),
+        (None, None) => format!("host-{agent}"),
+    }
+}
+
+/// The agent and the work (an issue or a task) in a role's name made by [`host_name`].
+pub fn parse_host_name(name: &str) -> Option<(&str, Option<&str>)> {
+    let rest = name.strip_prefix("host-")?;
+    // An actor has no `#`; an issue does (`github:o/r#1`).
+    Some(match rest.split_once('#') {
+        Some((agent, work)) => (agent, Some(work)),
+        None => (rest, None),
+    })
+}
+
+/// What the board says of a session whose host exited without closing it.
+pub const HOST_EXITED: &str = "host exited";
+
+/// Watches the roles for hosts that exit. A host that ends its work closes its session first; one that is killed
+/// (SIGTERM, a stop timeout, the OOM killer) closes nothing, and its session would read `idle` until silence
+/// made it `stale`, then `failed`. The node feeds this the roles at each tick and marks the sessions of the
+/// hosts it returns as ended.
+///
+/// An exit is reported only after it has stood for a grace period: a host that ended well has sent its
+/// `session.close`, and the node may see the unit end before that entry arrives.
+#[derive(Debug, Default)]
+pub struct ExitWatch {
+    running: std::collections::HashSet<String>,
+    gone: HashMap<String, u64>,
+}
+
+impl ExitWatch {
+    /// Takes the roles as they stand at `now_ms` (the node's steady clock); returns the roles whose exit has
+    /// stood for `grace_ms`. A role that is no longer listed is forgotten (see [`ExitWatch::stopped`]).
+    pub fn observe(
+        &mut self,
+        roles: &[(String, RoleStatus)],
+        now_ms: u64,
+        grace_ms: u64,
+    ) -> Vec<String> {
+        self.running.retain(|n| roles.iter().any(|(r, _)| r == n));
+        for (name, status) in roles {
+            match status {
+                RoleStatus::Running => {
+                    self.running.insert(name.clone());
+                    // started again under the same name
+                    self.gone.remove(name);
+                }
+                RoleStatus::Exited(_) => {
+                    if self.running.remove(name) {
+                        self.gone.entry(name.clone()).or_insert(now_ms);
+                    }
+                }
+            }
+        }
+        let due: Vec<String> = self
+            .gone
+            .iter()
+            .filter(|(_, since)| now_ms.saturating_sub(**since) >= grace_ms)
+            .map(|(n, _)| n.clone())
+            .collect();
+        for n in &due {
+            self.gone.remove(n);
+        }
+        let mut due = due;
+        due.sort();
+        due
+    }
+
+    /// The role `name` was stopped on purpose (and so is no longer listed): its exit counts from `now_ms`.
+    pub fn stopped(&mut self, name: &str, now_ms: u64) {
+        self.running.remove(name);
+        self.gone.entry(name.to_owned()).or_insert(now_ms);
+    }
+}
+
 /// The variables a child role inherits from the node (SR-08): what processes need to run on each OS, logging
 /// settings, and nothing else. Everything else a host needs is in its [`HostSpec`].
 pub const ENV_ALLOW: &[&str] = &[
@@ -266,6 +347,42 @@ impl ProcessSpawner {
             std::thread::sleep(Duration::from_millis(50));
         }
         Ok(())
+    }
+
+    /// Takes back the hosts that run as other OS users and outlived the node. A unit is not the node's child, so
+    /// a restarted node knows nothing of it: `agent stop` would say "is not running" and the roles would not
+    /// list it, while the unit went on. For each `(agent, run_as)` whose unit is active and not already
+    /// known, the role is remembered under the name its spec (the spawn file the node left for it) gives.
+    /// Returns the names adopted. Call it once at node start, with the OS-user agents of `agents.json`.
+    pub fn adopt(&self, candidates: &[(String, RunAs)]) -> Vec<String> {
+        let mut adopted = Vec::new();
+        for (agent, run_as) in candidates {
+            if !han_registry::valid_os_user(&run_as.os_user) {
+                continue;
+            }
+            let unit = unit_of(&run_as.os_user);
+            let known = self
+                .units
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .values()
+                .any(|(u, _)| *u == unit);
+            if known || !self.unit_active(&unit) {
+                continue;
+            }
+            let file = unit_spec_file(&run_as.state_dir);
+            // The spec says what the unit runs; without it the unit is still ours to stop, under the agent's name.
+            let name = match HostSpec::read(&file.to_string_lossy()) {
+                Ok(s) => host_name(&s.agent, s.work.issue.as_deref(), s.work.task.as_deref()),
+                Err(_) => host_name(agent, None, None),
+            };
+            self.units
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(name.clone(), (unit, run_as.state_dir.clone()));
+            adopted.push(name);
+        }
+        adopted
     }
 
     fn unit_list(&self) -> Vec<(String, (String, PathBuf))> {

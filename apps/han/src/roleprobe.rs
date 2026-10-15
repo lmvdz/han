@@ -63,6 +63,7 @@ pub async fn run(args: ProbeArgs) -> Result<(), Box<dyn std::error::Error>> {
                 result: "failed".into(),
                 started: "no".into(),
                 cost: None,
+                evidence: None,
             },
         ),
     };
@@ -82,6 +83,8 @@ pub async fn run(args: ProbeArgs) -> Result<(), Box<dyn std::error::Error>> {
             Command::EffectCancel {
                 space: space.clone(),
                 proposal: "none".into(),
+                reason: None,
+                evidence: None,
             },
         ),
         (

@@ -587,6 +587,22 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// Fetches the tip of `refname` from `remote` (with `auth`) into the repository of this backend's own for
+    /// `remote` (the one [`Vcs::import_bundle`] returns), and returns that repository with the tip's commit id:
+    /// the commit exactly as fetched. `None` when the ref does not exist. A landing lane squash-rebases onto it.
+    fn fetch_ref(
+        &self,
+        remote: &str,
+        auth: Option<&RemoteAuth>,
+        refname: &str,
+    ) -> Result<Option<(PathBuf, String)>> {
+        let _ = (remote, auth, refname);
+        Err(VcsError::Invalid(format!(
+            "{} fetches no refs",
+            self.name()
+        )))
+    }
+
     /// Simulates merging `theirs` into `ours` in the repository at `dir`, without touching its working tree,
     /// index or refs.
     fn merge_simulate(&self, dir: &Path, ours: &str, theirs: &str) -> Result<MergeSim>;
@@ -601,6 +617,16 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// The parents of `commit` in the repository at `dir`, in order (empty for a root commit). A landing
+    /// executor checks with it that the commit it moves a ref to sits directly on the tip it was tested on.
+    fn parents(&self, dir: &Path, commit: &str) -> Result<Vec<String>> {
+        let _ = (dir, commit);
+        Err(VcsError::Invalid(format!(
+            "{} lists no commit parents",
+            self.name()
+        )))
+    }
+
     /// The [`Delta`] from `base` to `head`, both commits of the repository at `dir`.
     ///
     /// Entries come from a tree-to-tree comparison (no content or similarity heuristics of the backend).
@@ -611,6 +637,17 @@ pub trait Vcs: Send + Sync + 'static {
         let _ = (dir, base, head);
         Err(VcsError::Invalid(format!(
             "{} makes no deltas",
+            self.name()
+        )))
+    }
+
+    /// The unified text diff from `base` to `head`, both commits of the repository at `dir`: no colour, no
+    /// renames, no external diff or text conversion, so any implementation reads the same bytes. Binary files
+    /// appear as a one-line notice. A reviewer reads it; nothing is applied from it.
+    fn diff_text(&self, dir: &Path, base: &str, head: &str) -> Result<String> {
+        let _ = (dir, base, head);
+        Err(VcsError::Invalid(format!(
+            "{} makes no text diffs",
             self.name()
         )))
     }

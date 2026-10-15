@@ -4,8 +4,9 @@
 //!
 //! It exits (status 0) on the first round that has events, one line per event:
 //!
-//! - `MERGED #n`: a PR seen open earlier in this run has merged; the pruner then runs;
-//! - `CLOSED #n`: closed without a merge; the pruner then runs;
+//! - `MERGED #n`: a PR seen open earlier in this run has merged; the pruner then runs on that PR's
+//!   branch only;
+//! - `CLOSED #n`: closed without a merge; the pruner then runs on that PR's branch only;
 //! - `CONFLICT #n`: the head conflicts with the base, and GitHub then runs no `pull_request` CI at all, so a
 //!   required check never appears and the PR would wait for ever;
 //! - `CI_FAILED #n checks`: a check failed, was cancelled or timed out;
@@ -13,16 +14,21 @@
 //!   last push; also when auto-merge was switched off or `update-branch` failed;
 //! - `GH_ERROR msg`.
 //!
+//! One event does not end the watch: `RETRIGGERED #n`. A PR with auto-merge on, mergeState CLEAN and every
+//! check green that has been idle for more than `--grace` was missed by GitHub's auto-merge; it is switched
+//! off and on again with the same merge method (never merged directly: branch protection still applies). If it
+//! is still open and idle one more grace period later, it is `STALLED` as any other.
+//!
 //! Otherwise `OK watching: …` (`--once`) or `IDLE no open auto-merge PRs`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use clap::Args;
 use serde::Serialize;
 
 use super::Res;
-use super::gh::{GhCli, Github, OpenPr, PrState};
+use super::gh::{GhCli, Github, OpenPr, PrState, merge_flag};
 use super::git::GitCli;
 use super::prune::{self, Kind, Outcome, Scope};
 
@@ -40,6 +46,8 @@ pub enum EventKind {
     CiFailed,
     /// Nothing pending and not merging.
     Stalled,
+    /// Auto-merge was switched off and on again; the watch goes on.
+    Retriggered,
     /// GitHub could not be asked, or answered something unexpected.
     GhError,
 }
@@ -59,6 +67,9 @@ pub struct Event {
     /// For `CI_FAILED`: the checks.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<String>,
+    /// For `MERGED` and `CLOSED`: the head branch, which the pruner is then limited to.
+    #[serde(skip)]
+    pub branch: String,
 }
 
 impl Event {
@@ -68,6 +79,14 @@ impl Event {
             pr,
             detail: detail.into(),
             checks: Vec::new(),
+            branch: String::new(),
+        }
+    }
+
+    fn finished(kind: EventKind, pr: u64, branch: String) -> Self {
+        Self {
+            branch,
+            ..Self::new(kind, Some(pr), "")
         }
     }
 
@@ -79,6 +98,7 @@ impl Event {
             EventKind::Conflict => "CONFLICT",
             EventKind::CiFailed => "CI_FAILED",
             EventKind::Stalled => "STALLED",
+            EventKind::Retriggered => "RETRIGGERED",
             EventKind::GhError => "GH_ERROR",
         };
         let pr = self.pr.map(|n| format!(" #{n}")).unwrap_or_default();
@@ -150,6 +170,7 @@ pub fn round(
     repo: &str,
     only: &BTreeSet<u64>,
     seen: &mut BTreeSet<u64>,
+    retriggered: &mut BTreeMap<u64, i64>,
     now: i64,
     grace: i64,
 ) -> Result<Round, Event> {
@@ -164,7 +185,7 @@ pub fn round(
     {
         open.insert(pr.number);
         seen.insert(pr.number);
-        if let Some(e) = judge(gh, repo, pr, now, grace) {
+        if let Some(e) = judge(gh, repo, pr, retriggered, now, grace) {
             events.push(e);
         }
     }
@@ -176,12 +197,15 @@ pub fn round(
         .collect::<Vec<_>>()
     {
         events.push(match gh.pr_state(repo, n) {
-            Ok(PrState::Merged) => Event::new(EventKind::Merged, Some(n), ""),
-            Ok(PrState::Closed) => Event::new(EventKind::Closed, Some(n), ""),
-            Ok(PrState::Open) => Event::new(EventKind::Stalled, Some(n), "auto-merge was disabled"),
+            Ok((PrState::Merged, b)) => Event::finished(EventKind::Merged, n, b),
+            Ok((PrState::Closed, b)) => Event::finished(EventKind::Closed, n, b),
+            Ok((PrState::Open, _)) => {
+                Event::new(EventKind::Stalled, Some(n), "auto-merge was disabled")
+            }
             Err(e) => Event::new(EventKind::GhError, Some(n), e.to_string()),
         });
         seen.remove(&n);
+        retriggered.remove(&n);
     }
     Ok(Round {
         events,
@@ -191,7 +215,14 @@ pub fn round(
 
 /// The verdict on one open PR. A conflicting PR gets no `pull_request` CI, so its required check never
 /// appears: it is reported before anything is waited for.
-fn judge(gh: &dyn Github, repo: &str, pr: &OpenPr, now: i64, grace: i64) -> Option<Event> {
+fn judge(
+    gh: &dyn Github,
+    repo: &str,
+    pr: &OpenPr,
+    retriggered: &mut BTreeMap<u64, i64>,
+    now: i64,
+    grace: i64,
+) -> Option<Event> {
     let n = Some(pr.number);
     if pr.mergeable == "CONFLICTING" {
         return Some(Event::new(
@@ -220,6 +251,18 @@ fn judge(gh: &dyn Github, repo: &str, pr: &OpenPr, now: i64, grace: i64) -> Opti
     }
     let age = now - pr.pushed;
     if pr.running + pr.pending == 0 && age > grace {
+        // CLEAN and green but idle: GitHub missed the merge. Switch auto-merge off and on once per grace
+        // period; the second time round it is a stall like any other.
+        let last = retriggered.get(&pr.number).copied();
+        if pr.merge_state == "CLEAN" && last.is_none_or(|t| now - t <= grace) {
+            if last.is_some() {
+                return None;
+            }
+            if merge_flag(&pr.merge_method).is_some() {
+                retriggered.insert(pr.number, now);
+                return Some(retrigger(gh, repo, pr));
+            }
+        }
         return Some(Event::new(
             EventKind::Stalled,
             n,
@@ -230,6 +273,26 @@ fn judge(gh: &dyn Github, repo: &str, pr: &OpenPr, now: i64, grace: i64) -> Opti
         ));
     }
     None
+}
+
+/// Auto-merge off, then at once on again with the same method. Failing to re-enable leaves it off, and says so.
+fn retrigger(gh: &dyn Github, repo: &str, pr: &OpenPr) -> Event {
+    let n = Some(pr.number);
+    if let Err(e) = gh.disable_auto_merge(repo, pr.number) {
+        return Event::new(
+            EventKind::Stalled,
+            n,
+            format!("clean and idle, and disabling auto-merge to retrigger it failed: {e}"),
+        );
+    }
+    match gh.enable_auto_merge(repo, pr.number, &pr.merge_method) {
+        Ok(()) => Event::new(EventKind::Retriggered, n, ""),
+        Err(e) => Event::new(
+            EventKind::Stalled,
+            n,
+            format!("auto-merge is now OFF: re-enabling it after the retrigger failed: {e}"),
+        ),
+    }
 }
 
 /// How `watch` runs.
@@ -248,32 +311,56 @@ pub struct Watch<'a> {
     pub once: bool,
 }
 
-/// Rounds until one has events (or nothing is watched, or `once`). After a merge or a close, `prune` runs and
-/// what it reports is shown, except that open or PR-less branches are not news.
+/// Rounds until one has events (or nothing is watched, or `once`). After a merge or a close, `prune` runs on the
+/// head branches of the PRs that finished, and what it reports is shown, except that open or PR-less branches are not news.
 pub fn watch(
     w: &Watch,
     now: &dyn Fn() -> i64,
     sleep: &dyn Fn(Duration),
-    prune: &mut dyn FnMut() -> Res<Vec<Outcome>>,
+    prune: &mut dyn FnMut(&[String]) -> Res<Vec<Outcome>>,
     emit: &mut dyn FnMut(Line),
 ) {
     let mut seen = BTreeSet::new();
+    let mut retriggered = BTreeMap::new();
     loop {
-        let r = match round(w.gh, w.repo, &w.only, &mut seen, now(), w.grace) {
+        let mut r = match round(
+            w.gh,
+            w.repo,
+            &w.only,
+            &mut seen,
+            &mut retriggered,
+            now(),
+            w.grace,
+        ) {
             Ok(r) => r,
             Err(e) => return emit(Line::Event(e)),
         };
+        // A retrigger is news but not an end: say it and keep watching.
+        let (news, events): (Vec<_>, Vec<_>) = r
+            .events
+            .into_iter()
+            .partition(|e| e.kind == EventKind::Retriggered);
+        r.events = events;
+        for e in news {
+            emit(Line::Event(e));
+        }
         if !r.events.is_empty() {
-            let freed = r
+            // Only the branches of the PRs that finished in this round: other sessions' worktrees are theirs
+            // to prune (`han dev prune` with no branch does the full sweep). No known branch, no pruning, as
+            // an empty filter would mean every branch.
+            let finished: Vec<String> = r
                 .events
                 .iter()
-                .any(|e| matches!(e.kind, EventKind::Merged | EventKind::Closed));
+                .filter(|e| matches!(e.kind, EventKind::Merged | EventKind::Closed))
+                .map(|e| e.branch.clone())
+                .filter(|b| !b.is_empty())
+                .collect();
             for e in r.events {
                 emit(Line::Event(e));
             }
             // A merge frees its worktree, Rust target and branch; the pruner keeps anything dirty or unpushed.
-            if freed {
-                match prune() {
+            if !finished.is_empty() {
+                match prune(&finished) {
                     Ok(outcomes) => outcomes
                         .into_iter()
                         .filter(|o| !matches!(o.kind, Kind::KeptOpen | Kind::KeptNoPr))
@@ -336,9 +423,13 @@ pub fn run(a: PrsArgs) -> Res<()> {
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
     };
     let git: &GitCli = &r.git;
-    let mut prune_all = || {
+    let mut prune_all = |branches: &[String]| {
         let mut out = Vec::new();
-        prune::prune(git, &GhCli, &r.repo, &r.cfg, &mut |o| out.push(o))?;
+        let cfg = prune::Config {
+            only: branches.to_vec(),
+            ..r.cfg.clone()
+        };
+        prune::prune(git, &GhCli, &r.repo, &cfg, &mut |o| out.push(o))?;
         Ok(out)
     };
     watch(&w, &now, &std::thread::sleep, &mut prune_all, &mut |l| {
@@ -365,6 +456,7 @@ mod tests {
             running: 1,
             pending: 0,
             failed: Vec::new(),
+            merge_method: "SQUASH".into(),
         }
     }
 
@@ -377,6 +469,18 @@ mod tests {
 
     /// Runs `watch` with a clock that never moves; returns the lines and how often it slept.
     fn run_watch(gh: &FakeGh, only: &[u64], once: bool, prune: Vec<Outcome>) -> (Vec<Line>, u32) {
+        let (lines, slept, _) = run_watch_branches(gh, only, once, prune);
+        (lines, slept)
+    }
+
+    /// Like `run_watch`; also returns the branches the pruner was limited to.
+    fn run_watch_branches(
+        gh: &FakeGh,
+        only: &[u64],
+        once: bool,
+        prune: Vec<Outcome>,
+    ) -> (Vec<Line>, u32, Vec<String>) {
+        let asked = RefCell::new(Vec::new());
         let slept = Cell::new(0);
         let lines = RefCell::new(Vec::new());
         let pruned = Cell::new(false);
@@ -392,13 +496,14 @@ mod tests {
             &w,
             &|| NOW,
             &|_| slept.set(slept.get() + 1),
-            &mut || {
+            &mut |branches| {
                 assert!(!pruned.replace(true), "pruned twice");
+                asked.borrow_mut().extend_from_slice(branches);
                 Ok(prune.clone())
             },
             &mut |l| lines.borrow_mut().push(l),
         );
-        (lines.into_inner(), slept.get())
+        (lines.into_inner(), slept.get(), asked.into_inner())
     }
 
     fn texts(lines: &[Line]) -> Vec<String> {
@@ -441,6 +546,110 @@ mod tests {
         p.pending = 1;
         let (lines, _) = run_watch(&gh(vec![vec![p]]), &[], true, vec![]);
         assert_eq!(texts(&lines), ["OK watching: 5"]);
+    }
+
+    /// A green, CLEAN PR that GitHub did not merge.
+    fn missed(n: u64, idle: i64) -> OpenPr {
+        let mut p = pr(n);
+        p.merge_state = "CLEAN".into();
+        p.running = 0;
+        p.pushed = NOW - idle;
+        p.merge_method = "REBASE".into();
+        p
+    }
+
+    /// `watch` over several rounds with a clock that reads `times` (one per round); returns the lines.
+    fn run_clock(g: &FakeGh, times: &[i64]) -> Vec<Line> {
+        let round = Cell::new(0);
+        let lines = RefCell::new(Vec::new());
+        let w = Watch {
+            gh: g,
+            repo: "o/n",
+            only: BTreeSet::new(),
+            grace: 900,
+            interval: Duration::from_secs(1),
+            once: false,
+        };
+        watch(
+            &w,
+            &|| times[round.get().min(times.len() - 1)],
+            &|_| round.set(round.get() + 1),
+            &mut |_| Ok(Vec::new()),
+            &mut |l| lines.borrow_mut().push(l),
+        );
+        lines.into_inner()
+    }
+
+    #[test]
+    fn a_clean_green_idle_pr_is_retriggered_once_then_stalls_a_grace_period_later() {
+        let g = gh(vec![vec![missed(116, 901)]]);
+        let lines = run_clock(&g, &[NOW, NOW + 60, NOW + 900, NOW + 901]);
+        assert_eq!(
+            *g.toggled.lock().unwrap(),
+            ["off #116", "on #116 REBASE"],
+            "retriggered once, with the same method"
+        );
+        let t = texts(&lines);
+        assert_eq!(t[0], "RETRIGGERED #116");
+        assert_eq!(
+            lines[0].json(),
+            serde_json::json!({"event": "RETRIGGERED", "pr": 116})
+        );
+        assert!(
+            t[1].starts_with("STALLED #116 mergeable=MERGEABLE mergeState=CLEAN"),
+            "{t:?}"
+        );
+        assert_eq!(t[2], "watching: 116");
+        assert_eq!(t.len(), 3);
+    }
+
+    #[test]
+    fn a_failed_re_enable_stalls_and_says_auto_merge_is_off() {
+        let mut g = gh(vec![vec![missed(116, 901)]]);
+        g.enable_fails = true;
+        let (lines, _) = run_watch(&g, &[], false, vec![]);
+        assert_eq!(
+            texts(&lines)[0],
+            "STALLED #116 auto-merge is now OFF: re-enabling it after the retrigger failed: enable refused"
+        );
+        assert_eq!(g.toggled.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_pr_with_pending_checks_or_inside_the_grace_period_is_not_retriggered() {
+        let mut p = missed(1, 99_999);
+        p.pending = 1;
+        let mut q = missed(2, 99_999);
+        q.running = 1;
+        let g = gh(vec![vec![p, q, missed(3, 900)]]);
+        let (lines, _) = run_watch(&g, &[], true, vec![]);
+        assert_eq!(texts(&lines), ["OK watching: 1 2 3"]);
+        assert!(g.toggled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_blocked_idle_pr_and_one_with_an_unknown_method_stall_without_a_retrigger() {
+        let mut blocked = missed(1, 901);
+        blocked.merge_state = "BLOCKED".into();
+        let mut odd = missed(2, 901);
+        odd.merge_method = String::new();
+        let g = gh(vec![vec![blocked, odd]]);
+        let (lines, _) = run_watch(&g, &[], false, vec![]);
+        let t = texts(&lines);
+        assert!(t[0].starts_with("STALLED #1 "), "{t:?}");
+        assert!(t[1].starts_with("STALLED #2 "), "{t:?}");
+        assert!(g.toggled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_behind_pr_still_goes_to_update_branch_not_a_retrigger() {
+        let mut p = missed(3, 99_999);
+        p.merge_state = "BEHIND".into();
+        let g = gh(vec![vec![p]]);
+        let (lines, _) = run_watch(&g, &[], true, vec![]);
+        assert_eq!(*g.updated.lock().unwrap(), [3]);
+        assert!(g.toggled.lock().unwrap().is_empty());
+        assert_eq!(texts(&lines), ["OK watching: 3"]);
     }
 
     #[test]
@@ -490,6 +699,23 @@ mod tests {
                 "watching: 2"
             ]
         );
+    }
+
+    #[test]
+    fn only_the_branches_of_the_finished_prs_are_pruned() {
+        // #1 and #2 both merged, but only #1 was watched; #2's worktree belongs to another session.
+        let g = gh(vec![vec![pr(1)], vec![]]);
+        {
+            let mut s = g.states.lock().unwrap();
+            s.insert(1, PrState::Merged);
+            s.insert(2, PrState::Merged);
+            let mut b = g.branches.lock().unwrap();
+            b.insert(1, "feat/one".into());
+            b.insert(2, "feat/two".into());
+        }
+        let (lines, _, asked) = run_watch_branches(&g, &[1], false, vec![]);
+        assert_eq!(texts(&lines)[0], "MERGED #1");
+        assert_eq!(asked, ["feat/one"]);
     }
 
     #[test]
