@@ -63,7 +63,8 @@ A clean three-way merge in a shared file is not path-disjoint. It changes what t
 | `queued` | a lane slot | lane | 30 min × lane depth / batch size |
 | `testing` | a speculative run that includes it | lane | the repo's CI timeout + 10 min |
 | `landing` | the claim and the ref compare-and-swap | lane | `launchWindow` |
-| `landed`, `rejected`, `cancelled` | final | | |
+| `landed` | the post-merge suite on a target that contains it (§4, two stages) | lane | the full suite's timeout + 30 min |
+| `confirmed`, `reverted`, `rejected`, `cancelled` | final | | |
 
 Faces and the node's views derive **`stalled`** the way they derive `stale`: the change has nothing pending, or it is past its state's deadline. Its agent, the agent's operator and the path owner are told as data. `rejected` always carries its reason as data:
 - `conflict`, with a conflict record (§5);
@@ -71,6 +72,8 @@ Faces and the node's views derive **`stalled`** the way they derive `stale`: the
 - `policy`;
 - `dependency`, naming the dependency that failed;
 - `timeout`.
+
+`reverted` carries the post-merge run that failed, as evidence, and the revert's own changeset.
 
 The **liveness invariant**: every changeset is in a state with something pending and within its deadline, or it is final, or it is `stalled` and someone has been told. Conformance tests this invariant, not single events.
 
@@ -82,7 +85,24 @@ States are folded from the log (proposal, approvals, claim, outcome) and from th
 
 **Order.** Changes leave `proposed` for `queued` in the sequencer's order of the entry that completed their approval. Order is deterministic and global across lanes, and every replica agrees on it.
 
-**Speculative batches.** The lane takes up to B queued changes c1…cB. It rebases them in order onto the ref's current target T, applying each change's path-disjoint check against T plus the changes before it. A change that fails the check leaves the batch and is gated again (§2). The lane then runs the repo's checks on the prefixes c1, c1+c2, …, up to S runs in parallel. Testing happens in executor-private workspaces and is not a world action, so it needs no claim.
+**Two stages (decided 2026-10-15).** Anthropic's experience at about 30,000 merges a day is that a full pre-merge queue does not hold at agent scale ("a proper merge queue… doesn't make much sense"); they test post-merge and pre-deploy. HAN splits each repo's checks in two:
+- **Pre-merge** (`fast`): formatting, lints, and the tests of the crates the change affects plus their reverse dependencies. These run on the exact commit that lands. They are the lane's gate and the evidence below.
+- **Post-merge** (`full`): the whole suite, including end-to-end and dogfood tests, on a target that contains the change. It can cover several landed changes at once.
+  - Green: those changes become `confirmed`.
+  - Red: the lane bisects among the changes the run covered, as below. The culprit is reverted, as a pre-approved effect of the lane's executor (PLAN.md §12 "Optimistic landing"), and becomes `reverted`. A fix-forward task goes to its agent with the failing run as evidence.
+- Which checks are `fast` and which are `full` is per-repo configuration, and the lane's status items show it. A repo with no `full` set treats `landed` as `confirmed`.
+- Deploys stay gated on `confirmed`, never on `landed`.
+
+**Conflict sets (decided 2026-10-15).** One lock per ref would make every change wait on every other. Instead, a change's **test scope** is the set of units whose tests its `fast` checks run (for cargo: the affected crates). Its **conflict set** is the test scope's dependency closure. Two queued changes are **independent** when neither changes a unit in the other's conflict set and they are path-disjoint from each other.
+- Independent changes are tested in parallel, each on the ref's tip T.
+- When the ref has moved from T to T′ only by changes independent of change c, c's `fast` evidence carries to T′: nothing its tests depend on changed. The lane then squash-rebases c onto T′ and lands it without testing again.
+- This is the one place where the landed commit is not the exact commit tested. The evidence names both commits and the independence check, and the post-merge stage covers it.
+- Within a conflict set, the exact-commit rule holds without exception: a change whose conflict set the move touched is tested again on T′.
+- The repo's configuration names the units and how to compute the closure (for cargo, from `cargo metadata`). A change outside every unit (workspace manifests, toolchain, CI configuration) conflicts with everything.
+
+This follows Uber's SubmitQueue, which cut its CI resources by 53% by running changes that cannot conflict in parallel.
+
+**Speculative batches.** Within one conflict set, the lane takes up to B queued changes c1…cB. It rebases them in order onto the ref's current target T, applying each change's path-disjoint check against T plus the changes before it. A change that fails the check leaves the batch and is gated again (§2). The lane then runs the repo's checks on the prefixes c1, c1+c2, …, up to S runs in parallel. Testing happens in executor-private workspaces and is not a world action, so it needs no claim.
 
 **Land.** The lane takes the longest green prefix:
 - it claims each member's effect (X-01…X-09, so `launchWindow` covers only the push, never CI);
@@ -95,7 +115,7 @@ If the compare-and-swap loses (T moved), the lane claims nothing new and starts 
 - red again: it is `rejected` (`test`), with the evidence;
 - green: the culprit is marked flaky, retried once in the next batch, and only then rejected.
 
-B, S and the flake retry count are per-repo settings, and the lane's status items show them.
+B, S and the flake retry count are per-repo settings, and the lane's status items show them. The RECOMMENDED way to size batches is Zuul's window: start at a configured size, grow by one after each green batch, and halve after each red one. A red batch may be split k ways rather than two, as Mergify does, when S allows it.
 
 **Evidence.** A green run is a blob signed by the executor instance key over `{target tree, [deltaDigest…], checks}`. It is the CI evidence for every member, and the land attestation (PLAN.md §10.2) names it.
 
@@ -105,7 +125,13 @@ B, S and the flake retry count are per-repo settings, and the lane's status item
 - the lane pushes each speculative prefix to `refs/heads/han/lane/<ref>/<n>` and reads the check runs (through the webhook relay; polling only as a fallback);
 - it moves the protected branch with the write App, which branch protection lists as allowed to bypass the merge requirements.
 
-GitHub's own merge queue is not used: it can neither do path-disjoint carrying nor `dependsOn`.
+GitHub's own merge queue is not used: it can neither do path-disjoint carrying nor `dependsOn`, and it is only offered to repositories owned by an organization.
+
+**Where checks run.** Checks run behind a `Checks` seam with backends:
+- a **warm runner** the executor controls, with a persistent build directory, so a change rebased onto the last green tree builds incrementally;
+- **GitHub Actions** on the same commit, as a backstop until the warm runner has proven itself.
+
+A warm runner runs only changes proposed by identities with a role in the space and approved through Policy, never code from fork pull requests. GitHub's guidance against self-hosted runners on public repositories is about the second case.
 
 ## 5. Conflicts as data
 
@@ -121,6 +147,29 @@ A rebase or merge simulation that conflicts never writes conflict markers. It re
 `against` names the landed changes that touched the conflicting paths since the base, and their tasks. The resolver agent gets this record and both tasks' intent. It does not get a broken worktree. Its fix is a new proposal with `rebaseOf` (§2). `Vcs::merge_simulate` returns this shape. Overlap tier 3 (PLAN.md §6.6) uses the same record before anything lands.
 
 *Implementation note (git backend).* `Vcs::merge_record` returns the record; `merge_simulate` is the same data in its old `{clean, conflicts: [path]}` shape. `clean` lists the paths the change touches that merge cleanly. `base`, `ours` and `theirs` are tree entries `{mode, id}` (a directory is mode `040000`). `hunks` are filled for `content` conflicts: changes of both sides that overlap or touch in the base form one region, which is a hunk when the two sides' lines differ there. The line merge git itself runs may split a region finer, so the hunks are coarser than git's markers, never finer. Each hunk has an `ours` and a `theirs` candidate whose `contentId` is a blob of that side's lines; the `tool` source is a variant of the same enum and nothing fills it yet. A submodule pointer conflict is `binary`. A symbolic link on any side is `symlink`, taking precedence over the other kinds.
+
+**Resolving: tools first, a model only to rank (proposed 2026-10-15, after a prototype on HAN's own conflicts).** A conflict record is resolved in this order:
+1. **git's merge.**
+2. **mergiraf**, a syntax-aware structural merge. It is optional and must be on `PATH`. It is GPL-3.0-only, so it runs only as a separate process and is never linked; an image that bundles it ships its licence and source offer. Its whole-file result becomes a `fileCandidates` entry `{id, source: tool, verified}`. Where its output aligns with a hunk, it becomes a hunk candidate `{source: {kind: tool, name: "mergiraf", version}}`. A whole-file result counts only once `verified` is `true`: a mergiraf exit status of 0 is not proof. On HAN's #92/#93 conflict in `bindings.rs` it exited 0 and produced code that fails to compile, with two `use super::{}` blocks.
+3. **Deterministic candidate generators**, each recorded as a tool with name and version:
+   - `line_split`: a finer split when every line is changed by at most one side;
+   - an AST-equality check for sides that differ only in formatting;
+   - an import-union generator.
+4. **A model ranks the candidates.** It never writes code. It returns a typed choice of one candidate id, or `needs_human`, as a decision record:
+   - `{requestDigest, selected, probabilities, confidence, reasonCode, backend, model, modelVersion, promptHash, schemaHash}`;
+   - `modelVersion` is a resolved version, never an alias;
+   - the question is asked twice, with the options in opposite order under anonymous labels, and two different answers mean `needs_human`.
+   A decision's trust level is `judged`. It is at most tier-1 evidence and never replaces the tier 2–3 interdiff approval.
+5. **The host builds and tests the chosen result.** It then becomes a new proposal with `rebaseOf` and goes through its gates (§2).
+
+**Triage stays structural.** Whether a predicted conflict is real (overlap tier 3) is decided from structural signals, not by the model.
+
+**Prototype findings.** The prototype was run on HAN's own conflicts:
+- #99/#100 `sandbox/mod.rs`: mergiraf failed, `line_split` was correct, and the model chose it with 0.96 confidence;
+- `agent_start.rs`: mergiraf was correct;
+- `bindings.rs`: mergiraf was wrong, and the model said `needs_human` at 0.35;
+- the model called every case "real" in triage, including the benign ones.
+A call cost about $0.0001. Confidence thresholds come from an evaluation set built from HAN's resolved-conflict history. That set starts with `conformance/merge-cases/` (#118): the three cases above, each with base, ours, theirs, the accepted resolution, and the git, diff3 and mergiraf outputs.
 
 ## 6. Cross-repo `dependsOn`
 
@@ -162,6 +211,9 @@ It keeps a workspace with uncommitted changes, or one whose tip has commits that
 - A batch of 8 with one breaking change lands 7 and rejects the culprit. A flaky failure is retried once before it rejects anything.
 - Two lane instances never land twice, and the standby takes over when the first one's items stop.
 - `dependsOn` across two repos lands in order. A dependency cycle is refused. A rejected dependency rejects the change that depends on it.
+- A change that passes `fast` and breaks `full` lands, is reverted by the lane with the failing run as evidence, and its agent gets a fix-forward task. A change is never `confirmed` before a green `full` run that contains it.
+- Two independent changes (disjoint conflict sets) are tested in parallel and both land without retesting. Two changes in one conflict set are tested in order, the second on the first's landed commit.
+- A mergiraf result that compiles to an error is never chosen: `verified` stays `false` and the record goes to the model or a person (#92/#93 `bindings.rs`).
 
 ## Open
 
