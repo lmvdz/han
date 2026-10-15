@@ -97,6 +97,32 @@ impl World {
         advance(&self.work, &self.remote, file, content)
     }
 
+    /// Two commits off the base on one branch, the second on top of the first and editing the same file:
+    /// the changesets of a follow-up proposal. Returns `(first, second)`.
+    fn chain(&self, branch: &str) -> (String, String) {
+        git(&self.work, &["checkout", "-q", "-b", branch, &self.base]);
+        std::fs::write(self.work.join("a.txt"), "a, first\n").unwrap();
+        git(&self.work, &["commit", "-q", "-am", "first"]);
+        let first = git(&self.work, &["rev-parse", "HEAD"]);
+        std::fs::write(self.work.join("a.txt"), "a, second\n").unwrap();
+        std::fs::write(self.work.join("b.txt"), "b, second\n").unwrap();
+        git(&self.work, &["add", "-A"]);
+        git(&self.work, &["commit", "-q", "-m", "second"]);
+        let second = git(&self.work, &["rev-parse", "HEAD"]);
+        git(&self.work, &["checkout", "-q", "main"]);
+        (first, second)
+    }
+
+    /// Whether the remote holds the commit.
+    fn remote_has(&self, commit: &str) -> bool {
+        Command::new("git")
+            .current_dir(&self.remote)
+            .args(["cat-file", "-e", commit])
+            .status()
+            .unwrap()
+            .success()
+    }
+
     fn tip(&self) -> String {
         git(&self.remote, &["rev-parse", REF])
     }
@@ -206,6 +232,9 @@ impl Rig {
                 appear_secs: 300,
                 rerun: 0,
             },
+            // The tests that move the clock read the items of a change state by state: the periodic
+            // publishing is switched on where it is the subject.
+            republish_secs: 0,
             ..RepoTarget::new("local:origin", w.remote.to_string_lossy().into_owned())
         };
         tweak(&mut repo);
@@ -265,16 +294,26 @@ impl Rig {
 
     /// The plan of landing `to` (a head from `World::change`), with its bundle in the space.
     fn plan(&self, to: &str, extra: Value) -> Value {
+        let base = self.w.base.clone();
+        self.plan_from(&base, &base, to, extra)
+    }
+
+    /// The plan of landing `base..to`, with the bundle `bundle_base..to` in the space (`bundleBase` is named
+    /// when it is not the base).
+    fn plan_from(&self, base: &str, bundle_base: &str, to: &str, extra: Value) -> Value {
         let delta = self
             .vcs
-            .delta(&self.w.work, &self.w.base, to)
+            .delta(&self.w.work, base, to)
             .unwrap()
             .digest()
             .unwrap();
-        let bundle = self.vcs.bundle(&self.w.work, &self.w.base, to).unwrap();
+        let bundle = self.vcs.bundle(&self.w.work, bundle_base, to).unwrap();
         let hash = self.node.put_blob(&bundle);
-        let mut args = json!({"ref": REF, "base": self.w.base, "to": to, "deltaDigest": delta,
+        let mut args = json!({"ref": REF, "base": base, "to": to, "deltaDigest": delta,
             "tier": 1, "rebase": "path-disjoint", "title": format!("Land {}", &to[..7])});
+        if bundle_base != base {
+            args["bundleBase"] = json!(bundle_base);
+        }
         for (k, v) in extra.as_object().cloned().unwrap_or_default() {
             args[k] = v;
         }
@@ -1095,6 +1134,164 @@ async fn depends_on_orders_the_changes_and_a_rejected_dependency_rejects() {
     );
 }
 
+/// A follow-up proposal has its predecessor's `to` as its base, and the lane squashes: that `to` never reaches
+/// the remote. The host bundles from the session's first base, so the bundle imports on an executor that never
+/// saw the first proposal, as after a restart that lost the executor's store or on another machine.
+#[tokio::test]
+async fn a_dependent_proposal_lands_on_an_executor_that_never_imported_the_first() {
+    let mut rig = Rig::new();
+    rig.checks.fast(green());
+    let (a, b) = rig.w.chain("chain");
+    let base = rig.w.base.clone();
+    let pa = rig.node.propose(&rig.plan(&a, json!({})));
+    rig.node.approve(&pa);
+    let (exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&pa)["state"], "confirmed");
+    // The squashed commit is on the remote; the proposal's own `to` never was.
+    assert!(!rig.w.remote_has(&a));
+    drop(lane);
+    drop(exec);
+
+    // Another executor: an object store of its own, no memory of the first proposal. The follow-up is based
+    // on the first `to`, and its bundle starts at the base the remote holds.
+    rig.vcs = Arc::new(GitVcs::new(rig.w.root.join("store-2")));
+    let pb = rig.node.propose(&rig.plan_from(
+        &a,
+        &base,
+        &b,
+        json!({"dependsOn": [{"repo": "local:origin", "proposal": pa}]}),
+    ));
+    rig.node.approve(&pb);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(
+        rig.states(&pb).last().unwrap(),
+        "confirmed",
+        "{:?}",
+        rig.last(&pb)
+    );
+    assert_eq!(rig.w.show("main", "a.txt"), "a, second");
+    assert_eq!(rig.w.show("main", "b.txt"), "b, second");
+    let log = git(&rig.w.remote, &["log", "--format=%s", "-2", "main"]);
+    assert_eq!(
+        log.lines().collect::<Vec<_>>(),
+        [format!("Land {}", &b[..7]), format!("Land {}", &a[..7])]
+    );
+    assert!(!rig.w.remote_has(&b));
+}
+
+/// The failure the fix is for: a bundle that needs the first `to` imports only where the first was imported.
+#[tokio::test]
+async fn a_bundle_that_needs_the_first_to_does_not_import_on_another_executor() {
+    let mut rig = Rig::new();
+    rig.checks.fast(green());
+    let (a, b) = rig.w.chain("chain");
+    let pa = rig.node.propose(&rig.plan(&a, json!({})));
+    rig.node.approve(&pa);
+    let (exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&pa)["state"], "confirmed");
+    drop(lane);
+    drop(exec);
+    rig.vcs = Arc::new(GitVcs::new(rig.w.root.join("store-2")));
+    let pb = rig.node.propose(&rig.plan_from(
+        &a,
+        &a,
+        &b,
+        json!({"dependsOn": [{"repo": "local:origin", "proposal": pa}]}),
+    ));
+    rig.node.approve(&pb);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    let last = rig.last(&pb);
+    assert_eq!(last["state"], "queued", "{last}");
+    assert!(
+        last["stalled"]
+            .as_str()
+            .unwrap()
+            .contains("does not hold the base"),
+        "{last}"
+    );
+}
+
+/// The home does not replay stream items: a host that was away when one went out learns the state from the
+/// next. A change that is not final is published again, with its `seq`, every `republish_secs`; after a restart
+/// every change is, final ones once.
+#[tokio::test]
+async fn a_change_is_published_again_and_after_a_restart_every_change_once_more() {
+    let rig = Rig::with(|r| r.republish_secs = 60);
+    rig.checks.fast(vec![run("quick", "in_progress")]);
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    let (exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    let n = rig.items(&p).len();
+    assert_eq!(rig.last(&p)["state"], "testing");
+    let seq = rig.last(&p)["seq"].clone();
+
+    // Not due yet, then due: one more item, the same state and `seq`.
+    rig.wall.advance(30);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), n);
+    rig.wall.advance(31);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), n + 1);
+    let again = rig.last(&p);
+    assert_eq!((&again["state"], &again["seq"]), (&json!("testing"), &seq));
+    assert_ne!(again["at"], rig.items(&p)[n - 1]["at"]);
+    // And not again until another interval has passed.
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), n + 1);
+
+    // Final: published as it happens, and not on a timer.
+    rig.checks.fast(green());
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&p)["state"], "confirmed");
+    let m = rig.items(&p).len();
+    rig.wall.advance(600);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), m);
+
+    // A restart: the final item goes out once more, with the same `seq`, and then no more.
+    let seq = rig.last(&p)["seq"].clone();
+    drop(lane);
+    drop(exec);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), m + 1);
+    let last = rig.last(&p);
+    assert_eq!((&last["state"], &last["seq"]), (&json!("confirmed"), &seq));
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), m + 1);
+}
+
+#[tokio::test]
+async fn an_old_final_change_is_not_published_again_after_a_restart_and_zero_disables_the_timer() {
+    let rig = Rig::with(|r| {
+        r.republish_secs = 0;
+        r.deadlines.testing_secs = 10_000_000;
+    });
+    rig.checks.fast(vec![run("quick", "in_progress")]);
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    let (exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    let n = rig.items(&p).len();
+    rig.wall.advance(100_000);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), n, "0 never publishes on a timer");
+    rig.checks.fast(green());
+    lane.pass().await.unwrap();
+    let m = rig.items(&p).len();
+    assert_eq!(rig.last(&p)["state"], "confirmed");
+    // Past the week a final item is kept: the log has it.
+    rig.wall.advance(8 * 86_400);
+    drop(lane);
+    drop(exec);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.items(&p).len(), m);
+}
+
 #[tokio::test]
 async fn a_depends_on_cycle_rejects_everything_on_it() {
     let rig = Rig::new();
@@ -1225,6 +1422,7 @@ fn the_config_is_per_repository_and_defaults_are_off() {
         (30, 300, 0)
     );
     assert_eq!(r.lane_branch_prefix, "han/lane/");
+    assert_eq!(r.republish_secs, 60);
     assert_eq!(r.deadlines, Deadlines::default());
     assert_eq!(
         (

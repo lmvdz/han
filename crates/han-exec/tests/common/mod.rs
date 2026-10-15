@@ -141,6 +141,7 @@ impl FakeNode {
             approved_at: None,
             seq,
             head: seq,
+            ended: None,
         });
         id
     }

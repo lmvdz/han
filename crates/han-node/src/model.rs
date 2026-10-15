@@ -283,6 +283,27 @@ pub(crate) struct EffectInfo {
     pub session: Option<String>,
     /// Notes the approvers wrote, as `(author, text)`.
     pub notes: Vec<(String, String)>,
+    /// How it ended, once its phase is `Done`.
+    pub ended: Option<crate::api::EffectEnd>,
+}
+
+/// The `evidence` of a record's content, a `BlobRef`.
+fn evidence_of(content: Option<&Value>) -> Option<crate::api::EvidenceRef> {
+    let e = content?.get("evidence")?;
+    Some(crate::api::EvidenceRef {
+        hash: e.get("hash")?.as_str()?.to_owned(),
+        size: e.get("size")?.as_u64()?,
+        media_type: e.get("type")?.as_str()?.to_owned(),
+    })
+}
+
+fn result_name(r: EffectResult) -> &'static str {
+    match r {
+        EffectResult::Succeeded => "succeeded",
+        EffectResult::Failed => "failed",
+        EffectResult::Cancelled => "cancelled",
+        EffectResult::Unknown => "unknown",
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -851,6 +872,7 @@ impl SpaceModel {
                         last_claim: None,
                         session,
                         notes: Vec::new(),
+                        ended: None,
                     },
                 );
             }
@@ -879,6 +901,17 @@ impl SpaceModel {
                 if let Some(e) = self.effects.get_mut(&c.proposal) {
                     if e.phase == Phase::Open {
                         e.phase = Phase::Done;
+                        e.ended = Some(crate::api::EffectEnd {
+                            by: "cancel".into(),
+                            result: None,
+                            reason: rec
+                                .content
+                                .as_ref()
+                                .and_then(|c| c.get("reason"))
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            evidence: evidence_of(rec.content.as_ref()),
+                        });
                     }
                     touch = e.session.clone().map(|session| Touch {
                         session,
@@ -933,6 +966,14 @@ impl SpaceModel {
                         (EffectResult::Unknown, _) if e.repeatable => Phase::Open,
                         _ => Phase::Done,
                     };
+                    if e.phase == Phase::Done {
+                        e.ended = Some(crate::api::EffectEnd {
+                            by: "outcome".into(),
+                            result: Some(result_name(o.result).into()),
+                            reason: None,
+                            evidence: evidence_of(rec.content.as_ref()),
+                        });
+                    }
                 }
             }
             Body::SessionInput(i) => {
@@ -973,6 +1014,18 @@ impl SpaceModel {
             Body::Resolve(r) => {
                 if let Some(e) = self.effects.get_mut(&r.proposal) {
                     e.phase = Phase::Done;
+                    e.ended = Some(crate::api::EffectEnd {
+                        by: "resolve".into(),
+                        result: Some(
+                            match r.result {
+                                han_core::policy::ResolveResult::Succeeded => "succeeded",
+                                han_core::policy::ResolveResult::Failed => "failed",
+                            }
+                            .into(),
+                        ),
+                        reason: None,
+                        evidence: evidence_of(rec.content.as_ref()),
+                    });
                     touch = e.session.clone().map(|session| Touch {
                         session,
                         summary: "resolved the proposal".into(),
@@ -2237,6 +2290,7 @@ impl SpaceModel {
                         approved_at: e.approved.as_ref().map(|(_, t)| t.clone()),
                         seq: e.seq,
                         head: self.head,
+                        ended: e.ended.clone(),
                     }),
                 )
             })

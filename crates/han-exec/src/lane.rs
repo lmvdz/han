@@ -72,6 +72,12 @@ use crate::{ExecError, Executor, IdempotencyKey, LaneInstruction, PlanError, Rep
 /// The profile the lane's items carry.
 pub const PROFILE: &str = "han.land/1";
 
+/// How long a final change's item is sent again after a restart, in seconds (a week).
+const FINAL_REPUBLISH_SECS: i64 = 7 * 86_400;
+
+/// How often a change that is not final has its item sent again when its repository does not say.
+pub const DEFAULT_REPUBLISH_SECS: u64 = 60;
+
 /// A lost claim attempt that did not start (not a lost compare-and-swap) is tried again this many times.
 const MAX_NOT_STARTED: u32 = 3;
 
@@ -227,6 +233,9 @@ struct Mem {
     sessions: HashMap<String, String>,
     /// A claim was made since the effects were read.
     rows_stale: bool,
+    /// Proposal → wall time its item last reached the stream in this process. Empty after a restart, which is
+    /// what makes every change's item go out once more.
+    last_item: HashMap<String, i64>,
 }
 
 /// The landing lane of an executor.
@@ -435,8 +444,39 @@ impl Lane {
         let body = self.body(c);
         if self.stream(&c.space, body).await {
             c.published = c.seq;
+            lock(&self.mem)
+                .last_item
+                .insert(c.proposal.clone(), self.wall.now_secs());
         }
         self.put(c)
+    }
+
+    /// Sends the change's current item again, with its unchanged `seq`: the home does not replay stream items,
+    /// so a host that was away when the item went out, or that never saw it, learns the state from the next
+    /// one. A change that is not final is sent again every `republish_secs`; every change, final ones too, is
+    /// sent once after a restart (a final one only while it is younger than [`FINAL_REPUBLISH_SECS`]: older
+    /// ones are in the log, which the host reads as well).
+    async fn republish(&self, c: &Change, now: i64) {
+        if c.seq == 0 || c.published < c.seq {
+            return; // `publish` is still to send it
+        }
+        let last = lock(&self.mem).last_item.get(&c.proposal).copied();
+        let every = self
+            .exec
+            .config()
+            .repo(&c.repo)
+            .map_or(DEFAULT_REPUBLISH_SECS, |r| r.republish_secs);
+        let due = match last {
+            None => !c.state.is_final() || now - c.entered <= FINAL_REPUBLISH_SECS,
+            Some(t) => {
+                !c.state.is_final()
+                    && every > 0
+                    && now - t >= i64::try_from(every).unwrap_or(i64::MAX)
+            }
+        };
+        if due && self.stream(&c.space, self.body(c)).await {
+            lock(&self.mem).last_item.insert(c.proposal.clone(), now);
+        }
     }
 
     async fn upload(&self, space: &str, text: &str) -> Option<Value> {
@@ -825,6 +865,7 @@ impl Lane {
                 self.publish(c).await?;
             }
             self.send_cancel(c).await?;
+            self.republish(c, now).await;
         }
         self.lane_items(&all, now).await;
         Ok(rep)
@@ -1154,7 +1195,10 @@ impl Lane {
         let Some(bytes) = ctx.args_blob.clone() else {
             return Ok(Prep::Retry("the changeset's bundle is not at hand".into()));
         };
-        let dir = match vcs.import_bundle(&repo.remote, auth.as_ref(), &bytes, base, to) {
+        // The bundle needs a commit the remote holds (a dependent proposal's `base` is its predecessor's `to`,
+        // which the lane squashed and never pushed).
+        let needs = crate::actions::bundle_base(&plan);
+        let dir = match vcs.import_bundle(&repo.remote, auth.as_ref(), &bytes, &needs, to) {
             Ok(d) => d,
             Err(e) => return Ok(Prep::Retry(format!("importing the bundle: {e}"))),
         };

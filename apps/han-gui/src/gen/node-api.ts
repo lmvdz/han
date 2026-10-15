@@ -1415,6 +1415,24 @@ needed: Needed,
  */
 agent_text: Array<AgentText>, };
 
+export type EffectEnd = { 
+/**
+ * `cancel` (an `effect.cancel` took it from `open`), `outcome` or `resolve`.
+ */
+by: string, 
+/**
+ * The result of an `outcome` or `resolve`: `succeeded`, `failed`, `cancelled` or `unknown`.
+ */
+result?: string, 
+/**
+ * The `reason` of the cancel.
+ */
+reason?: string, 
+/**
+ * The cancel's, outcome's or resolve's `evidence`.
+ */
+evidence?: EvidenceRef, };
+
 export type EffectRow = { 
 /**
  * Orders and identifies the row: the space and the proposal's seq, zero-padded.
@@ -1500,7 +1518,11 @@ seq: number,
 /**
  * The head of the space when the row was made (an executor claims each effect at most once per head).
  */
-head: number, };
+head: number, 
+/**
+ * How the effect ended, once its phase is `done`.
+ */
+ended?: EffectEnd, };
 
 export type GuardRow = { 
 /**

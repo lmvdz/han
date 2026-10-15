@@ -10,9 +10,9 @@ use std::time::Duration;
 use han_exec::{Action, ExecConfig, RepoTarget};
 use han_host::driver::builtin;
 use han_host::host::{HostConfig, RepoConfig, SandboxChoice};
-use han_host::land::{Flow, LaneChange, LaneFeed, Pruned};
+use han_host::land::{Flow, LaneChange, LaneFeed, Pruned, SessionLock, sweep_dirs};
 use han_host::sandbox::ShimCommand;
-use han_node::api::BoxFuture;
+use han_node::api::{BoxFuture, EffectEnd, EvidenceRef};
 use han_registry::{FinishSpec, LandFinish, TierRule};
 use han_vcs::{GitVcs, Vcs, WorkspaceSpec};
 use serde_json::{Map, Value, json};
@@ -41,6 +41,26 @@ fn git(dir: &Path, args: &[&str]) -> String {
 struct FakeFeed {
     changes: Mutex<Vec<LaneChange>>,
     blobs: Mutex<Vec<(String, Vec<u8>)>>,
+    /// How the log says effects ended (the Effects view).
+    ended: Mutex<Vec<(String, EffectEnd)>>,
+    /// The lane's items cannot be read.
+    items_fail: Mutex<bool>,
+    /// The Effects view cannot be read.
+    ended_fails: Mutex<bool>,
+}
+
+fn end(
+    by: &str,
+    result: Option<&str>,
+    reason: Option<&str>,
+    evidence: Option<EvidenceRef>,
+) -> EffectEnd {
+    EffectEnd {
+        by: by.into(),
+        result: result.map(str::to_owned),
+        reason: reason.map(str::to_owned),
+        evidence,
+    }
 }
 
 impl FakeFeed {
@@ -61,7 +81,21 @@ impl FakeFeed {
 
 impl LaneFeed for FakeFeed {
     fn changes(&self) -> BoxFuture<'_, Result<Vec<LaneChange>, String>> {
-        Box::pin(async move { Ok(self.changes.lock().unwrap().clone()) })
+        Box::pin(async move {
+            if *self.items_fail.lock().unwrap() {
+                return Err("the stream is away".into());
+            }
+            Ok(self.changes.lock().unwrap().clone())
+        })
+    }
+
+    fn ended(&self) -> BoxFuture<'_, Result<Vec<(String, EffectEnd)>, String>> {
+        Box::pin(async move {
+            if *self.ended_fails.lock().unwrap() {
+                return Err("the view is away".into());
+            }
+            Ok(self.ended.lock().unwrap().clone())
+        })
     }
 
     fn blob<'a>(&'a self, blob: &'a Value) -> BoxFuture<'a, Result<Vec<u8>, String>> {
@@ -462,24 +496,43 @@ fn later_work_is_a_new_changeset_that_depends_on_the_first() {
     assert_eq!(delta.entries.len(), 1);
     assert_eq!(delta.entries[0].path, "src/more.rs");
     assert_eq!(a2["deltaDigest"], delta.digest().unwrap().as_str());
-    // the bundle carries base(=P1's to)..to, and imports on top of what the lane imported for P1
-    let exec_vcs = GitVcs::new(r.session_dir.join("exec-objects"));
+    // the bundle starts at the session's first base (named `bundleBase`), not at P1's `to`: the lane squashes,
+    // so P1's `to` never reaches the remote and a bundle that needed it would import only where P1 was
+    // imported. This one imports on an executor that has seen nothing of P1.
+    assert_eq!(a2["bundleBase"], r.base.as_str());
     let first = r.flow.proposals();
     assert_eq!(first.len(), 1, "the draft is not a proposal yet");
-    // (the lane has P1's commits from its bundle)
-    let b1 = r.vcs.bundle(&r.dir(), &r.base, &to1).unwrap();
-    exec_vcs
-        .import_bundle(&r.origin.to_string_lossy(), None, &b1, &r.base, &to1)
-        .unwrap();
-    exec_vcs
+    let exec_vcs = GitVcs::new(r.session_dir.join("exec-objects"));
+    let imported = exec_vcs
         .import_bundle(
             &r.origin.to_string_lossy(),
             None,
             &d2.bundle,
-            &to1,
+            &r.base,
             a2["to"].as_str().unwrap(),
         )
-        .expect("the second bundle imports on the first");
+        .expect("the second bundle imports on its own");
+    // it holds the plan's base, and the delta of the plan is there to be checked
+    assert_eq!(
+        exec_vcs
+            .delta(&imported, &to1, a2["to"].as_str().unwrap())
+            .unwrap()
+            .digest()
+            .unwrap(),
+        a2["deltaDigest"].as_str().unwrap()
+    );
+    // a bundle that needs P1's `to` is not what the host makes
+    assert!(
+        GitVcs::new(r.session_dir.join("exec-objects-2"))
+            .import_bundle(
+                &r.origin.to_string_lossy(),
+                None,
+                &d2.bundle,
+                &to1,
+                a2["to"].as_str().unwrap(),
+            )
+            .is_err()
+    );
     han_exec::actions::VcsLand
         .plan_check(&d2.plan, &exec_config(&r.origin))
         .expect("the executor accepts the dependent plan");
@@ -872,4 +925,346 @@ fn a_clean_workspace_at_the_proposed_head_prunes_without_a_report() {
     settle_as(&r, "confirmed");
     assert_eq!(r.flow.prune(false, false), Pruned::Removed);
     assert!(r.flow.unlanded().is_none());
+}
+
+// ───────────────────────── missed items: the log settles them ─────────────────────────
+
+fn blob_of(r: &Rig, hash: &str, doc: &Value) -> EvidenceRef {
+    let bytes = serde_json::to_vec(doc).unwrap();
+    let size = bytes.len() as u64;
+    r.feed.blobs.lock().unwrap().push((hash.into(), bytes));
+    EvidenceRef {
+        hash: hash.into(),
+        size,
+        media_type: "application/json".into(),
+    }
+}
+
+#[test]
+fn a_cancel_with_a_lane_reason_settles_a_proposal_whose_item_was_missed() {
+    let r = proposed_rig(on());
+    // The lane said nothing the host heard. The executor's cancel is in the log, with its proof.
+    let record = json!({"changeset": "P1", "onto": "abc", "clean": false,
+        "conflicts": [{"path": "src/auth.rs"}], "against": [], "reason": "merge_conflict"});
+    let proof = blob_of(&r, "h1", &record);
+    r.feed.ended.lock().unwrap().push((
+        "P1".into(),
+        end(
+            "cancel",
+            None,
+            Some("conflict: conflicts with abc: src/auth.rs"),
+            Some(proof),
+        ),
+    ));
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    let n = &r.flow.notices()[0];
+    assert_eq!(n["state"], "rejected");
+    assert_eq!(n["reason"], "conflict");
+    assert_eq!(n["detail"], "conflicts with abc: src/auth.rs");
+    assert_eq!(n["final"], true);
+    assert_eq!(n["conflictRecord"]["reason"], "merge_conflict");
+    assert!(n["next"].as_str().unwrap().contains("rebaseOf"), "{n}");
+    // nothing new to learn
+    assert!(!tokio_block(r.flow.poll()).unwrap());
+    // pruned by the same rules: only once the session is over
+    assert!(matches!(r.flow.prune(false, false), Pruned::Waiting(_)));
+    assert_eq!(r.flow.prune(false, true), Pruned::Removed);
+    assert!(!r.dir().exists());
+}
+
+#[test]
+fn a_test_rejection_keeps_its_evidence_and_another_cancel_is_just_cancelled() {
+    let r = proposed_rig(on());
+    let proof = blob_of(
+        &r,
+        "h2",
+        &json!({"checks": [{"name": "quick", "conclusion": "failure"}]}),
+    );
+    r.feed.ended.lock().unwrap().push((
+        "P1".into(),
+        end(
+            "cancel",
+            None,
+            Some("test: required checks failed: quick"),
+            Some(proof.clone()),
+        ),
+    ));
+    // a stale item: the lane's last word the host heard was "testing"
+    r.feed.say("P1", "testing", None, 2);
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    let n = &r.flow.notices()[0];
+    assert_eq!(
+        (&n["state"], &n["reason"]),
+        (&json!("rejected"), &json!("test"))
+    );
+    assert_eq!(n["evidence"]["hash"], "h2");
+    assert!(n.get("conflict").is_none());
+
+    // a cancel that is not the lane's (someone withdrew the proposal): cancelled, with their words
+    let r = proposed_rig(on());
+    r.feed.ended.lock().unwrap().push((
+        "P1".into(),
+        end("cancel", None, Some("not needed any more"), None),
+    ));
+    r.feed.say("P1", "queued", None, 1);
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    let n = &r.flow.notices()[0];
+    assert_eq!(n["state"], "cancelled");
+    assert_eq!(n["detail"], "not needed any more");
+    assert!(n.get("reason").is_none());
+    // no reason at all
+    let r = proposed_rig(on());
+    r.feed
+        .ended
+        .lock()
+        .unwrap()
+        .push(("P1".into(), end("cancel", None, None, None)));
+    tokio_block(r.flow.poll()).unwrap();
+    assert_eq!(r.flow.notices()[0]["state"], "cancelled");
+}
+
+#[test]
+fn an_outcome_settles_a_missed_proposal_as_landed_and_the_lane_confirms_it_later() {
+    let r = proposed_rig(on());
+    let proof = blob_of(&r, "h3", &json!({"checks": []}));
+    r.feed.ended.lock().unwrap().push((
+        "P1".into(),
+        end("outcome", Some("succeeded"), None, Some(proof)),
+    ));
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    let n = &r.flow.notices()[0];
+    assert_eq!(n["state"], "landed");
+    assert_eq!(n["final"], false, "this repository has a full stage");
+    assert_eq!(n["evidence"]["hash"], "h3");
+    assert!(matches!(r.flow.prune(false, true), Pruned::Waiting(_)));
+    // the lane's later word still counts
+    r.feed.say("P1", "confirmed", None, 5);
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    assert_eq!(r.flow.prune(false, false), Pruned::Removed);
+
+    // where the repository has no full stage, the outcome is the end
+    let r = proposed_rig(FinishSpec {
+        land: Some(LandFinish {
+            no_full_stage: true,
+            ..LandFinish::default()
+        }),
+    });
+    r.feed
+        .ended
+        .lock()
+        .unwrap()
+        .push(("P1".into(), end("outcome", Some("succeeded"), None, None)));
+    tokio_block(r.flow.poll()).unwrap();
+    assert_eq!(r.flow.prune(false, false), Pruned::Removed);
+
+    // any other final outcome is a rejection of the proposal
+    let r = proposed_rig(on());
+    r.feed
+        .ended
+        .lock()
+        .unwrap()
+        .push(("P1".into(), end("outcome", Some("failed"), None, None)));
+    tokio_block(r.flow.poll()).unwrap();
+    let n = &r.flow.notices()[0];
+    assert_eq!(
+        (&n["state"], &n["reason"]),
+        (&json!("rejected"), &json!("claim_failed"))
+    );
+}
+
+#[test]
+fn the_log_moves_a_proposal_on_and_never_back() {
+    let r = proposed_rig(on());
+    r.feed.say("P1", "landed", None, 4);
+    r.feed
+        .ended
+        .lock()
+        .unwrap()
+        .push(("P1".into(), end("outcome", Some("succeeded"), None, None)));
+    tokio_block(r.flow.poll()).unwrap();
+    assert_eq!(r.flow.notices()[0]["state"], "landed");
+    // the same facts again change nothing, and a lane item of the same count does not undo the log
+    assert!(!tokio_block(r.flow.poll()).unwrap());
+
+    // the log is read even when the stream cannot be, and the other way round
+    let r = proposed_rig(on());
+    *r.feed.items_fail.lock().unwrap() = true;
+    r.feed.ended.lock().unwrap().push((
+        "P1".into(),
+        end("cancel", None, Some("timeout: stalled for 86400 s"), None),
+    ));
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    assert_eq!(r.flow.notices()[0]["reason"], "timeout");
+    let r = proposed_rig(on());
+    *r.feed.ended_fails.lock().unwrap() = true;
+    r.feed.say("P1", "testing", None, 2);
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    assert_eq!(r.flow.notices()[0]["state"], "testing");
+    // neither: an error, and the proposal stays as it was
+    *r.feed.items_fail.lock().unwrap() = true;
+    assert!(tokio_block(r.flow.poll()).is_err());
+    assert_eq!(r.flow.notices()[0]["state"], "testing");
+}
+
+// ───────────────────────── the backstop ─────────────────────────
+
+#[test]
+fn the_backstop_proposes_committed_work_and_never_commits_for_anyone() {
+    let r = rig(on());
+    // nothing at all, then only uncommitted changes: nothing to propose
+    assert!(!r.flow.backstop_ready());
+    r.write("dirty.txt", "not committed\n");
+    assert!(!r.flow.backstop_ready(), "uncommitted work never counts");
+    assert!(
+        r.flow
+            .draft_with("x", &Map::new(), false)
+            .err()
+            .unwrap()
+            .contains("nothing to land")
+    );
+    assert!(r.vcs.is_dirty(&r.dir()).unwrap(), "and is not committed");
+    std::fs::remove_file(r.dir().join("dirty.txt")).unwrap();
+
+    // committed work (by the agent) that was never proposed
+    let work = r.commit(
+        "src/auth/login.rs",
+        "pub fn login() {}\n",
+        "the login check",
+    );
+    assert!(r.flow.backstop_ready());
+    r.write("dirty.txt", "not committed\n");
+    let d = r
+        .flow
+        .draft_with("the session ended with committed work", &Map::new(), false)
+        .unwrap();
+    let a = args(&d.plan);
+    assert_eq!(a["to"], work.as_str(), "the plan is the agent's own commit");
+    assert_eq!(a["base"], r.base.as_str());
+    // titled from the task
+    assert_eq!(a["title"], "Fix the login (github:o/r#12)");
+    assert!(
+        r.vcs.is_dirty(&r.dir()).unwrap(),
+        "the uncommitted file stays uncommitted"
+    );
+    r.flow.proposed("B1");
+    assert!(!r.flow.backstop_ready(), "everything committed is proposed");
+
+    // later commits are a follow-up; a rejected last proposal is the agent's to re-propose
+    r.commit("src/more.rs", "pub fn more() {}\n", "more");
+    assert!(r.flow.backstop_ready());
+    settle_as_id(&r, "B1", "rejected");
+    assert!(!r.flow.backstop_ready());
+}
+
+fn settle_as_id(r: &Rig, id: &str, state: &str) {
+    r.feed.say(id, state, None, 9);
+    tokio_block(r.flow.poll()).unwrap();
+}
+
+#[test]
+fn the_backstop_is_a_flag_of_the_flow_that_is_on_by_default() {
+    assert!(LandFinish::default().auto_propose);
+    let spec: LandFinish = serde_json::from_str("{}").unwrap();
+    assert!(spec.auto_propose);
+    let off: LandFinish = serde_json::from_str(r#"{"autoPropose": false}"#).unwrap();
+    assert!(!off.auto_propose);
+    let r = rig(FinishSpec { land: Some(off) });
+    r.commit("src/a.rs", "// a\n", "a");
+    assert!(!r.flow.backstop_ready());
+}
+
+// ───────────────────────── a steer after the prune ─────────────────────────
+
+#[test]
+fn a_steer_to_a_session_whose_workspace_was_pruned_gets_a_refusal_as_data() {
+    let r = proposed_rig(on());
+    assert!(r.flow.steer_refusal().is_none());
+    settle_as(&r, "confirmed");
+    assert_eq!(r.flow.prune(false, false), Pruned::Removed);
+    let v = r.flow.steer_refusal().expect("a refusal");
+    assert_eq!(v["item"], "steer_refused");
+    assert_eq!(v["reason"], "workspace_pruned");
+    assert!(v["detail"].as_str().unwrap().contains("new session"), "{v}");
+
+    // a workspace that is gone for any other reason too
+    let r = proposed_rig(on());
+    std::fs::remove_dir_all(r.dir()).unwrap();
+    assert!(r.flow.steer_refusal().is_some());
+}
+
+// ───────────────────────── the sweep of a crashed host's leftovers ─────────────────────────
+
+#[test]
+fn a_sweep_follows_an_earlier_sessions_proposals_through_the_log_and_prunes_them() {
+    let r = proposed_rig(on());
+    let me = r._tmp.path().join("s2");
+    std::fs::create_dir_all(&me).unwrap();
+    // the earlier directory has a ledger; the host's own does not count
+    assert_eq!(sweep_dirs(&me), vec![r.session_dir.clone()]);
+    assert!(sweep_dirs(&r.session_dir).is_empty());
+    let cfg = HostConfig {
+        session_dir: me.clone(),
+        ..config_of(&r)
+    };
+
+    // a host that is still running holds its directory: not ours to prune
+    let held = SessionLock::take(&r.session_dir).expect("a free directory");
+    assert!(SessionLock::take(&r.session_dir).is_none());
+    drop(held);
+    assert!(SessionLock::take(&r.session_dir).is_some());
+
+    // the lane's items are long gone; the executor's cancel is in the log
+    let feed = Arc::new(FakeFeed::default());
+    feed.ended.lock().unwrap().push((
+        "P1".into(),
+        end(
+            "cancel",
+            None,
+            Some("test: required checks failed: quick"),
+            None,
+        ),
+    ));
+    let old = Flow::orphan(&cfg, &r.session_dir, r.vcs.clone(), feed.clone()).expect("an orphan");
+    assert!(tokio_block(old.poll()).unwrap());
+    // the session is over: a rejected change no longer keeps the workspace
+    assert_eq!(old.prune(false, true), Pruned::Removed);
+    assert!(!r.dir().exists() && !r.session_dir.join("target").exists());
+    // and a pruned directory is not an orphan any more
+    assert!(Flow::orphan(&cfg, &r.session_dir, r.vcs.clone(), feed).is_none());
+}
+
+#[test]
+fn a_sweep_keeps_what_never_landed_and_skips_other_spaces() {
+    let r = proposed_rig(on());
+    // work after the proposal that nobody proposed
+    r.commit("src/late.rs", "// late\n", "late");
+    let me = r._tmp.path().join("s2");
+    std::fs::create_dir_all(&me).unwrap();
+    let cfg = HostConfig {
+        session_dir: me,
+        ..config_of(&r)
+    };
+    let feed = Arc::new(FakeFeed::default());
+    feed.ended
+        .lock()
+        .unwrap()
+        .push(("P1".into(), end("outcome", Some("succeeded"), None, None)));
+    feed.say("P1", "confirmed", None, 5);
+    let old = Flow::orphan(&cfg, &r.session_dir, r.vcs.clone(), feed.clone()).unwrap();
+    tokio_block(old.poll()).unwrap();
+    match old.prune(false, true) {
+        Pruned::Kept(u) => assert_eq!(u.commits.len(), 1),
+        other => panic!("{other:?}"),
+    }
+    assert!(r.dir().exists());
+    // reported once: the next host start leaves it alone
+    assert!(Flow::orphan(&cfg, &r.session_dir, r.vcs.clone(), feed.clone()).is_none());
+
+    // another space's ledger is not followed
+    let other = HostConfig {
+        space: "other:han.example".into(),
+        ..cfg
+    };
+    let r2 = proposed_rig(on());
+    assert!(Flow::orphan(&other, &r2.session_dir, r2.vcs.clone(), feed).is_none());
 }

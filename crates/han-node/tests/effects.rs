@@ -467,6 +467,22 @@ async fn an_executor_refuses_its_open_effect_with_a_reason_and_evidence() {
             .iter()
             .all(|e| e.proposal != refused)
     );
+    // The view tells how it ended (a proposer that missed the executor's reports reads it here).
+    let ended = effects(&exec, EXEC, true)
+        .into_iter()
+        .find(|e| e.proposal == refused)
+        .and_then(|e| e.ended)
+        .expect("a cancelled effect shows how it ended");
+    assert_eq!(ended.by, "cancel");
+    assert_eq!(
+        ended.reason.as_deref(),
+        Some("test: required checks failed")
+    );
+    assert_eq!(ended.result, None);
+    assert_eq!(
+        ended.evidence.as_ref().map(|e| e.hash.as_str()),
+        Some(hash.as_str())
+    );
 
     // The evidence is referenced by that record: a member reads it (G-01).
     let mut read = None;
@@ -539,4 +555,12 @@ async fn an_executor_refuses_its_open_effect_with_a_reason_and_evidence() {
             .any(|e| e.proposal == running && e.phase == "done" && e.claims == 1)
     })
     .await;
+    let ended = effects(&exec, EXEC, true)
+        .into_iter()
+        .find(|e| e.proposal == running)
+        .and_then(|e| e.ended)
+        .expect("an effect with an outcome shows it");
+    assert_eq!(ended.by, "outcome");
+    assert_eq!(ended.result.as_deref(), Some("succeeded"));
+    assert!(ended.evidence.is_some());
 }

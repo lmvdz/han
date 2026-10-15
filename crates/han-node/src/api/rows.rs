@@ -728,6 +728,26 @@ pub struct GuardRow {
     pub head: u64,
 }
 
+/// How a final effect ended, as the log shows it: what a proposer that missed the executor's own reports reads
+/// (the landing lane's `han.land/1` items are not replayed).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct EffectEnd {
+    /// `cancel` (an `effect.cancel` took it from `open`), `outcome` or `resolve`.
+    pub by: String,
+    /// The result of an `outcome` or `resolve`: `succeeded`, `failed`, `cancelled` or `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub result: Option<String>,
+    /// The `reason` of the cancel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    /// The cancel's, outcome's or resolve's `evidence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub evidence: Option<super::EvidenceRef>,
+}
+
 /// An effect as an executor reads it (`Effects` view).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct EffectRow {
@@ -788,6 +808,10 @@ pub struct EffectRow {
     pub seq: u64,
     /// The head of the space when the row was made (an executor claims each effect at most once per head).
     pub head: u64,
+    /// How the effect ended, once its phase is `done`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended: Option<EffectEnd>,
 }
 
 /// How this device is connected to a space.
