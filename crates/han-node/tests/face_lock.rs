@@ -84,6 +84,7 @@ fn locked_commands(space: &str) -> Vec<(&'static str, Command)> {
                 repo: None,
                 issue: None,
                 home: None,
+                task: None,
             },
         ),
         // a ticket given with a command is pinned, which is `HomePin` by another door
@@ -506,6 +507,7 @@ async fn a_headless_service_node_starts_agents_without_a_prompt_and_a_persons_no
         repo: None,
         issue: None,
         home: None,
+        task: None,
     };
     let script = Scripted::new();
     // (the marker's folder and its parent must be owned by the user standing in for root and not writable by
