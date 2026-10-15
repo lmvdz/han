@@ -1,0 +1,17 @@
+# cargo-nextest runs each test in its own process, so a lock inside one test binary no longer serialises anything.
+# `cargo test` is still what runs the doc-tests (nextest skips them): see .github/workflows/ci.yml.
+
+[test-groups]
+# apps/han/tests/e2e/stack.rs holds a process-wide mutex so that only one dev stack (six processes, a sandbox and several
+# QUIC endpoints) runs at a time. Keep that guarantee across processes.
+e2e-stack = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary_id(han::e2e)"
+test-group = "e2e-stack"
+
+# CI prints every test's time, so the slowest tests can be read off the log.
+[profile.ci]
+status-level = "pass"
+final-status-level = "slow"
+slow-timeout = { period = "30s" }

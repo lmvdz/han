@@ -1,6 +1,7 @@
 name: ci
 
-# Early development: every PR runs one lean job (M4 added the host, executor and their tests: allow 30 min cold). The deep checks run nightly and on demand.
+# Early development: every PR runs lean jobs in parallel (M4 added the host, executor and their tests: allow 30 min cold). The deep checks run nightly and on demand.
+# `quick` is the only required check. It waits for the others, so adding or splitting a job needs no branch-protection change.
 on:
   pull_request:
   push:
@@ -13,54 +14,149 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # Line tables keep backtraces readable; full debuginfo only makes the cache and the link step bigger.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
-  quick:
+  # What the PR needs (.github/scripts/ci_scope.py). Pushes to main always run everything.
+  scope:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      packages: ${{ steps.scope.outputs.packages }}
+      spec: ${{ steps.scope.outputs.spec }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      # A PR that only touches docs/, research/ or top-level Markdown skips the Rust steps. The job still reports, so
-      # the required check passes. Pushes to main always run everything.
       - name: What changed
-        id: changes
+        id: scope
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          rust=true
-          if [ -n "$BASE" ] && ! git diff --name-only "$BASE"...HEAD | grep -qvE '^(docs|research)/|^[^/]+\.md$'; then
-            rust=false
-          fi
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "rust steps: $rust"
+          # The runner's own stable cargo reads the manifests; no need to install the pinned toolchain for that.
+          RUSTUP_TOOLCHAIN: stable
+        run: python3 .github/scripts/ci_scope.py "$BASE" | tee -a "$GITHUB_OUTPUT"
+
+  # Format and both clippy passes. Pull requests lint only the affected crates.
+  lint:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust toolchain (from rust-toolchain.toml)
-        if: steps.changes.outputs.rust == 'true'
         run: rustup show active-toolchain || rustup toolchain install
-      - if: steps.changes.outputs.rust == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Format
-        if: steps.changes.outputs.rust == 'true'
         run: cargo fmt --all --check
       - name: Clippy
-        if: steps.changes.outputs.rust == 'true'
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # Also runs the timeline vectors, the han-net/han-seq wire vectors with the conformance feature (their self
-      # dev-dependency), and apps/han/tests/test_mode_gate.rs (the default binary has no test mode, R9). The release
-      # build of that check runs nightly in 'full'.
-      - name: Rust tests
-        if: steps.changes.outputs.rust == 'true'
-        run: cargo test --workspace --locked
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: cargo clippy ${PACKAGES:---workspace} --all-targets --locked -- -D warnings
+      # The default binary has no test mode (R9); this builds it with the feature, as the tests of the feature do.
       - name: Conformance feature (clippy)
-        if: steps.changes.outputs.rust == 'true'
+        if: needs.scope.outputs.packages == '' || contains(format('{0} ', needs.scope.outputs.packages), '-p han ')
         run: cargo clippy -p han --features conformance --all-targets --locked -- -D warnings
+
+  # Also runs the timeline vectors, the han-net/han-seq wire vectors with the conformance feature (their self
+  # dev-dependency), and apps/han/tests/test_mode_gate.rs (the default binary has no test mode, R9). The release
+  # build of that check runs nightly in 'full'. Pull requests test only the affected crates and what depends on them.
+  # nextest does not run doc-tests: see `doc-tests`. The five slowest test binaries run in `test-slow`.
+  test:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Rust tests
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: >
+          cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
+          -E 'not (binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem))'
+
+  test-slow:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Rust tests (the slowest binaries)
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: >
+          cargo nextest run --profile ci ${PACKAGES:---workspace} --locked --no-tests=pass
+          -E 'binary_id(han-host::e2e) | binary_id(han::join_by_ticket) | binary_id(han::dogfood) | binary_id(han-net::wire_quic) | binary_id(han-net::wire_mem)'
+
+  # nextest does not run doc-tests, so `cargo test --doc` does, in its own job (it recompiles the dependencies for rustdoc).
+  doc-tests:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Doc-tests
+        env:
+          PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: cargo test --doc ${PACKAGES:---workspace} --locked
+
+  # The spec checks need no Rust: policy vectors, the three-way consistency of the entry kinds, and (when a Markdown file
+  # changed, or on a push) that every <!--s:key--> count and status in the spec text still matches what the checks derive.
+  # The rest of docs-match (a fresh run_all) runs nightly in 'full'.
+  spec:
+    needs: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - name: Spec fast checks (Policy vectors, consistency; docs-match runs nightly in 'full')
+      - name: Spec fast checks
         env:
           PYTHONIOENCODING: utf-8
         run: |
           pip install cryptography
           python ref/run_vectors.py
           python ref/check_consistency.py
+      - name: Spec text matches the checks (sync_docs --check)
+        if: needs.scope.outputs.spec == 'true'
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python ref/sync_docs.py --check
+
+  # The one required check. A skipped job counts as passed; a failed or cancelled one does not.
+  quick:
+    needs: [scope, lint, test, test-slow, doc-tests, spec]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All jobs passed or were skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1;; esac
