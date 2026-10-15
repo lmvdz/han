@@ -6,6 +6,8 @@
 Prints key=value lines for $GITHUB_OUTPUT:
   rust      true when the Rust steps (fmt, clippy, tests) must run at all
   packages  the `-p crate` arguments of the affected crates, or empty for the whole workspace
+  doc_packages  the same for doc-tests, only crates with a library target (`cargo test --doc` refuses a bin-only
+            crate), empty for the whole workspace, or `none` when no affected crate has a library
   spec      true when the doc-derived counts must be re-checked (ref/sync_docs.py --check): a Markdown file changed
 
 Rust steps are skipped for a PR that only touches docs/, research/, top-level Markdown or spec/**/*.md: no Rust test
@@ -28,9 +30,10 @@ def sh(*cmd):
     return subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8").stdout
 
 
-def emit(rust, packages, spec):
+def emit(rust, packages, spec, doc_packages=""):
     print(f"rust={str(rust).lower()}")
     print(f"packages={packages}")
+    print(f"doc_packages={doc_packages}")
     print(f"spec={str(spec).lower()}")
 
 
@@ -55,6 +58,7 @@ def main():
         assert d.startswith(root), d
         crates[d[len(root):]] = p["name"]
     names = set(crates.values())
+    libs = {p["name"] for p in meta["packages"] if any(k in ("lib", "rlib", "proc-macro") for t in p["targets"] for k in t["kind"])}
     users = {n: set() for n in names}  # crate -> workspace crates that depend on it
     for p in meta["packages"]:
         for dep in p["dependencies"]:
@@ -80,7 +84,8 @@ def main():
     if affected == names:
         emit(True, "", spec)
     else:
-        emit(True, " ".join(f"-p {n}" for n in sorted(affected)), spec)
+        docs = sorted(affected & libs)
+        emit(True, " ".join(f"-p {n}" for n in sorted(affected)), spec, " ".join(f"-p {n}" for n in docs) or "none")
 
 
 main()

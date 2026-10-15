@@ -172,6 +172,7 @@ pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
         budget: spec.budget.clone(),
         turn_timeout: Duration::from_secs(30 * 60),
         exclusion: Vec::new(),
+        finish: spec.work.finish.clone(),
     };
     // The operator names the repository, never the agent: a local path (a dev stack, a test remote) may be
     // cloned from disk; anything else may only be fetched over https.

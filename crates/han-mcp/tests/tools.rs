@@ -224,6 +224,10 @@ impl HostBridge for FakeBridge {
     fn summaries(&self, _session: &str) -> Vec<String> {
         self.summaries.clone()
     }
+
+    fn land_notices(&self) -> Vec<Value> {
+        vec![json!({"proposal": "E-1", "state": "rejected", "reason": "conflict"})]
+    }
 }
 
 struct Rig {
@@ -296,7 +300,8 @@ async fn the_tool_list_is_the_reviewed_allow_list() {
             "team_sessions",
             "team_who_is_on",
             "team_read",
-            "team_overlaps"
+            "team_overlaps",
+            "land_status"
         ]
     );
     assert_eq!(names, TOOL_NAMES);
@@ -480,6 +485,17 @@ async fn team_answers_are_envelopes_with_foreign_text_only_in_text() {
             "team_read"
         ]
     );
+}
+
+#[tokio::test]
+async fn land_status_hands_over_the_lanes_words_as_untrusted_data() {
+    let rig = rig().await;
+    let r = call(&rig, "land_status", json!({"summary": "check my proposal"})).await;
+    assert_ne!(r.is_error, Some(true));
+    let env = structured(&r);
+    assert_eq!(env["han_data"]["kind"], "land.status");
+    assert_eq!(env["han_data"]["trust"], "untrusted");
+    assert_eq!(env["han_data"]["data"]["items"][0]["reason"], "conflict");
 }
 
 #[tokio::test]

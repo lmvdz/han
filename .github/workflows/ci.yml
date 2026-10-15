@@ -27,6 +27,7 @@ jobs:
     outputs:
       rust: ${{ steps.scope.outputs.rust }}
       packages: ${{ steps.scope.outputs.packages }}
+      doc_packages: ${{ steps.scope.outputs.doc_packages }}
       spec: ${{ steps.scope.outputs.spec }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,13 +119,19 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Doc-tests
+        # only crates with a library target: `cargo test --doc` refuses a bin-only crate such as `han`
+        if: needs.scope.outputs.doc_packages != 'none'
         env:
-          PACKAGES: ${{ needs.scope.outputs.packages }}
+          PACKAGES: ${{ needs.scope.outputs.doc_packages }}
         run: cargo test --doc ${PACKAGES:---workspace} --locked
 
   # The spec checks need no Rust: policy vectors, the three-way consistency of the entry kinds, and (when a Markdown file
   # changed, or on a push) that every <!--s:key--> count and status in the spec text still matches what the checks derive.
   # The rest of docs-match (a fresh run_all) runs nightly in 'full'.
+  # The check passes --allow-stale-results: ref/RESULTS.md (and the interop run record) can only be refreshed by run_all.py and the
+  # frozen witnesses, which a separate clean-room PR updates after a core change adds vectors. While they are stale, sync_docs skips the
+  # markers derived from them, warns naming the file and the skipped keys, and still checks every marker derived from the current tree.
+  # The nightly 'full' keeps the strict check, so the staleness stays visible there.
   spec:
     needs: scope
     runs-on: ubuntu-latest
@@ -145,7 +152,7 @@ jobs:
         if: needs.scope.outputs.spec == 'true'
         env:
           PYTHONIOENCODING: utf-8
-        run: python ref/sync_docs.py --check
+        run: python ref/sync_docs.py --check --allow-stale-results
 
   # The one required check. A skipped job counts as passed; a failed or cancelled one does not.
   quick:

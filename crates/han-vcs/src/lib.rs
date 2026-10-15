@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use git::GitVcs;
+pub use git::{GitVcs, remove_tree};
 
 /// The one ref of a bundle made by [`Vcs::bundle`].
 pub const BUNDLE_REF: &str = "refs/han/bundle";
@@ -80,6 +80,39 @@ pub struct Workspace {
     pub branch: String,
     /// The shared object store it borrows objects from (read-only to the session), if any.
     pub shared_store: Option<PathBuf>,
+}
+
+/// A commit named by its short id and subject: what a report of unlanded work lists.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Commit {
+    /// The first 8 hex digits.
+    pub id: String,
+    /// The first line of the message.
+    pub subject: String,
+}
+
+/// The arguments of `git cherry -v` that list the commits of `tip` the `target` lacks by patch id. With
+/// `after`, only the commits after it are judged (a squash merge never matches the commits of the change it
+/// landed, so the commits the change itself carried are not looked at). Shared by the host's workspace pruning
+/// ([`Vcs::unlanded`]) and the `han dev prune` command, which run the same question over different checkouts.
+pub fn cherry_args<'a>(target: &'a str, tip: &'a str, after: Option<&'a str>) -> Vec<&'a str> {
+    let mut args = vec!["cherry", "-v", target, tip];
+    args.extend(after);
+    args
+}
+
+/// The commits `git cherry -v` marks `+` (not on the target), as [`Commit`]s.
+pub fn parse_cherry(text: &str) -> Vec<Commit> {
+    text.lines()
+        .filter_map(|l| {
+            let rest = l.strip_prefix("+ ")?;
+            let (id, subject) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some(Commit {
+                id: id.chars().take(8).collect(),
+                subject: subject.to_owned(),
+            })
+        })
+        .collect()
 }
 
 /// What happened to one path.
@@ -683,6 +716,66 @@ pub trait Vcs: Send + Sync + 'static {
         let _ = (dir, base, head, onto, message, author, committer_time);
         Err(VcsError::Invalid(format!(
             "{} makes no squash-rebases",
+            self.name()
+        )))
+    }
+
+    /// Whether `ancestor` is `descendant` or one of its ancestors, in the repository at `dir`. Both are
+    /// commit ids (the descendant may be `HEAD`). A host asks it before it bases new work on a commit it already proposed.
+    fn is_ancestor(&self, dir: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+        let _ = (dir, ancestor, descendant);
+        Err(VcsError::Invalid(format!(
+            "{} answers no ancestry",
+            self.name()
+        )))
+    }
+
+    /// The commit the workspace is on (`HEAD`), committed or not.
+    fn head(&self, dir: &Path) -> Result<String> {
+        let _ = dir;
+        Err(VcsError::Invalid(format!("{} names no head", self.name())))
+    }
+
+    /// Whether the workspace has changes that are not committed (untracked files that are not ignored
+    /// included). It runs no program of the workspace's configuration.
+    fn is_dirty(&self, dir: &Path) -> Result<bool> {
+        let _ = dir;
+        Err(VcsError::Invalid(format!(
+            "{} tells no dirty workspaces",
+            self.name()
+        )))
+    }
+
+    /// Fetches the tip of `refname` from `remote` (with `auth`) into the workspace at `dir`, where it can be
+    /// compared with the workspace's own commits ([`Vcs::unlanded`]), and returns its commit id (`None`: the
+    /// ref does not exist).
+    fn fetch_target(
+        &self,
+        dir: &Path,
+        remote: &str,
+        refname: &str,
+        auth: Option<&RemoteAuth>,
+    ) -> Result<Option<String>> {
+        let _ = (dir, remote, refname, auth);
+        Err(VcsError::Invalid(format!(
+            "{} fetches no targets",
+            self.name()
+        )))
+    }
+
+    /// The commits of `tip` that `target` lacks by patch id (R33 §7), oldest first, in the repository at
+    /// `dir`. With `after`, only the commits after it (an ancestor of `tip`) are judged. All three are commit
+    /// ids the repository holds.
+    fn unlanded(
+        &self,
+        dir: &Path,
+        target: &str,
+        tip: &str,
+        after: Option<&str>,
+    ) -> Result<Vec<Commit>> {
+        let _ = (dir, target, tip, after);
+        Err(VcsError::Invalid(format!(
+            "{} lists no unlanded commits",
             self.name()
         )))
     }

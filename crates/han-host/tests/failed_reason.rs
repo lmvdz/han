@@ -96,6 +96,7 @@ async fn a_failed_turn_keeps_its_reason_in_the_end_and_the_status() {
         budget: None,
         turn_timeout: Duration::from_secs(60),
         exclusion: Vec::new(),
+        finish: Default::default(),
     };
     let deps = HostDeps {
         api: Arc::new(coder.clone()),
