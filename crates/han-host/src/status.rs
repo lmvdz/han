@@ -99,6 +99,14 @@ pub enum Signal {
     Resumed,
     /// The turn ended normally.
     TurnEnded,
+    /// Where the session's `land` proposals stand in the landing lane (R33), as one line; `blocked` when
+    /// someone has to act (rejected, stalled).
+    Land {
+        /// The line.
+        text: String,
+        /// Whether it needs the agent or its operator.
+        blocked: bool,
+    },
     /// The turn or the agent failed.
     Failed(String),
     /// The work is finished.
@@ -144,6 +152,8 @@ pub struct StatusDeriver {
     act_state: SessionState,
     act_step: String,
     proposal: Proposal,
+    /// The lane's word on the session's landed work, shown while the agent is idle.
+    land: Option<(String, bool)>,
     /// Between a turn's start and end. The agent's tool events outside a turn are stale (read late) and
     /// change nothing: the turn's end is the bridge's word, and it wins.
     turn_active: bool,
@@ -190,6 +200,7 @@ impl StatusDeriver {
             act_state: SessionState::Idle,
             act_step: "starting".into(),
             proposal: Proposal::None,
+            land: None,
             turn_active: false,
         }
     }
@@ -204,7 +215,15 @@ impl StatusDeriver {
             (self.act_state, self.act_step.clone())
         } else {
             match &self.proposal {
-                Proposal::None => (self.act_state, self.act_step.clone()),
+                Proposal::None => match &self.land {
+                    Some((text, true)) if self.act_state == SessionState::Idle => {
+                        (SessionState::Blocked, bound(text, MAX_STEP))
+                    }
+                    Some((text, false)) if self.act_state == SessionState::Idle => {
+                        (SessionState::Idle, bound(text, MAX_STEP))
+                    }
+                    _ => (self.act_state, self.act_step.clone()),
+                },
                 Proposal::Waiting => (SessionState::WaitingApproval, self.act_step.clone()),
                 Proposal::Queued => (SessionState::Blocked, QUEUED_STEP.to_owned()),
                 Proposal::Refused(why) => (
@@ -271,6 +290,13 @@ impl StatusDeriver {
             Signal::Budget(x) => b.budget = Some(x),
             Signal::WaitingApproval => self.proposal = Proposal::Waiting,
             Signal::ProposalQueued => self.proposal = Proposal::Queued,
+            Signal::Land { text, blocked } => {
+                self.land = Some((text, blocked));
+                // The lane has the proposal, so it was approved: it no longer waits for an approver.
+                if self.proposal == Proposal::Waiting {
+                    self.proposal = Proposal::None;
+                }
+            }
             Signal::ProposalRefused(why) => self.proposal = Proposal::Refused(why),
             Signal::Resumed => {
                 self.proposal = Proposal::None;
@@ -496,6 +522,37 @@ branch should I
         s.apply(Signal::TurnEnded);
         assert_eq!(s.state(), SessionState::Blocked);
         assert!(s.snapshot("t").step.contains("has no profile"));
+    }
+
+    #[test]
+    fn the_lanes_word_shows_while_the_agent_is_idle_and_needs_someone_when_blocked() {
+        let mut s = d();
+        s.apply(Signal::TurnStarted { step: "w".into() });
+        s.apply(Signal::WaitingApproval);
+        s.apply(Signal::TurnEnded);
+        assert_eq!(s.state(), SessionState::WaitingApproval);
+        // the lane has the proposal: it was approved, and the status shows where it stands
+        s.apply(Signal::Land {
+            text: "land E-1: testing".into(),
+            blocked: false,
+        });
+        assert_eq!(s.state(), SessionState::Idle);
+        assert_eq!(s.snapshot("t").step, "land E-1: testing");
+        s.apply(Signal::Land {
+            text: "land E-1: rejected (conflict)".into(),
+            blocked: true,
+        });
+        assert_eq!(s.state(), SessionState::Blocked);
+        assert!(s.snapshot("t").step.contains("conflict"));
+        // an agent that is working shows its work, not the lane
+        s.apply(Signal::TurnStarted {
+            step: "resolving".into(),
+        });
+        assert_eq!(s.state(), SessionState::Working);
+        assert_eq!(s.snapshot("t").step, "resolving");
+        // and a finished session shows it is done
+        s.apply(Signal::Done);
+        assert_eq!(s.state(), SessionState::Done);
     }
 
     /// Every merge of `a` and `b` that keeps each one's own order.

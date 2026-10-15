@@ -226,6 +226,7 @@ async fn story(backend: &str) {
         budget: None,
         turn_timeout: Duration::from_secs(120),
         exclusion: Vec::new(),
+        finish: Default::default(),
     };
     let deps = HostDeps {
         api: Arc::new(coder.clone()),

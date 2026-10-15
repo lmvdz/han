@@ -109,6 +109,7 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
         budget: None,
         turn_timeout: Duration::from_secs(60),
         exclusion: Vec::new(),
+        finish: Default::default(),
     };
     let deps = HostDeps {
         api: Arc::new(coder.clone()),

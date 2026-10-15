@@ -26,6 +26,9 @@ use crate::retry::{Disposition, Via, disposition};
 /// The profile name of the typed items a host puts on a session's stream (messages, tool calls, plans...).
 pub const ITEM_PROFILE: &str = "han.item/1";
 
+/// The profile of a landing lane's status items (R33 §8); `han-exec` publishes them.
+pub const LAND_PROFILE: &str = "han.land/1";
+
 /// The kinds of item a host may put on the stream. `status`, `decision` and `input` are the node's own, made
 /// from the log; a host saying so would be passing off its words as someone else's.
 const HOST_KINDS: [&str; 7] = [
@@ -317,8 +320,49 @@ impl<T: Transport> Inner<T> {
         }
     }
 
+    /// A live `han.land/1` item of a landing lane's session (R33 §8): one per change, kept as the latest of its
+    /// proposal, so a host reads the state of its proposals from the lane's `Session` items. The node does not
+    /// interpret it (an `Unknown` item whose `raw` is the canonical JSON), and a face that does not know the
+    /// profile shows it as unknown.
+    fn land_item(&self, space: &str, item: &Value) {
+        let (Some(session), body) = (item["session"].as_str(), &item["body"]) else {
+            return;
+        };
+        let id = match (body["item"].as_str(), body["proposal"].as_str()) {
+            (Some("change"), Some(p)) => format!("land:{p}"),
+            (Some("lane"), _) => format!(
+                "land-lane:{}#{}",
+                body["repo"].as_str().unwrap_or_default(),
+                body["ref"].as_str().unwrap_or_default()
+            ),
+            _ => return,
+        };
+        if id.len() > 128 {
+            return;
+        }
+        let Some(raw) = json::canonicalize(body)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+        else {
+            return;
+        };
+        self.engine().apply_item(
+            space,
+            session,
+            id,
+            None,
+            ItemBody::Unknown {
+                raw_kind: LAND_PROFILE.into(),
+                raw,
+            },
+        );
+    }
+
     /// A live `han.item/1` item of `session`: a message, tool call or other thing the host puts on the stream.
     fn session_item(&self, space: &str, item: &Value) {
+        if item["type"].as_str() == Some("profile") && item["name"].as_str() == Some(LAND_PROFILE) {
+            return self.land_item(space, item);
+        }
         if item["type"].as_str() != Some("profile") || item["name"].as_str() != Some(ITEM_PROFILE) {
             return;
         }

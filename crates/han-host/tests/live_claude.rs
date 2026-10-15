@@ -127,6 +127,7 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
         budget: None,
         turn_timeout: Duration::from_secs(180),
         exclusion: Vec::new(),
+        finish: Default::default(),
     };
     let token = format!("live-token-{}", std::process::id());
     let bridge: Arc<dyn HostBridge> = Arc::new(Bridge(api));

@@ -7,7 +7,8 @@
 //! that is reported as `UNLANDED`, an event and not housekeeping.
 //!
 //! This is the reference for the host's pruning duty (r33 §7): the logic is in [`prune`], over the [`Git`]
-//! and [`Github`] traits; the command is a thin shell around it.
+//! and [`Github`] traits; the command is a thin shell around it. What both need (the `git cherry` question for
+//! unlanded commits, the commit report, removing a tree) lives in `han-vcs`, which `han-host` prunes with.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions, TryLockError};
@@ -262,12 +263,8 @@ fn judge(
 
 /// Removes a directory tree; one that is not there is done.
 fn remove_tree(p: &Path) -> Res<()> {
-    match std::fs::remove_dir_all(p) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(format!("cannot remove {}: {e}", p.display()).into())
-        }
-        _ => Ok(()),
-    }
+    // The host prunes its workspaces with the same function (it also clears read-only files).
+    han_vcs::remove_tree(p).map_err(|e| format!("cannot remove {}: {e}", p.display()).into())
 }
 
 /// Sweeps the repository of `git`: every worktree under `cfg.root` and every local branch whose PR is final.
