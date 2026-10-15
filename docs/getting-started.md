@@ -121,3 +121,34 @@ A runner is a team-owned Linux VM that hosts the home and runs agent sessions fo
 ## 10. When something is stuck
 
 `han doctor` checks the machine in one go and, for every problem, prints the cause and the exact command that fixes it (a node that is down, a link that does not fit its home, an outbox entry that holds a space back, a missing harness or login, a pinned Rust toolchain that is not installed, a replaced binary that still runs). It exits 0 when all is well and 1 otherwise; `--json` prints the same for scripts (schema in [runner.md](runner.md) section 8). `han node status` says whether the node runs, and its outbox. `han dev up` keeps logs in `<dir>/logs`. A home that was upgraded but not restarted runs the old binary (on Linux `/proc/<pid>/exe` reads `(deleted)`); `han home register` and `sudo han runner setup` say so and name the pid and the unit to restart.
+
+## 11. Landing your own pull requests: `han dev prs` and `han dev prune`
+
+Two commands for the people and agents who land HAN's own pull requests. They use your `gh` login (`gh auth login`) and the `git` on your path; the default repository is the `origin` remote of your main checkout.
+
+`han dev prs [PR...]` watches the open pull requests that have auto-merge enabled (or only the ones you name), with one GraphQL query per round (`--interval`, default 120 s). It keeps one invariant: every such PR is progressing or reported. It is stateless, so a new session just runs it again, and it exits 0 on the first round that has something to say, one line per event:
+
+| Line | Meaning |
+|---|---|
+| `MERGED #n`, `CLOSED #n` | a PR seen open in this run has merged or closed without a merge; `han dev prune` then runs |
+| `CONFLICT #n …` | the head conflicts with the base. GitHub runs no `pull_request` CI on a conflicting PR, so its required check would never appear; this is reported at once |
+| `CI_FAILED #n checks` | the named checks failed, were cancelled or timed out |
+| `STALLED #n reason` | nothing is pending and the last push is older than `--grace` (default 900 s); also when auto-merge was switched off or `update-branch` failed |
+| `GH_ERROR msg` | GitHub could not be asked |
+| `IDLE no open auto-merge PRs`, `OK watching: …` | nothing is watched; or `--once` found nothing to report |
+
+A PR that is `BEHIND` its base gets `gh pr update-branch`. Run it in the background and read its output when it exits. `--json` prints one JSON object per line (`{"event":"CI_FAILED","pr":7,"detail":"lint","checks":["lint"]}`), and ends with `{"event":"WATCHING","prs":[…]}`.
+
+`han dev prune [BRANCH...]` removes the worktrees and local branches whose PR has merged or closed, with each worktree's `target` directory (and a sibling `<worktree>-target`). One `gh pr list` call per run; `--dry-run` changes nothing. Options shared with `prs`: `--repo owner/name`, `--main DIR` (the main checkout, by default the first worktree of the repository you are in), `--root PREFIX` (only worktrees whose path starts with it are touched, by default `wt-` next to the main checkout) and `--base REF` (default `origin/main`). One line per candidate:
+
+| Line | Meaning |
+|---|---|
+| `PRUNED path (branch, PR state)` | worktree, target directory and branch removed (`; directory … is held open` when the OS keeps an empty directory) |
+| `PRUNED_BRANCH branch (PR state)` | a branch with no worktree removed |
+| `SWITCHED path from branch … to main; branch deleted` | the main checkout was clean (untracked files ignored) and on a landed branch: it went back to the base, fast-forwarded, and the branch was deleted. The main checkout itself is never removed |
+| `UNLANDED path (branch, PR #n STATE, commits not on base:` … `)` | commits made after the PR's recorded head that the base lacks by patch id (`git cherry`), listed with their subjects. A squash merge never matches the PR's own commits, so only commits after the head are judged; a branch that was rewritten is judged whole. This is an event, not housekeeping |
+| `PRUNE_FAILED path (branch): why` | removal failed; the worktree and branch stay |
+| `PRUNE_BUSY …` | another pruner holds the lock in the git directory (`han-prune.lock`); the operating system releases it when its holder dies |
+| `KEPT_DIRTY`, `KEPT_OPEN`, `KEPT_NO_PR` | uncommitted changes (untracked files count in a worktree); the PR is still open; the branch never had a PR |
+
+With `--dry-run` the removals show as `WOULD_PRUNE`, `WOULD_PRUNE_BRANCH` and `WOULD_SWITCH`. `--json` prints one object per outcome: `{"event":"UNLANDED","path":…,"branch":…,"pr":81,"prState":"MERGED","detail":"commits not on origin/main","commits":[{"id":"1a2b3c4d","subject":"…"}]}`.
