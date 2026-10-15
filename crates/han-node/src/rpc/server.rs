@@ -177,30 +177,16 @@ fn restrict(options: ListenerOptions<'_>) -> io::Result<ListenerOptions<'_>> {
     Ok(options.mode(0o600).try_overwrite(true))
 }
 
-/// The SID of the user running this process, from `whoami /user`.
+/// The SID of the user running this process, read once from the process token. It spawns nothing: a child
+/// process of a node that has no console (the scheduled task) can stall the node before it serves anything.
 #[cfg(windows)]
 fn current_user_sid() -> io::Result<String> {
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    let whoami = std::path::Path::new(&root)
-        .join("System32")
-        .join("whoami.exe");
-    let out = std::process::Command::new(whoami)
-        .args(["/user", "/fo", "csv", "/nh"])
-        .output()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    // "DOMAIN\user","S-1-5-21-..."
-    text.split('"')
-        .map(str::trim)
-        .find(|s| {
-            s.starts_with("S-1-") && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "cannot tell the current user's SID; refusing to open an unrestricted pipe",
-            )
-        })
+    static SID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(sid) = SID.get() {
+        return Ok(sid.clone());
+    }
+    let sid = super::winsid::current_user_sid()?;
+    Ok(SID.get_or_init(|| sid).clone())
 }
 
 /// A task that ends when its owner lets go of it, so a connection that ends takes its work with it.
