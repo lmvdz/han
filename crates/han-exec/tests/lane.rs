@@ -231,11 +231,15 @@ impl Rig {
     }
 
     fn boot_with(&self, actions: Vec<Arc<dyn Action>>) -> (Arc<Executor>, Lane) {
-        let exec = Arc::new(
-            Executor::open(
+        // Tests run in threads of one process: a `git` child that another test forks while this state's
+        // lock is open holds it for an instant after the executor is dropped, so a restart may have to ask
+        // twice.
+        let mut tries = 0;
+        let exec = loop {
+            let opened = Executor::open(
                 ExecutorConfig {
                     actor: EXEC.into(),
-                    actions,
+                    actions: actions.clone(),
                     gate: Arc::new(NeedsApproval),
                     config: Arc::new(self.config.clone()),
                     vcs: self.vcs.clone(),
@@ -245,9 +249,16 @@ impl Rig {
                 },
                 Arc::new(self.node.clone()),
                 self.clock.clone(),
-            )
-            .unwrap(),
-        );
+            );
+            match opened {
+                Ok(e) => break Arc::new(e),
+                Err(han_exec::ExecError::Ledger(han_exec::LedgerError::Held(_))) if tries < 100 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
         let lane = Lane::new(exec.clone(), self.checks.clone(), self.wall.clone());
         (exec, lane)
     }
