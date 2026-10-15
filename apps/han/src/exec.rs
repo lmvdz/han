@@ -6,9 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
-use han_exec::checks::GithubChecks;
+use han_exec::checks::warm::{WarmConfig, WarmRunner};
+use han_exec::checks::{Checks, GithubChecks, RoutedChecks, WarmChecks};
 use han_exec::{
-    ExecConfig, Executor, ExecutorConfig, Lane, NeedsApproval, SystemElapsed, SystemWall,
+    ChecksBackend, ExecConfig, Executor, ExecutorConfig, Lane, NeedsApproval, SystemElapsed,
+    SystemWall,
 };
 use han_node::api::ConnectionClass;
 use han_registry::HomeRef;
@@ -71,13 +73,36 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         Some(app) => Some(Arc::new(han_exec::github::GithubMinter::from_app(app)?)),
         None => None,
     };
-    // The landing lane runs only for a configuration that names landing refs (default: none) and reads its
-    // checks from GitHub.
+    // The landing lane runs only for a configuration that names landing refs (default: none). A repository's
+    // `checks.backend` picks where its checks run: GitHub Actions (read through the App) or the warm runner.
+    let vcs = Arc::new(GitVcs::new(args.data.join("objects")));
     let lane_checks = if Lane::configured(&config) {
-        let minter = github.clone().ok_or(
-            "landing_refs need a GitHub App in the configuration (the lane reads its checks there)",
-        )?;
-        Some(Arc::new(GithubChecks::new(minter)))
+        let uses = |b: ChecksBackend| {
+            config
+                .repos
+                .iter()
+                .any(|r| !r.landing_refs.is_empty() && r.checks.backend == b)
+        };
+        let github: Option<Arc<dyn Checks>> = if uses(ChecksBackend::Github) {
+            let minter = github.clone().ok_or(
+                "a repository's checks are read from GitHub, which needs a GitHub App in the configuration",
+            )?;
+            Some(Arc::new(GithubChecks::new(minter)))
+        } else {
+            None
+        };
+        let warm: Option<Arc<dyn Checks>> = if uses(ChecksBackend::Warm) {
+            let runner = Arc::new(WarmRunner::new(WarmConfig::new(args.data.join("warm")))?);
+            let vcs = vcs.clone();
+            // the lane's commit is in the repository its bundle was imported into
+            Some(Arc::new(WarmChecks::new(
+                runner,
+                Arc::new(move |repo| vcs.landing_for(&repo.remote)),
+            )))
+        } else {
+            None
+        };
+        Some(Arc::new(RoutedChecks::new(github, warm)))
     } else {
         None
     };
@@ -87,7 +112,7 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
             actions: han_exec::actions::builtin(),
             gate: Arc::new(NeedsApproval),
             config: Arc::new(config),
-            vcs: Arc::new(GitVcs::new(args.data.join("objects"))),
+            vcs,
             github,
             state_dir: args.data.join("state"),
             stall_bound: Duration::from_secs(10),

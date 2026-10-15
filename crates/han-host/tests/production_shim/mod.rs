@@ -33,6 +33,25 @@ pub fn han() -> PathBuf {
         build
             .args(["build", "--workspace", "--tests", "--bins", "--quiet"])
             .current_dir(env!("CARGO_MANIFEST_DIR"));
+
+        // Cargo gives a test its crate's variables (CARGO_PKG_NAME, CARGO_MANIFEST_DIR, ...). Dependencies' build
+        // scripts (ring's) watch them, so building with them set makes the next ordinary build in this target dir
+        // redo those scripts and everything above them.
+        for (name, _) in std::env::vars() {
+            if name.starts_with("CARGO_PKG_")
+                || name.starts_with("CARGO_BIN_EXE_")
+                || matches!(
+                    name.as_str(),
+                    "CARGO_MANIFEST_DIR"
+                        | "CARGO_MANIFEST_PATH"
+                        | "CARGO_CRATE_NAME"
+                        | "CARGO_PRIMARY_PACKAGE"
+                        | "CARGO_BIN_NAME"
+                )
+            {
+                build.env_remove(name);
+            }
+        }
         if dir.file_name().is_some_and(|n| n == "release") {
             build.arg("--release");
         } else {
