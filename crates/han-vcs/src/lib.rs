@@ -14,6 +14,7 @@
 //! credential, ssh and protocol settings disabled (SR-72).
 
 pub mod git;
+mod merge;
 
 use std::path::{Path, PathBuf};
 
@@ -274,6 +275,258 @@ pub struct MergeSim {
     pub conflicts: Vec<String>,
 }
 
+impl From<&ConflictRecord> for MergeSim {
+    fn from(r: &ConflictRecord) -> Self {
+        let mut conflicts: Vec<String> = r.conflicts.iter().map(|c| c.path.clone()).collect();
+        conflicts.sort();
+        conflicts.dedup();
+        MergeSim {
+            clean: conflicts.is_empty(),
+            conflicts,
+        }
+    }
+}
+
+/// What a [`Delta`] entry did to its path.
+///
+/// Serialised flat into the entry as `kind` (`add`, `modify`, `delete`, `rename`) plus, for a rename,
+/// `fromPath`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DeltaKind {
+    /// The path did not exist at the base.
+    Add,
+    /// The path exists on both sides with another content id, type or mode.
+    Modify,
+    /// The path does not exist at the head.
+    Delete,
+    /// The content moved: the path is new, `from_path` is gone. Detected by [`Vcs::delta`] (exact content
+    /// only).
+    Rename {
+        /// The path the content had at the base.
+        from_path: String,
+    },
+}
+
+/// One path of a [`Delta`] (R33 §1).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeltaEntry {
+    /// The path (for a rename, the new one), relative, `/`-separated.
+    pub path: String,
+    /// What happened to it.
+    #[serde(flatten)]
+    pub kind: DeltaKind,
+    /// The backend's object id of the content at the base (for a rename, at `from_path`); absent for an add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The mode at the base (`100644`, `100755`, `120000`, `160000`); absent for an add. Not in R33 §1's
+    /// list, but without it a mode change landed on the target in the meantime would be undone silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_mode: Option<String>,
+    /// The object id of the content at the head; absent for a delete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The mode at the head; absent for a delete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+impl DeltaEntry {
+    /// The paths this entry reads or writes: its own and, for a rename, the old one.
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        let from = match &self.kind {
+            DeltaKind::Rename { from_path } => Some(from_path.as_str()),
+            _ => None,
+        };
+        std::iter::once(self.path.as_str()).chain(from)
+    }
+}
+
+/// The changes between a base and a head as a path-sorted list that does not name the base commit, so it is
+/// the same wherever the change is rebased to. Its [`delta_digest`] is what an approval and its evidence
+/// are over; [`changeset_digest`] stays the digest of the landed result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Delta {
+    /// The entries, sorted by (new) path in byte order. At most one per path.
+    pub entries: Vec<DeltaEntry>,
+}
+
+/// `sha256(JCS(delta))` as lowercase hex: the digest of the entry list, with absent fields left out.
+pub fn delta_digest(delta: &Delta) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let value = han_core::json::to_value(delta).map_err(|e| VcsError::Invalid(e.to_string()))?;
+    let bytes =
+        han_core::json::canonicalize(&value).map_err(|e| VcsError::Invalid(e.to_string()))?;
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+impl Delta {
+    /// [`delta_digest`] of this delta.
+    pub fn digest(&self) -> Result<String> {
+        delta_digest(self)
+    }
+}
+
+/// The answer of [`Vcs::path_disjoint`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathDisjoint {
+    /// Whether the delta applies to the new base without changing: every path it reads or writes is as it
+    /// was at the old base, and so is the kind (file or directory) of every ancestor directory.
+    pub ok: bool,
+    /// The paths that broke the condition, sorted: delta paths whose content differs in the new base, and
+    /// ancestor directories that are no longer directories (or no longer files).
+    pub touched: Vec<String>,
+}
+
+/// A change squash-rebased onto a new base.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rebased {
+    /// The new commit: one commit on `onto`.
+    pub commit: String,
+    /// The delta from `onto` to `commit`. Equal to the original delta when `path_disjoint`.
+    pub delta: Delta,
+    /// Whether the original delta applied unchanged (see [`PathDisjoint`]). When false the change merged
+    /// cleanly but its result is not what was approved, so it must be gated again (R33 §2).
+    pub path_disjoint: bool,
+}
+
+/// The result of [`Vcs::squash_rebase`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum RebaseOutcome {
+    /// The change is on the new base.
+    Rebased(Rebased),
+    /// It does not merge; nothing was written but the objects the record names.
+    Conflict(ConflictRecord),
+}
+
+/// Why a path conflicts (R33 §5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictKind {
+    /// Both sides changed the same text.
+    Content,
+    /// Both sides added the path with different content.
+    AddAdd,
+    /// One side deleted what the other changed.
+    ModifyDelete,
+    /// One side has a file where the other has a directory.
+    FileDirectory,
+    /// Both sides changed a binary file (a submodule pointer counts as opaque content too).
+    Binary,
+    /// A symbolic link is involved.
+    Symlink,
+}
+
+/// One side of a conflicted path: a git tree entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictSide {
+    /// The mode: `100644`, `100755`, `120000`, `160000`, or `040000` for a directory.
+    pub mode: String,
+    /// The object id (a blob, or a tree for a directory).
+    pub id: String,
+}
+
+/// A line range, 1-based: `len` lines from `start`. An empty range (`len` 0) sits before line `start`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineRange {
+    /// The first line.
+    pub start: u32,
+    /// How many lines.
+    pub len: u32,
+}
+
+/// Where a resolution candidate comes from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum CandidateSource {
+    /// The side being rebased onto.
+    Ours,
+    /// The change being rebased.
+    Theirs,
+    /// An external structural-merge tool (for example mergiraf). Nothing in this crate fills it yet.
+    Tool {
+        /// The tool.
+        name: String,
+        /// Its version.
+        version: String,
+    },
+}
+
+/// One proposed resolution of a hunk.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Candidate {
+    /// An id for the candidate, unique within the record.
+    pub id: String,
+    /// Where it comes from.
+    pub source: CandidateSource,
+    /// The git blob that holds the resolved text of the hunk.
+    pub content_id: String,
+}
+
+/// A region of a text file where the two sides disagree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictHunk {
+    /// The region in the merge base.
+    pub base_range: LineRange,
+    /// The region in the side being rebased onto.
+    pub ours_range: LineRange,
+    /// The region in the change being rebased.
+    pub theirs_range: LineRange,
+    /// Resolutions to choose from: ours and theirs, plus any tool's.
+    pub candidates: Vec<Candidate>,
+}
+
+/// A path that does not merge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conflict {
+    /// The path, relative, `/`-separated.
+    pub path: String,
+    /// Why it conflicts.
+    pub kind: ConflictKind,
+    /// The merge base's entry, if the path existed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<ConflictSide>,
+    /// The entry on the side rebased onto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ours: Option<ConflictSide>,
+    /// The entry of the change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theirs: Option<ConflictSide>,
+    /// The disagreeing regions of a `content` conflict; empty for the other kinds.
+    #[serde(default)]
+    pub hunks: Vec<ConflictHunk>,
+}
+
+/// A merge or rebase that does not go through, as data (R33 §5): never conflict markers. Every content it
+/// names is a git blob (or tree) in the repository that was asked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictRecord {
+    /// The commit merged into.
+    pub onto: String,
+    /// The paths the change touches that merge cleanly, sorted.
+    pub clean: Vec<String>,
+    /// The paths that do not, sorted.
+    pub conflicts: Vec<Conflict>,
+}
+
 /// The version-control seam.
 pub trait Vcs: Send + Sync + 'static {
     /// The backend's name, for example `git`.
@@ -337,6 +590,65 @@ pub trait Vcs: Send + Sync + 'static {
     /// Simulates merging `theirs` into `ours` in the repository at `dir`, without touching its working tree,
     /// index or refs.
     fn merge_simulate(&self, dir: &Path, ours: &str, theirs: &str) -> Result<MergeSim>;
+
+    /// [`Vcs::merge_simulate`] with the conflicts as data (R33 §5). The record has no conflicts when the
+    /// merge is clean. Contents it references are written to the repository's object store.
+    fn merge_record(&self, dir: &Path, ours: &str, theirs: &str) -> Result<ConflictRecord> {
+        let _ = (dir, ours, theirs);
+        Err(VcsError::Invalid(format!(
+            "{} makes no conflict records",
+            self.name()
+        )))
+    }
+
+    /// The [`Delta`] from `base` to `head`, both commits of the repository at `dir`.
+    ///
+    /// Entries come from a tree-to-tree comparison (no content or similarity heuristics of the backend).
+    /// A rename is a path deleted and a path added with the same content id and the same type (regular file
+    /// or symbolic link); several candidates with one content id pair up in path order, the n-th deleted
+    /// path with the n-th added path. A rename that also edits the file is a delete and an add.
+    fn delta(&self, dir: &Path, base: &str, head: &str) -> Result<Delta> {
+        let _ = (dir, base, head);
+        Err(VcsError::Invalid(format!(
+            "{} makes no deltas",
+            self.name()
+        )))
+    }
+
+    /// Whether `delta` applies to `new_base` unchanged (R33 §1), and the paths that say otherwise.
+    fn path_disjoint(&self, dir: &Path, delta: &Delta, new_base: &str) -> Result<PathDisjoint> {
+        let _ = (dir, delta, new_base);
+        Err(VcsError::Invalid(format!(
+            "{} checks no path-disjointness",
+            self.name()
+        )))
+    }
+
+    /// Squashes `base..head` into one commit on `onto` (R33 §2), without touching any checkout.
+    ///
+    /// When the delta is path-disjoint from `onto`, the commit's tree is `onto`'s with exactly the approved
+    /// entries written, so its delta equals the original. Otherwise the change is merged three-way
+    /// (`base`, `onto`, `head`): a clean merge returns `path_disjoint: false`, a conflict a record.
+    ///
+    /// The commit is a function of the arguments: `author` (`Name <email>` or a bare name) is author and
+    /// committer, `committer_time` (seconds since the epoch, UTC) is both dates.
+    #[allow(clippy::too_many_arguments)]
+    fn squash_rebase(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+        onto: &str,
+        message: &str,
+        author: &str,
+        committer_time: i64,
+    ) -> Result<RebaseOutcome> {
+        let _ = (dir, base, head, onto, message, author, committer_time);
+        Err(VcsError::Invalid(format!(
+            "{} makes no squash-rebases",
+            self.name()
+        )))
+    }
 
     /// Removes a workspace (after merge or cancel).
     fn remove_workspace(&self, ws: &Workspace) -> Result<()>;

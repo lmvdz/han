@@ -13,7 +13,7 @@
 //! index with `update-index --index-info`, diffs are tree-to-tree with `--no-ext-diff --no-textconv`, and
 //! merges are simulated in a scratch bare repository whose configuration is this backend's own.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -25,8 +25,11 @@ use std::time::{Duration, SystemTime};
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
+use crate::merge::{self, parse_changes, parse_merge_tree};
 use crate::{
-    BUNDLE_REF, ChangeKind, ChangeSet, FileChange, LandOutcome, LandSpec, MergeSim, RemoteAuth,
+    BUNDLE_REF, Candidate, CandidateSource, ChangeKind, ChangeSet, Conflict, ConflictHunk,
+    ConflictKind, ConflictRecord, ConflictSide, Delta, DeltaEntry, DeltaKind, FileChange,
+    LandOutcome, LandSpec, LineRange, MergeSim, PathDisjoint, RebaseOutcome, Rebased, RemoteAuth,
     Result, Vcs, VcsError, Workspace, WorkspaceSpec, changeset_digest,
 };
 
@@ -297,6 +300,7 @@ impl Git {
 
 /// One raw `diff-tree` entry.
 struct RawEntry {
+    old_mode: String,
     new_mode: String,
     old_sha: String,
     new_sha: String,
@@ -854,6 +858,583 @@ impl GitVcs {
     }
 }
 
+/// A scratch bare repository of this backend's own that writes into the session repository's object store:
+/// no session configuration (merge drivers, `i18n.commitEncoding`) and no session attributes apply to what
+/// is computed in it, and what it writes is visible from the session. Removed when dropped.
+struct Scratch {
+    path: PathBuf,
+    objects: PathBuf,
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = remove_tree(&self.path);
+    }
+}
+
+/// Splits `Name <email>` (or a bare name) into git's name and email.
+fn identity(author: &str) -> (String, String) {
+    let (name, email) = match author.split_once('<') {
+        Some((n, e)) => (
+            n.trim().to_owned(),
+            e.trim_end_matches('>').trim().to_owned(),
+        ),
+        None => (
+            author.trim().to_owned(),
+            format!("{}@han.invalid", author.trim()),
+        ),
+    };
+    let name = if name.is_empty() {
+        "han".to_owned()
+    } else {
+        name
+    };
+    (name, email)
+}
+
+/// A tree mode as git prints it in `ls-tree`.
+const TREE_MODE: &str = "040000";
+
+/// How a delta entry's type is compared when pairing renames: regular files with each other, symbolic
+/// links with each other, nothing else.
+fn rename_class(mode: &str) -> Option<u8> {
+    match mode {
+        "100644" | "100755" => Some(0),
+        "120000" => Some(1),
+        _ => None,
+    }
+}
+
+/// The deleted and the added entries (indexes) that share one content id and type.
+type RenameCandidates = (Vec<usize>, Vec<usize>);
+
+/// The ancestor directories of a path, outermost first.
+fn ancestors(path: &str) -> impl Iterator<Item = &str> {
+    path.match_indices('/').map(move |(i, _)| &path[..i])
+}
+
+impl GitVcs {
+    fn scratch(&self, dir: &Path) -> Result<Scratch> {
+        let objects = self
+            .git(Some(dir))?
+            .args([
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "objects",
+            ])
+            .text()?;
+        let path = self.tmp_dir().join(unique("scratch") + ".git");
+        let s = Scratch {
+            path,
+            objects: PathBuf::from(objects),
+        };
+        self.git(None)?
+            .args(["init", "--bare", "--quiet"])
+            .arg(format!("--template={}", slash(&self.template_dir())))
+            .arg(&s.path)
+            .run()?;
+        Ok(s)
+    }
+
+    /// A git command in the scratch repository, writing objects to the session's store.
+    fn scratch_git(&self, s: &Scratch) -> Result<Git> {
+        Ok(self
+            .git(Some(&s.path))?
+            .env("GIT_OBJECT_DIRECTORY", &s.objects)
+            .env("LC_ALL", "C"))
+    }
+
+    /// Mode and object id of `paths` in `commit` (`ls-tree`, so a directory shows as mode `040000` with its
+    /// tree id); a path that does not exist is missing from the map.
+    fn tree_entries(
+        &self,
+        dir: &Path,
+        commit: &str,
+        paths: &[String],
+    ) -> Result<HashMap<String, (String, String)>> {
+        let mut found = HashMap::new();
+        for chunk in paths.chunks(100) {
+            let out = self
+                .git(Some(dir))?
+                .env("GIT_LITERAL_PATHSPECS", "1")
+                .args(["ls-tree", "-z", "--full-tree", commit, "--"])
+                .args(chunk)
+                .run()?;
+            for rec in out.stdout.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+                let rec = String::from_utf8_lossy(rec);
+                if let Some((meta, path)) = rec.split_once('\t') {
+                    let mut f = meta.split(' ');
+                    if let (Some(mode), Some(_), Some(id)) = (f.next(), f.next(), f.next()) {
+                        found.insert(path.to_owned(), (mode.to_owned(), id.to_owned()));
+                    }
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    fn delta_between(&self, dir: &Path, base: &str, head: &str) -> Result<Delta> {
+        let base = self.commit_of(dir, base)?;
+        let head = self.commit_of(dir, head)?;
+        let raw = self
+            .git(Some(dir))?
+            .arg("diff-tree")
+            .args(["-r", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"])
+            .args(["--raw", "--no-abbrev", &base, &head])
+            .run()?;
+        let mut entries: Vec<DeltaEntry> = parse_raw(&raw.stdout)
+            .into_iter()
+            .map(|e| {
+                let (kind, from, to) = match e.status {
+                    'A' => (DeltaKind::Add, None, Some(e.new_sha)),
+                    'D' => (DeltaKind::Delete, Some(e.old_sha), None),
+                    _ => (DeltaKind::Modify, Some(e.old_sha), Some(e.new_sha)),
+                };
+                let added = kind == DeltaKind::Add;
+                let deleted = kind == DeltaKind::Delete;
+                DeltaEntry {
+                    path: e.path,
+                    kind,
+                    from,
+                    from_mode: (!added).then_some(e.old_mode),
+                    to,
+                    mode: (!deleted).then_some(e.new_mode),
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        // Exact renames: a deleted and an added path with the same content id and type, paired in path order.
+        let mut groups: BTreeMap<(u8, &str), RenameCandidates> = BTreeMap::new();
+        for (i, e) in entries.iter().enumerate() {
+            match (&e.kind, &e.from, &e.to) {
+                (DeltaKind::Delete, Some(id), _) => {
+                    if let Some(c) = e.from_mode.as_deref().and_then(rename_class) {
+                        groups.entry((c, id)).or_default().0.push(i);
+                    }
+                }
+                (DeltaKind::Add, _, Some(id)) => {
+                    if let Some(c) = e.mode.as_deref().and_then(rename_class) {
+                        groups.entry((c, id)).or_default().1.push(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut renames: Vec<(usize, usize)> = Vec::new();
+        for (dels, adds) in groups.values() {
+            renames.extend(dels.iter().copied().zip(adds.iter().copied()));
+        }
+        let gone: HashSet<usize> = renames.iter().flat_map(|(d, a)| [*d, *a]).collect();
+        let mut out: Vec<DeltaEntry> = Vec::with_capacity(entries.len());
+        for (d, a) in &renames {
+            out.push(DeltaEntry {
+                path: entries[*a].path.clone(),
+                kind: DeltaKind::Rename {
+                    from_path: entries[*d].path.clone(),
+                },
+                from: entries[*d].from.clone(),
+                from_mode: entries[*d].from_mode.clone(),
+                to: entries[*a].to.clone(),
+                mode: entries[*a].mode.clone(),
+            });
+        }
+        out.extend(
+            entries
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !gone.contains(i))
+                .map(|(_, e)| e),
+        );
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(Delta { entries: out })
+    }
+
+    fn path_disjoint_of(&self, dir: &Path, delta: &Delta, new_base: &str) -> Result<PathDisjoint> {
+        let new_base = self.commit_of(dir, new_base)?;
+        // What each path must be in the new base: `None` absent, `Some((mode, id))` as at the old base.
+        let mut expect: BTreeMap<&str, Option<(&str, &str)>> = BTreeMap::new();
+        for e in &delta.entries {
+            let was = match (&e.from_mode, &e.from) {
+                (Some(m), Some(id)) => Some((m.as_str(), id.as_str())),
+                _ => None,
+            };
+            match &e.kind {
+                DeltaKind::Add => {
+                    expect.insert(&e.path, None);
+                }
+                DeltaKind::Modify | DeltaKind::Delete => {
+                    expect.insert(&e.path, was);
+                }
+                DeltaKind::Rename { from_path } => {
+                    expect.insert(&e.path, None);
+                    expect.insert(from_path, was);
+                }
+            }
+        }
+        // An ancestor must be a directory (or absent), unless the delta itself replaces it.
+        let mut dirs: BTreeSet<&str> = BTreeSet::new();
+        for p in expect.keys() {
+            dirs.extend(ancestors(p).filter(|a| !matches!(expect.get(a), Some(Some(_)))));
+        }
+        let query: Vec<String> = expect
+            .keys()
+            .copied()
+            .chain(dirs.iter().copied())
+            .map(str::to_owned)
+            .collect();
+        let now = self.tree_entries(dir, &new_base, &query)?;
+        let mut touched: BTreeSet<String> = BTreeSet::new();
+        for (path, want) in &expect {
+            let got = now.get(*path).map(|(m, id)| (m.as_str(), id.as_str()));
+            if got != *want {
+                touched.insert((*path).to_owned());
+            }
+        }
+        for d in &dirs {
+            if now.get(*d).is_some_and(|(m, _)| m != TREE_MODE) {
+                touched.insert((*d).to_owned());
+            }
+        }
+        Ok(PathDisjoint {
+            ok: touched.is_empty(),
+            touched: touched.into_iter().collect(),
+        })
+    }
+
+    /// `onto`'s tree with exactly the delta's entries written, built in a scratch index.
+    fn apply_delta(&self, dir: &Path, s: &Scratch, onto: &str, delta: &Delta) -> Result<String> {
+        let index = s.path.join("han-index");
+        let zero = self.zero_id(dir)?;
+        let mut info: Vec<u8> = Vec::new();
+        let mut put = |mode: &str, id: &str, path: &str| {
+            info.extend_from_slice(format!("{mode} {id}\t{path}").as_bytes());
+            info.push(0);
+        };
+        // Removals first, so that a file can become a directory and the other way round.
+        for e in &delta.entries {
+            match &e.kind {
+                DeltaKind::Delete => put("0", &zero, &e.path),
+                DeltaKind::Rename { from_path } => put("0", &zero, from_path),
+                _ => {}
+            }
+        }
+        for e in &delta.entries {
+            if let (Some(mode), Some(id)) = (&e.mode, &e.to) {
+                put(mode, id, &e.path);
+            }
+        }
+        self.scratch_git(s)?
+            .index(&index)
+            .args(["read-tree", &format!("{onto}^{{tree}}")])
+            .run()?;
+        self.scratch_git(s)?
+            .index(&index)
+            .args(["update-index", "-z", "--add", "--index-info"])
+            .stdin(info)
+            .run()?;
+        self.scratch_git(s)?.index(&index).arg("write-tree").text()
+    }
+
+    fn commit_with(
+        &self,
+        s: &Scratch,
+        tree: &str,
+        parent: &str,
+        message: &str,
+        author: &str,
+        time: i64,
+    ) -> Result<String> {
+        let (name, email) = identity(author);
+        let date = format!("{time} +0000");
+        self.scratch_git(s)?
+            .env("GIT_AUTHOR_NAME", &name)
+            .env("GIT_AUTHOR_EMAIL", &email)
+            .env("GIT_AUTHOR_DATE", &date)
+            .env("GIT_COMMITTER_NAME", &name)
+            .env("GIT_COMMITTER_EMAIL", &email)
+            .env("GIT_COMMITTER_DATE", &date)
+            .args(["commit-tree", tree, "-p", parent, "-F", "-"])
+            .stdin(message.as_bytes().to_vec())
+            .text()
+    }
+
+    /// Runs `merge-tree --write-tree`. `--merge-base` needs git 2.40; before that, the change is given a
+    /// synthetic parent, which is the same merge as long as `merge_base` is an ancestor of `ours`.
+    fn merge_tree(
+        &self,
+        dir: &Path,
+        s: &Scratch,
+        merge_base: Option<&str>,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<Output> {
+        let run = |theirs: &str, base_opt: Option<&str>| -> Result<Output> {
+            let mut g = self
+                .scratch_git(s)?
+                .args(["merge-tree", "--write-tree", "-z"]);
+            if let Some(b) = base_opt {
+                g = g.arg(format!("--merge-base={b}"));
+            }
+            g.args([ours, theirs]).run_codes(&[1])
+        };
+        let Some(b) = merge_base else {
+            return run(theirs, None);
+        };
+        match run(theirs, Some(b)) {
+            Err(VcsError::Tool { message, .. }) if message.contains("unknown option") => {}
+            other => return other,
+        }
+        let synthetic = self
+            .scratch_git(s)?
+            .env("GIT_AUTHOR_NAME", "han")
+            .env("GIT_AUTHOR_EMAIL", "han@han.invalid")
+            .env("GIT_AUTHOR_DATE", "1000000000 +0000")
+            .env("GIT_COMMITTER_NAME", "han")
+            .env("GIT_COMMITTER_EMAIL", "han@han.invalid")
+            .env("GIT_COMMITTER_DATE", "1000000000 +0000")
+            .args(["commit-tree", &format!("{theirs}^{{tree}}"), "-p", b])
+            .args(["-m", "han: merge base"])
+            .text()?;
+        let found = self
+            .git(Some(dir))?
+            .args(["merge-base", ours, &synthetic])
+            .run_codes(&[1])
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+        if found.as_deref() != Some(b) {
+            return Err(VcsError::Invalid(
+                "this git cannot merge with a base that is not an ancestor of the target (needs 2.40)"
+                    .into(),
+            ));
+        }
+        run(&synthetic, None)
+    }
+
+    /// Merges `theirs` into `ours` (with `merge_base`, or the one git finds) in the scratch repository and
+    /// returns the merged tree and the record. The tree of a conflicted merge is not usable.
+    fn three_way(
+        &self,
+        dir: &Path,
+        s: &Scratch,
+        merge_base: Option<&str>,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<(String, ConflictRecord)> {
+        let out = self.merge_tree(dir, s, merge_base, ours, theirs)?;
+        let parsed = parse_merge_tree(&out.stdout).ok_or_else(|| VcsError::Tool {
+            tool: "git".into(),
+            message: "merge-tree printed something unexpected".into(),
+        })?;
+        let base = match merge_base {
+            Some(b) => Some(b.to_owned()),
+            None => self
+                .git(Some(dir))?
+                .args(["merge-base", ours, theirs])
+                .run_codes(&[1])
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .filter(|b| is_hex_id(b)),
+        };
+        let conflicts = if out.status.success() {
+            Vec::new()
+        } else {
+            self.conflicts_of(dir, s, base.as_deref(), ours, theirs, &parsed)?
+        };
+        let mut clean: Vec<String> = Vec::new();
+        if let Some(b) = &base {
+            let changed = self
+                .git(Some(dir))?
+                .args(["diff-tree", "-r", "-z", "--no-renames", "--name-only"])
+                .args([b.as_str(), theirs])
+                .run()?;
+            clean = changed
+                .stdout
+                .split(|b| *b == 0)
+                .filter(|p| !p.is_empty())
+                .map(|p| String::from_utf8_lossy(p).into_owned())
+                .filter(|p| {
+                    !conflicts
+                        .iter()
+                        .any(|c| p == &c.path || p.starts_with(&format!("{}/", c.path)))
+                })
+                .collect();
+            clean.sort();
+            clean.dedup();
+        }
+        Ok((
+            parsed.tree,
+            ConflictRecord {
+                onto: ours.to_owned(),
+                clean,
+                conflicts,
+            },
+        ))
+    }
+
+    fn conflicts_of(
+        &self,
+        dir: &Path,
+        s: &Scratch,
+        base: Option<&str>,
+        ours: &str,
+        theirs: &str,
+        parsed: &merge::MergeTreeOut,
+    ) -> Result<Vec<Conflict>> {
+        let side = |e: &(String, String)| ConflictSide {
+            mode: e.0.clone(),
+            id: e.1.clone(),
+        };
+        let mut out: Vec<Conflict> = Vec::new();
+        let mut consumed: HashSet<&str> = HashSet::new();
+        // A file where the other side has a directory: git moves the file to `<path>~<side>` and says so.
+        for (paths, kind) in &parsed.messages {
+            if kind != "CONFLICT (file/directory)" {
+                continue;
+            }
+            let moved = paths.iter().find(|p| parsed.stages.contains_key(*p));
+            let logical = paths
+                .iter()
+                .find(|p| !parsed.stages.contains_key(*p))
+                .or(paths.last());
+            let (Some(logical), Some(moved)) = (logical, moved) else {
+                continue;
+            };
+            consumed.insert(moved);
+            let want = std::slice::from_ref(logical);
+            let at = |c: Option<&str>| -> Result<Option<ConflictSide>> {
+                Ok(match c {
+                    Some(c) => self.tree_entries(dir, c, want)?.get(logical).map(side),
+                    None => None,
+                })
+            };
+            out.push(Conflict {
+                path: logical.clone(),
+                kind: ConflictKind::FileDirectory,
+                base: at(base)?,
+                ours: at(Some(ours))?,
+                theirs: at(Some(theirs))?,
+                hunks: Vec::new(),
+            });
+        }
+        let binary: HashSet<&str> = parsed
+            .messages
+            .iter()
+            .filter(|(_, k)| k == "CONFLICT (binary)")
+            .flat_map(|(p, _)| p.iter().map(String::as_str))
+            .collect();
+        for (path, [b, o, t]) in &parsed.stages {
+            if consumed.contains(path.as_str()) {
+                continue;
+            }
+            let any_mode = |m: &str| {
+                [b, o, t]
+                    .iter()
+                    .any(|x| x.as_ref().is_some_and(|x| x.mode == m))
+            };
+            let kind = if any_mode("120000") {
+                ConflictKind::Symlink
+            } else if b.is_some() && (o.is_some() != t.is_some()) {
+                ConflictKind::ModifyDelete
+            } else if b.is_none() && o.is_some() && t.is_some() {
+                ConflictKind::AddAdd
+            } else if any_mode("160000") || binary.contains(path.as_str()) {
+                ConflictKind::Binary
+            } else {
+                ConflictKind::Content
+            };
+            let hunks = match (kind, b, o, t) {
+                (ConflictKind::Content, Some(b), Some(o), Some(t)) => {
+                    self.hunks_of(s, path, &b.id, &o.id, &t.id)?
+                }
+                _ => Vec::new(),
+            };
+            out.push(Conflict {
+                path: path.clone(),
+                kind,
+                base: b.clone(),
+                ours: o.clone(),
+                theirs: t.clone(),
+                hunks,
+            });
+        }
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(out)
+    }
+
+    /// The regions where `ours` and `theirs` (blob ids) disagree about `base`, each with its two candidates
+    /// written as blobs. Empty when the files do not allow it.
+    fn hunks_of(
+        &self,
+        s: &Scratch,
+        path: &str,
+        base: &str,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<Vec<ConflictHunk>> {
+        let blob = |id: &str| -> Result<Vec<u8>> {
+            Ok(self
+                .scratch_git(s)?
+                .args(["cat-file", "blob", id])
+                .run()?
+                .stdout)
+        };
+        let changes = |new: &str| -> Result<Vec<merge::Change>> {
+            let out = self
+                .scratch_git(s)?
+                .args([
+                    "diff",
+                    "-U0",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--diff-algorithm=myers",
+                ])
+                .args([base, new])
+                .run()?;
+            Ok(parse_changes(&String::from_utf8_lossy(&out.stdout)))
+        };
+        let (o_bytes, t_bytes) = (blob(ours)?, blob(theirs)?);
+        let o_lines: Vec<&[u8]> = o_bytes.split_inclusive(|b| *b == b'\n').collect();
+        let t_lines: Vec<&[u8]> = t_bytes.split_inclusive(|b| *b == b'\n').collect();
+        let Some(regions) = merge::regions(&changes(ours)?, &changes(theirs)?, &o_lines, &t_lines)
+        else {
+            return Ok(Vec::new());
+        };
+        let range = |(start, len): (usize, usize)| LineRange {
+            start: u32::try_from(start + 1).unwrap_or(u32::MAX),
+            len: u32::try_from(len).unwrap_or(u32::MAX),
+        };
+        let mut hunks = Vec::new();
+        for (n, r) in regions.iter().enumerate() {
+            let mut candidates = Vec::new();
+            for (name, source, lines, (start, len)) in [
+                ("ours", CandidateSource::Ours, &o_lines, r.ours),
+                ("theirs", CandidateSource::Theirs, &t_lines, r.theirs),
+            ] {
+                let text: Vec<u8> = lines[start..start + len].concat();
+                let content_id = self
+                    .scratch_git(s)?
+                    .args(["hash-object", "-w", "--stdin"])
+                    .stdin(text)
+                    .text()?;
+                candidates.push(Candidate {
+                    id: format!("{path}#{n}/{name}"),
+                    source,
+                    content_id,
+                });
+            }
+            hunks.push(ConflictHunk {
+                base_range: range(r.base),
+                ours_range: range(r.ours),
+                theirs_range: range(r.theirs),
+                candidates,
+            });
+        }
+        Ok(hunks)
+    }
+}
+
 /// Removes the lock directory of a shared store when dropped.
 struct StoreLock(PathBuf);
 
@@ -924,6 +1505,7 @@ fn parse_raw(out: &[u8]) -> Vec<RawEntry> {
             e
         };
         entries.push(RawEntry {
+            old_mode: f[0].into(),
             new_mode: f[1].into(),
             old_sha: f[2].into(),
             new_sha: f[3].into(),
@@ -1083,21 +1665,7 @@ impl Vcs for GitVcs {
     }
 
     fn commit_all(&self, dir: &Path, message: &str, author: &str) -> Result<String> {
-        let (name, email) = match author.split_once('<') {
-            Some((n, e)) => (
-                n.trim().to_owned(),
-                e.trim_end_matches('>').trim().to_owned(),
-            ),
-            None => (
-                author.trim().to_owned(),
-                format!("{}@han.invalid", author.trim()),
-            ),
-        };
-        let name = if name.is_empty() {
-            "han".to_owned()
-        } else {
-            name
-        };
+        let (name, email) = identity(author);
         let (tree, tmp, skip) = self.worktree_tree(dir)?;
         let result = (|| -> Result<String> {
             let parent = self.commit_of(dir, "HEAD").ok();
@@ -1365,58 +1933,66 @@ impl Vcs for GitVcs {
     }
 
     fn merge_simulate(&self, dir: &Path, ours: &str, theirs: &str) -> Result<MergeSim> {
+        Ok(MergeSim::from(&self.merge_record(dir, ours, theirs)?))
+    }
+
+    fn merge_record(&self, dir: &Path, ours: &str, theirs: &str) -> Result<ConflictRecord> {
         let ours = self.commit_of(dir, ours)?;
         let theirs = self.commit_of(dir, theirs)?;
-        let objects = self
-            .git(Some(dir))?
-            .args([
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-path",
-                "objects",
-            ])
-            .text()?;
-        // A scratch bare repository of this backend's own, borrowing the session's objects: no session
-        // configuration (merge drivers) and no session attributes apply.
-        let scratch = self.tmp_dir().join(unique("merge") + ".git");
-        let result = (|| -> Result<MergeSim> {
-            self.git(None)?
-                .args(["init", "--bare", "--quiet"])
-                .arg(format!("--template={}", slash(&self.template_dir())))
-                .arg(&scratch)
-                .run()?;
-            let info = scratch.join("objects").join("info");
-            std::fs::create_dir_all(&info)?;
-            std::fs::write(
-                info.join("alternates"),
-                format!("{}\n", objects.replace('\\', "/")),
-            )?;
-            let out = self
-                .git(Some(&scratch))?
-                .args([
-                    "merge-tree",
-                    "--write-tree",
-                    "--name-only",
-                    "--no-messages",
-                    "-z",
-                ])
-                .args([&ours, &theirs])
-                .run_codes(&[1])?;
-            let clean = out.status.success();
-            let mut conflicts: Vec<String> = out
-                .stdout
-                .split(|b| *b == 0)
-                .skip(1)
-                .filter(|p| !p.is_empty())
-                .map(|p| String::from_utf8_lossy(p).trim().to_owned())
-                .filter(|p| !p.is_empty())
-                .collect();
-            conflicts.sort();
-            conflicts.dedup();
-            Ok(MergeSim { clean, conflicts })
-        })();
-        let _ = remove_tree(&scratch);
-        result
+        let s = self.scratch(dir)?;
+        Ok(self.three_way(dir, &s, None, &ours, &theirs)?.1)
+    }
+
+    fn delta(&self, dir: &Path, base: &str, head: &str) -> Result<Delta> {
+        self.delta_between(dir, base, head)
+    }
+
+    fn path_disjoint(&self, dir: &Path, delta: &Delta, new_base: &str) -> Result<PathDisjoint> {
+        self.path_disjoint_of(dir, delta, new_base)
+    }
+
+    fn squash_rebase(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+        onto: &str,
+        message: &str,
+        author: &str,
+        committer_time: i64,
+    ) -> Result<RebaseOutcome> {
+        if committer_time < 0 {
+            return Err(VcsError::Invalid("committer time before the epoch".into()));
+        }
+        let base = self.commit_of(dir, base)?;
+        let head = self.commit_of(dir, head)?;
+        let onto = self.commit_of(dir, onto)?;
+        let delta = self.delta_between(dir, &base, &head)?;
+        let s = self.scratch(dir)?;
+        if self.path_disjoint_of(dir, &delta, &onto)?.ok {
+            let tree = self.apply_delta(dir, &s, &onto, &delta)?;
+            let commit = self.commit_with(&s, &tree, &onto, message, author, committer_time)?;
+            let got = self.delta_between(dir, &onto, &commit)?;
+            if got == delta {
+                return Ok(RebaseOutcome::Rebased(Rebased {
+                    commit,
+                    delta: got,
+                    path_disjoint: true,
+                }));
+            }
+            // Not the approved result after all (a similarity quirk): treat it as a merge.
+        }
+        let (tree, record) = self.three_way(dir, &s, Some(&base), &onto, &head)?;
+        if !record.conflicts.is_empty() {
+            return Ok(RebaseOutcome::Conflict(record));
+        }
+        let commit = self.commit_with(&s, &tree, &onto, message, author, committer_time)?;
+        let delta = self.delta_between(dir, &onto, &commit)?;
+        Ok(RebaseOutcome::Rebased(Rebased {
+            commit,
+            delta,
+            path_disjoint: false,
+        }))
     }
 
     fn remove_workspace(&self, ws: &Workspace) -> Result<()> {

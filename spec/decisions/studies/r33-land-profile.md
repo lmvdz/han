@@ -31,6 +31,8 @@ The ids are the `Vcs` backend's own object ids. `deltaDigest = sha256(JCS(delta)
 
 **Path-disjoint.** A changeset with base B is path-disjoint from a later commit B′ when every path in its delta (both sides of a rename) has content `from` in B′, or is absent in B′ where `from` is absent. Every ancestor directory of those paths must also be the same kind (file or directory) in B′. Then rebasing onto B′ writes exactly the approved contents, and the delta, and so `deltaDigest`, is unchanged. This check is exact and deterministic, and costs O(|delta| × depth) lookups (the same bound as Scion's rebase).
 
+*Implementation note (git backend, `crates/han-vcs`).* "Content" in the path-disjoint check is mode and id together; an ancestor that the delta itself replaces (a directory that becomes a file) is checked as the delta path it is. Two things in the entry differ from the list above. A rename is detected on **exact content only**: a deleted and an added path with the same content id and the same type (regular file or symlink), paired in path order when several share an id. The backend's similarity matching is not used, so any implementation reproduces the delta, and the digest, from the two trees; a moved and edited file is a delete and an add, which the path-disjoint check treats the same way. And an entry carries `fromMode`, the mode at the base: without it a mode change landed on the target in the meantime (for example the executable bit) would be undone by an approved content edit, because `from` alone is the same blob id. `deltaDigest` is `sha256(JCS(entries))` over the bare array, absent fields left out.
+
 ## 2. The land plan
 
 The reference plan for a lane (round 33 replaces `git_push` for landing; `git_push` stays for branch pushes):
@@ -117,6 +119,8 @@ A rebase or merge simulation that conflicts never writes conflict markers. It re
 ```
 
 `against` names the landed changes that touched the conflicting paths since the base, and their tasks. The resolver agent gets this record and both tasks' intent. It does not get a broken worktree. Its fix is a new proposal with `rebaseOf` (§2). `Vcs::merge_simulate` returns this shape. Overlap tier 3 (PLAN.md §6.6) uses the same record before anything lands.
+
+*Implementation note (git backend).* `Vcs::merge_record` returns the record; `merge_simulate` is the same data in its old `{clean, conflicts: [path]}` shape. `clean` lists the paths the change touches that merge cleanly. `base`, `ours` and `theirs` are tree entries `{mode, id}` (a directory is mode `040000`). `hunks` are filled for `content` conflicts: changes of both sides that overlap or touch in the base form one region, which is a hunk when the two sides' lines differ there. The line merge git itself runs may split a region finer, so the hunks are coarser than git's markers, never finer. Each hunk has an `ours` and a `theirs` candidate whose `contentId` is a blob of that side's lines; the `tool` source is a variant of the same enum and nothing fills it yet. A submodule pointer conflict is `binary`. A symbolic link on any side is `symlink`, taking precedence over the other kinds.
 
 ## 6. Cross-repo `dependsOn`
 
