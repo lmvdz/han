@@ -60,7 +60,11 @@ impl Repo {
         git(&main, &["commit", "-q", "-m", "base"]);
         git(&main, &["push", "-q", "-u", "origin", "main"]);
         git(t, &["clone", "-q", &origin.to_string_lossy(), "other"]);
-        Self { _tmp: tmp, dir, main }
+        Self {
+            _tmp: tmp,
+            dir,
+            main,
+        }
     }
 
     fn path(&self, name: &str) -> PathBuf {
