@@ -140,6 +140,7 @@ export interface Change {
   total: number;                 // the entries the delta has; more than files.length exactly when `truncated`
   files: ChangeFile[];
   truncated?: true;              // present when files are left out: tier 3
+  revertOf?: EntryId;            // A2: the succeeded vcs.land of this space this change reverts; the tier is at least that change's
 }
 export interface ChangeFile {
   path: string;                  // 1–255 bytes, `/`-separated, no empty, `.` or `..` segment, no control character
@@ -156,6 +157,7 @@ export interface ApprovalRule {
   humans?: boolean;                                     // only human approvals count (always so at tier 2 and 3)
   evidence?: string;                                    // a non-human approval counts only with evidence of this kind over the effect's gate.deltaDigest
   needs?: 1 | 2 | 3;                                    // distinct approvals a claim consumes (2 at least at tier 3)
+  revert?: true;                                        // A2: the rule covers only a revert (gate.revertOf); its evidence is over gate.revertedDigest; the lane approving its own revert is exempt from separateApprover
 }
 export interface GatesDoc {
   small: number; large: number;                         // lines: tier 0 only up to `small`; more than `large` is at least tier 2
@@ -219,7 +221,7 @@ export interface SpaceState {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      gate?: { tier: 0 | 1 | 2 | 3; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[] };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates; deltaDigest, changeDigest (sha256(JCS(change))) absent without a change; owners at most MAX_PATH_OWNERS
+      gate?: { tier: 0 | 1 | 2 | 3; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[]; revertOf?: EntryId; revertedDigest?: Hex };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates; deltaDigest, changeDigest (sha256(JCS(change))) absent without a change; owners at most MAX_PATH_OWNERS
       guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then guards(proposer), then guards(executor) at the proposal (Z1); fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId; evidence?: ApprovalEvidence }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS

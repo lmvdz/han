@@ -96,6 +96,14 @@ pub struct NodeState {
     pub published: Vec<(String, String, Value)>,
     /// Runs once, just before the next claim is applied (the world moves under the claim).
     pub on_claim: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Proposal ids are 64 hex characters, as the real ones are (a revert names one in `change.revertOf`).
+    pub hex_ids: bool,
+    /// Tasks created: `(assignees, ask)`.
+    pub tasks: Vec<(Vec<String>, String)>,
+    /// Path prefixes that make a change tier 2 (a machine's approval is refused for them, as Policy refuses it).
+    pub sensitive: Vec<String>,
+    /// The approvals the executor signed: `(proposal, evidence)`.
+    pub signed: Vec<(String, Option<han_node::api::ApprovalEvidence>)>,
 }
 
 #[derive(Default, Clone)]
@@ -115,15 +123,34 @@ impl FakeNode {
     }
 
     pub fn propose_raw(&self, action: &str, plan: &str, digest: &str) -> String {
-        let mut st = self.state();
+        Self::push_row(
+            &mut self.state(),
+            "@agent:a.localhost",
+            action,
+            plan,
+            digest,
+        )
+    }
+
+    fn push_row(
+        st: &mut NodeState,
+        proposer: &str,
+        action: &str,
+        plan: &str,
+        digest: &str,
+    ) -> String {
         st.head += 1;
         let seq = st.head;
-        let id = format!("p{seq}");
+        let id = if st.hex_ids {
+            han_core::ids::sha256_hex(format!("p{seq}").as_bytes())
+        } else {
+            format!("p{seq}")
+        };
         st.rows.push(EffectRow {
             key: format!("{SPACE}|{seq:012}|{id}"),
             space: SPACE.into(),
             proposal: id.clone(),
-            proposer: "@agent:a.localhost".into(),
+            proposer: proposer.into(),
             executor: EXEC.into(),
             action: action.into(),
             plan_digest: digest.into(),
@@ -297,6 +324,89 @@ impl FakeNode {
                     space: SPACE.into(),
                     seq: st.head,
                     id: format!("o{}", st.head),
+                    time: String::new(),
+                })
+            }
+            Command::EffectPropose { plan, .. } => {
+                // the executor proposes as itself (a revert); the plan is digested as the node would
+                let parsed = han_core::json::parse(plan.as_bytes())
+                    .map_err(|_| NodeError::invalid("plan"))?;
+                let digest = han_core::ids::json_digest(&parsed).unwrap();
+                let text =
+                    String::from_utf8(han_core::json::canonicalize(&parsed).unwrap()).unwrap();
+                let action = serde_json::from_str::<Value>(&text).unwrap()["action"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let id = Self::push_row(&mut st, EXEC, &action, &text, &digest);
+                Ok(CallResult::Receipt {
+                    space: SPACE.into(),
+                    seq: st.head,
+                    id,
+                    time: String::new(),
+                })
+            }
+            Command::EffectApprove {
+                proposal, evidence, ..
+            } => {
+                // Policy's answer to a machine: no approval at tier 2 or more (a never-auto path, a sensitive
+                // one), and a revert rule asks for the failing run as evidence.
+                let row = st
+                    .rows
+                    .iter()
+                    .find(|r| &r.proposal == proposal)
+                    .ok_or_else(|| NodeError::not_found("proposal"))?;
+                let plan: Value =
+                    serde_json::from_str(row.plan.as_deref().unwrap_or("{}")).unwrap();
+                let paths: Vec<String> = plan
+                    .pointer("/args/change/files")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|f| {
+                        ["path", "fromPath"]
+                            .into_iter()
+                            .filter_map(|k| f.get(k).and_then(Value::as_str).map(str::to_owned))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let tier2 = paths.iter().any(|p| {
+                    han_core::policy::NEVER_AUTO
+                        .iter()
+                        .any(|g| han_core::policy::glob_match(g, p))
+                        || st.sensitive.iter().any(|s| p.starts_with(s.as_str()))
+                });
+                if tier2 || evidence.is_none() {
+                    return Err(NodeError::denied("not an approver for this action"));
+                }
+                st.signed.push((proposal.clone(), evidence.clone()));
+                st.head += 1;
+                let head = st.head;
+                let r = st
+                    .rows
+                    .iter_mut()
+                    .find(|r| &r.proposal == proposal)
+                    .unwrap();
+                r.approvals.push(EXEC.into());
+                r.approved_seq = Some(head);
+                r.approved_at = Some("2026-10-15T10:00:00Z".into());
+                for r in &mut st.rows {
+                    r.head = head;
+                }
+                Ok(CallResult::Receipt {
+                    space: SPACE.into(),
+                    seq: head,
+                    id: format!("a{head}"),
+                    time: String::new(),
+                })
+            }
+            Command::TaskCreate { to, ask, .. } => {
+                st.tasks.push((to.clone(), ask.clone()));
+                st.head += 1;
+                Ok(CallResult::Receipt {
+                    space: SPACE.into(),
+                    seq: st.head,
+                    id: format!("t{}", st.tasks.len()),
                     time: String::new(),
                 })
             }

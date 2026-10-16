@@ -127,7 +127,7 @@ POLICY_FIELDS = {"visibility", "join", "membersMayInvite", "allowAgents", "appro
 
 # ── P-17 semantic gates (round 33): the grammar of paths, globs and the summary of a change ──
 PATH_OWNER = "@path-owner"                       # an approvers entry: an author of the effect's `gate.owners` (P-17)
-RULE_FIELDS = {"action", "approvers", "minTier", "maxTier", "humans", "evidence", "needs"}
+RULE_FIELDS = {"action", "approvers", "minTier", "maxTier", "humans", "evidence", "needs", "revert"}
 EVIDENCE_KIND = _rx(r"^[a-z0-9][a-z0-9./_-]{0,63}$")
 REPO_NAME = _rx(r"^[!-~]{1,128}$")
 GLOB_TEXT = _rx(r"^[A-Za-z0-9._/*?@+=,~:-]{1,256}$")
@@ -188,9 +188,10 @@ def glob_match(pat: str, path: str) -> bool:
 
 def _change(v) -> bool:
     """P-17: the summary of a change (`effect.propose.change`, and the plan's `args.change`): what Policy reads of a `vcs.land`."""
-    if not (isinstance(v, dict) and {"repo", "deltaDigest", "total", "files"} <= set(v) <= {"repo", "deltaDigest", "total", "files", "truncated"}): return False
+    if not (isinstance(v, dict) and {"repo", "deltaDigest", "total", "files"} <= set(v) <= {"repo", "deltaDigest", "total", "files", "truncated", "revertOf"}): return False
     if not (isinstance(v["repo"], str) and REPO_NAME.fullmatch(v["repo"]) and _hex(v["deltaDigest"]) and _int(v["total"])): return False
     if "truncated" in v and v["truncated"] is not True: return False
+    if "revertOf" in v and not _hex(v["revertOf"]): return False         # A2: the EntryId of the vcs.land this inverts
     files = v["files"]
     if not (isinstance(files, list) and len(files) <= MAX_CHANGE_FILES): return False
     last = None
@@ -221,6 +222,7 @@ def _rule(a) -> bool:
     if "minTier" in a and "maxTier" in a and a["minTier"] > a["maxTier"]: return False
     if "humans" in a and not isinstance(a["humans"], bool): return False
     if "evidence" in a and not (isinstance(a["evidence"], str) and EVIDENCE_KIND.fullmatch(a["evidence"])): return False
+    if "revert" in a and a["revert"] is not True: return False
     return "needs" not in a or (_int(a["needs"]) and 1 <= a["needs"] <= 3)
 
 def _gates(g) -> bool:
@@ -363,6 +365,7 @@ def rule_for(state, eff):
     g = eff.get("gate")
     for r in state["policy"]["approvals"]:
         if r["action"] != eff["action"] and r["action"] != "*": continue
+        if r.get("revert") and (g is None or "revertOf" not in g): continue          # A2: the revert predicate covers only a revert
         if ("minTier" in r or "maxTier" in r) and (g is None or g["tier"] < r.get("minTier", 0) or g["tier"] > r.get("maxTier", 3)): continue
         return r
     return DEFAULT_GATED_RULE if g is not None and g["tier"] >= 1 else None
@@ -376,8 +379,15 @@ def counts(state, eff, rule, actor, kind, evidence):
     if not any(x == actor or x == role or (x == PATH_OWNER and g is not None and actor in g.get("owners", [])) for x in rule["approvers"]): return False
     if kind != "human":
         if rule.get("humans") or (g is not None and g["tier"] >= 2): return False
-        if rule.get("evidence") and not (g is not None and evidence == {"kind": rule["evidence"], "over": g.get("deltaDigest")}): return False
+        if rule.get("evidence"):
+            over = g.get("revertedDigest") if rule.get("revert") and g is not None else g.get("deltaDigest") if g is not None else None   # A2: a revert's is over the reverted delta
+            if not (g is not None and evidence == {"kind": rule["evidence"], "over": over}): return False
     return True
+
+def self_revert_approval(eff, rule, author, kind) -> bool:
+    """A2: the lane approving its own revert, which `separateApprover` does not stop: a revert rule, a machine author that is both the
+    proposer and the executor. A machine never counts at tier 2 or more (`counts`), so this lifts nothing there."""
+    return bool(rule.get("revert")) and kind != "human" and author == eff["proposer"] and author == eff["executor"]
 
 def needs(eff, rule) -> int:
     """P-07 E3 (round 33): the distinct approvals a claim consumes under the rule: its `needs`, and two when the effect's tier is 3."""
@@ -390,7 +400,7 @@ def never_auto(path: str) -> bool:
 def _in_repo(rule, repo) -> bool:
     return "repo" not in rule or rule["repo"] == repo
 
-def gate_of(policy, body, ctx, author):
+def gate_of(policy, body, effects, ctx, author):
     """P-17: the gate of a `vcs.land` proposal, derived from the policy in force and the proposal's change summary, never from a tier
     the proposer states; None when the policy has no `gates` or the action is another. {tier, deltaDigest?, changeDigest?, owners?}."""
     gates = policy.get("gates")
@@ -418,6 +428,12 @@ def gate_of(policy, body, ctx, author):
     if not owners:                                                  # no path owner: the proposer's confirmed operator
         pr = ctx["profiles"][author]
         if pr["actorKind"] != "human" and pr.get("operatorConfirmed") and pr.get("operator"): owners = [pr["operator"]]
+    reverted = effects.get(ch["revertOf"]) if ch is not None and "revertOf" in ch else None
+    if reverted is not None:                                        # A2: a revert is at least the tier of the change it reverts
+        rg = reverted.get("gate")                                   # (one with no gate is not known: tier 3)
+        tier = max(tier, rg["tier"] if rg is not None else 3)
+        out["revertOf"] = ch["revertOf"]
+        if rg is not None and "deltaDigest" in rg: out["revertedDigest"] = rg["deltaDigest"]
     out["tier"] = tier
     if owners: out["owners"] = owners[:MAX_PATH_OWNERS]
     return out
@@ -442,7 +458,7 @@ def approval_candidates(state, eff, time):
         if a.get("consumedBy"): continue
         if time is not None and a.get("expiresAt") and ts(a["expiresAt"]) <= ts(time): continue
         if not rule or not counts(state, eff, rule, a["author"], a["actorKind"], a.get("evidence")): continue
-        if state["policy"]["separateApprover"] and a["author"] == eff["proposer"]: continue
+        if state["policy"]["separateApprover"] and a["author"] == eff["proposer"] and not self_revert_approval(eff, rule, a["author"], a["actorKind"]): continue
         out.append(a)
     return out
 
@@ -696,6 +712,10 @@ def _propose(state, entry, ctx, role):
     if over_bound(effect_guarded_for(state, ctx, author, b["executor"], b.get("task")), author, b["executor"]):
         return deny("too many guarded tasks; close some")                       # P-15: the bound is kept, never exceeded
     if "change" in b and b["action"] != "vcs.land": return invalid("a change summary belongs to a vcs.land")   # P-17
+    if "revertOf" in b.get("change", {}):                                   # A2: a revert names a vcs.land of this space that has landed
+        target = state["effects"].get(b["change"]["revertOf"])
+        if target is None or target["action"] != "vcs.land": return invalid("revertOf names no vcs.land of this space")
+        if target["phase"] != "succeeded": return deny("revertOf names a vcs.land that has not succeeded")
     return ALLOW
 
 def _budgeted_tasks_of(state, actor):
@@ -719,7 +739,8 @@ def _approve(state, entry, ctx, role):
     guards = guards_of(state, ctx, eff)
     if not (author in guards and role in READ_ROLES):                    # a guard approves as a guard (P-15): no rule, no cap
         if not rule or not counts(state, eff, rule, author, ctx["profiles"][author]["actorKind"], b.get("evidence")): return deny("not an approver for this action")
-        if state["policy"]["separateApprover"] and author == eff["proposer"]: return deny("separate approver required")
+        if (state["policy"]["separateApprover"] and author == eff["proposer"]
+                and not self_revert_approval(eff, rule, author, ctx["profiles"][author]["actorKind"])): return deny("separate approver required")
         if sum(1 for a in approval_candidates(state, eff, ctx["time"])
                if a["author"] != author and a["author"] not in guards) >= MAX_OPEN_APPROVALS:
             return deny("too many open approvals")       # only E3 candidates count; a new one supersedes the author's own; the guards' never count (P-08)
@@ -1071,7 +1092,7 @@ def fold(state, record, ctx) -> dict:
         if "task" in b: eff["task"] = b["task"]
         if "expiresAt" in b: eff["expiresAt"] = b["expiresAt"]
         eff["guardedFor"] = effect_guarded_for(s, ctx, author, b["executor"], b.get("task"))      # P-15: fixed now, never shrinks
-        gate = gate_of(s["policy"], b, ctx, author)                                              # P-17: fixed now, from the policy in force
+        gate = gate_of(s["policy"], b, s["effects"], ctx, author)                                              # P-17: fixed now, from the policy in force
         if gate is not None: eff["gate"] = gate
         s["effects"][eid] = eff
     elif kind == "effect.approve":

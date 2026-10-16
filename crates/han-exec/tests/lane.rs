@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -86,8 +87,12 @@ impl World {
     /// A change off the base editing one file; returns its head commit.
     fn change(&self, branch: &str, file: &str, content: &str) -> String {
         git(&self.work, &["checkout", "-q", "-b", branch, &self.base]);
+        if let Some(parent) = Path::new(file).parent() {
+            std::fs::create_dir_all(self.work.join(parent)).unwrap();
+        }
         std::fs::write(self.work.join(file), content).unwrap();
-        git(&self.work, &["commit", "-q", "-am", branch]);
+        git(&self.work, &["add", "-A"]);
+        git(&self.work, &["commit", "-q", "-m", branch]);
         let to = git(&self.work, &["rev-parse", "HEAD"]);
         git(&self.work, &["checkout", "-q", "main"]);
         to
@@ -138,6 +143,8 @@ impl World {
 struct ChecksState {
     fast: Vec<CheckRun>,
     full: Vec<CheckRun>,
+    /// What `full` says about one commit, where it differs from the default.
+    full_by_commit: HashMap<String, Vec<CheckRun>>,
     /// What `fast` becomes once a re-run was asked for.
     after_rerun: Option<Vec<CheckRun>>,
     requests: Vec<(Stage, String)>,
@@ -159,6 +166,16 @@ impl FakeChecks {
     }
     fn full(&self, runs: Vec<CheckRun>) {
         self.0.lock().unwrap().full = runs;
+    }
+    fn full_for(&self, commit: &str, runs: Vec<CheckRun>) {
+        self.0
+            .lock()
+            .unwrap()
+            .full_by_commit
+            .insert(commit.to_owned(), runs);
+    }
+    fn started(&self) -> Vec<String> {
+        self.0.lock().unwrap().started.clone()
     }
     fn commits(&self, stage: Stage) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
@@ -188,7 +205,11 @@ impl Checks for FakeChecks {
         }
         Ok(match req.stage {
             Stage::Fast => st.fast.clone(),
-            Stage::Full => st.full.clone(),
+            Stage::Full => st
+                .full_by_commit
+                .get(&req.commit)
+                .cloned()
+                .unwrap_or_else(|| st.full.clone()),
         })
     }
     async fn rerun(&self, _: &CheckRequest, names: &[String]) -> Result<bool, CheckError> {
@@ -1818,4 +1839,461 @@ async fn the_lane_opens_a_pull_request_and_reads_github_checks() {
         .filter(|r| r.0 == "POST" && r.1 == "/repos/o/r/pulls")
         .count();
     assert_eq!(creates, 1);
+}
+
+// ───────────────────────── the revert of a change that broke the post-merge run (A2) ─────────────────────────
+
+/// A rig whose repository runs `full` after the merge and reverts what breaks it.
+fn revert_rig() -> Rig {
+    let rig = Rig::with(|r| {
+        r.checks.full = vec!["full".into()];
+        r.checks.auto_revert = true;
+    });
+    rig.node.state().hex_ids = true;
+    rig.checks.fast(green());
+    rig
+}
+
+/// The commit a change landed as.
+fn landed_commit(rig: &Rig, proposal: &str) -> String {
+    rig.items(proposal)
+        .iter()
+        .rev()
+        .find_map(|i| i["commit"].as_str().map(str::to_owned))
+        .expect("the change was prepared")
+}
+
+/// The proposals the executor made as itself, with their plans: the lane's reverts.
+fn reverts(rig: &Rig) -> Vec<(String, Value)> {
+    rig.node
+        .state()
+        .rows
+        .iter()
+        .filter(|r| r.proposer == EXEC && r.action == "vcs.land")
+        .map(|r| {
+            (
+                r.proposal.clone(),
+                serde_json::from_str(r.plan.as_deref().unwrap()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// Passes until `done` holds (at most 25).
+async fn until(lane: &Lane, rig: &Rig, done: impl Fn(&Rig) -> bool) -> (Vec<String>, Vec<String>) {
+    let (mut stalled, mut escalated) = (Vec::new(), Vec::new());
+    for _ in 0..25 {
+        let rep = lane.pass().await.unwrap();
+        stalled.extend(rep.stalled.into_iter().map(|(_, w)| w));
+        escalated.extend(rep.escalated.into_iter().map(|(p, _)| p));
+        if done(rig) {
+            break;
+        }
+    }
+    (stalled, escalated)
+}
+
+fn failing(commit: &str, rig: &Rig) {
+    rig.checks.full(vec![run("full", "success")]);
+    rig.checks.full_for(commit, vec![run("full", "failure")]);
+}
+
+#[tokio::test]
+async fn a_tier_1_culprit_is_reverted_automatically_and_its_agent_gets_a_fix_forward_task() {
+    let rig = revert_rig();
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&p)["state"], "landed");
+    let commit = landed_commit(&rig, &p);
+    assert_eq!(rig.w.tip(), commit);
+    failing(&commit, &rig);
+    let (_, escalated) = until(&lane, &rig, |rig| {
+        rig.states(&p).last().map(String::as_str) == Some("reverted")
+            && reverts(rig)
+                .first()
+                .is_some_and(|(r, _)| rig.states(r).last().map(String::as_str) == Some("confirmed"))
+    })
+    .await;
+    assert_eq!(escalated.as_slice(), std::slice::from_ref(&p), "told once");
+
+    // The proposal: the lane's own, a vcs.land whose change names the culprit.
+    let made = reverts(&rig);
+    assert_eq!(made.len(), 1);
+    let (rv, plan) = &made[0];
+    assert_eq!(plan["args"]["change"]["revertOf"], p.as_str());
+    assert_eq!(plan["args"]["base"], commit.as_str());
+    // The revert commit's tree is the tree the culprit landed on: the delta is the exact inverse.
+    let tip = rig.w.tip();
+    assert_ne!(tip, commit);
+    assert_eq!(
+        git(&rig.w.remote, &["rev-parse", &format!("{tip}^{{tree}}")]),
+        git(
+            &rig.w.remote,
+            &["rev-parse", &format!("{}^{{tree}}", rig.w.base)]
+        )
+    );
+    assert_eq!(rig.w.show("main", "a.txt"), "a");
+    let inverse = rig.vcs.delta(&rig.w.remote, &commit, &rig.w.base).unwrap();
+    let landed = rig.vcs.delta(&rig.w.remote, &commit, &tip).unwrap();
+    assert_eq!(landed.digest().unwrap(), inverse.digest().unwrap());
+    assert_eq!(
+        plan["args"]["deltaDigest"],
+        inverse.digest().unwrap().as_str()
+    );
+    assert!(
+        git(&rig.w.remote, &["log", "-1", "--format=%s", "main"]).starts_with("Revert"),
+        "squashed into one commit"
+    );
+
+    // The lane approved it with the failing run over the culprit's delta as evidence.
+    let signed = rig.node.state().signed.clone();
+    assert_eq!(signed.len(), 1);
+    assert_eq!(&signed[0].0, rv);
+    let ev = signed[0].1.clone().unwrap();
+    let culprit_delta = rig.vcs.delta(&rig.w.remote, &rig.w.base, &commit).unwrap();
+    assert_eq!(ev.kind, "han.ci/1");
+    assert_eq!(ev.over, culprit_delta.digest().unwrap());
+
+    // The culprit: reverted, with the failing run and the revert's id.
+    let last = rig.last(&p);
+    assert_eq!(last["state"], "reverted");
+    assert_eq!(last["revertedBy"], rv.as_str());
+    assert_eq!(last["revertProposal"], rv.as_str());
+    let record = rig.blob(&last["evidence"]);
+    assert_eq!(record["commit"], commit.as_str());
+    assert_eq!(record["checks"][0]["conclusion"], "failure");
+    // Its agent: one fix-forward task, with the failing run.
+    let tasks = rig.node.state().tasks.clone();
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    assert_eq!(tasks[0].0, ["@agent:a.localhost"]);
+    assert!(
+        tasks[0].1.contains(&p) && tasks[0].1.contains("full"),
+        "{}",
+        tasks[0].1
+    );
+    assert_eq!(last["fixTask"], "t1");
+    // The revert went the normal way: fast checks on its own commit, then the compare-and-swap.
+    assert_eq!(
+        rig.states(rv),
+        ["queued", "testing", "landing", "landed", "confirmed"]
+    );
+    assert!(rig.checks.commits(Stage::Fast).contains(&tip));
+    assert!(rig.cancels().is_empty());
+}
+
+#[tokio::test]
+async fn the_lane_does_nothing_about_a_red_run_unless_auto_revert_is_on() {
+    let rig = Rig::with(|r| r.checks.full = vec!["full".into()]);
+    rig.node.state().hex_ids = true;
+    rig.checks.fast(green());
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    failing(&landed_commit(&rig, &p), &rig);
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert_eq!(rig.last(&p)["state"], "landed");
+    assert_eq!(rig.last(&p)["postMergeFailed"], true);
+    assert!(reverts(&rig).is_empty());
+    assert!(rig.node.state().tasks.is_empty());
+}
+
+/// A culprit whose revert no machine may approve: the lane proposes it at once, with the evidence, and it waits.
+async fn revert_waits_for_a_person(file: &str, sensitive: &[&str]) {
+    let rig = revert_rig();
+    rig.node.state().sensitive = sensitive.iter().map(|s| (*s).to_owned()).collect();
+    let p = rig.land("one", file, "edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    let commit = landed_commit(&rig, &p);
+    failing(&commit, &rig);
+    until(&lane, &rig, |rig| {
+        rig.last(&p).get("needsHuman").is_some() && !reverts(rig).is_empty()
+    })
+    .await;
+    let made = reverts(&rig);
+    assert_eq!(made.len(), 1, "proposed at once");
+    let rv = made[0].0.clone();
+    // Nothing is approved, and nothing lands.
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert!(rig.node.state().signed.is_empty());
+    assert!(rig.node.row(&rv).approvals.is_empty());
+    assert_eq!(rig.w.tip(), commit);
+    let last = rig.last(&p);
+    assert_eq!(last["state"], "landed");
+    assert_eq!(last["needsHuman"], true);
+    assert_eq!(last["revertProposal"], rv.as_str());
+    assert!(
+        last["detail"].as_str().unwrap().contains("person"),
+        "{last}"
+    );
+    assert!(
+        rig.items(&rv).is_empty(),
+        "the lane does not queue what nobody approved"
+    );
+    // The proposer still gets its task, with the evidence.
+    assert_eq!(rig.node.state().tasks.len(), 1);
+    assert_eq!(
+        rig.blob(&last["evidence"])["checks"][0]["conclusion"],
+        "failure"
+    );
+
+    // A person approves; the revert lands through the normal path, and the culprit is reverted.
+    rig.node.approve(&rv);
+    until(&lane, &rig, |rig| {
+        rig.states(&p).last().map(String::as_str) == Some("reverted")
+    })
+    .await;
+    assert_eq!(rig.last(&p)["revertedBy"], rv.as_str());
+    assert_ne!(rig.w.tip(), commit);
+    assert_eq!(
+        rig.node.state().tasks.len(),
+        1,
+        "one task, not one per pass"
+    );
+}
+
+#[tokio::test]
+async fn a_tier_2_culprit_is_proposed_for_revert_at_once_and_waits_for_a_person() {
+    revert_waits_for_a_person("payments/pay.txt", &["payments/"]).await;
+}
+
+#[tokio::test]
+async fn a_culprit_on_a_never_auto_path_waits_for_a_person() {
+    revert_waits_for_a_person(".github/workflows/ci.yml", &[]).await;
+}
+
+#[tokio::test]
+async fn bisection_among_three_landed_changes_finds_the_culprit() {
+    let rig = revert_rig();
+    let one = rig.land("one", "a.txt", "a, edited\n");
+    let two = rig.land("two", "b.txt", "b, edited\n");
+    let three = rig.land("three", "c.txt", "c, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    let (c1, c2, c3) = (
+        landed_commit(&rig, &one),
+        landed_commit(&rig, &two),
+        landed_commit(&rig, &three),
+    );
+    assert_eq!(rig.w.tip(), c3);
+    for p in [&one, &two, &three] {
+        assert_eq!(rig.last(p)["state"], "landed");
+    }
+
+    // Only the tip's run has ended, and it is red: the three changes are the candidates.
+    rig.checks.full_for(&c3, vec![run("full", "failure")]);
+    lane.pass().await.unwrap();
+    assert!(
+        rig.last(&three)["detail"]
+            .as_str()
+            .unwrap()
+            .contains("bisecting"),
+        "{}",
+        rig.last(&three)
+    );
+    assert!(
+        rig.checks.started().contains(&c2),
+        "the middle one is run first"
+    );
+    assert!(reverts(&rig).is_empty(), "no culprit yet");
+
+    // The middle one is red: the culprit is the first or the second.
+    rig.checks.full_for(&c2, vec![run("full", "failure")]);
+    lane.pass().await.unwrap();
+    assert!(rig.checks.started().contains(&c1), "then the first");
+    assert!(reverts(&rig).is_empty());
+
+    // The first is green: the second broke it.
+    rig.checks.full_for(&c1, vec![run("full", "success")]);
+    rig.checks.full(vec![run("full", "success")]);
+    rig.checks.full_for(&c2, vec![run("full", "failure")]);
+    rig.checks.full_for(&c3, vec![run("full", "failure")]);
+    until(&lane, &rig, |rig| {
+        ["reverted", "confirmed"].contains(&rig.last(&three)["state"].as_str().unwrap())
+            && rig.last(&two)["state"] == "reverted"
+    })
+    .await;
+    assert_eq!(rig.last(&two)["state"], "reverted");
+    assert_eq!(rig.last(&two)["fixTask"], "t1");
+    assert_eq!(rig.node.state().tasks.len(), 1);
+    assert_eq!(rig.last(&one)["state"], "confirmed");
+    // The change behind the culprit was red because of it: the revert's green run confirms it.
+    assert_eq!(rig.last(&three)["state"], "confirmed");
+    assert!(rig.last(&three).get("postMergeFailed").is_none());
+    // Only the culprit's file went back.
+    assert_eq!(rig.w.show("main", "a.txt"), "a, edited");
+    assert_eq!(rig.w.show("main", "b.txt"), "b");
+    assert_eq!(rig.w.show("main", "c.txt"), "c, edited");
+    assert_eq!(reverts(&rig).len(), 1);
+    assert_eq!(
+        reverts(&rig)[0].1["args"]["change"]["revertOf"],
+        two.as_str()
+    );
+}
+
+#[tokio::test]
+async fn a_revert_that_conflicts_with_later_changes_escalates_as_stalled_and_forces_nothing() {
+    let rig = revert_rig();
+    let (a, b) = rig.w.chain("chain");
+    let base = rig.w.base.clone();
+    let pa = rig.node.propose(&rig.plan(&a, json!({})));
+    rig.node.approve(&pa);
+    let pb = rig.node.propose(&rig.plan_from(
+        &a,
+        &base,
+        &b,
+        json!({"dependsOn": [{"repo": "local:origin", "proposal": pa}]}),
+    ));
+    rig.node.approve(&pb);
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    for _ in 0..3 {
+        lane.pass().await.unwrap();
+    }
+    assert_eq!(rig.last(&pa)["state"], "landed");
+    assert_eq!(rig.last(&pb)["state"], "landed");
+    let tip = rig.w.tip();
+    assert_eq!(rig.w.show("main", "a.txt"), "a, second");
+
+    // The first broke the run, but the second edited the same file after it.
+    rig.checks.full(vec![run("full", "success")]);
+    rig.checks
+        .full_for(&landed_commit(&rig, &pa), vec![run("full", "failure")]);
+    rig.checks
+        .full_for(&landed_commit(&rig, &pb), vec![run("full", "failure")]);
+    let (stalled, _) = until(&lane, &rig, |rig| {
+        reverts(rig).first().is_some_and(|(r, _)| {
+            rig.items(r)
+                .last()
+                .is_some_and(|i| i.get("stalled").is_some())
+        })
+    })
+    .await;
+    let made = reverts(&rig);
+    assert_eq!(made.len(), 1);
+    let rv = &made[0].0;
+    let last = rig.last(rv);
+    assert_eq!(last["state"], "queued", "{last}");
+    assert!(
+        last["stalled"].as_str().unwrap().contains("does not apply"),
+        "{last}"
+    );
+    assert!(
+        stalled.iter().any(|w| w.contains("does not apply")),
+        "{stalled:?}"
+    );
+    // The conflict record names the path.
+    let record = rig.blob(&last["conflict"]);
+    assert_eq!(record["conflicts"][0]["path"], "a.txt");
+    // Nothing was forced, rejected or cancelled; the culprit waits, escalated.
+    assert_eq!(rig.w.tip(), tip);
+    assert!(rig.cancels().is_empty());
+    assert_eq!(rig.last(&pa)["state"], "landed");
+    assert_eq!(rig.last(&pa)["postMergeFailed"], true);
+    assert_eq!(rig.last(&pa)["escalated"], true);
+    // It does not hold the lane: a later change still lands.
+    let c = rig.land("later", "c.txt", "c, edited\n");
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert!(
+        ["landed", "confirmed"].contains(&rig.last(&c)["state"].as_str().unwrap()),
+        "{}",
+        rig.last(&c)
+    );
+    assert_eq!(rig.last(rv)["state"], "queued");
+}
+
+#[tokio::test]
+async fn a_restart_in_the_middle_of_a_revert_carries_on_without_repeating_a_step() {
+    let rig = revert_rig();
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let commit;
+    {
+        let (exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        commit = landed_commit(&rig, &p);
+        drop(lane);
+        drop(exec);
+    }
+    failing(&commit, &rig);
+    // A new executor and lane for every pass: whatever one left half done, the next finds in the journal.
+    for _ in 0..25 {
+        let (exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        drop(lane);
+        drop(exec);
+        if rig.states(&p).last().map(String::as_str) == Some("reverted") {
+            break;
+        }
+    }
+    assert_eq!(rig.last(&p)["state"], "reverted");
+    assert_eq!(reverts(&rig).len(), 1, "one revert proposal");
+    assert_eq!(rig.node.state().tasks.len(), 1, "one task");
+    assert_eq!(rig.node.state().signed.len(), 1, "one approval");
+    assert_eq!(rig.w.show("main", "a.txt"), "a");
+    let rv = reverts(&rig)[0].0.clone();
+    assert_eq!(
+        rig.node.state().outcomes.len(),
+        2,
+        "two landings: the change and its revert"
+    );
+    assert!(
+        rig.node
+            .state()
+            .outcomes
+            .iter()
+            .all(|(_, result, started)| result == "succeeded" && started == "yes"),
+        "{:?}",
+        rig.node.state().outcomes
+    );
+    assert_eq!(rig.last(&p)["revertedBy"], rv.as_str());
+}
+
+#[tokio::test]
+async fn a_revert_of_something_this_executor_did_not_land_is_refused() {
+    let rig = revert_rig();
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    // An agent proposes a "revert" of it whose delta is not the inverse.
+    let other = rig.w.change("other", "b.txt", "b, edited\n");
+    let mut plan = rig.plan(&other, json!({}));
+    let delta = plan["args"]["deltaDigest"].as_str().unwrap().to_owned();
+    plan["args"]["change"] = json!({
+        "repo": "local:origin", "deltaDigest": delta, "total": 1,
+        "files": [{"path": "b.txt", "kind": "modify", "lines": 2}],
+        "revertOf": p,
+    });
+    let fake = rig.node.propose(&plan);
+    rig.node.approve(&fake);
+    // And one that names a change that never landed.
+    let mut plan = rig.plan(&other, json!({}));
+    plan["args"]["change"] = json!({
+        "repo": "local:origin", "deltaDigest": delta, "total": 1,
+        "files": [{"path": "b.txt", "kind": "modify", "lines": 2}],
+        "revertOf": "0".repeat(64),
+    });
+    let unknown = rig.node.propose(&plan);
+    rig.node.approve(&unknown);
+    lane.pass().await.unwrap();
+    for (q, why) in [(&fake, "inverse"), (&unknown, "no land this executor made")] {
+        let last = rig.last(q);
+        assert_eq!(last["state"], "rejected", "{last}");
+        assert_eq!(last["reason"], "policy");
+        assert!(last["detail"].as_str().unwrap().contains(why), "{last}");
+    }
+    assert_eq!(rig.w.show("main", "b.txt"), "b");
 }

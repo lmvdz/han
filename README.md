@@ -20,7 +20,7 @@ HAN is being built in Rust, in this repository, and its first users are building
 | Part | What it does |
 |---|---|
 | `han-core` | Policy as pure functions: all 168 Policy vectors pass, with 0 divergences from the reference under differential fuzzing (M1) |
-| `han-seq`, `han-net` | the sequencer and the `han/1` binding over QUIC (iroh), dialled by key: all <!--s:wv_n-->117<!--/s--> wire vectors pass over QUIC. Also home tickets, the peer filter, federation with pinned remote profiles, and a hosting rule: only known actors create spaces on a home (M2) |
+| `han-seq`, `han-net` | the sequencer and the `han/1` binding over QUIC (iroh), dialled by key: all <!--s:wv_n-->118<!--/s--> wire vectors pass over QUIC. Also home tickets, the peer filter, federation with pinned remote profiles, and a hosting rule: only known actors create spaces on a home (M2) |
 | `han-node` | the per-device daemon: keys, sync, outbox, live views (board, sessions, approvals, overlaps), and the node API over JSON-RPC on a named pipe or Unix socket. A three-node simulation runs in CI (M3) |
 | `han-timeline` | live work timelines, built by a two-team clean room from a behaviour-only spec (T0, T1) |
 | `han-host`, `han-exec`, `han-mcp`, `han-vcs` | agent sessions over ACP in a sandbox (MXC on Windows, bubblewrap on Linux) whose only way out is an egress proxy; agent tools (`propose`, `team_*`); an executor that runs approved effects at most once; git workspaces, changesets and mirroring (M4) |
