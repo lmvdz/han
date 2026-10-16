@@ -335,6 +335,8 @@ fn log_line(data: &std::path::Path, line: &str) {
 }
 
 async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
+    // Started by the logon task through `conhost.exe --headless`: end with it.
+    han_node::lifetime::die_with_console_host();
     let actor = args.actor()?.to_owned();
     let actor = actor.as_str();
     std::fs::create_dir_all(&args.data)?;

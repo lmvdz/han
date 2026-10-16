@@ -48,15 +48,28 @@ impl Drop for Scratch {
     }
 }
 
-/// Registers a scratch task with the action `install-service` would give, and starts it `runs` times.
-/// Returns how many runs opened the pipe within 10 s.
-fn measure(headless: bool, runs: usize, tag: &str) -> usize {
+/// A registered scratch task.
+struct Task {
+    name: String,
+    endpoint: String,
+    dir: std::path::PathBuf,
+    _scratch: Scratch,
+}
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Registers a scratch task with the action `install-service` would give.
+fn register(headless: bool, tag: &str) -> Task {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .subsec_nanos();
     let name = format!("han-test-{tag}-{}-{nanos}", std::process::id());
-    let endpoint = format!("han-test-{tag}-{}-{nanos}", std::process::id());
+    let endpoint = name.clone();
     // The task runs as the user, outside any sandbox of the test run: `HAN_E2E_TASK_DIR` names a directory
     // it can write when the temp directory is not one.
     let base = std::env::var_os("HAN_E2E_TASK_DIR")
@@ -80,15 +93,30 @@ fn measure(headless: bool, runs: usize, tag: &str) -> usize {
         .lines()
         .skip_while(|l| !l.starts_with("$ErrorActionPreference"))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(
+            "
+",
+        )
         .replace("'HAN Node'", &format!("'{name}'"));
     assert_eq!(
         script.contains("conhost.exe"),
         headless,
         "the action is not as asked: {script}"
     );
-    let _scratch = Scratch(name.clone());
+    let scratch = Scratch(name.clone());
     assert!(powershell(&script), "registering the scratch task failed");
+    Task {
+        name,
+        endpoint,
+        dir,
+        _scratch: scratch,
+    }
+}
+
+/// Starts a scratch task `runs` times. Returns how many runs opened the pipe within 10 s.
+fn measure(headless: bool, runs: usize, tag: &str) -> usize {
+    let task = register(headless, tag);
+    let (name, endpoint) = (task.name.as_str(), task.endpoint.as_str());
     let mut up = 0;
     for _ in 0..runs {
         assert!(powershell(&format!(
@@ -97,7 +125,7 @@ fn measure(headless: bool, runs: usize, tag: &str) -> usize {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut opened = false;
         while Instant::now() < deadline {
-            if pipe_exists(&endpoint) {
+            if pipe_exists(endpoint) {
                 opened = true;
                 break;
             }
@@ -109,14 +137,12 @@ fn measure(headless: bool, runs: usize, tag: &str) -> usize {
         powershell(&format!(
             "Stop-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue"
         ));
-        end_nodes(&name);
+        end_nodes(name);
         let gone = Instant::now() + Duration::from_secs(15);
-        while pipe_exists(&endpoint) && Instant::now() < gone {
+        while pipe_exists(endpoint) && Instant::now() < gone {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    drop(_scratch);
-    let _ = std::fs::remove_dir_all(&dir);
     up
 }
 
@@ -137,4 +163,48 @@ fn a_node_started_by_task_scheduler_through_conhost_headless_opens_its_pipe() {
         wrapped, runs,
         "the wrapped task stalled ({wrapped}/{runs}; unwrapped {plain}/{runs})"
     );
+}
+
+/// The processes whose command line names the scratch endpoint.
+fn nodes_of(endpoint: &str) -> bool {
+    Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "if (Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*--endpoint {endpoint}*'                  -and $_.Name -ne 'powershell.exe' }}) {{ exit 1 }}"
+            ),
+        ])
+        .status()
+        .is_ok_and(|s| !s.success())
+}
+
+#[test]
+fn stopping_the_task_ends_the_node_too() {
+    if std::env::var_os("HAN_E2E_TASK").is_none() {
+        eprintln!("skipped: set HAN_E2E_TASK=1 to start scratch scheduled tasks");
+        return;
+    }
+    let task = register(true, "stop");
+    let (name, endpoint) = (task.name.as_str(), task.endpoint.as_str());
+    assert!(powershell(&format!(
+        "Start-ScheduledTask -TaskName '{name}'"
+    )));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut up = false;
+    while !up && Instant::now() < deadline {
+        up = pipe_exists(endpoint);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(up, "the node did not open its pipe");
+    assert!(nodes_of(endpoint));
+    powershell(&format!("Stop-ScheduledTask -TaskName '{name}'"));
+    let gone = Instant::now() + Duration::from_secs(20);
+    while nodes_of(endpoint) && Instant::now() < gone {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let left = nodes_of(endpoint);
+    end_nodes(name);
+    assert!(!left, "a node outlived the task that started it");
 }
