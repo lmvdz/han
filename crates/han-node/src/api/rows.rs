@@ -781,6 +781,11 @@ pub struct EffectRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub gate_tier: Option<u8>,
+    /// Whether the rule that applies to this action lets the proposal itself satisfy E3 (P-17, round 33): no
+    /// approval is asked, so an executor's gate does not wait for one. Policy's report, judged under the policy in
+    /// force now; guards (P-15) are asked as ever.
+    #[serde(default)]
+    pub proposer_suffices: bool,
     /// The delta digest of the change summary the body carries (the gate's `deltaDigest`): what an approval's
     /// evidence must be over. Absent when the proposal carried no change.
     #[serde(default, skip_serializing_if = "Option::is_none")]

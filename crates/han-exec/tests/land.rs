@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use han_exec::actions::{VcsLand, depends_cycle};
+use han_exec::actions::{VcsLand, VcsTry, depends_cycle};
 use han_exec::{
     Action, ActionCtx, ExecConfig, IdempotencyKey, LaneInstruction, Outcome, PlanError, RepoTarget,
 };
@@ -530,4 +530,130 @@ async fn a_summary_that_is_not_one_or_is_for_another_plan_fails_the_plan_check()
     let mut plan = w.plan_with(&good);
     plan["args"]["change"]["files"][0]["path"] = json!("../a.txt");
     schema(plan, "not a valid summary");
+}
+
+// ───────────────────────── vcs.try (P-17): the checks, and nothing lands ─────────────────────────
+
+impl World {
+    /// The plan of trying the change: a land's plan without `tier` and `rebase`.
+    fn try_plan(&self) -> Value {
+        let mut plan = self.plan();
+        plan["action"] = json!("vcs.try");
+        let args = plan["args"].as_object_mut().unwrap();
+        args.remove("tier");
+        args.remove("rebase");
+        plan
+    }
+}
+
+#[tokio::test]
+async fn a_try_verifies_the_lanes_commit_and_moves_no_ref() {
+    let w = World::new();
+    let plan = w.try_plan();
+    VcsTry.plan_check(&plan, &w.config).unwrap();
+    VcsTry.preflight(&plan, &w.ctx(None, true)).await.unwrap();
+    let onto = w.advance(
+        "b.txt",
+        "b, moved on
+",
+    );
+    let commit = w.squash(&onto);
+    let ctx = w.ctx(Some((&onto, &commit)), true);
+    let o = VcsTry.run(&plan, &key(), &ctx).await;
+    let Outcome::Succeeded { detail } = &o else {
+        panic!("{o:?}")
+    };
+    assert!(
+        detail.contains(&commit) && detail.contains("nothing was landed"),
+        "{detail}"
+    );
+    assert_eq!(w.tip(), onto, "the ref did not move");
+    // After a restart the journal's instruction answers for the launch; without it nothing can be said.
+    assert!(matches!(
+        VcsTry.lookup(&plan, &key(), &ctx).await,
+        Some(Outcome::Succeeded { .. })
+    ));
+    assert!(
+        VcsTry
+            .lookup(&plan, &key(), &w.ctx(None, true))
+            .await
+            .is_none()
+    );
+    assert!(VcsTry.lane_only());
+}
+
+#[tokio::test]
+async fn a_try_refuses_a_commit_that_is_not_the_change_or_not_on_onto() {
+    let w = World::new();
+    let plan = w.try_plan();
+    let onto = w.advance(
+        "b.txt", "one
+",
+    );
+    let base = w.base.clone();
+    let stale = w.squash(&base);
+    let o = VcsTry
+        .run(&plan, &key(), &w.ctx(Some((&onto, &stale)), true))
+        .await;
+    failed_unstarted(&o, "not one commit on");
+    // A commit on `onto` with another change in it.
+    let tree = format!("{onto}^{{tree}}");
+    let other = git(&w.work, &["commit-tree", "-p", &onto, "-m", "x", &tree]);
+    let o = VcsTry
+        .run(&plan, &key(), &w.ctx(Some((&onto, &other)), true))
+        .await;
+    failed_unstarted(&o, "not the change the plan names");
+    let o = VcsTry.run(&plan, &key(), &w.ctx(None, true)).await;
+    failed_unstarted(&o, "no lane instruction");
+    assert_eq!(w.tip(), onto);
+}
+
+#[tokio::test]
+async fn a_try_plan_is_a_lands_without_the_landing_members_and_never_a_revert() {
+    let w = World::new();
+    let ok = w.try_plan();
+    VcsTry.plan_check(&ok, &w.config).unwrap();
+    // `tier`, `rebase`, `dependsOn` and `rebaseOf` are a land's.
+    for (k, v) in [
+        ("tier", json!(1)),
+        ("rebase", json!("none")),
+        ("dependsOn", json!([])),
+        ("rebaseOf", json!("p0")),
+    ] {
+        let mut bad = ok.clone();
+        bad["args"][k] = v;
+        assert!(
+            matches!(
+                VcsTry.plan_check(&bad, &w.config),
+                Err(PlanError::Schema(_))
+            ),
+            "{k}"
+        );
+    }
+    // A ref outside the landing refs, an action that is not a try, and a revert.
+    let mut other = ok.clone();
+    other["args"]["ref"] = json!("refs/heads/release");
+    assert!(matches!(
+        VcsTry.plan_check(&other, &w.config),
+        Err(PlanError::OutOfScope(_))
+    ));
+    assert!(matches!(
+        VcsTry.plan_check(&w.plan(), &w.config),
+        Err(PlanError::Schema(_))
+    ));
+    let mut revert = ok.clone();
+    revert["args"]["change"] = json!({"repo": "local:origin", "deltaDigest": w.delta_digest(), "total": 0,
+        "files": [], "revertOf": "a".repeat(64)});
+    assert!(matches!(
+        VcsTry.plan_check(&revert, &w.config),
+        Err(PlanError::Schema(_))
+    ));
+    // The landing action refuses a try's plan, as a try refuses a land's.
+    assert!(VcsLand.plan_check(&ok, &w.config).is_err());
+    let mut none = (*w.config).clone();
+    none.repos[0].landing_refs.clear();
+    assert!(matches!(
+        VcsTry.plan_check(&ok, &none),
+        Err(PlanError::OutOfScope(_))
+    ));
 }

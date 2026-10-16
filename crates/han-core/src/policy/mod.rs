@@ -39,16 +39,16 @@ pub use body::{
 };
 pub use decide::{decide, decide_value, relevant_actors};
 pub use doc::{
-    ActorKind, AllowAgents, ApprovalRule, GatesDoc, JoinMode, KeyDoc, NewRole, OwnerRule,
-    PathClass, PathRule, PolicyDoc, ProfileDoc, Role, ServersDoc, SessionLevel, SessionsDoc,
-    SteerMode, Visibility,
+    ActorKind, AllowAgents, ApprovalRule, CHECK_ONLY, GatesDoc, JoinMode, KeyDoc, NewRole,
+    OwnerRule, PathClass, PathRule, PolicyDoc, ProfileDoc, Role, ServersDoc, SessionLevel,
+    SessionsDoc, SteerMode, Visibility,
 };
 pub use fold::fold;
 pub use gate::{
     Change, ChangeFile, Evidence, FileKind, Gate, MAX_CHANGE_BYTES, MAX_CHANGE_FILES,
     MAX_GATE_RULES, MAX_PATH_OWNERS, NEVER_AUTO, PATH_OWNER, change_tier, glob_match,
 };
-pub use guard::{GuardInput, GuardStatus, abandon_after, guard_status};
+pub use guard::{GuardInput, GuardStatus, abandon_after, guard_status, proposer_suffices};
 pub use state::{
     ActorSet, Approval, ClaimState, Effect, EntryRef, Interval, KeyState, Phase, ProfileState,
     Remaining, Session, Source, SpaceState, Task,

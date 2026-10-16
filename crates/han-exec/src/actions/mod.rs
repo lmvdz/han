@@ -1,9 +1,10 @@
-//! The actions: [`GitPush`], [`VcsLand`], [`OpenPr`], [`HttpRequest`].
+//! The actions: [`GitPush`], [`VcsLand`], [`VcsTry`], [`OpenPr`], [`HttpRequest`].
 
 mod git_push;
 mod http_request;
 mod land;
 mod open_pr;
+mod vcs_try;
 
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ pub use http_request::{HttpRequest, is_public};
 pub use land::{REF_MOVED, VcsLand, bundle_base, change_digest, commit_title, depends_cycle};
 pub use open_pr::OpenPr;
 pub(crate) use open_pr::ensure_pr;
+pub use vcs_try::{VcsTry, try_title};
 
 use crate::{Action, ActionCtx, PlanError};
 
@@ -20,6 +22,7 @@ pub fn builtin() -> Vec<Arc<dyn Action>> {
     vec![
         Arc::new(GitPush),
         Arc::new(VcsLand),
+        Arc::new(VcsTry),
         Arc::new(OpenPr),
         Arc::new(HttpRequest),
     ]

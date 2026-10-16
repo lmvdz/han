@@ -1,0 +1,829 @@
+{
+ "name": "try-budget",
+ "rules": [
+  "P-17",
+  "P-06",
+  "P-07 E6",
+  "P-07 E5"
+ ],
+ "description": "round 33: the proposer rule lifts only the approval: a try is an ordinary costed effect in a budgeted space; a non-human must name an open budgeted task assigned to it and the cost is reserved from and settled on that task at the claim, a human's draws on the space; no cost, another task or a task without a budget is denied at the proposal, a cost the task cannot cover or a closed task at the claim",
+ "profiles": {
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       },
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": {
+       "unit": "USD-cent",
+       "amount": 1000
+      },
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@x:c.example"
+     ],
+     "budget": {
+      "unit": "USD-cent",
+      "amount": 300
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@x:c.example"
+     ]
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "to": [
+      "@x:c.example"
+     ],
+     "budget": {
+      "unit": "USD-cent",
+      "amount": 50
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "ee7e850e319018a9b6c6da53031ad8e53b1e5199d7c91c8a30cc25f5c5cbb5f3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "c302fdfaf71bf596680e2cf37d7bcc459bfb9cbec9076958d4efb7ee825a95e6",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "denied",
+   "note": "a budgeted space: a cost is required"
+  },
+  {
+   "entry": {
+    "id": "39f82526861f1e785e2bf52b0828194c4fa43c62a0d5be74ec097cf8c6a88151",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "d946dfde6794e0fd541b1f265a0f7e5efc52bd4627f1b0d5a5f0c9a2c12e7a35",
+     "repeatable": false,
+     "task": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a0b",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "denied",
+   "note": "its own budgeted task, but no cost: a try is costed like any effect"
+  },
+  {
+   "entry": {
+    "id": "a906e1889fa2af4c654e7fd303171ff58a30fd72f291429ef79f782e5dda6007",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "64e77186f548ebe913046335e32f3348d13f4c27e28086cfa53193a095d9f70d",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a0h",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "denied",
+   "note": "a human's try needs a cost too"
+  },
+  {
+   "entry": {
+    "id": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "5f89110bcddab35f2a03b17217daa7f346cd09aacfccd176c94c1fbac772e043",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "denied",
+   "note": "a non-human names a budgeted task of its own"
+  },
+  {
+   "entry": {
+    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "a879b7a5d3fb5820eeca4c47ad2b0df9f9e0d3e8b5724fe666e86d9348ab767f",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     },
+     "task": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "denied",
+   "note": "a task with no budget"
+  },
+  {
+   "entry": {
+    "id": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "a801d13b71176b2c8776766043f7e3fe5352872e509c3a670b3e4b89e618d1c9",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     },
+     "task": "nope"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "invalid",
+   "note": "no such task"
+  },
+  {
+   "entry": {
+    "id": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "1ea2b737911f2a3b7fae227c179a6ab049b4ff62af1264ac5d0645c58f5207e6",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     },
+     "task": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "effects.80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb.task": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b"
+   }
+  },
+  {
+   "entry": {
+    "id": "85344bd3d01c875eedcc26680ec1738fa64057ebe84fa818b6685a8d679ddc50",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ca4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow",
+   "check": {
+    "tasks.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.left": {
+     "unit": "USD-cent",
+     "amount": 290
+    },
+    "budgetLeft": {
+     "unit": "USD-cent",
+     "amount": 650
+    },
+    "effects.80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb.claims.0.approval": "<missing>",
+    "effects.80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb.claims.0.reserved": {
+     "unit": "USD-cent",
+     "amount": 10
+    }
+   },
+   "note": "reserved from t1, no approval needed"
+  },
+  {
+   "entry": {
+    "id": "49f8e75d21eb6325c13fbfabd1de7c868f9d8302aeb7f207e5228b5395c2c1b3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "85344bd3d01c875eedcc26680ec1738fa64057ebe84fa818b6685a8d679ddc50",
+     "result": "succeeded",
+     "started": "yes",
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 4
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-oa4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "allow",
+   "check": {
+    "tasks.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.left": {
+     "unit": "USD-cent",
+     "amount": 296
+    }
+   },
+   "note": "settled on t1: the rest is refunded"
+  },
+  {
+   "entry": {
+    "id": "c72608cc2beb1d1eb6c3d8bf4804201cd5a663ace817d72542b9f4e1ff25c666",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "14ccac016445b73683b45093d4895c891e7202c48b255fed3185e517707b2bdb",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 400
+     },
+     "task": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "c8a749593fd1df8d7ae29deda62b1118dd0f2d01a7d861a8c6de072f94966930",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c72608cc2beb1d1eb6c3d8bf4804201cd5a663ace817d72542b9f4e1ff25c666",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ca5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "denied",
+   "note": "E6: t1 holds 296"
+  },
+  {
+   "entry": {
+    "id": "c8aa24c6b2600e8af31f06c46e7b723d931f33c8b2d52a04f7811849ab0cd6e0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "dc992237ee0288c783ae59acf3be842086bbd9550a0a69aa9a4a5956e91e44d8",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 40
+     },
+     "task": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "task.update",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "task": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "state": "done"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-c3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "7ba2e13511f6c82a0e54cb85a9653809219922dbbc1601df3d36f73150464e83",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c8aa24c6b2600e8af31f06c46e7b723d931f33c8b2d52a04f7811849ab0cd6e0",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ca6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "denied",
+   "note": "E5: the task is closed"
+  },
+  {
+   "entry": {
+    "id": "7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "9b5ec3a53fa67d523b05290270adc923d41cfe49280b63110c4d7607658b0595",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 20
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-h1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "allow",
+   "note": "a human's draws on the space"
+  },
+  {
+   "entry": {
+    "id": "c1de06ab156a9102d798d0d5fe1450e67fbda840f6cc963b026100c0e67d359b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ch1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "allow",
+   "check": {
+    "budgetLeft": {
+     "unit": "USD-cent",
+     "amount": 680
+    },
+    "effects.7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374.claims.0.approval": "<missing>"
+   }
+  },
+  {
+   "entry": {
+    "id": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "834c4e55137913bccf8c8619c7b251c0a74442e7cb08bfef963ca78535e99e3b",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 900
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-h2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "45d44da245e663148decdda7eccab9a37afdc6fc223550e87c2ec7bc404ded62",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ch2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "denied",
+   "note": "E6: the space cannot cover it"
+  },
+  {
+   "entry": {
+    "id": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "5e6c2029a457ab09c46aa36a384a40ff99a6ef2518871ed088410d298ab2b57d",
+     "repeatable": false,
+     "cost": {
+      "unit": "USD-cent",
+      "amount": 10
+     },
+     "task": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "3a57cbaacab2c09483221ae7dd98c4e58ce40672340a97a92825c0d364b8d346",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cg1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "denied",
+   "note": "another action: an owner still approves"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a0": "ee7e850e319018a9b6c6da53031ad8e53b1e5199d7c91c8a30cc25f5c5cbb5f3",
+  "a0b": "39f82526861f1e785e2bf52b0828194c4fa43c62a0d5be74ec097cf8c6a88151",
+  "a0h": "a906e1889fa2af4c654e7fd303171ff58a30fd72f291429ef79f782e5dda6007",
+  "a1": "285512eec0c42c4e3da44b3b52625735bdba5ec5e0c72285305d1c95af2e054d",
+  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+  "a3": "7e09ff6d7d1bfb517ccf8332db70ddda12c4676a7084443b1c644cf7a3c273b5",
+  "a4": "80cf693808e847fba4a894ad2f13cadb7c02c20e5e3ff6de80b38c738bd6ceeb",
+  "a5": "c72608cc2beb1d1eb6c3d8bf4804201cd5a663ace817d72542b9f4e1ff25c666",
+  "a6": "c8aa24c6b2600e8af31f06c46e7b723d931f33c8b2d52a04f7811849ab0cd6e0",
+  "c3": "2672b242dd38cc62c0e5d55585e3cddaee4e927e5dc7e7b0c18ec9515d660c6d",
+  "ca4": "85344bd3d01c875eedcc26680ec1738fa64057ebe84fa818b6685a8d679ddc50",
+  "ca5": "c8a749593fd1df8d7ae29deda62b1118dd0f2d01a7d861a8c6de072f94966930",
+  "ca6": "7ba2e13511f6c82a0e54cb85a9653809219922dbbc1601df3d36f73150464e83",
+  "cg1": "3a57cbaacab2c09483221ae7dd98c4e58ce40672340a97a92825c0d364b8d346",
+  "ch1": "c1de06ab156a9102d798d0d5fe1450e67fbda840f6cc963b026100c0e67d359b",
+  "ch2": "45d44da245e663148decdda7eccab9a37afdc6fc223550e87c2ec7bc404ded62",
+  "g1": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+  "h1": "7d48b4d86af13dc06f3f7b7cc0c6ed5f1acf3a3b56203471df9dff1031f8e374",
+  "h2": "028c8551402e10992354b7b5f03ec970727ddd6338992424eeeaba2f8763494a",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "oa4": "49f8e75d21eb6325c13fbfabd1de7c868f9d8302aeb7f207e5228b5395c2c1b3",
+  "t1": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+  "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+  "t3": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3"
+ }
+}

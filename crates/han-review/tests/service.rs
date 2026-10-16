@@ -245,6 +245,7 @@ fn node_with(f: &Fixture, tier: Option<u8>, plan_delta: &str, body_delta: &str) 
             cd
         }),
         gate_tier: tier,
+        proposer_suffices: false,
         delta_digest: Some(body_delta.into()),
         task: None,
         phase: "open".into(),

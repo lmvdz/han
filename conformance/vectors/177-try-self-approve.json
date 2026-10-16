@@ -1,0 +1,2785 @@
+{
+ "name": "try-self-approve",
+ "rules": [
+  "P-17",
+  "P-08",
+  "P-07 E3",
+  "P-01",
+  "P-16"
+ ],
+ "description": "round 33: a rule with `proposer: true` is valid only on the check-only action `vcs.try` and nothing else on it; under it the proposal itself satisfies E3, so a claim needs and consumes no approval (the claim records none), nobody's approval is asked, and relevantActors pins no candidate; it never applies to another action (a `*` rule listed first shadows it; vcs.land, a revert and git.push still need their approvals), E1, E2 and the guards of P-15 are unchanged, and a change summary on a vcs.try is invalid",
+ "profiles": {
+  "@h3:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "invalid",
+   "note": "proposer on a vcs.land rule"
+  },
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "invalid",
+   "note": "proposer on a * rule"
+  },
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       },
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": true,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "4908bc8c620a12b93f0d97937e4a1a10808a53c5e8cc49af30d801cf0664a277",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow",
+   "check": {
+    "effects.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.gate": "<missing>"
+   },
+   "note": "a try has no gate"
+  },
+  {
+   "relevantActors": {
+    "id": "70f5c0d726f13f7804b3718482da9a898f7d396cca5e51898c4fa45ea44e1e2c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": [
+    "@x:c.example",
+    "@p:b.example"
+   ]
+  },
+  {
+   "entry": {
+    "id": "70f5c0d726f13f7804b3718482da9a898f7d396cca5e51898c4fa45ea44e1e2c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow",
+   "check": {
+    "effects.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.phase": "claimed",
+    "effects.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.claims.0.approval": "<missing>",
+    "effects.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.claims.0.coApprovals": "<missing>",
+    "effects.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.claims.0.guardApprovals": "<missing>"
+   },
+   "note": "no approval entry: the proposal suffices"
+  },
+  {
+   "entry": {
+    "id": "a451eddca0a82a7436276bcb83c12c457679911ccbf8aa28725b397336689a06",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "70f5c0d726f13f7804b3718482da9a898f7d396cca5e51898c4fa45ea44e1e2c",
+     "result": "succeeded",
+     "started": "yes"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ot1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow",
+   "check": {
+    "effects.9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b.phase": "succeeded"
+   }
+  },
+  {
+   "entry": {
+    "id": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "9f100d10636fcf23971c72aa944a1a4e504553e478727f5edd950b421668a821",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "planDigest": "9f100d10636fcf23971c72aa944a1a4e504553e478727f5edd950b421668a821"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "denied",
+   "note": "nobody's approval is asked"
+  },
+  {
+   "entry": {
+    "id": "fa44c3ce4f6fb2dcb7cb1f4159a9d41e06692a8d490d8c0b80d54ace31e0539b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "planDigest": "9f100d10636fcf23971c72aa944a1a4e504553e478727f5edd950b421668a821"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a2p",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "denied",
+   "note": "not the proposer's either"
+  },
+  {
+   "entry": {
+    "id": "bf0f841ebe63029d735727da5400954b8c47121efc690cdb657d9f5d36ff43c0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "denied",
+   "note": "E1: M is not the executor"
+  },
+  {
+   "entry": {
+    "id": "bf0f841ebe63029d735727da5400954b8c47121efc690cdb657d9f5d36ff43c0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow",
+   "check": {
+    "effects.de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8.claims.0.approval": "<missing>"
+   }
+  },
+  {
+   "entry": {
+    "id": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "git.push",
+     "planDigest": "5e6c2029a457ab09c46aa36a384a40ff99a6ef2518871ed088410d298ab2b57d",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "3a57cbaacab2c09483221ae7dd98c4e58ce40672340a97a92825c0d364b8d346",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cg1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "denied",
+   "note": "another action: the * rule still asks"
+  },
+  {
+   "entry": {
+    "id": "2ec4ac4107f99c23c260137772d09e2a84c56462f4cbd0442c7535298aab065e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "add7c9eafc612214bf17880ee9f6712dffacfbf4fe21c0e9f7a7816fe0a2a42a",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-l1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "0c8e3068181c7f45ddcf70077c91c6c7c63a84152cff20b575adc88af2256f1a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "2ec4ac4107f99c23c260137772d09e2a84c56462f4cbd0442c7535298aab065e",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cl1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "denied",
+   "note": "a vcs.land never lets the proposer suffice"
+  },
+  {
+   "entry": {
+    "id": "3a97b07188321d9c2987c94e956d695e924ef0dd351e39e73cb311a16cec2ba4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "2ec4ac4107f99c23c260137772d09e2a84c56462f4cbd0442c7535298aab065e",
+     "planDigest": "add7c9eafc612214bf17880ee9f6712dffacfbf4fe21c0e9f7a7816fe0a2a42a"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-al1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "0c8e3068181c7f45ddcf70077c91c6c7c63a84152cff20b575adc88af2256f1a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "2ec4ac4107f99c23c260137772d09e2a84c56462f4cbd0442c7535298aab065e",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cl1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow",
+   "check": {
+    "effects.2ec4ac4107f99c23c260137772d09e2a84c56462f4cbd0442c7535298aab065e.claims.0.approval": "3a97b07188321d9c2987c94e956d695e924ef0dd351e39e73cb311a16cec2ba4"
+   },
+   "note": "its approval is asked as ever"
+  },
+  {
+   "entry": {
+    "id": "f17d423bfd667291615ec66cc0d9fdf4940b210e3bd022ae20d590babb0124b9",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@h3:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-mh",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@h3:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "0fff19446598a53a41a9d323ca04bc0c83ed1d484b82501b1c697535d9d109a0",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@h3:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "55aa054b5faa407d9aeb45ef75cc1a31ebc25c4c0383e24ed1400c8be1169ec5",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "37fcbed5901a03a9ef58c4f07c6aa1a52c5daf14d0cbbb38a0baa147db3efae4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "denied",
+   "profiles": {
+    "@h3:a.example": {
+     "actorKind": "human",
+     "operatorConfirmed": false,
+     "keys": {
+      "k1": {
+       "publicKey": "pk",
+       "status": "revoked"
+      }
+     }
+    }
+   },
+   "note": "E2: the proposal's key was revoked"
+  },
+  {
+   "entry": {
+    "id": "37fcbed5901a03a9ef58c4f07c6aa1a52c5daf14d0cbbb38a0baa147db3efae4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "allow",
+   "profiles": {
+    "@h3:a.example": {
+     "actorKind": "human",
+     "operatorConfirmed": false,
+     "keys": {
+      "k1": {
+       "publicKey": "pk",
+       "status": "valid"
+      }
+     }
+    }
+   },
+   "note": "valid again"
+  },
+  {
+   "entry": {
+    "id": "1dca010d0489386c2a5271116dfcfbc3ae1ae82d79d0d15556c7ccbb4de9d3e6",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@h3:a.example",
+     "role": "guest"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-mh2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fa1fe5ead2652f1a4c7bc751c040bc3adf267536db40eaef92b9c19ded705e06",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "denied",
+   "note": "E2: the proposer is no member now"
+  },
+  {
+   "entry": {
+    "id": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "ff5fea8dc8c2560da67d2c2f96eea39d3851d7908f71794fa201f8e3dcf7164b",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "e3704690aea9f82938ce4b14a7dc3b4e4349fd7ae7449ee8e060f0846b3fcab9",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 1
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:28Z",
+   "expect": "invalid",
+   "note": "a change summary belongs to a vcs.land"
+  },
+  {
+   "entry": {
+    "id": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "7d4eee77917d4d45038c77531ffec071c68e6bef9d107fd50323d765f7649a34",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:29Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "b4f65d7ed15b0e4aa4b836c47df649fb50053d3a38c147468af87774985aa44a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ]
+       },
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:30Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "329f7df4cfd703862cfcd18c8ba0655df486b7e3013fa0112839299bd96e62e5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:31Z",
+   "expect": "denied",
+   "note": "the first rule that applies decides: the * rule above asks an owner"
+  },
+  {
+   "entry": {
+    "id": "c8aa24c6b2600e8af31f06c46e7b723d931f33c8b2d52a04f7811849ab0cd6e0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+     "planDigest": "7d4eee77917d4d45038c77531ffec071c68e6bef9d107fd50323d765f7649a34"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:32Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "329f7df4cfd703862cfcd18c8ba0655df486b7e3013fa0112839299bd96e62e5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:33Z",
+   "expect": "allow",
+   "check": {
+    "effects.402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1.claims.0.approval": "c8aa24c6b2600e8af31f06c46e7b723d931f33c8b2d52a04f7811849ab0cd6e0"
+   }
+  },
+  {
+   "entry": {
+    "id": "a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "be0e64025fc6d276313f5ce743328d767fc8b31975af6504c8bc17b65469985d",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t10",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:34Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "eb424a160954b059f66523b52a631f86a2b0d29034a58a63cf04705c54adc5d9",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452",
+     "planDigest": "be0e64025fc6d276313f5ce743328d767fc8b31975af6504c8bc17b65469985d"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-a10",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "allow",
+   "note": "approved while the * rule applied"
+  },
+  {
+   "entry": {
+    "id": "2cf12316d6bd9be5097f453aa239282a9fad1217f7209f0aca40eb0c0db71dce",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       },
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:36Z",
+   "expect": "allow"
+  },
+  {
+   "relevantActors": {
+    "id": "4a18fcbe1b58ebf606813160210f584e9e98f7d569357b7f503f94586e141816",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct10",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:36Z",
+   "expect": [
+    "@x:c.example",
+    "@p:b.example"
+   ],
+   "pinned": [
+    "@x:c.example",
+    "@p:b.example"
+   ]
+  },
+  {
+   "entry": {
+    "id": "4a18fcbe1b58ebf606813160210f584e9e98f7d569357b7f503f94586e141816",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct10",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:37Z",
+   "expect": "allow",
+   "check": {
+    "effects.a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452.claims.0.approval": "<missing>",
+    "effects.a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452.approvals.0.id": "eb424a160954b059f66523b52a631f86a2b0d29034a58a63cf04705c54adc5d9",
+    "effects.a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452.approvals.0.consumedBy": "<missing>"
+   },
+   "note": "the approval made earlier is neither pinned nor consumed: the proposal suffices now"
+  },
+  {
+   "entry": {
+    "id": "7dfe1ccf764529d922b32aa49a85f4deddc311186921bbafc8322baf879cd55d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "ba2694fa54454c489a33107595d837ea56c0e134e973f8aea6151ef685a03325",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:38Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d00654b73ba9b1c54fd559f389829aa4e0f39fd745821843a8522ee295b8a302",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "7dfe1ccf764529d922b32aa49a85f4deddc311186921bbafc8322baf879cd55d",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:39Z",
+   "expect": "allow",
+   "check": {
+    "effects.7dfe1ccf764529d922b32aa49a85f4deddc311186921bbafc8322baf879cd55d.claims.0.approval": "<missing>"
+   }
+  },
+  {
+   "entry": {
+    "id": "c32820dd5698aa5cf9ae1a1b80653821b114ef50d5d1d4a25b898db56ec48ff2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "d002ac518a52c62312bc659f1c5715fffe7c22f06edaac9e8fffa2f4fe7111da",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t8",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:40Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a85222d1ddd0b3ca9f2b14761da2559873fde954f1a31e086c73779137da7c03",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:41Z",
+   "expect": "allow",
+   "note": "the proposer rule is withdrawn after the proposal"
+  },
+  {
+   "entry": {
+    "id": "f601cb795c20d75627b4610a16dd1edf0ac0b9570cb246152ec077160092bde3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c32820dd5698aa5cf9ae1a1b80653821b114ef50d5d1d4a25b898db56ec48ff2",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct8",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:42Z",
+   "expect": "denied",
+   "note": "E3 is judged at the claim, under the policy then in force"
+  },
+  {
+   "entry": {
+    "id": "8f656f99a2f406514fdcc3c7089e68af20226aa4d9ce252d2b11c9038b72764f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:43Z",
+   "expect": "allow",
+   "note": "valid"
+  },
+  {
+   "entry": {
+    "id": "6bdc5391ce1d4d670051f546e5844dceca0e027ef4be940ae78e14bf7d19640b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner",
+         "member"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:44Z",
+   "expect": "allow",
+   "note": "approvers stay, whatever they list"
+  },
+  {
+   "entry": {
+    "id": "3805505a06b960775f984f98067df58d2c85441750064fda0b6f0713bb486641",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:45Z",
+   "expect": "invalid",
+   "note": "vcs.land"
+  },
+  {
+   "entry": {
+    "id": "e8f97c449e17318219710ac3ec74c7694abe1b7f753867184294673234ef6019",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "*",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:46Z",
+   "expect": "invalid",
+   "note": "*"
+  },
+  {
+   "entry": {
+    "id": "b30a81fe3d26626d0872307fbcde63523dda4b2309104e3d7fcf52001e337764",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "git.push",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:47Z",
+   "expect": "invalid",
+   "note": "another action"
+  },
+  {
+   "entry": {
+    "id": "263f2e24fba48ec1f754e89cdfd31e724297e6307aa076906b375a7bb26d8621",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try.x",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe4",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:48Z",
+   "expect": "invalid",
+   "note": "not exactly vcs.try"
+  },
+  {
+   "entry": {
+    "id": "3ad517bad5b75cc7340df19b01674ceb54a13476226e25f36ce28c4917b8c968",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": false
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe5",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:49Z",
+   "expect": "invalid",
+   "note": "false is not a value"
+  },
+  {
+   "entry": {
+    "id": "5c6d0cd8e5765764edbcb3ef391d29ca72b86a1b2154428bf68952987149faa8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": "yes"
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe6",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:50Z",
+   "expect": "invalid",
+   "note": "a boolean"
+  },
+  {
+   "entry": {
+    "id": "1b6c8483c0431a7edcf3fd9ea791065de48794b1c7717d1f0e69c65939841715",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": 1
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe7",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:51Z",
+   "expect": "invalid",
+   "note": "a boolean"
+  },
+  {
+   "entry": {
+    "id": "0dfec5af05c81549a6718a2c449faa3977ee32fa61d81de46abbd173f93a660c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true,
+        "minTier": 0
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pfminTier",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:52Z",
+   "expect": "invalid",
+   "note": "no minTier on a proposer rule"
+  },
+  {
+   "entry": {
+    "id": "08bd61fb36c413770d03a57dd4160d7bc91241f0d2032027d5fcc3d011e572de",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true,
+        "maxTier": 3
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pfmaxTier",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:53Z",
+   "expect": "invalid",
+   "note": "no maxTier on a proposer rule"
+  },
+  {
+   "entry": {
+    "id": "6ece9af239453687f2c29529b84c9d1835c21b2f0e50706e1e2b9f5cd3bff0ff",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true,
+        "humans": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pfhumans",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:54Z",
+   "expect": "invalid",
+   "note": "no humans on a proposer rule"
+  },
+  {
+   "entry": {
+    "id": "f47d3b840fbaa78f49e27742a013c75d83246598456f4c96adc52bb623815e88",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true,
+        "evidence": "han.review/1"
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pfevidence",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:55Z",
+   "expect": "invalid",
+   "note": "no evidence on a proposer rule"
+  },
+  {
+   "entry": {
+    "id": "ecc66978aea3ec40c2391515d51ce2b60bdac3e317188140dbf1cc454d0eb973",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true,
+        "needs": 1
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pfneeds",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:56Z",
+   "expect": "invalid",
+   "note": "no needs on a proposer rule"
+  },
+  {
+   "entry": {
+    "id": "74abcd36c629624aeb53a78e993db7fa4dbca82f8fc1482da9cf7f00518a6896",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true,
+        "revert": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pfrevert",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:57Z",
+   "expect": "invalid",
+   "note": "no revert on a proposer rule"
+  },
+  {
+   "entry": {
+    "id": "ab602b1e8c987e6f7e874a86ba08ec5c45b79053f2abaecc0ca9952992c07fe7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe8",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:58Z",
+   "expect": "invalid",
+   "note": "approvers are still required"
+  },
+  {
+   "entry": {
+    "id": "52dad238b0e34de44c915f1ad301e3d3134301903547d761c4c4d7257a567297",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pe9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:59Z",
+   "expect": "invalid",
+   "note": "one bad rule spoils the document"
+  },
+  {
+   "entry": {
+    "id": "09bab85b94eb5f987af866b365a94c41fb7f0f6b41b4732248154072e9fa49ad",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "minTier": 0
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pok1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:00Z",
+   "expect": "allow",
+   "note": "a plain vcs.try rule is a rule like any other"
+  },
+  {
+   "entry": {
+    "id": "f1b921eb323df4e910f0fba8347bf3975853ef6461c12679b9da938c7629753b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner"
+        ],
+        "revert": true
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pok2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "e92a5088d09e997cf641c6b71132d097c9f58bc1d62d9c31f755c577d9fcfbb8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.try",
+        "approvers": [
+         "owner"
+        ],
+        "proposer": true
+       },
+       {
+        "action": "vcs.land",
+        "maxTier": 1,
+        "approvers": [
+         "@rev:a.example",
+         "owner"
+        ],
+        "evidence": "han.review/1"
+       },
+       {
+        "action": "vcs.land",
+        "maxTier": 2,
+        "approvers": [
+         "@path-owner",
+         "owner"
+        ],
+        "humans": true
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner",
+         "member"
+        ],
+        "humans": true
+       }
+      ],
+      "separateApprover": true,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pg",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "115037759ca68fecabd2621e9761bc53401626192119841d4b21ec99593ab449",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "99a151976f32e9f8b00fda99d94c765d1ba13323ce6b192b102f6960b3deba76",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "1e17588660dec26c5ba209d4fd5762fd6f1571cc2588b1db57b72bd30727f3f5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
+     "planDigest": "115037759ca68fecabd2621e9761bc53401626192119841d4b21ec99593ab449"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-g2a",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "b30b8ad1d8a3fdedc0ffc2393ab35e7e96772f37b27447a148d2737ea5415a13",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cg2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "0e4dd608db645e154b78854c17b2970bebf67d825ab0b8e39aba1e9c7cde2fc0",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.outcome",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "claim": "b30b8ad1d8a3fdedc0ffc2393ab35e7e96772f37b27447a148d2737ea5415a13",
+     "result": "succeeded",
+     "started": "yes"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-og2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:06Z",
+   "expect": "allow",
+   "check": {
+    "effects.c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96.phase": "succeeded"
+   }
+  },
+  {
+   "entry": {
+    "id": "c1939bc03e2e1ecb7ad8f759b089c42f21533ac5376a126f8968b062783cfbf1",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "922bf78f1e34c941396ea134e87fcc4cab5693e853f881777b174224baf962b6",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "ac825f3da489dba11803094c0595a8a99bf9fbac2ee34be61aafaaebe83202f9",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/a.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ],
+      "revertOf": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96"
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-rv",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:07Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "b80851d7e7fca72efcb02bd86a3f7e22bdf53c94d13b9513bcd088aeba6d16e2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "c1939bc03e2e1ecb7ad8f759b089c42f21533ac5376a126f8968b062783cfbf1",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-crv",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:08Z",
+   "expect": "denied",
+   "note": "a revert needs the approval of its land's rule: the proposer rule is not its rule"
+  },
+  {
+   "entry": {
+    "id": "dad65bc46985a921756d08b24b7c6fa6ea78de63cb270fed89781eaaba70723e",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.try",
+     "planDigest": "f094c4add536f2928e6daefc07d8bc5f2565c054acaca9acc7276e448578c426",
+     "repeatable": false
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-t9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:09Z",
+   "expect": "allow",
+   "check": {
+    "effects.dad65bc46985a921756d08b24b7c6fa6ea78de63cb270fed89781eaaba70723e.gate": "<missing>"
+   }
+  },
+  {
+   "entry": {
+    "id": "8a278e46c8f809324969fe238c333495b1a997eb1e36c99f788e3fa049f9c2c4",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "dad65bc46985a921756d08b24b7c6fa6ea78de63cb270fed89781eaaba70723e",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-ct9",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:01:10Z",
+   "expect": "allow",
+   "check": {
+    "effects.dad65bc46985a921756d08b24b7c6fa6ea78de63cb270fed89781eaaba70723e.claims.0.approval": "<missing>"
+   },
+   "note": "and a try needs none, with gates in the policy"
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "a10": "eb424a160954b059f66523b52a631f86a2b0d29034a58a63cf04705c54adc5d9",
+  "a2": "1f76fde5bed5a312477f832bbba3358d0d8581792a18c6d35a7b184387e42226",
+  "a2p": "fa44c3ce4f6fb2dcb7cb1f4159a9d41e06692a8d490d8c0b80d54ace31e0539b",
+  "a6": "c8aa24c6b2600e8af31f06c46e7b723d931f33c8b2d52a04f7811849ab0cd6e0",
+  "al1": "3a97b07188321d9c2987c94e956d695e924ef0dd351e39e73cb311a16cec2ba4",
+  "cg1": "3a57cbaacab2c09483221ae7dd98c4e58ce40672340a97a92825c0d364b8d346",
+  "cg2": "b30b8ad1d8a3fdedc0ffc2393ab35e7e96772f37b27447a148d2737ea5415a13",
+  "cl1": "0c8e3068181c7f45ddcf70077c91c6c7c63a84152cff20b575adc88af2256f1a",
+  "crv": "b80851d7e7fca72efcb02bd86a3f7e22bdf53c94d13b9513bcd088aeba6d16e2",
+  "ct1": "70f5c0d726f13f7804b3718482da9a898f7d396cca5e51898c4fa45ea44e1e2c",
+  "ct10": "4a18fcbe1b58ebf606813160210f584e9e98f7d569357b7f503f94586e141816",
+  "ct2": "bf0f841ebe63029d735727da5400954b8c47121efc690cdb657d9f5d36ff43c0",
+  "ct3": "37fcbed5901a03a9ef58c4f07c6aa1a52c5daf14d0cbbb38a0baa147db3efae4",
+  "ct4": "fa1fe5ead2652f1a4c7bc751c040bc3adf267536db40eaef92b9c19ded705e06",
+  "ct6": "329f7df4cfd703862cfcd18c8ba0655df486b7e3013fa0112839299bd96e62e5",
+  "ct7": "d00654b73ba9b1c54fd559f389829aa4e0f39fd745821843a8522ee295b8a302",
+  "ct8": "f601cb795c20d75627b4610a16dd1edf0ac0b9570cb246152ec077160092bde3",
+  "ct9": "8a278e46c8f809324969fe238c333495b1a997eb1e36c99f788e3fa049f9c2c4",
+  "g1": "907e02efc6d125d28c0863f0998d694ff246039d381758967ac6c2525f6515f4",
+  "g2": "c736943abf9e8bf625e3a605111e814be2a12822dcb2b71bb2a9c8791466ab96",
+  "g2a": "1e17588660dec26c5ba209d4fd5762fd6f1571cc2588b1db57b72bd30727f3f5",
+  "l1": "2ec4ac4107f99c23c260137772d09e2a84c56462f4cbd0442c7535298aab065e",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "mh": "f17d423bfd667291615ec66cc0d9fdf4940b210e3bd022ae20d590babb0124b9",
+  "mh2": "1dca010d0489386c2a5271116dfcfbc3ae1ae82d79d0d15556c7ccbb4de9d3e6",
+  "og2": "0e4dd608db645e154b78854c17b2970bebf67d825ab0b8e39aba1e9c7cde2fc0",
+  "ot1": "a451eddca0a82a7436276bcb83c12c457679911ccbf8aa28725b397336689a06",
+  "pe1": "3805505a06b960775f984f98067df58d2c85441750064fda0b6f0713bb486641",
+  "pe2": "e8f97c449e17318219710ac3ec74c7694abe1b7f753867184294673234ef6019",
+  "pe3": "b30a81fe3d26626d0872307fbcde63523dda4b2309104e3d7fcf52001e337764",
+  "pe4": "263f2e24fba48ec1f754e89cdfd31e724297e6307aa076906b375a7bb26d8621",
+  "pe5": "3ad517bad5b75cc7340df19b01674ceb54a13476226e25f36ce28c4917b8c968",
+  "pe6": "5c6d0cd8e5765764edbcb3ef391d29ca72b86a1b2154428bf68952987149faa8",
+  "pe7": "1b6c8483c0431a7edcf3fd9ea791065de48794b1c7717d1f0e69c65939841715",
+  "pe8": "ab602b1e8c987e6f7e874a86ba08ec5c45b79053f2abaecc0ca9952992c07fe7",
+  "pe9": "52dad238b0e34de44c915f1ad301e3d3134301903547d761c4c4d7257a567297",
+  "pfevidence": "f47d3b840fbaa78f49e27742a013c75d83246598456f4c96adc52bb623815e88",
+  "pfhumans": "6ece9af239453687f2c29529b84c9d1835c21b2f0e50706e1e2b9f5cd3bff0ff",
+  "pfmaxTier": "08bd61fb36c413770d03a57dd4160d7bc91241f0d2032027d5fcc3d011e572de",
+  "pfminTier": "0dfec5af05c81549a6718a2c449faa3977ee32fa61d81de46abbd173f93a660c",
+  "pfneeds": "ecc66978aea3ec40c2391515d51ce2b60bdac3e317188140dbf1cc454d0eb973",
+  "pfrevert": "74abcd36c629624aeb53a78e993db7fa4dbca82f8fc1482da9cf7f00518a6896",
+  "pg": "e92a5088d09e997cf641c6b71132d097c9f58bc1d62d9c31f755c577d9fcfbb8",
+  "pok1": "09bab85b94eb5f987af866b365a94c41fb7f0f6b41b4732248154072e9fa49ad",
+  "pok2": "f1b921eb323df4e910f0fba8347bf3975853ef6461c12679b9da938c7629753b",
+  "pol1": "b4f65d7ed15b0e4aa4b836c47df649fb50053d3a38c147468af87774985aa44a",
+  "pol2": "2cf12316d6bd9be5097f453aa239282a9fad1217f7209f0aca40eb0c0db71dce",
+  "pol3": "a85222d1ddd0b3ca9f2b14761da2559873fde954f1a31e086c73779137da7c03",
+  "pol4": "8f656f99a2f406514fdcc3c7089e68af20226aa4d9ce252d2b11c9038b72764f",
+  "pol5": "6bdc5391ce1d4d670051f546e5844dceca0e027ef4be940ae78e14bf7d19640b",
+  "rv": "c1939bc03e2e1ecb7ad8f759b089c42f21533ac5376a126f8968b062783cfbf1",
+  "t1": "9f9c0f9a3c414c4f362c00587420996c88cfeec0b6a97b0b20d8d9d5ab16027b",
+  "t10": "a9e2f09627a2c07fac91fede2efbab42c112e24e33085aecbdd4bc98b23eb452",
+  "t2": "de118e32db2fc99914c688b3fc889457322618a30ea596f967c30774369defa8",
+  "t3": "cf1a35d7803287fe1ff939ed66bb518f5b51f9f79fb028214a91aeef9af561c3",
+  "t4": "ee4e977a382738ce1f8c9b9a5b70897d4bd82292f2ce7e7d203dd8a7ffed3b21",
+  "t5": "c9fb9acd9ababd4703709dd545ec356bd68802bbf26746b6e4415ca163ca18bd",
+  "t6": "402470fb6d613bed886552b9d75752cebb2e778f476040bd35ef574f882843c1",
+  "t7": "7dfe1ccf764529d922b32aa49a85f4deddc311186921bbafc8322baf879cd55d",
+  "t8": "c32820dd5698aa5cf9ae1a1b80653821b114ef50d5d1d4a25b898db56ec48ff2",
+  "t9": "dad65bc46985a921756d08b24b7c6fa6ea78de63cb270fed89781eaaba70723e"
+ }
+}

@@ -348,6 +348,8 @@ pub(crate) struct SpaceModel {
     pub gates: Option<han_core::policy::GatesDoc>,
     /// The approval rules of the policy: action (or `*`) and approvers.
     pub rules: Vec<(String, Vec<String>)>,
+    /// The approval rules in full, from which Policy reports whether a proposer suffices (P-17).
+    pub approval_rules: Vec<han_core::policy::ApprovalRule>,
     /// Who may steer sessions, by the policy.
     pub steer: Option<SessionLevel>,
     /// Who may watch and who may read sessions, by the policy.
@@ -430,6 +432,7 @@ impl SpaceModel {
             me: me.to_owned(),
             gates: None,
             rules: Vec::new(),
+            approval_rules: Vec::new(),
             steer: None,
             watch: None,
             read: None,
@@ -458,9 +461,10 @@ impl SpaceModel {
         self.budget = policy.budget.map(|b| (b.unit, b.amount));
         self.rules = policy
             .approvals
-            .into_iter()
-            .map(|r| (r.action, r.approvers))
+            .iter()
+            .map(|r| (r.action.clone(), r.approvers.clone()))
             .collect();
+        self.approval_rules = policy.approvals;
         self.gates = policy.gates;
         self.steer = Some(policy.sessions.steer);
         self.watch = Some(policy.sessions.watch);
@@ -678,6 +682,13 @@ impl SpaceModel {
             }
         }
         out
+    }
+
+    /// Whether the rule that applies to an effect of `action` lets the proposal itself satisfy E3 (P-17, round 33):
+    /// what Policy reports, so that an executor asks for an approval where Policy does and not otherwise. It is
+    /// judged under the policy in force now, as a claim is.
+    pub fn proposer_suffices(&self, action: &str) -> bool {
+        han_core::policy::proposer_suffices(&self.approval_rules, action)
     }
 
     /// The approval rule that applies to `action`, if the policy has one (the first match wins, P-08).
@@ -1875,6 +1886,14 @@ impl SpaceModel {
             .values()
             .filter(|e| Self::effect_waiting(e, now))
             .filter(|e| e.proposer != actor && !e.approvals.iter().any(|a| a == actor))
+            // under a proposer rule (P-17) only the guards are asked
+            .filter(|e| {
+                !self.proposer_suffices(&e.action)
+                    || self
+                        .effect_guards(&e.proposer, &e.executor)
+                        .iter()
+                        .any(|(_, g)| g.as_ref().is_none_or(|g| !e.approvals.contains(g)))
+            })
             .map(|e| {
                 let rule = self.rule_for(&e.action);
                 let approvers = match rule {
@@ -1956,7 +1975,10 @@ impl SpaceModel {
                         can_cancel: e.proposer == actor || self.is_owner(actor),
                         approvers,
                         why_gated,
-                        needed: Needed { rule: 1, guards },
+                        needed: Needed {
+                            rule: u32::from(!self.proposer_suffices(&e.action)),
+                            guards,
+                        },
                         agent_text,
                     }),
                 )
@@ -2310,6 +2332,7 @@ impl SpaceModel {
                         plan: e.plan.clone(),
                         change_digest: e.change_digest.clone(),
                         gate_tier: e.gate_tier,
+                        proposer_suffices: self.proposer_suffices(&e.action),
                         delta_digest: e.change_delta.clone(),
                         task: e.task.clone(),
                         phase: phase.into(),

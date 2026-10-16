@@ -127,7 +127,8 @@ POLICY_FIELDS = {"visibility", "join", "membersMayInvite", "allowAgents", "appro
 
 # ── P-17 semantic gates (round 33): the grammar of paths, globs and the summary of a change ──
 PATH_OWNER = "@path-owner"                       # an approvers entry: an author of the effect's `gate.owners` (P-17)
-RULE_FIELDS = {"action", "approvers", "minTier", "maxTier", "humans", "evidence", "needs", "revert"}
+RULE_FIELDS = {"action", "approvers", "minTier", "maxTier", "humans", "evidence", "needs", "revert", "proposer"}
+CHECK_ONLY = "vcs.try"                                        # P-17 (round 33): the one action a `proposer` rule may name
 EVIDENCE_KIND = _rx(r"^[a-z0-9][a-z0-9./_-]{0,63}$")
 REPO_NAME = _rx(r"^[!-~]{1,128}$")
 GLOB_TEXT = _rx(r"^[A-Za-z0-9._/*?@+=,~:-]{1,256}$")
@@ -223,6 +224,7 @@ def _rule(a) -> bool:
     if "humans" in a and not isinstance(a["humans"], bool): return False
     if "evidence" in a and not (isinstance(a["evidence"], str) and EVIDENCE_KIND.fullmatch(a["evidence"])): return False
     if "revert" in a and a["revert"] is not True: return False
+    if "proposer" in a and not (a["proposer"] is True and a["action"] == CHECK_ONLY and set(a) <= {"action", "approvers", "proposer"}): return False   # P-17: only on a check-only action, and nothing else on the rule
     return "needs" not in a or (_int(a["needs"]) and 1 <= a["needs"] <= 3)
 
 def _gates(g) -> bool:
@@ -370,6 +372,16 @@ def rule_for(state, eff):
         return r
     return DEFAULT_GATED_RULE if g is not None and g["tier"] >= 1 else None
 
+def proposer_suffices(rule) -> bool:
+    """P-17 (round 33): whether the proposal itself satisfies E3 under `rule`: a `proposer: true` rule, which validation allows only on the
+    check-only `vcs.try`. No approval is asked, made or consumed; the guards of P-15 are asked as ever."""
+    return bool(rule) and rule.get("proposer") is True
+
+def asks_approval(state, eff) -> bool:
+    """P-07 E3: whether a claim of `eff` consumes approvals of the rule that applies: there is a rule and it does not let the proposer suffice."""
+    rule = rule_for(state, eff)
+    return rule is not None and not proposer_suffices(rule)
+
 def counts(state, eff, rule, actor, kind, evidence):
     """P-08, P-17: whether an approval by `actor` (of `kind` `human`, `agent` or `service`, with `evidence` {kind, over} or None) counts under `rule`:
     the actor holds a role the rule names (a role, its id, or `@path-owner`); of tier 2 or more, or under `humans`, only humans count; and when
@@ -454,6 +466,7 @@ def approval_candidates(state, eff, time):
     claim if its key is valid, which needs its pinned profile (`usable`)."""
     rule = rule_for(state, eff)
     out = []
+    if proposer_suffices(rule): return out
     for a in eff["approvals"]:
         if a.get("consumedBy"): continue
         if time is not None and a.get("expiresAt") and ts(a["expiresAt"]) <= ts(time): continue
@@ -749,6 +762,7 @@ def _approve(state, entry, ctx, role):
     if b.get("expiresAt") and ts(b["expiresAt"]) <= ts(ctx["time"]): return deny("approval already expired")
     guards = guards_of(state, ctx, eff)
     if not (author in guards and role in READ_ROLES):                    # a guard approves as a guard (P-15): no rule, no cap
+        if proposer_suffices(rule): return deny("the rule asks no approval: the proposer suffices")
         if not rule or not counts(state, eff, rule, author, ctx["profiles"][author]["actorKind"], b.get("evidence")): return deny("not an approver for this action")
         if (state["policy"]["separateApprover"] and author == eff["proposer"]
                 and not self_revert_approval(eff, rule, author, ctx["profiles"][author]["actorKind"])): return deny("separate approver required")
@@ -788,7 +802,7 @@ def _claim(state, entry, ctx, role):
         return deny("E2 proposer no longer authorized")
     if not _accountable(state, ctx, eff["proposer"]): return deny("E2 proposer's operator confirmation withdrawn")
     if b["window"] != state["policy"]["launchWindow"]: return deny("E5 claim's window is not the space's launchWindow")
-    if rule_for(state, eff):
+    if asks_approval(state, eff):
         res, _ = pick_approval(state, eff, ctx)
         if res == "unpinned": return invalid("approver profile not pinned")
         if res == "none": return deny("E3 no usable approval")
@@ -1120,7 +1134,7 @@ def fold(state, record, ctx) -> dict:
         eff = s["effects"][b["proposal"]]
         c = {"id": eid, "attempt": b["attempt"], "instance": b["instance"], "time": rc["time"], "window": b["window"], "settled": False}
         chosen = []
-        if rule_for(s, eff):
+        if asks_approval(s, eff):
             _, picked = pick_approval(s, eff, ctx)
             chosen.extend(picked); c["approval"] = picked[0]["id"]
             if len(picked) > 1: c["coApprovals"] = [x["id"] for x in picked[1:]]

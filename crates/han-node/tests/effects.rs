@@ -685,3 +685,172 @@ fn han_exec_digest(change: &serde_json::Value) -> Option<String> {
     let v = han_core::json::parse(change.to_string().as_bytes()).unwrap();
     Some(han_core::ids::json_digest(&v).unwrap())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rule_that_lets_the_proposer_suffice_is_reported_in_the_row_and_needs_no_approval() {
+    let world = World::new(&[(ALICE, 71)]);
+    world
+        .home
+        .register(CODER, "agent", "d1", &common::pubkey(72), Some(ALICE))
+        .unwrap();
+    world
+        .home
+        .register(EXEC, "service", "d1", &common::pubkey(73), Some(ALICE))
+        .unwrap();
+    let alice = world.node(ALICE, 71);
+    let coder = world.node(CODER, 72);
+    let exec = world.node(EXEC, 73);
+    let space = space_of(
+        &call(
+            &alice,
+            Command::SpaceCreate {
+                home: world.home_ref.clone(),
+                name: "team".into(),
+                visibility: "members".into(),
+                join: "invite".into(),
+            },
+        )
+        .await,
+    );
+    confirm_operator(&world, &alice, ALICE, CODER).await;
+    confirm_operator(&world, &alice, ALICE, EXEC).await;
+    // P-17: a rule with `proposer: true` is valid on `vcs.try` and nowhere else; every other action needs an owner.
+    let policy = |rules: &str| {
+        let mut p = han_seq::build::space_policy("members", "invite");
+        if let han_core::Value::Object(m) = &mut p {
+            m.insert(
+                "approvals".into(),
+                han_core::json::parse(rules.as_bytes()).unwrap(),
+            );
+        }
+        String::from_utf8(han_core::json::canonicalize(&p).unwrap()).unwrap()
+    };
+    let bad = alice
+        .call(Command::PolicySet {
+            space: space.clone(),
+            policy: policy(r#"[{"action":"vcs.land","approvers":["owner"],"proposer":true}]"#),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(bad, NodeError::Invalid { .. }), "{bad:?}");
+    call(
+        &alice,
+        Command::PolicySet {
+            space: space.clone(),
+            policy: policy(
+                r#"[{"action":"vcs.try","approvers":["owner"],"proposer":true},{"action":"*","approvers":["owner"]}]"#,
+            ),
+        },
+    )
+    .await;
+    for who in [CODER, EXEC] {
+        call(
+            &alice,
+            Command::MemberSet {
+                space: space.clone(),
+                actor: who.into(),
+                role: "member".into(),
+            },
+        )
+        .await;
+    }
+    for node in [&coder, &exec] {
+        call(
+            node,
+            Command::SpaceFollow {
+                home: world.home_ref.clone(),
+                space: space.clone(),
+            },
+        )
+        .await;
+    }
+    let propose = |plan: &str| Command::EffectPropose {
+        space: space.clone(),
+        executor: EXEC.into(),
+        plan: plan.into(),
+        task: None,
+        cost: None,
+        repeatable: false,
+        expires_at: None,
+    };
+    let tried = id_of(
+        &call(
+            &coder,
+            propose(r#"{"action":"vcs.try","target":"github:o/r","args":{"to":"abc"}}"#),
+        )
+        .await,
+    );
+    let pushed = id_of(
+        &call(
+            &coder,
+            propose(
+                r#"{"action":"git_push","target":"github:o/r","args":{"branch":"han/1-coder","to":"abc"}}"#,
+            ),
+        )
+        .await,
+    );
+    until("the executor sees both", || {
+        let seen = effects(&exec, EXEC, false);
+        [&tried, &pushed]
+            .iter()
+            .all(|p| seen.iter().any(|e| &e.proposal == *p && e.plan.is_some()))
+    })
+    .await;
+    // Policy's report: the rule that applies to the try lets the proposer suffice; the push's does not.
+    let seen = effects(&exec, EXEC, false);
+    let flag = |p: &str| {
+        seen.iter()
+            .find(|e| e.proposal == p)
+            .unwrap()
+            .proposer_suffices
+    };
+    assert!(flag(&tried));
+    assert!(!flag(&pushed));
+
+    let claim = |proposal: &str| Command::EffectClaim {
+        space: space.clone(),
+        proposal: proposal.to_owned(),
+        attempt: 1,
+        window: 30,
+    };
+    // Policy refuses the push's claim without an approval, and grants the try's with none.
+    let refused = exec.call(claim(&pushed)).await.unwrap_err();
+    assert!(matches!(refused, NodeError::Denied { .. }), "{refused:?}");
+    // Nobody's approval is asked of a try (it would never be consumed).
+    let approve = alice
+        .call(Command::EffectApprove {
+            space: space.clone(),
+            proposal: tried.clone(),
+            expires_at: None,
+            note: None,
+            evidence: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            approve,
+            NodeError::Denied { .. } | NodeError::Invalid { .. }
+        ),
+        "{approve:?}"
+    );
+    let claim_id = id_of(&call(&exec, claim(&tried)).await);
+    call(
+        &exec,
+        Command::EffectOutcome {
+            space: space.clone(),
+            claim: claim_id,
+            result: "succeeded".into(),
+            started: "yes".into(),
+            cost: None,
+            evidence: None,
+        },
+    )
+    .await;
+    until("the try is done", || {
+        effects(&exec, EXEC, true)
+            .iter()
+            .any(|e| e.proposal == tried && e.phase == "done")
+    })
+    .await;
+}

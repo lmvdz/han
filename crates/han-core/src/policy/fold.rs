@@ -10,8 +10,8 @@ use super::decide::find_claim;
 use super::doc::{Role, SteerMode};
 use super::gate::gate_of;
 use super::guard::{
-    approval_candidates, approval_dead, effect_guarded_for, effect_source, expired, guard_approval,
-    guards_of, is_human, pick_approval, rebudget, role_of, rule_for, server_of, space_unit,
+    approval_candidates, approval_dead, asks_approval, effect_guarded_for, effect_source, expired,
+    guard_approval, guards_of, is_human, pick_approval, rebudget, role_of, server_of, space_unit,
     task_guarded_for, task_source,
 };
 use super::state::{
@@ -451,7 +451,7 @@ fn fold_claim(
         started: None,
     };
     let mut chosen: Vec<(String, String)> = Vec::new(); // (approval id, author)
-    if rule_for(s, eff).is_some() {
+    if asks_approval(s, eff) {
         let picked = pick_approval(s, eff, ctx).1;
         for (i, a) in picked.iter().enumerate() {
             chosen.push((a.id.clone(), a.author.clone()));
