@@ -2555,6 +2555,42 @@ v.step(lappr("f2", "r4", author=O), "allow").step(claim("cr4x", "r4"), "denied",
 v.step(lappr("f3", "r4", author=P), "allow").step(claim("cr4", "r4"), "allow")
 add(v.done())
 
+v = V("gate-coverage", ["P-17", "P-08", "P-07"], "round 33, coverage: (1) \"a rule with `minTier` or `maxTier` applies only to an effect with a gate whose tier is within them\": a rule with only `minTier` does not apply below it, and the next rule decides; (2) \"no machine counts at tier 2 or 3 whatever the rules say\": a rule without `humans` admits the machine reviewer below tier 2 only; (3) \"at tier 3 at least 2, by distinct authors ... tier 3 needs two distinct humans whatever the rules say\": a rule's `needs: 1` does not lower tier 3, and still holds at tier 2")
+v.prof(R, REVIEWER)
+team(v, policy(gates=GATES, approvals=[{"action": "vcs.land", "minTier": 2, "approvers": ["owner"]},
+                                       {"action": "vcs.land", "approvers": ["member", "owner"]}]))
+v.step(ms("mr", O, R, "member"), "allow").step(ms("mh", O, H3, "owner"), "allow")
+# (1) minTier alone: below it the rule does not apply
+v.step(lprop("n1", chg([("src/lib.rs", "modify", 3)], label="n1"), author=M), "allow", check={"effects.n1.gate.tier": 1})
+v.step(lappr("na1", "n1", author=P), "allow", note="tier 1 is below the first rule's minTier 2: the second rule applies and a member counts")
+v.step(claim("cn1", "n1"), "allow", check={"effects.n1.claims.0.approval": "na1"})
+v.step(lprop("n0", chg([("docs/g.md", "modify", 2)], label="n0"), author=M), "allow", check={"effects.n0.gate.tier": 0})
+v.step(lappr("na0", "n0", author=P), "allow", note="tier 0 is below minTier 2 too")
+v.step(lprop("n2", chg([("payments/pay.rs", "modify", 3)], label="n2"), author=M), "allow", check={"effects.n2.gate.tier": 2})
+v.step(lappr("na2", "n2", author=P), "denied", note="tier 2 is within minTier 2: the first rule applies and a member is not listed")
+v.step(lappr("na2o", "n2", author=O), "allow").step(claim("cn2", "n2"), "allow")
+# (2) a rule without `humans` admits a machine below tier 2 only
+v.step(E("pol2", "policy.set", O, {"policy": policy(gates=GATES, approvals=[{"action": "vcs.land", "approvers": [R, "owner"]}])}), "allow")
+v.step(lprop("q1", chg([("src/lib.rs", "modify", 3)], label="q1"), author=M), "allow", check={"effects.q1.gate.tier": 1})
+v.step(lappr("qa1", "q1", author=R), "allow", note="tier 1, no `humans`, no `evidence`: the machine reviewer counts")
+v.step(claim("cq1", "q1"), "allow", check={"effects.q1.claims.0.approval": "qa1"})
+v.step(lprop("q2", chg([("payments/pay.rs", "modify", 3)], label="q2"), author=M), "allow", check={"effects.q2.gate.tier": 2})
+v.step(lappr("qa2", "q2", author=R), "denied", note="tier 2: no machine counts, though the rule lists it and has no `humans`")
+v.step(claim("cq2x", "q2"), "denied", note="E3: nothing counted")
+v.step(lappr("qa2o", "q2", author=O), "allow").step(claim("cq2", "q2"), "allow")
+v.step(lprop("q3", chg([("migrations/001.sql", "add", 3)], label="q3"), author=M), "allow", check={"effects.q3.gate.tier": 3})
+v.step(lappr("qa3", "q3", author=R), "denied", note="tier 3: no machine counts whatever the rules say")
+v.step(lappr("qa3o", "q3", author=O), "allow").step(claim("cq3x", "q3"), "denied", note="one human is not enough at tier 3")
+v.step(lappr("qa3h", "q3", author=H3), "allow").step(claim("cq3", "q3"), "allow", check={"effects.q3.claims.0.approval": "qa3o", "effects.q3.claims.0.coApprovals": ["qa3h"]})
+# (3) needs: 1 does not lower tier 3
+v.step(E("pol3", "policy.set", O, {"policy": policy(gates=GATES, approvals=[{"action": "vcs.land", "approvers": ["owner"], "needs": 1}])}), "allow")
+v.step(lprop("w2", chg([("payments/pay.rs", "modify", 3)], label="w2"), author=M), "allow", check={"effects.w2.gate.tier": 2})
+v.step(lappr("wa2", "w2", author=O), "allow").step(claim("cw2", "w2"), "allow", note="tier 2 with needs 1: one approval is enough")
+v.step(lprop("w3", chg([("migrations/001.sql", "add", 3)], label="w3"), author=M), "allow", check={"effects.w3.gate.tier": 3})
+v.step(lappr("wa3", "w3", author=O), "allow").step(claim("cw3x", "w3"), "denied", note="tier 3 with needs 1: still two distinct humans")
+v.step(lappr("wa3h", "w3", author=H3), "allow").step(claim("cw3", "w3"), "allow", check={"effects.w3.claims.0.approval": "wa3", "effects.w3.claims.0.coApprovals": ["wa3h"]})
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",

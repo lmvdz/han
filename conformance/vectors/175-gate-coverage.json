@@ -1,0 +1,1416 @@
+{
+ "name": "gate-coverage",
+ "rules": [
+  "P-17",
+  "P-08",
+  "P-07"
+ ],
+ "description": "round 33, coverage: (1) \"a rule with `minTier` or `maxTier` applies only to an effect with a gate whose tier is within them\": a rule with only `minTier` does not apply below it, and the next rule decides; (2) \"no machine counts at tier 2 or 3 whatever the rules say\": a rule without `humans` admits the machine reviewer below tier 2 only; (3) \"at tier 3 at least 2, by distinct authors ... tier 3 needs two distinct humans whatever the rules say\": a rule's `needs: 1` does not lower tier 3, and still holds at tier 2",
+ "profiles": {
+  "@rev:a.example": {
+   "actorKind": "agent",
+   "operator": "@o:a.example",
+   "operatorConfirmed": true,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@h3:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@m:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@o:a.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@p:b.example": {
+   "actorKind": "human",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  },
+  "@x:c.example": {
+   "actorKind": "service",
+   "operatorConfirmed": false,
+   "keys": {
+    "k1": {
+     "publicKey": "pk",
+     "status": "valid"
+    }
+   }
+  }
+ },
+ "steps": [
+  {
+   "entry": {
+    "id": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "space.create",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "minTier": 2,
+        "approvers": [
+         "owner"
+        ]
+       },
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "member",
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-C",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:01Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@m:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:02Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@p:b.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:03Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@x:c.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-m3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:04Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "16fbfc681a5be1e9dfcc2294c8d774002606f9f98ff28cc5350119e89c625d60",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@rev:a.example",
+     "role": "member"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-mr",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:05Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "f17d423bfd667291615ec66cc0d9fdf4940b210e3bd022ae20d590babb0124b9",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "member.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "actor": "@h3:a.example",
+     "role": "owner"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-mh",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:06Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "a3569179f7c682da43b0754be140af4725a58b498c2596e995ef1ea93cb4b9f9",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "a386f351997bd02d4bdfa1db9257405a957f3f8f34a9c11aed58c09a84ff4499",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "f8de18bfaecf342a60c753ab2c686a56dc2730b99ea06be1e68d3241f0823c19",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/lib.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-n1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:07Z",
+   "expect": "allow",
+   "check": {
+    "effects.a3569179f7c682da43b0754be140af4725a58b498c2596e995ef1ea93cb4b9f9.gate.tier": 1
+   }
+  },
+  {
+   "entry": {
+    "id": "3de7844f1e0e37a0eda5505f7f3a744715ef2ae35852952f838145743ece56ca",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a3569179f7c682da43b0754be140af4725a58b498c2596e995ef1ea93cb4b9f9",
+     "planDigest": "a386f351997bd02d4bdfa1db9257405a957f3f8f34a9c11aed58c09a84ff4499"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-na1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:08Z",
+   "expect": "allow",
+   "note": "tier 1 is below the first rule's minTier 2: the second rule applies and a member counts"
+  },
+  {
+   "entry": {
+    "id": "88fe49fef2af19ca2ee8ec668786ade5b133249989720f848a5cf9738008c60f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "a3569179f7c682da43b0754be140af4725a58b498c2596e995ef1ea93cb4b9f9",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cn1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:09Z",
+   "expect": "allow",
+   "check": {
+    "effects.a3569179f7c682da43b0754be140af4725a58b498c2596e995ef1ea93cb4b9f9.claims.0.approval": "3de7844f1e0e37a0eda5505f7f3a744715ef2ae35852952f838145743ece56ca"
+   }
+  },
+  {
+   "entry": {
+    "id": "bc9f8f3103b2239ac1ed393403ea4de573f1e7805fddc8101a1c1a3722435400",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "b791bedd630fbdc8b09a09c045598d4c5fedb06604618c9ce6aab3ec7d895500",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "dfbae64a87e53423b105f15b7c784b7658bcb30eb172917e2db037dd78016897",
+      "total": 1,
+      "files": [
+       {
+        "path": "docs/g.md",
+        "kind": "modify",
+        "lines": 2
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-n0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:10Z",
+   "expect": "allow",
+   "check": {
+    "effects.bc9f8f3103b2239ac1ed393403ea4de573f1e7805fddc8101a1c1a3722435400.gate.tier": 0
+   }
+  },
+  {
+   "entry": {
+    "id": "ffa4c746177e90248dc15baadfd1ee275fed408e331114c8c3fe94116cc976dc",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "bc9f8f3103b2239ac1ed393403ea4de573f1e7805fddc8101a1c1a3722435400",
+     "planDigest": "b791bedd630fbdc8b09a09c045598d4c5fedb06604618c9ce6aab3ec7d895500"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-na0",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:11Z",
+   "expect": "allow",
+   "note": "tier 0 is below minTier 2 too"
+  },
+  {
+   "entry": {
+    "id": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "21ed69938340107cf415dbf268a5d9eb4c80e2a9f6adb70ee48ba97159ad5ee4",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "6279fd4b27c6072ad02fb1931501d28ad864a1367af216349b4cb35f9ee0d93d",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/pay.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-n2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:12Z",
+   "expect": "allow",
+   "check": {
+    "effects.77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f.gate.tier": 2
+   }
+  },
+  {
+   "entry": {
+    "id": "438dbf47bfff2defe35ef2113d6db0ca7d6d3563280734b4aa0a13b1baf6fae2",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@p:b.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
+     "planDigest": "21ed69938340107cf415dbf268a5d9eb4c80e2a9f6adb70ee48ba97159ad5ee4"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-na2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:13Z",
+   "expect": "denied",
+   "note": "tier 2 is within minTier 2: the first rule applies and a member is not listed"
+  },
+  {
+   "entry": {
+    "id": "954f7ab09af22953e34d6067d4254768d503595a39b06b62ef8333480fedf051",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
+     "planDigest": "21ed69938340107cf415dbf268a5d9eb4c80e2a9f6adb70ee48ba97159ad5ee4"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-na2o",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:14Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "10d7a278311d8bd19126f252ef39e7aa26a0272491ecaba53145f5f77af206c7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cn2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:15Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "2cf12316d6bd9be5097f453aa239282a9fad1217f7209f0aca40eb0c0db71dce",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "@rev:a.example",
+         "owner"
+        ]
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:16Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "746355915be324e176779900e494cf637727a81303d763651be2a142f4ca9a51",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "2223a9fe7397969da37a27781ced7c9632e440e2fdaa357adfbfe6d74c7c556e",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "838291ed00f385f6588e9ae98f6808caa38b1593c6dc2bec360c3903e1bc89aa",
+      "total": 1,
+      "files": [
+       {
+        "path": "src/lib.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-q1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:17Z",
+   "expect": "allow",
+   "check": {
+    "effects.746355915be324e176779900e494cf637727a81303d763651be2a142f4ca9a51.gate.tier": 1
+   }
+  },
+  {
+   "entry": {
+    "id": "d844c23a48b14157743e4a5ff85356b1950e36c9c0f233460696f3da1b35285a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@rev:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "746355915be324e176779900e494cf637727a81303d763651be2a142f4ca9a51",
+     "planDigest": "2223a9fe7397969da37a27781ced7c9632e440e2fdaa357adfbfe6d74c7c556e"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qa1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:18Z",
+   "expect": "allow",
+   "note": "tier 1, no `humans`, no `evidence`: the machine reviewer counts"
+  },
+  {
+   "entry": {
+    "id": "11ed3c70c3c2a5b4b31e18b2a610e3fede1057b3db81f2c9cc7777d70a2b0643",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "746355915be324e176779900e494cf637727a81303d763651be2a142f4ca9a51",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cq1",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:19Z",
+   "expect": "allow",
+   "check": {
+    "effects.746355915be324e176779900e494cf637727a81303d763651be2a142f4ca9a51.claims.0.approval": "d844c23a48b14157743e4a5ff85356b1950e36c9c0f233460696f3da1b35285a"
+   }
+  },
+  {
+   "entry": {
+    "id": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "0a790790c9e7b9ce202f5617afb8fcb3f1fe408d4c73918270ed967c947b05c0",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "fc9746aad532e0240e79ffc2f74cc3b4fafeb5b8cf4f54fc9e64e3867458eca9",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/pay.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-q2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:20Z",
+   "expect": "allow",
+   "check": {
+    "effects.5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026.gate.tier": 2
+   }
+  },
+  {
+   "entry": {
+    "id": "01b16cb0ed96530948fa7a76f5dba3372cfe02334d1d157f6c572ca027ed0840",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@rev:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
+     "planDigest": "0a790790c9e7b9ce202f5617afb8fcb3f1fe408d4c73918270ed967c947b05c0"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qa2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:21Z",
+   "expect": "denied",
+   "note": "tier 2: no machine counts, though the rule lists it and has no `humans`"
+  },
+  {
+   "entry": {
+    "id": "74924e5d57a84d597066a89a854b8ff55c576a95cb7a35b96f5624086cf4e3c8",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cq2x",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:22Z",
+   "expect": "denied",
+   "note": "E3: nothing counted"
+  },
+  {
+   "entry": {
+    "id": "cbd762dd33d894e0f44b422ecbc6d6cb2f9d827f2edd49f89bc45fcb35cc90ba",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
+     "planDigest": "0a790790c9e7b9ce202f5617afb8fcb3f1fe408d4c73918270ed967c947b05c0"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qa2o",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:23Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "4d69f82818080bcc4e176d1a50702096f37ade3fb9167c654988e924908c2f6b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cq2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:24Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "853f5b7217d51836cbc57c01116e415bde7c9f839f624b7560dfa41871c9ee6b",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "805849f3e6862847d9d1e9e8673d4e11c1931281984b4be47664debff606ef2f",
+      "total": 1,
+      "files": [
+       {
+        "path": "migrations/001.sql",
+        "kind": "add",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-q3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:25Z",
+   "expect": "allow",
+   "check": {
+    "effects.3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b.gate.tier": 3
+   }
+  },
+  {
+   "entry": {
+    "id": "77ea6e1dd93308b68eedb8eeb56193ac7434a71ac6174f36e990164b031c854c",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@rev:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+     "planDigest": "853f5b7217d51836cbc57c01116e415bde7c9f839f624b7560dfa41871c9ee6b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qa3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:26Z",
+   "expect": "denied",
+   "note": "tier 3: no machine counts whatever the rules say"
+  },
+  {
+   "entry": {
+    "id": "517ad5a645c9d03bd303ca962463c02cfe60c8962c6e4ccfee34f23d251ecb0d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+     "planDigest": "853f5b7217d51836cbc57c01116e415bde7c9f839f624b7560dfa41871c9ee6b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qa3o",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:27Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "c02fc1756bba8e33f84b24452a7d653723700648cc4d16b1426eb104080573b3",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cq3x",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:28Z",
+   "expect": "denied",
+   "note": "one human is not enough at tier 3"
+  },
+  {
+   "entry": {
+    "id": "64ba7c1533cc890936d045bdc09d0ad29a7f880f75d045c170cb5c26e4d4b59a",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@h3:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+     "planDigest": "853f5b7217d51836cbc57c01116e415bde7c9f839f624b7560dfa41871c9ee6b"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-qa3h",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:29Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "b9703ba33e002a6335829c8ae1f23c431ef4e7343110b5df6c6a482c78ee021d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cq3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:30Z",
+   "expect": "allow",
+   "check": {
+    "effects.3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b.claims.0.approval": "517ad5a645c9d03bd303ca962463c02cfe60c8962c6e4ccfee34f23d251ecb0d",
+    "effects.3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b.claims.0.coApprovals": [
+     "64ba7c1533cc890936d045bdc09d0ad29a7f880f75d045c170cb5c26e4d4b59a"
+    ]
+   }
+  },
+  {
+   "entry": {
+    "id": "a85222d1ddd0b3ca9f2b14761da2559873fde954f1a31e086c73779137da7c03",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "policy.set",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "policy": {
+      "visibility": "members",
+      "join": "invite",
+      "membersMayInvite": false,
+      "allowAgents": "any",
+      "approvals": [
+       {
+        "action": "vcs.land",
+        "approvers": [
+         "owner"
+        ],
+        "needs": 1
+       }
+      ],
+      "separateApprover": false,
+      "budget": null,
+      "maxDelegationDepth": 4,
+      "minDurability": "local",
+      "launchWindow": 30,
+      "extensionsMinRole": "member",
+      "sessions": {
+       "watch": "member",
+       "read": "member",
+       "steer": "owner",
+       "modes": [
+        "auto",
+        "guarded"
+       ]
+      },
+      "servers": {
+       "deny": []
+      },
+      "gates": {
+       "small": 20,
+       "large": 500,
+       "paths": [
+        {
+         "glob": "payments/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "ops/**",
+         "class": "sensitive"
+        },
+        {
+         "glob": "migrations/**",
+         "class": "critical"
+        },
+        {
+         "glob": "auth/**",
+         "class": "critical"
+        },
+        {
+         "glob": "only-b/**",
+         "class": "critical",
+         "repo": "github:o/b"
+        },
+        {
+         "glob": ".github/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/Cargo.lock",
+         "class": "generated"
+        },
+        {
+         "glob": "docs/**",
+         "class": "docs"
+        },
+        {
+         "glob": "**/*.md",
+         "class": "docs"
+        },
+        {
+         "glob": "**/tests/**",
+         "class": "tests"
+        },
+        {
+         "glob": "gen/**",
+         "class": "generated"
+        }
+       ],
+       "owners": [
+        {
+         "glob": "payments/**",
+         "owners": [
+          "@p:b.example",
+          "@rev:a.example"
+         ]
+        },
+        {
+         "glob": "auth/**",
+         "owners": [
+          "@m:a.example"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-pol3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:31Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "bdf4105bc6c371c1bbef65562033f0af0115050e05272ea559b592694fd6f13f",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "42451b0c3c70070424b57e31180c1d422b61f170dde07a968af83dc80900ffe2",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "8c948b53311798c315e37acab82c2b9fcc2fcfed6b14523dbddc264a6767d72f",
+      "total": 1,
+      "files": [
+       {
+        "path": "payments/pay.rs",
+        "kind": "modify",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-w2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:32Z",
+   "expect": "allow",
+   "check": {
+    "effects.bdf4105bc6c371c1bbef65562033f0af0115050e05272ea559b592694fd6f13f.gate.tier": 2
+   }
+  },
+  {
+   "entry": {
+    "id": "a5612014c392c67f4e9f826290504a2710302631337c8e103e8d480c03b1643b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "bdf4105bc6c371c1bbef65562033f0af0115050e05272ea559b592694fd6f13f",
+     "planDigest": "42451b0c3c70070424b57e31180c1d422b61f170dde07a968af83dc80900ffe2"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-wa2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:33Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "74910523c942eace0d9311bb986192de61155c408511126c55489909ef43887d",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "bdf4105bc6c371c1bbef65562033f0af0115050e05272ea559b592694fd6f13f",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cw2",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:34Z",
+   "expect": "allow",
+   "note": "tier 2 with needs 1: one approval is enough"
+  },
+  {
+   "entry": {
+    "id": "d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.propose",
+    "author": "@m:a.example",
+    "keyId": "k1",
+    "body": {
+     "executor": "@x:c.example",
+     "action": "vcs.land",
+     "planDigest": "49731be30595396ca0446075e9b53d19cb48bc8705c5a83496d60abd7b44aab3",
+     "repeatable": false,
+     "change": {
+      "repo": "github:o/r",
+      "deltaDigest": "615304244bbaaa2f622484002188d620c3c800304b7a7b6b583fbd8272307118",
+      "total": 1,
+      "files": [
+       {
+        "path": "migrations/001.sql",
+        "kind": "add",
+        "lines": 3
+       }
+      ]
+     }
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-w3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:35Z",
+   "expect": "allow",
+   "check": {
+    "effects.d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7.gate.tier": 3
+   }
+  },
+  {
+   "entry": {
+    "id": "1ecbeb8966dc1ca3610dd2871a752462dca6069cdcda9a770b1ae7a9201ea318",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@o:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7",
+     "planDigest": "49731be30595396ca0446075e9b53d19cb48bc8705c5a83496d60abd7b44aab3"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-wa3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:36Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "2aec4db3fc8331a35593cff1633ca4810959d6093914245ea838f7512ed2152b",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cw3x",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:37Z",
+   "expect": "denied",
+   "note": "tier 3 with needs 1: still two distinct humans"
+  },
+  {
+   "entry": {
+    "id": "741260868fc6cab0e9f207322d90c28ddccaea21941aaa8d0c62a2439692e686",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.approve",
+    "author": "@h3:a.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7",
+     "planDigest": "49731be30595396ca0446075e9b53d19cb48bc8705c5a83496d60abd7b44aab3"
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-wa3h",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:38Z",
+   "expect": "allow"
+  },
+  {
+   "entry": {
+    "id": "187d2614dbe04a561546f59b4ad8c0a5c7ac08d63f816addfac77746728c1fd5",
+    "v": 1,
+    "space": "s1:a.example",
+    "kind": "effect.claim",
+    "author": "@x:c.example",
+    "keyId": "k1",
+    "body": {
+     "proposal": "d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7",
+     "attempt": 1,
+     "instance": "k1",
+     "window": 30
+    },
+    "contentHash": "",
+    "refs": [],
+    "seen": 0,
+    "nonce": "n-cw3",
+    "time": "2026-10-10T12:00:00Z"
+   },
+   "time": "2026-10-10T12:00:39Z",
+   "expect": "allow",
+   "check": {
+    "effects.d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7.claims.0.approval": "1ecbeb8966dc1ca3610dd2871a752462dca6069cdcda9a770b1ae7a9201ea318",
+    "effects.d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7.claims.0.coApprovals": [
+     "741260868fc6cab0e9f207322d90c28ddccaea21941aaa8d0c62a2439692e686"
+    ]
+   }
+  }
+ ],
+ "ids": {
+  "C": "7aa73054fd300440fa27325b0f0b4089afbbb42cdec4c13c449ccffeb002b3fc",
+  "cn1": "88fe49fef2af19ca2ee8ec668786ade5b133249989720f848a5cf9738008c60f",
+  "cn2": "10d7a278311d8bd19126f252ef39e7aa26a0272491ecaba53145f5f77af206c7",
+  "cq1": "11ed3c70c3c2a5b4b31e18b2a610e3fede1057b3db81f2c9cc7777d70a2b0643",
+  "cq2": "4d69f82818080bcc4e176d1a50702096f37ade3fb9167c654988e924908c2f6b",
+  "cq2x": "74924e5d57a84d597066a89a854b8ff55c576a95cb7a35b96f5624086cf4e3c8",
+  "cq3": "b9703ba33e002a6335829c8ae1f23c431ef4e7343110b5df6c6a482c78ee021d",
+  "cq3x": "c02fc1756bba8e33f84b24452a7d653723700648cc4d16b1426eb104080573b3",
+  "cw2": "74910523c942eace0d9311bb986192de61155c408511126c55489909ef43887d",
+  "cw3": "187d2614dbe04a561546f59b4ad8c0a5c7ac08d63f816addfac77746728c1fd5",
+  "cw3x": "2aec4db3fc8331a35593cff1633ca4810959d6093914245ea838f7512ed2152b",
+  "m1": "fad46c5650a2641d1c21ee25c943f575bc75a3c89382fb687f56b1cc72a57445",
+  "m2": "9bd709d301c73160a7e92a0dd6331763f9328e9a4c8855f8f55d844f6bb9e400",
+  "m3": "d111ff9ad09027de8d8ea97f60c0d99fbf3adb4d0ff7f3c751d41301d32bf221",
+  "mh": "f17d423bfd667291615ec66cc0d9fdf4940b210e3bd022ae20d590babb0124b9",
+  "mr": "16fbfc681a5be1e9dfcc2294c8d774002606f9f98ff28cc5350119e89c625d60",
+  "n0": "bc9f8f3103b2239ac1ed393403ea4de573f1e7805fddc8101a1c1a3722435400",
+  "n1": "a3569179f7c682da43b0754be140af4725a58b498c2596e995ef1ea93cb4b9f9",
+  "n2": "77904a7b77b506f180b21fefc3786819ff881b27827cfcaf652c94a2b117179f",
+  "na0": "ffa4c746177e90248dc15baadfd1ee275fed408e331114c8c3fe94116cc976dc",
+  "na1": "3de7844f1e0e37a0eda5505f7f3a744715ef2ae35852952f838145743ece56ca",
+  "na2": "438dbf47bfff2defe35ef2113d6db0ca7d6d3563280734b4aa0a13b1baf6fae2",
+  "na2o": "954f7ab09af22953e34d6067d4254768d503595a39b06b62ef8333480fedf051",
+  "pol2": "2cf12316d6bd9be5097f453aa239282a9fad1217f7209f0aca40eb0c0db71dce",
+  "pol3": "a85222d1ddd0b3ca9f2b14761da2559873fde954f1a31e086c73779137da7c03",
+  "q1": "746355915be324e176779900e494cf637727a81303d763651be2a142f4ca9a51",
+  "q2": "5b799a336f14fdc90e4e6663cb2f8e23fec60a969b676d8154cb5a3892cc6026",
+  "q3": "3a3a2ef596113f2ffabd7e24da4e9d4bb539cb8dd61f0eb38578abaecbd4954b",
+  "qa1": "d844c23a48b14157743e4a5ff85356b1950e36c9c0f233460696f3da1b35285a",
+  "qa2": "01b16cb0ed96530948fa7a76f5dba3372cfe02334d1d157f6c572ca027ed0840",
+  "qa2o": "cbd762dd33d894e0f44b422ecbc6d6cb2f9d827f2edd49f89bc45fcb35cc90ba",
+  "qa3": "77ea6e1dd93308b68eedb8eeb56193ac7434a71ac6174f36e990164b031c854c",
+  "qa3h": "64ba7c1533cc890936d045bdc09d0ad29a7f880f75d045c170cb5c26e4d4b59a",
+  "qa3o": "517ad5a645c9d03bd303ca962463c02cfe60c8962c6e4ccfee34f23d251ecb0d",
+  "w2": "bdf4105bc6c371c1bbef65562033f0af0115050e05272ea559b592694fd6f13f",
+  "w3": "d584893c9fea5300486eaf0fc0dab0f1e3893dc7e68d80edcc95efe495bf86b7",
+  "wa2": "a5612014c392c67f4e9f826290504a2710302631337c8e103e8d480c03b1643b",
+  "wa3": "1ecbeb8966dc1ca3610dd2871a752462dca6069cdcda9a770b1ae7a9201ea318",
+  "wa3h": "741260868fc6cab0e9f207322d90c28ddccaea21941aaa8d0c62a2439692e686"
+ }
+}
