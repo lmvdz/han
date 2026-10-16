@@ -1833,6 +1833,7 @@ dependencies = [
  "han-node",
  "han-proc",
  "han-registry",
+ "han-review",
  "han-seq",
  "han-tui",
  "han-vcs",
@@ -2066,6 +2067,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "han-core",
+ "han-node",
  "han-proc",
  "han-vcs",
  "reqwest",

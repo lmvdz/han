@@ -24,6 +24,7 @@ han-host = { path = "../../crates/han-host", version = "0.1.0" }
 han-faces = { path = "../han-faces", version = "0.1.0" }
 han-tui = { path = "../han-tui", version = "0.1.0" }
 han-vcs = { path = "../../crates/han-vcs", version = "0.1.0" }
+han-review = { path = "../../crates/han-review", version = "0.1.0" }
 getrandom.workspace = true
 interprocess = { version = "2.4", features = ["tokio"] }
 serde.workspace = true

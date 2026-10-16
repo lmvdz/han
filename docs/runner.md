@@ -308,7 +308,7 @@ The node never needs root at run time. It starts a host as another user through 
 sudo han runner setup --agents 2            # add --dry-run to see the plan and change nothing
 ```
 
-It makes the OS users (`han`, `han-exec`, `han-agent1` … `han-agent<N>`, each with a locked password), the `han-github` directory `/var/lib/han/github` (mode 700, owned by `han`), the agents directory `/var/lib/han-agents` (mode 755) with one state directory per agent (`2770`, setgid, in the agent's own group; the node's user joins that group and no other agent's), and installs `han-agent@.service`, `han-exec.service` and `han-github.service` (both installed, **left disabled**; `han-github` also does not start until its config exists), `/etc/polkit-1/rules.d/50-han-agent.rules` (the node's user may start and stop `han-agent@han-agent<N>` and nothing else) and the node's drop-in `/etc/systemd/system/han-node.service.d/10-agents.conf` (`UMask=0007`, `ReadWritePaths=/var/lib/han/node /var/lib/han-agents`), then reloads systemd. Each step says `changed:` or `unchanged:`, so a second run reports no change. The unit files are in `integrations/runner/`; `install-agent-user.sh` and `install-executor.sh` there are thin wrappers around the command.
+It makes the OS users (`han`, `han-exec`, `han-agent1` … `han-agent<N>`, each with a locked password), the `han-github` directory `/var/lib/han/github` (mode 700, owned by `han`), the agents directory `/var/lib/han-agents` (mode 755) with one state directory per agent (`2770`, setgid, in the agent's own group; the node's user joins that group and no other agent's), and installs `han-agent@.service`, `han-exec.service`, `han-review@.service` and `han-github.service` (all installed, **left disabled**; `han-github` also does not start until its config exists), `/etc/polkit-1/rules.d/50-han-agent.rules` (the node's user may start and stop `han-agent@han-agent<N>` and nothing else) and the node's drop-in `/etc/systemd/system/han-node.service.d/10-agents.conf` (`UMask=0007`, `ReadWritePaths=/var/lib/han/node /var/lib/han-agents`), then reloads systemd. Each step says `changed:` or `unchanged:`, so a second run reports no change. The unit files are in `integrations/runner/`; `install-agent-user.sh` and `install-executor.sh` there are thin wrappers around the command.
 
 It also looks at the running services. If `han-seq`, `han-node`, `han-exec`, `han-github` or a running `han-agent@<user>` unit runs a binary that has since been replaced on disk (after you installed a new `han`), or the node has not yet picked up its new group, it says which and how to restart it, or restarts it with `--restart-stale`. A home that kept running the old binary has no admin socket, and everything that registers profiles fails against it; this is how you find out before that. An agent unit that has a session running (its cgroup holds more than the host) is reported as `busy:` and not restarted, even with `--restart-stale`: restarting would kill the session, so restart it when the session ends. Each restarted unit is waited for until it serves (an agent unit: until its host has written a fresh admission file).
 
@@ -410,9 +410,10 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - `han-github` (`/var/lib/han/github`, or `--github-dir`; checked when the directory exists): prints whether it is configured and running. A config without an `[app] private_key`, a missing key file, a key readable by group or others, or a configured service that is not running is a finding (`github.config-invalid`, `github.key-missing`, `github.key-mode`, `github.not-running`; `github.config-missing` when the service runs without a config). Unconfigured and disabled, as `han runner setup` leaves it, is not a problem;
 - the executor (`/var/lib/han-exec`, or `--exec-dir`): `exec.json` names repositories but has no `github` block, or the write App's key file is missing or not mode 600 (the fix is the `han executor add … --github-app … --github-installation … --github-key …` of 9);
 - the `land` finish flow, when `agents.json` turns it on (9.1): the executor has no such repository or does not list the target ref in `landing_refs`, has no required checks, or runs a full stage the flow says it does not have; the executor's lane session cannot be watched (the space's `sessions.watch`); with `--check-github-app`, the write App lacks Contents write, Checks read or Commit statuses read;
+- the machine reviewer (9.2; checked when a `review.json` is under `/var/lib/han-agents/*/review` or `--review-dir`): a `review.json` that cannot be used (`review.config.invalid`, `review.config.empty`), an enabled reviewer whose model key is not set in `review.env` (`review.key.missing`) or whose `review.env` is readable by others (`review.env.mode`), and, only with `--check-review-route`, a model route that does not answer (`review.route.unreachable`). The note line names whether it approves and the independence mode;
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).
 
-**Who runs it.** On a runner two users each see half of the machine: `han` opens the node's socket and reads its data, `han-exec` reads the executor's key. No single user gets every check, so `han doctor` says so instead of failing: its first line is `checked as <user>`, then every check prints `ok <check>` when it passed or `skipped <check>: <why>` when this user could not look, with the command that covers it. A skipped check is not a finding (nothing is known to be wrong), and `healthy` says how many were skipped. The checks are `node`, `registry`, `sandbox`, `toolchain`, `presence`, `process.stale-binary`, `github.service`, `land`, `land.watch`, `executor.github` and `land.github.permissions`; one that does not apply on the machine (no executor, `land` off) is not listed.
+**Who runs it.** On a runner two users each see half of the machine: `han` opens the node's socket and reads its data, `han-exec` reads the executor's key. No single user gets every check, so `han doctor` says so instead of failing: its first line is `checked as <user>`, then every check prints `ok <check>` when it passed or `skipped <check>: <why>` when this user could not look, with the command that covers it. A skipped check is not a finding (nothing is known to be wrong), and `healthy` says how many were skipped. The checks are `node`, `registry`, `sandbox`, `toolchain`, `presence`, `process.stale-binary`, `github.service`, `review`, `review.route`, `land`, `land.watch`, `executor.github` and `land.github.permissions`; one that does not apply on the machine (no executor, `land` off) is not listed.
 
 ```sh
 sudo -u han      han doctor --data /var/lib/han/node --repo /srv/repos/han
@@ -565,6 +566,72 @@ Landing has three settings, each set by a command, none by hand. The default is 
 3. **The watch right.** The agent's host follows the lane through the `han.land lane` session that the executor opens in the space (one per space, opened when the lane first has something to say). There is no per-session grant in Policy: watching a session is the space's `sessions.watch` level (default `member`), judged against the watcher's role, and the agents `han agent add --space` makes are members. So nothing needs setting up unless an owner raised the level to `owner` or `nobody`; then an owner replaces the policy with `sessions.watch` at `member` (`han space policy <space> <file>`).
 
 `han doctor [--check-github-app]` checks the lot (`land.*` in 8.1) and prints the fix for each. The GitHub App check asks GitHub, with the App's JWT, what the installation may do (Contents write, Checks read, Commit statuses read; Checks write when a repository sets `rerun` above 0), so it is only done when asked.
+
+### 9.2 The machine reviewer (tier 1)
+
+A landing of tier 0 or 1 (P-17) may be approved by a **machine reviewer** instead of a person: an independent model reads the change and returns a typed verdict, recorded as a `han.review/1` record over the landing's delta digest. It is off unless configured, it never approves tier 2 or 3, and Policy decides whether its approval counts. `han review run` is the service (crate `han-review`; the pipeline and the record are described there).
+
+**What it does**, for each open `vcs.land` of a configured space whose derived tier (the `gateTier` of the node's `Effects` row) is 0 or 1:
+
+1. refuses, before any model call, a proposal whose body does not match its plan, an author it knows nothing about, a reviewer that is not independent of the author (`strict`: a different vendor and no shared operator; `dogfood_relaxed`: a different actor and vendor only, and the record says so), and a bundle whose delta is not the plan's `deltaDigest`;
+2. fetches the bundle, recomputes the delta, asks the model once for a typed answer (an answer that does not parse, or is cut off at `max_tokens`, is `needs_human`), and uploads the record as a blob;
+3. on `approve` (with `approve` on, a confidence at or above `min_confidence`, and the model named in the record): sends `ReviewApprove`, which the node turns into `effect.approve` with `evidence {kind: "han.review/1", over: <deltaDigest>}` and the record as the content `evidence`. On `request_changes` or `needs_human`: the record is uploaded and the proposer gets a task whose text says it is review data, not an instruction.
+
+One review is made per proposal and reviewer version (model, prompt, schema and independence mode); each step is written to `state/ledger.json` first, and the record is kept in `state/records/`, so a restart neither asks the model again nor loses its place.
+
+**Which connection approves.** The service runs its own node as the reviewer's actor and works through it held to the **executor** class, like `han exec`: `EffectApprove` stays refused to it (SR-06, SR-106; a headless node never approves for a person). `ReviewApprove` is a second executor-only command next to the lane's `RevertApprove`: no person is asked, so the node checks everything itself. The proposal must be open, a `vcs.land`, proposed by another actor, of derived tier at most 1; the evidence must be `han.review/1` over the gate's `deltaDigest`. Then Policy decides, as for any approval: the reviewer must be listed in an approval rule with `evidence: "han.review/1"`, a non-human approval never counts at tier 2 or more, and `separateApprover` and guards still apply. A face or an agent's host cannot send it.
+
+The space's policy needs the rule (the dogfood space `han-dev` has it), and the reviewer must be a member:
+
+```json
+{"action": "vcs.land", "maxTier": 1, "approvers": ["@reviewer:<server>", "owner"], "evidence": "han.review/1"}
+```
+
+**Setup**, in order. The reviewer is an agent actor with the operator as its operator, running as its own OS user (here `han-agent2`); it starts no sessions.
+
+```sh
+# 1. root, once: the OS users and the units (installs han-review@.service, not enabled)
+sudo han runner setup --agents 2
+
+# 2. the actor: as the node's user (key in /var/lib/han-agents/han-agent2/keys, profile, operator confirmation, membership)
+sudo -u han han agent add reviewer --operator @lars:runner.han.home.arpa --server runner.han.home.arpa \
+    --os-user han-agent2 --space iwufdph6fg:runner.han.home.arpa \
+    --home <ticket> --home-data /var/lib/han/seq --data /var/lib/han/node
+
+# 3. the configuration and the model key: as the reviewer's user. --key-file is a file holding the key (mode 600);
+#    it is copied to review.env (mode 600), never into review.json and never printed. Delete the file afterwards.
+sudo -u han-agent2 han review set --dir /var/lib/han-agents/han-agent2/review \
+    --actor @reviewer:runner.han.home.arpa --operators @lars:runner.han.home.arpa \
+    --model agy/gemini-flash --max-tokens 16384 \
+    --base-url http://127.0.0.1:20128 --route-name omniroute --key-env HAN_REVIEW_KEY \
+    --spaces iwufdph6fg:runner.han.home.arpa \
+    --repo github:lmvdz/han=https://github.com/lmvdz/han.git \
+    --independence dogfood_relaxed \
+    --default-author claude-code:claude-opus-4-1:@lars:runner.han.home.arpa \
+    --home <ticket> --relay n0 --key-file <path-to-key-file> --enabled
+
+# 4. check it: the model route is asked only with --check-review-route (one request, no key sent)
+sudo -u han-agent2 han doctor --review-dir /var/lib/han-agents/han-agent2/review --check-review-route
+
+# 5. start it (an admin)
+sudo systemctl enable --now han-review@han-agent2
+journalctl -u han-review@han-agent2 -f
+```
+
+Run first without `--approve`: the service reviews, uploads the record and messages the proposer, and approves nothing (a shadow run, `recorded: the service is not set to approve` in the ledger). When the records look right, `sudo -u han-agent2 han review set --dir … --approve` and `sudo systemctl restart han-review@han-agent2`. Every `han review set` prints `changed:` or `unchanged:` and only what is given changes; `--enabled=false` turns the service off (`han review run` then exits 0 and does nothing).
+
+The settings:
+
+| Option | Meaning |
+|---|---|
+| `--model`, `--max-tokens` | The model and its output ceiling, always sent explicitly. For the agy Gemini Flash route use about 16384: a larger or smaller value gives truncation (`needs_human`) or spurious compaction. The model must be of a different vendor from the author's (the vendor table refuses a name it does not know). |
+| `--base-url`, `--path`, `--key-env`, `--key-header` | The OpenAI-compatible route (OmniRoute). TLS only, except to a loopback host. `--key-env` names the environment variable that holds the key; the unit's `review.env` sets it. |
+| `--spaces`, `--repo name=remote` | What is watched, and where a bundle's base is fetched from (a remote readable without credentials, for example the public HTTPS URL; the bundle itself comes from the space). A proposal for another repository is refused. |
+| `--independence` | `strict` (default) or `dogfood_relaxed`. |
+| `--default-author`, `--author actor=harness:model[:operators]` | What the reviewer knows of the author: the node does not say which harness and model ran an actor, so this does. Without an entry the review is refused (independence can't be shown). |
+| `--approve`, `--min-confidence`, `--max-diff-bytes`, `--poll-secs` | Approval on or off (default off), the confidence an `approve` needs (default 80), the largest diff sent to the model (default 200000 bytes; over it the record is `needs_human`) and the pause between reads (default 15 s). |
+
+The files, all under `--dir`: `review.json`, `review.env` (`HAN_HOME`, `HAN_RELAY`, the key), `state/` (ledger and kept records), `node/` and `objects/`. If the proposal's author is guarded (`sessions.forceGuarded`, or the agent chose it), the guard must approve as well: the reviewer satisfies the rule, not the guard. A reviewer that is itself guarded (it chose guarding, or the space has `sessions.forceGuarded`) cannot approve (P-08, P-15): leave `forceGuarded` off in the space the reviewer works in, or tier 1 needs an owner.
 
 ## 10. GitHub App permissions for writes
 

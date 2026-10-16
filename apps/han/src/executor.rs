@@ -362,7 +362,7 @@ fn read_pem(path: &Path) -> Res<Vec<u8>> {
 }
 
 /// Whether `path` has exactly mode 600 (always true where there are no modes).
-fn mode_600(path: &Path) -> bool {
+pub(crate) fn mode_600(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -377,7 +377,7 @@ fn mode_600(path: &Path) -> bool {
 
 /// Puts `pem` at `dest` with mode 600, created that way (never readable by others, not even briefly).
 /// Returns whether anything changed.
-fn install_key(dest: &Path, pem: &[u8]) -> Res<bool> {
+pub(crate) fn install_key(dest: &Path, pem: &[u8]) -> Res<bool> {
     if std::fs::read(dest).ok().as_deref() == Some(pem) && mode_600(dest) {
         return Ok(false);
     }

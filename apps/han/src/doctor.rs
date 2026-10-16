@@ -48,6 +48,14 @@ pub struct DoctorArgs {
     /// permissions the landing lane needs. Off by default: `han doctor` otherwise makes no network request.
     #[arg(long)]
     check_github_app: bool,
+    /// The machine reviewer's directory (`review.json`), if it is not found under `/var/lib/han-agents/*/review`
+    /// (Linux). Checked when `review.json` is there; the reviewer is off unless configured.
+    #[arg(long, env = "HAN_REVIEW_DIR")]
+    review_dir: Option<PathBuf>,
+    /// Ask the reviewer's model route whether it answers (one unauthenticated request to its base URL; the key
+    /// is not sent). Off by default: `han doctor` otherwise makes no network request.
+    #[arg(long)]
+    check_review_route: bool,
     /// Run only the checks that need the executor's files (its key, `exec.json`), as the executor's user
     /// (`sudo -u han-exec han doctor --exec-only`). The other checks need the node's socket and data, which
     /// that user cannot reach: run plain `han doctor` as the node's user for those. Each run lists what the
@@ -178,6 +186,16 @@ const SPECS: &[Spec] = &[
         id: "land.watch",
         side: Side::Node,
         ids: &["land.watch."],
+    },
+    Spec {
+        id: "review",
+        side: Side::Node,
+        ids: &["review.config", "review.key", "review.env"],
+    },
+    Spec {
+        id: "review.route",
+        side: Side::Node,
+        ids: &["review.route"],
     },
     Spec {
         id: "executor.github",
@@ -353,6 +371,22 @@ pub struct GithubFacts {
     pub active: Option<bool>,
 }
 
+/// The machine reviewer's setup (`han review`): its `review.json`, the environment file the unit reads, and, when
+/// asked, whether its model route answers.
+#[derive(Clone, Debug)]
+pub struct ReviewFacts {
+    pub dir: PathBuf,
+    /// The parsed `review.json`, or why it can't be used.
+    pub config: Result<han_review::config::ServiceConfig, String>,
+    /// The environment file's permission bits (Unix).
+    pub env_mode: Option<u32>,
+    /// Whether the environment file sets the variable the config names for the model key (`None`: the file is
+    /// not readable by this user, so it is not known; the key's value is never put into the report).
+    pub key_set: Option<bool>,
+    /// The route's answer when `--check-review-route` asked (`Err`: why it did not answer).
+    pub route: Option<Result<u16, String>>,
+}
+
 /// Everything [`analyze`] looks at.
 #[derive(Clone, Debug)]
 pub struct Facts {
@@ -384,6 +418,10 @@ pub struct Facts {
     pub github: Option<GithubFacts>,
     /// The sessions of actors that are not agents of `agents.json`, in the spaces where the `land` flow is on.
     pub lane_sessions: Vec<LaneSessionFact>,
+    /// `None` when there is no `review.json` on this machine: the reviewer is off unless configured.
+    pub review: Option<ReviewFacts>,
+    /// `--check-review-route` was given.
+    pub check_review: bool,
     /// The OS user running this process.
     pub user: String,
     /// `--exec-only`: only the executor-side checks run.
@@ -472,6 +510,9 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     if let Some(g) = &f.github {
         github_findings(g, &mut out);
     }
+    if let Some(r) = &f.review {
+        review_findings(r, &mut out);
+    }
     for s in &f.stale {
         out.push(finding(
             "process.stale-binary",
@@ -517,6 +558,7 @@ pub fn checks(f: &Facts, findings: &[Finding]) -> Vec<Check> {
             "presence" => f.presence.is_some(),
             "process.stale-binary" => f.linux,
             "github.service" => f.github.is_some(),
+            "review" | "review.route" => f.review.is_some(),
             "land" | "land.watch" => land_on,
             "executor.github" => f.executor.is_some(),
             "land.github.permissions" => f.executor.is_some() && (land_on || f.exec_only),
@@ -539,6 +581,15 @@ pub fn checks(f: &Facts, findings: &[Finding]) -> Vec<Check> {
             Some("exec.json has no `github` block to ask GitHub about".to_owned())
         } else if f.exec_only && spec.side == Side::Exec && f.executor.is_none() {
             Some("no readable exec.json on this machine (see --exec-dir)".to_owned())
+        } else if spec.id == "review.route"
+            && applies
+            && f.review
+                .as_ref()
+                .is_some_and(|r| r.config.as_ref().map_or(true, |c| !c.enabled))
+        {
+            Some("the reviewer is not enabled, so no model is asked".to_owned())
+        } else if spec.id == "review.route" && applies && !f.check_review {
+            Some("it asks the model route, so only on request: add --check-review-route".to_owned())
         } else if spec.id == "land.watch" && applies && f.node.is_err() {
             Some("the node did not answer".to_owned())
         } else {
@@ -807,6 +858,202 @@ fn executor_findings(e: &ExecutorFacts, out: &mut Vec<Finding>) {
 
 /// What `han-github` needs: a config that names the read App's key, the key (mode 600), and a running unit once it
 /// is configured. Unconfigured and not running is how `han runner setup` leaves it: not a problem.
+/// The reviewer's setup: a usable `review.json`, the model key set where the unit reads it, the environment file
+/// private, and (when asked) a route that answers. A reviewer that is off asks for none of it but a valid file.
+fn review_findings(r: &ReviewFacts, out: &mut Vec<Finding>) {
+    let dir = q(r.dir.to_string_lossy());
+    let subject = r.dir.join(han_review::config::FILE).display().to_string();
+    let env_file = r.dir.join(crate::review::ENV_FILE);
+    let cfg = match &r.config {
+        Ok(c) => c,
+        Err(e) => {
+            out.push(finding(
+                "review.config.invalid",
+                subject,
+                format!("review.json cannot be used: {e}"),
+                format!(
+                    "han review set --dir {dir} (give the option the message names; see `han review set --help`)"
+                ),
+            ));
+            return;
+        }
+    };
+    if !cfg.enabled {
+        return;
+    }
+    if let Err(e) = cfg.validate() {
+        out.push(finding(
+            "review.config.invalid",
+            subject,
+            format!("review.json is enabled but cannot work: {e}"),
+            format!("han review set --dir {dir} (fix the option the message names)"),
+        ));
+        return;
+    }
+    if cfg.spaces.is_empty() || cfg.repos.is_empty() {
+        out.push(finding(
+            "review.config.empty",
+            subject,
+            "review.json is enabled but names no space or no repository, so there is nothing to review"
+                .to_owned(),
+            format!(
+                "han review set --dir {dir} --spaces <space> --repo github:<owner>/<repo>=<remote>"
+            ),
+        ));
+    }
+    if r.key_set == Some(false) {
+        out.push(finding(
+            "review.key.missing",
+            env_file.display().to_string(),
+            format!(
+                "the model key {} is not set in the unit's environment file, so every model call would fail",
+                cfg.route.key_env
+            ),
+            format!("han review set --dir {dir} --key-file <file holding the key, mode 600>"),
+        ));
+    }
+    if let Some(mode) = r.env_mode
+        && mode & 0o077 != 0
+    {
+        out.push(finding(
+            "review.env.mode",
+            env_file.display().to_string(),
+            format!(
+                "the environment file holds the model key and has mode {mode:03o}: others may read it"
+            ),
+            format!("chmod 600 {}", q(env_file.to_string_lossy())),
+        ));
+    }
+    if let Some(Err(e)) = &r.route {
+        out.push(finding(
+            "review.route.unreachable",
+            cfg.route.base.clone(),
+            format!("the model route did not answer: {e}"),
+            format!(
+                "check that {} is running and reachable from this machine, then run `han doctor --check-review-route` again",
+                cfg.route.base
+            ),
+        ));
+    }
+}
+
+/// One line on the reviewer for `han doctor`: whether it is on, whether it may approve, and the independence
+/// mode its records are made under.
+pub fn review_note(r: &ReviewFacts) -> String {
+    match &r.config {
+        Err(_) => "note: the reviewer has a review.json that cannot be read".to_owned(),
+        Ok(c) => format!(
+            "note: the reviewer {} is {}; approves: {}; independence: {:?}; model {} (max_tokens {}), route {}{}",
+            c.actor,
+            if c.enabled { "enabled" } else { "disabled" },
+            if c.approve {
+                "yes"
+            } else {
+                "no (records and messages only)"
+            },
+            c.independence,
+            c.model,
+            c.max_tokens,
+            c.route.base,
+            match &r.route {
+                Some(Ok(code)) => format!(" (answered HTTP {code})"),
+                Some(Err(_)) => " (did not answer)".to_owned(),
+                None => String::new(),
+            }
+        ),
+    }
+}
+
+/// The reviewer's directory: `dir`, else the first `/var/lib/han-agents/*/review` that holds a `review.json`
+/// (Linux). `None` when there is none.
+fn review_dir_of(dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(d) = dir {
+        return Some(d.to_path_buf());
+    }
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir("/var/lib/han-agents")
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path().join("review"))
+        .filter(|p| p.join(han_review::config::FILE).exists())
+        .collect();
+    dirs.sort();
+    dirs.into_iter().next()
+}
+
+/// Reads the reviewer's directory, when there is a `review.json`; and, if `check_route`, asks the route.
+async fn review_facts(dir: Option<&Path>, check_route: bool) -> (Option<ReviewFacts>, Vec<Skip>) {
+    let Some(dir) = review_dir_of(dir) else {
+        return (None, Vec::new());
+    };
+    let file = dir.join(han_review::config::FILE);
+    if denied(&file) {
+        let why = format!(
+            "needs the reviewer's directory {}, which {} may not read: run as the reviewer's OS user",
+            dir.display(),
+            current_user()
+        );
+        return (
+            None,
+            ["review", "review.route"]
+                .into_iter()
+                .map(|check| Skip {
+                    check,
+                    reason: why.clone(),
+                })
+                .collect(),
+        );
+    }
+    if !file.exists() {
+        return (None, Vec::new());
+    }
+    let config = std::fs::read(&file)
+        .map_err(|e| e.to_string())
+        .and_then(|b| {
+            serde_json::from_slice::<han_review::config::ServiceConfig>(&b)
+                .map_err(|e| e.to_string())
+        });
+    let env_path = dir.join(crate::review::ENV_FILE);
+    #[cfg(unix)]
+    let env_mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(&env_path)
+            .ok()
+            .map(|m| m.permissions().mode() & 0o777)
+    };
+    #[cfg(not(unix))]
+    let env_mode = None;
+    // only whether the variable has a value is looked at, never the value itself
+    let key_set = match (&config, std::fs::read_to_string(&env_path)) {
+        (Ok(c), Ok(text)) => Some(text.lines().any(|l| {
+            l.split_once('=')
+                .is_some_and(|(k, v)| k.trim() == c.route.key_env && !v.trim().is_empty())
+        })),
+        (Ok(c), Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            Some(std::env::var(&c.route.key_env).is_ok_and(|v| !v.is_empty()))
+        }
+        _ => None,
+    };
+    let route = match (&config, check_route) {
+        (Ok(c), true) if c.enabled => {
+            Some(han_review::probe_route(&c.route.base, std::time::Duration::from_secs(10)).await)
+        }
+        _ => None,
+    };
+    (
+        Some(ReviewFacts {
+            dir,
+            config,
+            env_mode,
+            key_set,
+            route,
+        }),
+        Vec::new(),
+    )
+}
+
 fn github_findings(g: &GithubFacts, out: &mut Vec<Finding>) {
     let subject = g.dir.to_string_lossy().into_owned();
     let fix_config = "write the config and install the read-only App's key as in docs/runner.md 10, then: sudo systemctl enable --now han-github";
@@ -1579,6 +1826,7 @@ fn stale_processes() -> Vec<StaleFact> {
 }
 
 /// Reads the machine.
+#[allow(clippy::too_many_arguments)]
 pub async fn gather(
     data: &Path,
     endpoint: &str,
@@ -1587,6 +1835,8 @@ pub async fn gather(
     github_dir: Option<&Path>,
     check_github_app: bool,
     exec_only: bool,
+    review_dir: Option<&Path>,
+    check_review_route: bool,
 ) -> Facts {
     let linux = cfg!(target_os = "linux");
     let user = current_user();
@@ -1712,6 +1962,8 @@ pub async fn gather(
         Ok(file) if node.is_ok() => lane_sessions(endpoint, file).await,
         _ => Vec::new(),
     };
+    let (review, review_skips) = review_facts(review_dir, check_review_route).await;
+    skips.extend(review_skips);
     Facts {
         data: data.to_path_buf(),
         linux,
@@ -1728,6 +1980,8 @@ pub async fn gather(
         executor,
         github: github_facts(github_dir),
         lane_sessions,
+        review,
+        check_review: check_review_route,
         user,
         exec_only: false,
         check_app: check_github_app,
@@ -1813,6 +2067,8 @@ async fn gather_exec_only(
         executor,
         github: None,
         lane_sessions: Vec::new(),
+        review: None,
+        check_review: false,
         user,
         exec_only: true,
         check_app: check_github_app,
@@ -1961,6 +2217,8 @@ pub async fn run(args: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
         args.github_dir.as_deref(),
         args.check_github_app,
         args.exec_only,
+        args.review_dir.as_deref(),
+        args.check_review_route,
     )
     .await;
     let r = report(&facts, analyze(&facts));
@@ -1974,6 +2232,9 @@ pub async fn run(args: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(g) = &facts.github {
             println!("{}", github_note(g));
+        }
+        if let Some(r) = &facts.review {
+            println!("{}", review_note(r));
         }
         println!("{}", render(&r));
     }
@@ -2008,6 +2269,8 @@ mod tests {
             executor: None,
             github: None,
             lane_sessions: Vec::new(),
+            review: None,
+            check_review: false,
             user: "han".into(),
             exec_only: false,
             check_app: false,
@@ -2868,5 +3131,103 @@ private_key = {:?}
         let (status, why) = status_of(&r, "executor.github").unwrap();
         assert_eq!(status, Status::Skipped);
         assert!(why.unwrap().contains("no readable exec.json"));
+    }
+
+    fn review_facts_ok() -> ReviewFacts {
+        let mut c = han_review::config::ServiceConfig::new(
+            "@reviewer:han.example",
+            "agy/gemini-flash",
+            16384,
+            han_review::config::Route {
+                name: "omniroute".into(),
+                base: "http://127.0.0.1:20128".into(),
+                path: "/v1/chat/completions".into(),
+                key_env: "HAN_REVIEW_KEY".into(),
+                key_header: han_review::config::KeyHeader::Bearer,
+                timeout_secs: 120,
+            },
+        );
+        c.enabled = true;
+        c.spaces = vec!["s1:han.example".into()];
+        c.repos
+            .insert("github:o/r".into(), "https://x/r.git".into());
+        ReviewFacts {
+            dir: PathBuf::from("/var/lib/han-agents/han-agent2/review"),
+            config: Ok(c),
+            env_mode: Some(0o600),
+            key_set: Some(true),
+            route: None,
+        }
+    }
+
+    #[test]
+    fn no_review_json_means_no_review_checks() {
+        let r = run(&healthy());
+        assert!(r.checks.iter().all(|c| !c.id.starts_with("review")));
+    }
+
+    #[test]
+    fn a_configured_reviewer_is_ok_and_its_route_is_asked_only_on_request() {
+        let mut f = healthy();
+        f.review = Some(review_facts_ok());
+        assert!(analyze(&f).is_empty(), "{:#?}", analyze(&f));
+        let r = run(&f);
+        assert_eq!(status_of(&r, "review"), Some((Status::Ok, None)));
+        let (status, why) = status_of(&r, "review.route").unwrap();
+        assert_eq!(status, Status::Skipped);
+        assert!(why.unwrap().contains("--check-review-route"));
+        // asked, and it answers
+        f.check_review = true;
+        f.review.as_mut().unwrap().route = Some(Ok(404));
+        let r = run(&f);
+        assert_eq!(status_of(&r, "review.route"), Some((Status::Ok, None)));
+        assert!(review_note(f.review.as_ref().unwrap()).contains("independence: Strict"));
+        assert!(review_note(f.review.as_ref().unwrap()).contains("max_tokens 16384"));
+    }
+
+    #[test]
+    fn a_reviewer_that_cannot_work_is_a_finding_with_the_command_that_fixes_it() {
+        let mut f = healthy();
+        let mut rv = review_facts_ok();
+        rv.key_set = Some(false);
+        rv.env_mode = Some(0o644);
+        f.review = Some(rv);
+        assert_eq!(ids(&f), ["review.key.missing", "review.env.mode"]);
+        let fixes: Vec<String> = analyze(&f).into_iter().map(|x| x.fix).collect();
+        assert!(fixes[0].contains("han review set --dir") && fixes[0].contains("--key-file"));
+        assert!(fixes[1].starts_with("chmod 600 "));
+        // a key is never in a finding
+        assert!(!format!("{:?}", analyze(&f)).contains("sk-"));
+
+        let mut rv = review_facts_ok();
+        rv.config = Err("expected value at line 1".into());
+        f.review = Some(rv);
+        assert_eq!(ids(&f), ["review.config.invalid"]);
+
+        let mut rv = review_facts_ok();
+        rv.route = Some(Err("connection refused".into()));
+        f.check_review = true;
+        f.review = Some(rv);
+        let x = only(&f);
+        assert_eq!(x.id, "review.route.unreachable");
+        assert_eq!(
+            status_of(&run(&f), "review.route").unwrap().0,
+            Status::Problem
+        );
+    }
+
+    #[test]
+    fn a_disabled_reviewer_needs_no_key_and_no_route() {
+        let mut f = healthy();
+        let mut rv = review_facts_ok();
+        let c = rv.config.as_mut().unwrap();
+        c.enabled = false;
+        rv.key_set = Some(false);
+        f.review = Some(rv);
+        f.check_review = true;
+        assert!(analyze(&f).is_empty());
+        let (status, why) = status_of(&run(&f), "review.route").unwrap();
+        assert_eq!(status, Status::Skipped);
+        assert!(why.unwrap().contains("not enabled"));
     }
 }

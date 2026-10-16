@@ -1,0 +1,33 @@
+[Unit]
+Description=HAN machine reviewer as %i (han review run); set up with `han review set`, left disabled by `han runner setup`
+After=network-online.target han-seq.service
+Wants=network-online.target
+
+[Service]
+User=%i
+Group=%i
+EnvironmentFile=/var/lib/han-agents/%i/review/review.env
+ExecStart=/usr/local/bin/han review run --dir /var/lib/han-agents/%i/review --keys /var/lib/han-agents/%i
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/han-agents/%i
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

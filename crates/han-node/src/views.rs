@@ -108,6 +108,17 @@ pub(crate) struct RevertSubject {
     pub reverted_digest: Option<String>,
 }
 
+/// What the machine reviewer's approval is checked against (see [`Engine::review_subject`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ReviewSubject {
+    pub digest: String,
+    pub open: bool,
+    pub action: String,
+    pub proposer: String,
+    pub delta_digest: Option<String>,
+    pub tier: Option<u8>,
+}
+
 impl NoTimeline {
     fn err<T>() -> Result<T, NodeError> {
         Err(NodeError::unavailable(
@@ -599,6 +610,20 @@ impl Engine {
             proposer: e.proposer.clone(),
             reverted,
             reverted_digest,
+        })
+    }
+
+    /// What `ReviewApprove` checks of a proposal: whether it waits for approval, its action and proposer, the
+    /// delta digest of its change summary and its derived tier.
+    pub(crate) fn review_subject(&self, space: &str, proposal: &str) -> Option<ReviewSubject> {
+        let e = self.spaces.get(space)?.effects.get(proposal)?;
+        Some(ReviewSubject {
+            digest: e.plan_digest.clone(),
+            open: crate::model::effect_open(e, &self.now),
+            action: e.action.clone(),
+            proposer: e.proposer.clone(),
+            delta_digest: e.change_delta.clone(),
+            tier: e.gate_tier,
         })
     }
 

@@ -277,6 +277,9 @@ pub(crate) struct EffectInfo {
     /// The body's change summary: the delta digest, and the `vcs.land` it reverts (A2).
     pub change_delta: Option<String>,
     pub change_revert_of: Option<String>,
+    /// The risk tier of a `vcs.land`, derived at the proposal from the policy then in force, as Policy derives
+    /// it (P-17): the change's tier, at least that of the change it reverts. `None` without `gates`.
+    pub gate_tier: Option<u8>,
     /// The task it is charged to.
     pub task: Option<String>,
     /// Claims so far, and the latest.
@@ -341,6 +344,8 @@ pub(crate) struct SpaceModel {
     pub fresh: Freshness,
     /// The actor this device acts as.
     pub me: String,
+    /// The policy's semantic gates (P-17), from which a landing's tier is derived.
+    pub gates: Option<han_core::policy::GatesDoc>,
     /// The approval rules of the policy: action (or `*`) and approvers.
     pub rules: Vec<(String, Vec<String>)>,
     /// Who may steer sessions, by the policy.
@@ -423,6 +428,7 @@ impl SpaceModel {
             outbox: Vec::new(),
             fresh,
             me: me.to_owned(),
+            gates: None,
             rules: Vec::new(),
             steer: None,
             watch: None,
@@ -455,11 +461,26 @@ impl SpaceModel {
             .into_iter()
             .map(|r| (r.action, r.approvers))
             .collect();
+        self.gates = policy.gates;
         self.steer = Some(policy.sessions.steer);
         self.watch = Some(policy.sessions.watch);
         self.read = Some(policy.sessions.read);
         self.launch_window = policy.launch_window;
         self.force_guarded = policy.sessions.force_guarded == Some(true);
+    }
+
+    /// The tier of a `vcs.land` proposal under the policy in force now, as Policy derives it for the gate it
+    /// pins (P-17): none without `gates`; a missing summary is tier 3; a revert is at least the tier of the
+    /// change it reverts, and a revert of a change with no known tier is tier 3.
+    fn land_tier(&self, action: &str, change: Option<&han_core::policy::Change>) -> Option<u8> {
+        let gates = self.gates.as_ref().filter(|_| action == "vcs.land")?;
+        let mut tier = change.map_or(3, |c| han_core::policy::change_tier(gates, c));
+        if let Some(r) = change.and_then(|c| c.revert_of.as_ref())
+            && let Some(of) = self.effects.get(r)
+        {
+            tier = tier.max(of.gate_tier.unwrap_or(3));
+        }
+        Some(tier)
     }
 
     /// The budget a session may spend: the budget of the task it works when that task has one (P-05), else
@@ -854,6 +875,7 @@ impl SpaceModel {
                 }
                 // The guards of the agents it involves are asked for, to say who must approve.
                 self.want_guard_profiles(&author, &p.executor);
+                let gate_tier = self.land_tier(&p.action, p.change.as_ref());
                 self.effects.insert(
                     id.clone(),
                     EffectInfo {
@@ -874,6 +896,7 @@ impl SpaceModel {
                         change_digest: p.change.as_ref().map(han_core::policy::Change::digest),
                         change_delta: p.change.as_ref().map(|c| c.delta_digest.clone()),
                         change_revert_of: p.change.as_ref().and_then(|c| c.revert_of.clone()),
+                        gate_tier,
                         plan_ok,
                         task: p.task,
                         claims: 0,
@@ -2286,6 +2309,8 @@ impl SpaceModel {
                         plan_digest: e.plan_digest.clone(),
                         plan: e.plan.clone(),
                         change_digest: e.change_digest.clone(),
+                        gate_tier: e.gate_tier,
+                        delta_digest: e.change_delta.clone(),
                         task: e.task.clone(),
                         phase: phase.into(),
                         approvals: e.approvals.clone(),

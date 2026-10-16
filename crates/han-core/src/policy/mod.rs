@@ -46,7 +46,7 @@ pub use doc::{
 pub use fold::fold;
 pub use gate::{
     Change, ChangeFile, Evidence, FileKind, Gate, MAX_CHANGE_BYTES, MAX_CHANGE_FILES,
-    MAX_GATE_RULES, MAX_PATH_OWNERS, NEVER_AUTO, PATH_OWNER, glob_match,
+    MAX_GATE_RULES, MAX_PATH_OWNERS, NEVER_AUTO, PATH_OWNER, change_tier, glob_match,
 };
 pub use guard::{GuardInput, GuardStatus, abandon_after, guard_status};
 pub use state::{
