@@ -144,10 +144,14 @@ pub async fn run(args: ProbeArgs) -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     let mut leaked = false;
     for (name, cmd) in tries {
+        // An executor refuses an effect it will not run (P-07a): its class lets EffectCancel through to the node.
+        let may = class == ConnectionClass::Executor && name == "cancel";
         match role.api.call(cmd).await {
             Err(NodeError::Denied { message }) if message.contains("may not send") => {
+                leaked |= may;
                 println!("{name}: refused by class");
             }
+            _ if may => println!("{name}: reached the node"),
             other => {
                 leaked = true;
                 println!("{name}: NOT refused by class: {other:?}");
