@@ -7,7 +7,7 @@ This page describes the release tooling (PLAN 4 and 6.8). Nothing here creates a
 | File | Runs on | What |
 |---|---|---|
 | `ci.yml` | pull requests, pushes to main | the lean `quick` job, Linux only: fmt, clippy `-D warnings`, `cargo test --workspace`, timeline vectors, spec fast checks |
-| `full.yml` | nightly (02:17 UTC) and on demand | the spec and fuzz checks; `rust-matrix` (`cargo test --workspace` and `cargo deny check bans licenses sources` on ubuntu, windows and macOS); `sandbox-linux` (installs bubblewrap, runs han-host's `sandbox_probe`) |
+| `full.yml` | on release tags (`v0.*`) and on demand; not nightly | the spec and fuzz checks; `rust-matrix` (`cargo test --workspace` and `cargo deny check bans licenses sources` on ubuntu, windows and macOS); `sandbox-linux` (installs bubblewrap, runs han-host's `sandbox_probe`) |
 | `full.yml`, job `advisories` | daily (05:43 UTC) and on demand | `cargo deny check advisories` and `cargo audit`, because a new advisory can appear without any change of ours. The reviewed ignore is in `deny.toml` and repeated in the audit command |
 | `release.yml` | tags `v0.*` only, never pull requests | cargo-dist: plan, build per target, global installers, GitHub Release |
 | `toolchain-bump.yml` | monthly (the 1st) and on demand | opens a PR moving `rust-toolchain.toml` to the latest stable |

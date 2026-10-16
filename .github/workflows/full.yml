@@ -1,9 +1,12 @@
 name: full
 
-# The deep checks: nightly and on demand. Not required for merging.
+# The deep checks: for release versions and on demand, not nightly (decided 2026-10-15: heavy builds only when they
+# make sense; every land is gated by ci.yml's `quick`). Not required for merging. The advisory job alone stays daily,
+# since a new advisory can appear without any change of ours and it compiles nothing.
 on:
+  push:
+    tags: ["v0.*"]   # the same tags release.yml builds
   schedule:
-    - cron: "17 2 * * *"   # 02:17 UTC
     - cron: "43 5 * * *"   # 05:43 UTC: the advisory job only (see `advisories`)
   workflow_dispatch:
 
