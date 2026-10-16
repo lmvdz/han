@@ -4,6 +4,7 @@
 
 mod common;
 
+use han_proc::NoWindow as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -247,6 +248,7 @@ async fn a_separate_process_on_the_face_pipe_cannot_govern_or_steer() {
     let script = Scripted::new();
     let s = stage(script.clone(), None).await;
     let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .no_window()
         .args(["--ignored", "--exact", "locked_child", "--nocapture"])
         .env("HAN_FACE_LOCK_ENDPOINT", &s.face)
         .env("HAN_FACE_LOCK_SPACE", &s.space)

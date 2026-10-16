@@ -104,6 +104,7 @@ mod linux {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    use han_proc::NoWindow as _;
     use han_registry::AgentsFile;
 
     type Res<T> = Result<T, Box<dyn std::error::Error>>;
@@ -159,6 +160,7 @@ mod linux {
                 return Ok(());
             }
             let out = Command::new(program)
+                .no_window()
                 .args(args)
                 .envs(env.iter().copied())
                 .output()?;
@@ -181,6 +183,7 @@ mod linux {
             let owner_ok = |p: &str| {
                 owner.is_none_or(|o| {
                     Command::new("stat")
+                        .no_window()
                         .args(["-c", "%U", p])
                         .output()
                         .is_ok_and(|s| String::from_utf8_lossy(&s.stdout).trim() == o)
@@ -308,6 +311,7 @@ mod linux {
 
     fn user_exists(user: &str) -> bool {
         Command::new("id")
+            .no_window()
             .arg(user)
             .output()
             .is_ok_and(|o| o.status.success())
@@ -315,6 +319,7 @@ mod linux {
 
     fn is_root() -> bool {
         Command::new("id")
+            .no_window()
             .arg("-u")
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
@@ -322,6 +327,7 @@ mod linux {
 
     fn in_group(user: &str, group: &str) -> bool {
         Command::new("id")
+            .no_window()
             .args(["-nG", user])
             .output()
             .is_ok_and(|o| {
@@ -488,6 +494,7 @@ mod linux {
             c.cmd("systemctl", &["daemon-reload"], "systemctl daemon-reload")?;
         }
         let enabled = Command::new("systemctl")
+            .no_window()
             .args(["is-enabled", "han-exec"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
@@ -536,6 +543,7 @@ mod linux {
             let unit = unit.as_str();
             let agent = unit.starts_with("han-agent@");
             let active = Command::new("systemctl")
+                .no_window()
                 .args(["is-active", unit])
                 .output()
                 .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "active");
@@ -651,6 +659,7 @@ mod linux {
 
     fn unit_active(unit: &str) -> bool {
         Command::new("systemctl")
+            .no_window()
             .args(["is-active", unit])
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
@@ -659,6 +668,7 @@ mod linux {
     /// The `han-agent@<user>.service` units that are active.
     fn active_agent_units() -> Vec<String> {
         let out = Command::new("systemctl")
+            .no_window()
             .args([
                 "list-units",
                 "han-agent@*",
@@ -687,6 +697,7 @@ mod linux {
     fn unit_is_busy(unit: &str) -> bool {
         let show = |prop: &str| {
             Command::new("systemctl")
+                .no_window()
                 .args(["show", "-p", prop, "--value", unit])
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
@@ -750,6 +761,7 @@ mod linux {
     /// Whether the main process of `unit` runs a binary that has been replaced on disk.
     fn unit_binary_replaced(unit: &str) -> bool {
         let Ok(out) = Command::new("systemctl")
+            .no_window()
             .args(["show", "-p", "MainPID", "--value", unit])
             .output()
         else {
@@ -766,6 +778,7 @@ mod linux {
     /// Whether anything under `dir` is not readable by all (or a directory not searchable by all).
     fn unreadable_by_all(dir: &str) -> bool {
         Command::new("find")
+            .no_window()
             .args([
                 dir, "(", "-not", "-perm", "-o+r", "-o", "(", "-type", "d", "-not", "-perm",
                 "-o+x", ")", ")", "-print", "-quit",

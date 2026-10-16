@@ -45,6 +45,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use han_proc::NoWindow as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -311,7 +312,8 @@ pub struct Direct;
 impl StepLauncher for Direct {
     fn command(&self, launch: &StepLaunch) -> Result<Command> {
         let mut cmd = Command::new(&launch.program);
-        cmd.args(&launch.args)
+        cmd.no_window()
+            .args(&launch.args)
             .current_dir(&launch.cwd)
             .env_clear()
             .envs(launch.env.iter().cloned());
@@ -754,6 +756,7 @@ async fn reap(pid: Option<u32>, dirs: &[PathBuf]) {
     let mut cmd = {
         let _ = pid;
         let mut c = Command::new("powershell");
+        c.no_window();
         c.args([
             "-NoProfile",
             "-NonInteractive",
@@ -772,6 +775,7 @@ async fn reap(pid: Option<u32>, dirs: &[PathBuf]) {
         let _ = dirs;
         let Some(pid) = pid else { return };
         let mut c = Command::new("kill");
+        c.no_window();
         c.args(["-KILL", "--", &format!("-{pid}")]);
         c
     };
@@ -787,6 +791,7 @@ async fn kill_tree(pid: Option<u32>) {
     #[cfg(windows)]
     let mut cmd = {
         let mut c = Command::new("taskkill");
+        c.no_window();
         c.args(["/F", "/T", "/PID", &pid.to_string()]);
         c
     };
@@ -794,6 +799,7 @@ async fn kill_tree(pid: Option<u32>) {
     let mut cmd = {
         // the step leads its own process group (see run_step)
         let mut c = Command::new("kill");
+        c.no_window();
         c.args(["-KILL", "--", &format!("-{pid}")]);
         c
     };
@@ -932,6 +938,7 @@ fn git_dirs(repo: &Path) -> Vec<PathBuf> {
 /// executor's operation on its own repository, not a step.
 async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
+        .no_window()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -955,6 +962,7 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String> {
 
 async fn cargo_metadata(tree: &Path, env: &[(String, String)]) -> Result<Value> {
     let out = Command::new("cargo")
+        .no_window()
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(tree)
         .env_clear()

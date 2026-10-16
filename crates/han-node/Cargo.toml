@@ -28,6 +28,7 @@ conformance = ["han-presence?/test-doubles"]
 
 [dependencies]
 futures-core = "0.3"
+han-proc = { workspace = true, features = ["tokio"] }
 han-registry.workspace = true
 interprocess = { version = "2.4", features = ["tokio"] }
 serde.workspace = true

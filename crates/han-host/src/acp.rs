@@ -30,6 +30,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo};
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use han_proc::NoWindow as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader};
@@ -779,7 +780,8 @@ impl AcpDriver {
         mut cmd: tokio::process::Command,
         policy: Arc<dyn PermissionPolicy>,
     ) -> Result<AcpDriver, AcpError> {
-        cmd.stdin(Stdio::piped())
+        cmd.no_window()
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);

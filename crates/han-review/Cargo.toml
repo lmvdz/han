@@ -19,6 +19,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+han-proc.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

@@ -10,6 +10,7 @@ use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use base64::Engine as _;
+use han_proc::NoWindow as _;
 use serde_json::{Value, json};
 
 fn emit(prefix: &str, op: String, r: Result<String, String>) {
@@ -278,6 +279,7 @@ fn main() {
     if !is_child && spec.get("child").and_then(Value::as_bool) == Some(true) {
         let exe = std::env::current_exe().unwrap_or_default();
         match std::process::Command::new(exe)
+            .no_window()
             .env("HAN_PROBE_CHILD", "1")
             .output()
         {

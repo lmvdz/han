@@ -30,6 +30,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use base64::Engine as _;
+use han_proc::NoWindow as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -307,6 +308,7 @@ async fn run(args: Vec<String>) -> i32 {
                 return 0;
             };
             let status = tokio::process::Command::new(program)
+                .no_window()
                 .args(pargs)
                 .stdin(std::process::Stdio::inherit())
                 .stdout(std::process::Stdio::inherit())

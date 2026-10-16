@@ -1,9 +1,11 @@
 //! R9: test mode (`han seq --test-mode`, `han conform`) exists only in a build with the `conformance` feature.
 
+use han_proc::NoWindow as _;
 use std::process::Command;
 
 fn help(args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_han"))
+        .no_window()
         .args(args)
         .output()
         .expect("han runs");

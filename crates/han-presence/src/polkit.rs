@@ -6,6 +6,7 @@
 //! `polkit.message` detail so the prompt shows the action and the short digest, and add an optional FIDO2
 //! backend (a security key's user-presence touch) for devices that have one.
 
+use han_proc::NoWindow as _;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -74,6 +75,7 @@ impl Presence for Polkit {
 
     fn confirm(&self, prompt: &PresencePrompt) -> Result<PresenceProof, PresenceError> {
         let mut child = Command::new(&self.program)
+            .no_window()
             .args(Self::args())
             .stdin(Stdio::null())
             .stdout(Stdio::null())

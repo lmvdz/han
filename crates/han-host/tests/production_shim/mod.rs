@@ -13,6 +13,7 @@
 //! tree.
 #![allow(dead_code)]
 
+use han_proc::NoWindow as _;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -30,6 +31,7 @@ pub fn han() -> PathBuf {
             .expect("the test sits in target/<profile>/deps")
             .to_path_buf();
         let mut build = std::process::Command::new(env!("CARGO"));
+        build.no_window();
         build
             .args(["build", "--workspace", "--tests", "--bins", "--quiet"])
             .current_dir(env!("CARGO_MANIFEST_DIR"));

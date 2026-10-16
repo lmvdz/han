@@ -13,6 +13,7 @@ conformance = ["han-net/conformance", "han-node/conformance"]
 
 [dependencies]
 clap.workspace = true
+han-proc = { workspace = true, features = ["tokio"] }
 han-core.workspace = true
 han-net.workspace = true
 han-node.workspace = true

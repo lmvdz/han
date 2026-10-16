@@ -3,6 +3,7 @@
 
 use std::process::Command;
 
+use han_proc::NoWindow as _;
 use serde_json::Value;
 
 use super::Res;
@@ -104,9 +105,13 @@ pub struct GhCli;
 
 impl GhCli {
     fn run(args: &[&str]) -> Res<String> {
-        let out = Command::new("gh").args(args).output().map_err(|e| {
-            format!("cannot run gh: {e} (install the GitHub CLI and run `gh auth login`)")
-        })?;
+        let out = Command::new("gh")
+            .no_window()
+            .args(args)
+            .output()
+            .map_err(|e| {
+                format!("cannot run gh: {e} (install the GitHub CLI and run `gh auth login`)")
+            })?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             let msg = if err.trim().is_empty() {

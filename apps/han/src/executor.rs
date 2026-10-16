@@ -14,6 +14,7 @@ use clap::{Args, Subcommand};
 use han_exec::{ExecConfig, GithubApp, RepoTarget};
 use han_node::keys::{FileKeyStore, KeyStore};
 use han_node::rpc::{RpcClient, default_endpoint};
+use han_proc::NoWindow as _;
 use han_registry::HomeRef;
 
 use crate::rolenode::{key_dir, key_name};
@@ -657,12 +658,14 @@ fn chown(dir: &Path, user: &str) {
         return;
     }
     let root = std::process::Command::new("id")
+        .no_window()
         .arg("-u")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
         .unwrap_or(false);
     if root {
         let ok = std::process::Command::new("chown")
+            .no_window()
             .args(["-R", &format!("{user}:{user}")])
             .arg(dir)
             .status()
@@ -694,6 +697,7 @@ fn unit_state() {
         return;
     }
     let enabled = std::process::Command::new("systemctl")
+        .no_window()
         .args(["is-enabled", "han-exec"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())

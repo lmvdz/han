@@ -25,6 +25,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand, ValueEnum};
+use han_proc::NoWindow as _;
 use serde::{Deserialize, Serialize};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
@@ -274,12 +275,9 @@ fn spawn(name: &str, state_dir: &Path, program: &Path, args: &[String]) -> Res<S
         .stdin(Stdio::null())
         .stdout(out.try_clone()?)
         .stderr(out);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS: the service outlives `han dev up`
-        cmd.creation_flags(0x0000_0200 | 0x0000_0008);
-    }
+    // The service outlives `han dev up` and owns no console. Not `no_window`: that flag is void with
+    // DETACHED_PROCESS. The service's own children get `no_window`.
+    cmd.detached_service();
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -302,6 +300,7 @@ fn kill(pid: u32, tree: bool) {
     #[cfg(windows)]
     {
         let mut c = Command::new("taskkill");
+        c.no_window();
         c.args(["/PID", &pid.to_string(), "/F"]);
         if tree {
             c.arg("/T");
@@ -316,6 +315,7 @@ fn kill(pid: u32, tree: bool) {
             pid.to_string()
         };
         let _ = Command::new("kill")
+            .no_window()
             .args(["-KILL", "--", &target])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -344,6 +344,7 @@ fn kill_strays(dir: &Path) {
             dir.to_string_lossy().replace('\'', "''")
         );
         let _ = Command::new("powershell")
+            .no_window()
             .args(["-NoProfile", "-Command", &script])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -361,6 +362,7 @@ fn kill_strays(dir: &Path) {
             p = parent;
         }
         let Ok(out) = Command::new("pgrep")
+            .no_window()
             .args(["-f", &dir.to_string_lossy()])
             .stderr(Stdio::null())
             .output()
@@ -380,6 +382,7 @@ fn kill_strays(dir: &Path) {
 #[cfg(unix)]
 fn parent_of(pid: u32) -> Option<u32> {
     let out = Command::new("ps")
+        .no_window()
         .args(["-o", "ppid=", "-p", &pid.to_string()])
         .stderr(Stdio::null())
         .output()
@@ -408,6 +411,7 @@ where
 fn han(args: &[String]) -> Res<String> {
     println!("$ han {}", args.join(" "));
     let out = Command::new(std::env::current_exe()?)
+        .no_window()
         .args(args)
         .env("HAN_RELAY", "none")
         .stdin(Stdio::null())
@@ -557,6 +561,7 @@ const PROPOSE_SCRIPT: &str = r#"{
 
 fn git(dir: &Path, args: &[&str]) -> Res<()> {
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .args([
@@ -738,6 +743,7 @@ async fn up(a: UpArgs) -> Res<()> {
         let d = person_data.clone();
         async move {
             Command::new(std::env::current_exe().unwrap_or_default())
+                .no_window()
                 .args(["node", "status", "--data", &s(&d)])
                 .output()
                 .is_ok_and(|o| o.status.success())
@@ -985,6 +991,7 @@ async fn up(a: UpArgs) -> Res<()> {
         let sp = space.clone();
         async move {
             Command::new(std::env::current_exe().unwrap_or_default())
+                .no_window()
                 .args(["task", "list", &sp, "--data", &s(&d)])
                 .output()
                 .is_ok_and(|o| {
@@ -1177,6 +1184,7 @@ async fn start(dir: &Path, service: &str) -> Res<()> {
                 let d = d.clone();
                 async move {
                     Command::new(std::env::current_exe().unwrap_or_default())
+                        .no_window()
                         .args(["node", "status", "--data", &s(&d)])
                         .output()
                         .is_ok_and(|o| o.status.success())

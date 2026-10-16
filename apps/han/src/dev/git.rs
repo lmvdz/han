@@ -1,6 +1,7 @@
 //! Git access for `han dev prune`: the git CLI behind a small trait, so the pruner is tested against real
 //! temporary repositories and could one day run on another backend.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -58,6 +59,7 @@ pub struct GitCli {
 impl GitCli {
     fn run_in(dir: &Path, args: &[&str]) -> Res<String> {
         let out = Command::new("git")
+            .no_window()
             .arg("-C")
             .arg(dir)
             .args(args)

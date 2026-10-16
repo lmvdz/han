@@ -8,6 +8,7 @@
 //! a systemd container (`.github/workflows/full.yml`, job `e2e-os-users`). `TMPDIR` must not be under `/tmp`
 //! or `/home`: the agent's unit has `PrivateTmp` and `ProtectHome`, so it would not see the dev stack.
 
+use han_proc::NoWindow as _;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -23,6 +24,7 @@ const EXEC_DIR: &str = "/var/lib/han-exec";
 
 fn sh(program: &str, args: &[&str]) {
     let st = Command::new(program)
+        .no_window()
         .args(args)
         .status()
         .unwrap_or_else(|e| panic!("{program}: {e}"));
@@ -80,6 +82,7 @@ fn executor_as_exec_user(s: &Stack, source: &Path, landing: &Path) -> Child {
     );
     let log = std::fs::File::create(s.dir.join("logs").join("exec-os-user.log")).unwrap();
     Command::new("runuser")
+        .no_window()
         .args([
             "-u",
             EXEC_USER,
@@ -211,6 +214,7 @@ async fn an_os_user_agents_push_lands_through_an_executor_that_cannot_read_its_w
     // the executor really can't read the agent's workspace
     let ws_root = format!("/var/lib/han-agents/{AGENT_USER}");
     let peek = Command::new("runuser")
+        .no_window()
         .args(["-u", EXEC_USER, "--", "ls", &ws_root])
         .output()
         .unwrap();
@@ -240,6 +244,7 @@ async fn an_os_user_agents_push_lands_through_an_executor_that_cannot_read_its_w
     let _ = exec.kill();
     let _ = exec.wait();
     let _ = Command::new("systemctl")
+        .no_window()
         .args(["stop", &format!("han-agent@{AGENT_USER}")])
         .status();
     assert!(
@@ -250,6 +255,7 @@ async fn an_os_user_agents_push_lands_through_an_executor_that_cannot_read_its_w
     let branch = plan["args"]["branch"].as_str().unwrap();
     // the landing remote belongs to han-exec: read it as root past git's ownership check
     let landed = Command::new("git")
+        .no_window()
         .args(["-c", "safe.directory=*", "-C", &landing.to_string_lossy()])
         .args(["rev-parse", &format!("refs/heads/{branch}")])
         .output()
@@ -323,6 +329,7 @@ async fn an_os_user_agents_sandbox_is_checked_by_its_host_not_by_the_node() {
         &data,
     ]);
     let _ = Command::new("systemctl")
+        .no_window()
         .args(["stop", &format!("han-agent@{AGENT_USER}")])
         .status();
     assert!(
@@ -425,7 +432,11 @@ fn the_host_admits_its_sandbox_under_the_agent_units_directives() {
         format!("{spawn}/host.json"),
     ]);
     // The host goes on to fail later (no node to talk to); only what it wrote at its start matters.
-    let out = Command::new("systemd-run").args(&args).output().unwrap();
+    let out = Command::new("systemd-run")
+        .no_window()
+        .args(&args)
+        .output()
+        .unwrap();
     let admission = std::fs::read_to_string(format!("{spawn}/admission.json")).unwrap_or_default();
     assert!(
         admission.contains("Admitted"),

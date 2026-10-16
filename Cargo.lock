@@ -1831,6 +1831,7 @@ dependencies = [
  "han-host",
  "han-net",
  "han-node",
+ "han-proc",
  "han-registry",
  "han-seq",
  "han-tui",
@@ -1854,6 +1855,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
+ "han-proc",
  "proptest",
  "ryu-js",
  "serde",
@@ -1871,6 +1873,7 @@ dependencies = [
  "base64 0.23.1",
  "han-core",
  "han-node",
+ "han-proc",
  "han-vcs",
  "octocrab",
  "reqwest",
@@ -1936,6 +1939,7 @@ dependencies = [
  "han-net",
  "han-node",
  "han-presence",
+ "han-proc",
  "han-registry",
  "han-seq",
  "han-timeline",
@@ -2005,6 +2009,7 @@ dependencies = [
  "han-core",
  "han-net",
  "han-presence",
+ "han-proc",
  "han-registry",
  "han-seq",
  "han-timeline",
@@ -2029,12 +2034,20 @@ name = "han-presence"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "han-proc",
  "objc2",
  "objc2-foundation",
  "objc2-local-authentication",
  "thiserror 2.0.21",
  "windows",
  "windows-future",
+]
+
+[[package]]
+name = "han-proc"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
@@ -2053,6 +2066,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "han-core",
+ "han-proc",
  "han-vcs",
  "reqwest",
  "rustls",
@@ -2112,6 +2126,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "han-core",
+ "han-proc",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",

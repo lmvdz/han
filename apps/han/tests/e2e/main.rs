@@ -12,6 +12,7 @@ mod model;
 mod os_user;
 mod stack;
 
+use han_proc::NoWindow as _;
 use std::time::Duration;
 
 use han_node::NodeApi;
@@ -566,6 +567,7 @@ async fn joining_by_ticket_and_the_operators_confirm_use_only_the_setup_commands
         .unwrap();
     let log = std::fs::File::create(s.dir.join("logs").join("bob.log")).unwrap();
     let mut node = std::process::Command::new(stack::HAN)
+        .no_window()
         .args([
             "node",
             "--actor",

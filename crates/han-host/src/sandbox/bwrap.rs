@@ -10,6 +10,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use han_node::api::{Fidelity, SandboxBackend};
+use han_proc::NoWindow as _;
 
 use super::seccomp;
 use super::{
@@ -187,6 +188,7 @@ fn trial(bwrap: &Path, shim: &super::ShimCommand, disable_userns: bool) -> Resul
         filter.is_some().then_some(filter_path.as_path()),
     );
     let out = std::process::Command::new(program)
+        .no_window()
         .args(args)
         .env_clear()
         .stdin(Stdio::null())
@@ -325,6 +327,7 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
     }
     gaps.push("no disk cap on the worktree and temp directory (SR-31)".into());
     let child = tokio::process::Command::new(program)
+        .no_window()
         .args(full)
         .env_clear()
         .stdin(Stdio::piped())

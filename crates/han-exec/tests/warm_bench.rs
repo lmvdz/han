@@ -5,6 +5,7 @@
 //!
 //! `HAN_WARM_BENCH_FILE` names another file to touch (default `integrations/han-github/src/main.rs`).
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -14,6 +15,7 @@ use han_exec::checks::warm::{Scope, WarmConfig, WarmEvidence, WarmRequest, WarmR
 
 fn git(dir: &Path, args: &[&str], index: Option<&Path>) -> String {
     let mut cmd = Command::new("git");
+    cmd.no_window();
     cmd.args([
         "-c",
         "user.name=bench",

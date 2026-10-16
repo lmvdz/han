@@ -1,6 +1,7 @@
 //! `han executor add --github-app …`, run as the real binary: the `github` block, the key's mode and its
 //! secrecy, idempotence, the refusals, and what `han doctor` says about it. No node runs.
 
+use han_proc::NoWindow as _;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -10,6 +11,7 @@ const BODY: &str = "TESTONLYSECRETBODY";
 
 fn han(args: &[&str]) -> Output {
     Command::new(HAN)
+        .no_window()
         .args(args)
         .env_remove("HAN_DATA")
         .env_remove("HAN_GITHUB_READ_APP")

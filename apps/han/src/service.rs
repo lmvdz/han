@@ -6,6 +6,7 @@
 //! * Linux: a systemd user unit `han-node.service` in `~/.config/systemd/user`. For it to run without a login
 //!   session, an admin runs `loginctl enable-linger <user>` once.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -95,6 +96,7 @@ pub fn unit_path() -> Result<PathBuf, String> {
 
 fn run(program: &str, args: &[&str]) -> Result<std::process::Output, String> {
     Command::new(program)
+        .no_window()
         .args(args)
         .output()
         .map_err(|e| format!("{program}: {e}"))

@@ -1,5 +1,6 @@
 //! The warm-runner checks backend on a small temporary cargo workspace: `a`, `b` (depends on `a`) and `c`.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -30,6 +31,7 @@ impl Fixture {
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .args([
             "-c",
             "user.name=t",
@@ -94,6 +96,7 @@ fn fixture() -> Fixture {
     write(r, "README.md", "fixture\n");
     git(r, &["init", "-q"]);
     let out = Command::new("cargo")
+        .no_window()
         .args(["generate-lockfile"])
         .current_dir(r)
         .output()

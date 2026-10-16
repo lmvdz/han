@@ -1,0 +1,22 @@
+[package]
+name = "han-proc"
+description = "HAN child-process helpers: spawn background children without a console window on Windows. No dependencies unless the tokio feature is on."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Also implement the helper for tokio::process::Command.
+tokio = ["dep:tokio"]
+
+[dependencies]
+tokio = { workspace = true, features = ["process"], optional = true }
+
+[lints.rust]
+# Only the Windows console test (tests/no_console.rs) allows unsafe: it asks the OS for the console window.
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
