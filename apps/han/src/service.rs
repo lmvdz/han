@@ -40,23 +40,67 @@ fn unit_quote(a: &str) -> String {
     format!("\"{}\"", a.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// The PowerShell that registers the task for the current user and optionally starts it.
-pub fn windows_script(spec: &Spec, start: bool) -> String {
-    let arguments = std::iter::once("node".to_owned())
+/// The console host the Windows task action goes through.
+pub const CONHOST: &str = r"%SystemRoot%\System32\conhost.exe";
+
+/// The task action `(Execute, Argument)`. Task Scheduler starts a console program with a console it sometimes
+/// never finishes setting up, so the program stalls before `main`; `conhost.exe --headless` gives it a console
+/// of its own without a window, and the stall does not happen. `headless: false` is the plain action.
+pub fn windows_action(spec: &Spec, headless: bool) -> (String, String) {
+    let args = std::iter::once("node".to_owned())
         .chain(spec.args.iter().cloned())
         .map(|a| win_quote(&a))
         .collect::<Vec<_>>()
         .join(" ");
+    let exe = spec.exe.to_string_lossy();
+    if headless {
+        (CONHOST.to_owned(), format!("--headless \"{exe}\" {args}"))
+    } else {
+        (exe.into_owned(), args)
+    }
+}
+
+/// Whether a task action runs the program through `conhost.exe --headless`.
+pub fn action_is_wrapped(execute: &str, arguments: &str) -> bool {
+    let execute = execute.trim().trim_matches('"').to_ascii_lowercase();
+    (execute == "conhost.exe" || execute.ends_with(r"\conhost.exe"))
+        && arguments.trim_start().starts_with("--headless ")
+}
+
+/// Whether this machine has a `conhost.exe` that takes `--headless`: it runs a program that exits 0.
+fn conhost_headless_works() -> bool {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let sys = Path::new(&root).join("System32");
+    let conhost = sys.join("conhost.exe");
+    conhost.is_file()
+        && Command::new(conhost)
+            .args(["--headless"])
+            .arg(sys.join("cmd.exe"))
+            .args(["/c", "exit", "0"])
+            .output()
+            .is_ok_and(|o| o.status.success())
+}
+
+/// The PowerShell that registers the task for the current user and optionally starts it. It prints `changed`
+/// when it registered the task and `unchanged` when the task already had this action.
+pub fn windows_script(spec: &Spec, start: bool, headless: bool) -> String {
+    let (execute, arguments) = windows_action(spec, headless);
     let ps = |s: &str| format!("'{}'", s.replace('\'', "''"));
     let mut script = format!(
         "$ErrorActionPreference = 'Stop'\n\
-         $a = New-ScheduledTaskAction -Execute {exe} -Argument {arguments}\n\
+         $exe = {execute}\n\
+         $arg = {arguments}\n\
+         $old = Get-ScheduledTask -TaskName {name} -ErrorAction SilentlyContinue\n\
+         if ($old -and @($old.Actions).Count -eq 1 -and $old.Actions[0].Execute -eq $exe \
+         -and $old.Actions[0].Arguments -eq $arg) {{ Write-Output 'unchanged' }} else {{\n\
+         $a = New-ScheduledTaskAction -Execute $exe -Argument $arg\n\
          $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME\n\
          $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries \
          -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 5 \
          -RestartInterval (New-TimeSpan -Minutes 1)\n\
-         Register-ScheduledTask -TaskName {name} -Action $a -Trigger $t -Settings $s -Force | Out-Null\n",
-        exe = ps(&spec.exe.to_string_lossy()),
+         Register-ScheduledTask -TaskName {name} -Action $a -Trigger $t -Settings $s -Force | Out-Null\n\
+         Write-Output 'changed' }}\n",
+        execute = ps(&execute),
         arguments = ps(&arguments),
         name = ps(TASK_NAME),
     );
@@ -67,6 +111,29 @@ pub fn windows_script(spec: &Spec, start: bool) -> String {
         ));
     }
     script
+}
+
+/// The action of the `HAN Node` task as `(Execute, Arguments)`, when this machine has the task.
+pub fn windows_task_action() -> Option<(String, String)> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let script = format!(
+        "$a = (Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction Stop).Actions[0]\n\
+         $a.Execute\n$a.Arguments"
+    );
+    let out = run(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut lines = text.lines();
+    let execute = lines.next()?.trim().to_owned();
+    Some((execute, lines.next().unwrap_or("").trim().to_owned()))
 }
 
 /// The text of the systemd user unit.
@@ -106,11 +173,19 @@ pub fn install(
     description: &str,
     start: bool,
     dry_run: bool,
+    plain: bool,
 ) -> Result<String, String> {
     if cfg!(windows) {
-        let script = windows_script(spec, start);
+        let headless = !plain && conhost_headless_works();
+        let note = if plain || headless {
+            ""
+        } else {
+            "note: conhost.exe is missing or does not take --headless; the task runs han directly and may stall at startup
+"
+        };
+        let script = windows_script(spec, start, headless);
         if dry_run {
-            return Ok(script);
+            return Ok(format!("{note}{script}"));
         }
         let out = run(
             "powershell.exe",
@@ -122,8 +197,13 @@ pub fn install(
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
+        let verdict = if String::from_utf8_lossy(&out.stdout).contains("unchanged") {
+            "unchanged"
+        } else {
+            "changed"
+        };
         Ok(format!(
-            "scheduled task \"{TASK_NAME}\" will start the node at logon{}",
+            "{note}{verdict}: scheduled task \"{TASK_NAME}\" will start the node at logon{}",
             if start { " (started now)" } else { "" }
         ))
     } else if cfg!(target_os = "linux") {
@@ -242,7 +322,7 @@ mod tests {
 
     #[test]
     fn the_windows_task_runs_at_logon_for_the_current_user_without_admin() {
-        let s = windows_script(&spec(), true);
+        let s = windows_script(&spec(), true, true);
         assert!(
             s.contains("New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME"),
             "{s}"
@@ -250,15 +330,51 @@ mod tests {
         assert!(s.contains("Register-ScheduledTask -TaskName 'HAN Node'"));
         // no principal with elevated rights, no SYSTEM
         assert!(!s.contains("-RunLevel") && !s.contains("SYSTEM"));
-        assert!(s.contains(r#"-Execute 'C:\Program Files\han\han.exe'"#));
+        assert!(s.contains("Start-ScheduledTask"));
+        assert!(!windows_script(&spec(), false, true).contains("Start-ScheduledTask"));
+        // running it again reports whether the task changed
+        assert!(s.contains("'unchanged'") && s.contains("'changed'"), "{s}");
+    }
+
+    #[test]
+    fn the_windows_action_goes_through_a_headless_conhost_and_quotes_its_paths() {
+        let (execute, arguments) = windows_action(&spec(), true);
+        assert_eq!(execute, r"%SystemRoot%\System32\conhost.exe");
+        assert_eq!(
+            arguments,
+            r#"--headless "C:\Program Files\han\han.exe" node --actor @lars:han.example --data "C:\Users\Lars\han data""#
+        );
+        assert!(action_is_wrapped(&execute, &arguments));
+        let s = windows_script(&spec(), true, true);
         assert!(
-            s.contains(
-                r#"-Argument 'node --actor @lars:han.example --data "C:\Users\Lars\han data"'"#
-            ),
+            s.contains(r"$exe = '%SystemRoot%\System32\conhost.exe'"),
             "{s}"
         );
-        assert!(s.contains("Start-ScheduledTask"));
-        assert!(!windows_script(&spec(), false).contains("Start-ScheduledTask"));
+        // a path without spaces is quoted too
+        let plain = Spec {
+            exe: PathBuf::from(r"C:\han\han.exe"),
+            args: vec![],
+        };
+        assert_eq!(
+            windows_action(&plain, true).1,
+            r#"--headless "C:\han\han.exe" node"#
+        );
+    }
+
+    #[test]
+    fn the_plain_action_is_the_old_one_and_is_not_wrapped() {
+        let (execute, arguments) = windows_action(&spec(), false);
+        assert_eq!(execute, r"C:\Program Files\han\han.exe");
+        assert_eq!(
+            arguments,
+            r#"node --actor @lars:han.example --data "C:\Users\Lars\han data""#
+        );
+        assert!(!action_is_wrapped(&execute, &arguments));
+        assert!(!action_is_wrapped("conhost.exe", "node --actor x"));
+        assert!(action_is_wrapped(
+            r"C:\Windows\System32\CONHOST.EXE",
+            "--headless \"x\" node"
+        ));
     }
 
     #[test]

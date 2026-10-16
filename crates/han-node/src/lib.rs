@@ -13,6 +13,7 @@
 //! so a whole team can be simulated in one process (`tests/sim.rs`).
 
 pub mod api;
+pub mod lifetime;
 pub mod rpc;
 
 pub use api::{ClassApi, NodeApi, NodeError, ViewStream};
