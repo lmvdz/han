@@ -189,6 +189,21 @@ async fn a_tier_1_culprit_is_reverted_through_the_real_node_with_no_person() {
             .any(|e| e.proposal == land && e.plan.is_some())
     })
     .await;
+    // the owner's node has the proposal before the owner approves it (it arrives by sync)
+    until("alice sees the proposal", 15, || {
+        rows(
+            &alice,
+            Query::Effects {
+                space: Some(space.clone()),
+                executor: None,
+                include_done: true,
+                window: Window::default(),
+            },
+        )
+        .iter()
+        .any(|r| matches!(r, Row::Effect(e) if e.proposal == land))
+    })
+    .await;
     call(
         &alice,
         Command::EffectApprove {

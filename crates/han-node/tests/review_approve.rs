@@ -179,6 +179,9 @@ impl Rig {
             effects(&self.reviewer).iter().any(|e| e.proposal == p)
         })
         .await;
+        // the nodes that act on it next (the owner approves, the coder is the stranger) have it, too
+        common::effect_known(&self.alice, &self.space, &id).await;
+        common::effect_known(&self.coder, &self.space, &id).await;
         id
     }
 
