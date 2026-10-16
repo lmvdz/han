@@ -112,7 +112,7 @@ fn executor_as_exec_user(s: &Stack, source: &Path, landing: &Path) -> Child {
             &s.executor(),
             "--space",
             &s.space(),
-            "--home-ticket",
+            "--home",
             &s.ticket(),
             "--keys",
             EXEC_DIR,
