@@ -427,9 +427,7 @@ impl Service {
             .to_blob()
             .map_err(|e| Stop::Retry(format!("encoding the record: {e}")))?;
         let hash = han_core::ids::sha256_hex(&blob);
-        self.ledger
-            .save_record(&hash, &blob)
-            .map_err(Stop::Retry)?;
+        self.ledger.save_record(&hash, &blob).map_err(Stop::Retry)?;
         let entry = Entry {
             stage: Stage::Reviewed,
             record: Some(hash),
