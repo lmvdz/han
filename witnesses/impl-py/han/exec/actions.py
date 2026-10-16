@@ -3,6 +3,7 @@ A plan is {action, target, args?}: file.write → target = relative path, args =
 args = the JSON body."""
 from __future__ import annotations
 import json, os, urllib.request
+from ..paths import portable_relative
 
 class Refused(Exception):
     """The plan is not something this executor will run (checked before claiming)."""
@@ -23,7 +24,7 @@ class Actions:
         else: raise Refused(f"unknown action {action}")
 
     def _path(self, target: str) -> str:
-        if not target or os.path.isabs(target) or os.path.splitdrive(target)[0]: raise Refused("path must be relative")
+        if not portable_relative(target): raise Refused("path must be relative")
         full = os.path.realpath(os.path.join(self.sandbox, target))
         if os.path.commonpath([full, self.sandbox]) != self.sandbox or full == self.sandbox: raise Refused("path escapes the sandbox")
         return full
