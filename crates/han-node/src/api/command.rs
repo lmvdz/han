@@ -303,6 +303,24 @@ pub enum Command {
         #[ts(optional)]
         evidence: Option<ApprovalEvidence>,
     },
+    /// The land lane's own approval of the revert it proposed (A2, P-17 "Revert"), an **executor** command: no
+    /// person is asked. The node signs an `effect.approve` as its own actor only when the proposal is open, was
+    /// made by this node's actor, carries `change.revertOf`, and the evidence is `han.ci/1` over the delta of
+    /// the change it reverts (the gate's `revertedDigest`). Policy still decides whether the approval counts, so
+    /// a revert of tier 2 or more, or on a never-auto path, stays with a person. A face or an agent's host may
+    /// not send it, and `EffectApprove` stays refused to an executor (SR-06, SR-106).
+    RevertApprove {
+        /// The space.
+        space: String,
+        /// The revert's proposal (entry id).
+        proposal: String,
+        /// A note.
+        #[serde(default)]
+        #[ts(optional)]
+        note: Option<String>,
+        /// The failing run the revert rests on: `han.ci/1` over the reverted change's delta digest.
+        evidence: ApprovalEvidence,
+    },
     /// Cancels a proposed effect. The effect's executor may cancel it too while it is `open` (round 33,
     /// P-07a): it refuses an effect for good, and says why.
     EffectCancel {
@@ -436,6 +454,13 @@ pub enum ConnectionClass {
 }
 
 impl ConnectionClass {
+    /// Whether a connection of this class may send `cmd`: its class permits the command's class, and a
+    /// command only an executor sends ([`Command::executor_only`]) is not sent on a face connection, which would
+    /// otherwise skip the person's confirmation it stands for.
+    pub fn permits_command(self, cmd: &Command) -> bool {
+        self.permits(cmd.class()) && !(self == ConnectionClass::Face && cmd.executor_only())
+    }
+
     /// Whether a connection of this class may send a command of class `c`.
     pub fn permits(self, c: CommandClass) -> bool {
         match self {
@@ -485,7 +510,9 @@ impl Command {
             | Command::StreamPublish { .. }
             | Command::LeaseSet { .. }
             | Command::EffectPropose { .. } => CommandClass::Agent,
-            Command::EffectClaim { .. } | Command::EffectOutcome { .. } => CommandClass::Executor,
+            Command::EffectClaim { .. }
+            | Command::EffectOutcome { .. }
+            | Command::RevertApprove { .. } => CommandClass::Executor,
         }
     }
 
@@ -532,9 +559,16 @@ impl Command {
             | Command::EffectPropose { .. }
             | Command::EffectClaim { .. }
             | Command::EffectOutcome { .. }
+            | Command::RevertApprove { .. }
             | Command::OutboxRetry { .. }
             | Command::StreamPublish { .. } => false,
         }
+    }
+
+    /// Whether only an executor connection may send it: it signs as the node's actor with no prompt, so a face
+    /// connection (any process of the person's OS user can open it) must not.
+    pub fn executor_only(&self) -> bool {
+        matches!(self, Command::RevertApprove { .. })
     }
 
     /// Whether an agent's tools may send it (SR-06).

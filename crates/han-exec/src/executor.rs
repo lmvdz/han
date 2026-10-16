@@ -21,7 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use han_node::api::{
-    CallResult, Command, EffectRow, NodeApi, NodeError, Query, Row, ViewEvent, ViewMirror, Window,
+    CallResult, Command, EffectRow, NodeApi, NodeError, Query, Row, TaskRow, ViewEvent, ViewMirror,
+    Window,
 };
 use serde_json::Value;
 
@@ -285,6 +286,29 @@ impl Executor {
             }
             Some(ViewEvent::Failed { error, .. }) => Err(error),
             _ => Err(NodeError::unavailable("the effects view ended")),
+        }
+    }
+
+    /// The tasks of `space` as the node shows them now (open and closed).
+    pub(crate) async fn tasks(&self, space: &str) -> Result<Vec<TaskRow>, NodeError> {
+        let mut stream = self.api.view(Query::Tasks {
+            space: space.to_owned(),
+            assignee: None,
+            window: Window {
+                limit: 10_000,
+                ..Window::default()
+            },
+        });
+        match stream.next().await {
+            Some(ViewEvent::Snapshot { rows, .. } | ViewEvent::Resnapshot { rows, .. }) => Ok(rows
+                .into_iter()
+                .filter_map(|r| match r {
+                    Row::Task(t) => Some(t),
+                    _ => None,
+                })
+                .collect()),
+            Some(ViewEvent::Failed { error, .. }) => Err(error),
+            _ => Err(NodeError::unavailable("the tasks view ended")),
         }
     }
 

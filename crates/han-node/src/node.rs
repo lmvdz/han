@@ -1872,6 +1872,66 @@ impl<T: Transport> Node<T> {
                 )
                 .await
             }
+            Command::RevertApprove {
+                space,
+                proposal,
+                note,
+                evidence,
+            } => {
+                // The lane's own approval of its revert (A2): no prompt, so every condition is checked here, and
+                // Policy still decides whether the approval counts (tier 2 or more and never-auto paths do not).
+                let Some(subject) = inner.engine().revert_subject(&space, &proposal) else {
+                    return Err(NodeError::not_found("no such proposal"));
+                };
+                if !subject.open {
+                    return Err(NodeError::conflict(
+                        "the proposal no longer waits for approval",
+                    ));
+                }
+                if subject.proposer != inner.cfg.actor {
+                    return Err(NodeError::denied(
+                        "this node approves only a revert its own actor proposed",
+                    ));
+                }
+                if subject.reverted.is_none() {
+                    return Err(NodeError::denied(
+                        "the proposal is not a revert: its change names no revertOf",
+                    ));
+                }
+                if evidence.kind != "han.ci/1" {
+                    return Err(NodeError::denied(
+                        "a revert is approved on han.ci/1 evidence",
+                    ));
+                }
+                match subject.reverted_digest.as_deref() {
+                    None => {
+                        return Err(NodeError::denied(
+                            "the node knows no delta digest of the change the revert undoes",
+                        ));
+                    }
+                    Some(d) if d != evidence.over => {
+                        return Err(NodeError::denied(
+                            "the evidence is not over the delta of the change the revert undoes",
+                        ));
+                    }
+                    Some(_) => {}
+                }
+                let mut content = BTreeMap::new();
+                if let Some(n) = &note {
+                    content.insert("note".to_owned(), s(n));
+                }
+                content.insert("evidence".to_owned(), evidence_ref(&evidence.record));
+                let body = obj([
+                    ("proposal", s(&proposal)),
+                    ("planDigest", s(&subject.digest)),
+                    (
+                        "evidence",
+                        obj([("kind", s(&evidence.kind)), ("over", s(&evidence.over))]),
+                    ),
+                ]);
+                self.append(&space, "effect.approve", body, Some(Value::Object(content)))
+                    .await
+            }
             Command::EffectPropose {
                 space,
                 executor,

@@ -14,7 +14,7 @@ use han_exec::{
     NeedsApproval, Outcome, PlanError, RepoTarget,
 };
 use han_node::api::{
-    BoxFuture, CallResult, Command, EffectRow, NodeApi, NodeError, Query, Row, ViewEvent,
+    BoxFuture, CallResult, Command, EffectRow, NodeApi, NodeError, Query, Row, TaskRow, ViewEvent,
     ViewStream,
 };
 use han_vcs::{
@@ -102,6 +102,11 @@ pub struct NodeState {
     pub tasks: Vec<(Vec<String>, String)>,
     /// Path prefixes that make a change tier 2 (a machine's approval is refused for them, as Policy refuses it).
     pub sensitive: Vec<String>,
+    /// Policy refuses the executor's own proposals with this reason (a budgeted space asks for a task the
+    /// lane was not given).
+    pub deny_own_proposals: Option<String>,
+    /// The next task creations are applied and then answer `unavailable` (a crash after the send).
+    pub task_lost_replies: u32,
     /// The approvals the executor signed: `(proposal, evidence)`.
     pub signed: Vec<(String, Option<han_node::api::ApprovalEvidence>)>,
 }
@@ -328,6 +333,9 @@ impl FakeNode {
                 })
             }
             Command::EffectPropose { plan, .. } => {
+                if let Some(why) = &st.deny_own_proposals {
+                    return Err(NodeError::denied(why.clone()));
+                }
                 // the executor proposes as itself (a revert); the plan is digested as the node would
                 let parsed = han_core::json::parse(plan.as_bytes())
                     .map_err(|_| NodeError::invalid("plan"))?;
@@ -346,9 +354,16 @@ impl FakeNode {
                     time: String::new(),
                 })
             }
-            Command::EffectApprove {
+            Command::EffectApprove { .. } => {
+                // SR-06, SR-106: an executor connection may not approve; the lane has `RevertApprove`.
+                Err(NodeError::denied(
+                    "an Executor connection may not send a Face command",
+                ))
+            }
+            Command::RevertApprove {
                 proposal, evidence, ..
             } => {
+                let evidence = &Some(evidence.clone());
                 // Policy's answer to a machine: no approval at tier 2 or more (a never-auto path, a sensitive
                 // one), and a revert rule asks for the failing run as evidence.
                 let row = st
@@ -488,6 +503,20 @@ impl FakeNode {
 impl NodeApi for FakeNode {
     fn call(&self, cmd: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
         Box::pin(async move {
+            if matches!(cmd, Command::TaskCreate { .. }) {
+                let lose = {
+                    let mut st = self.state();
+                    let lose = st.task_lost_replies > 0;
+                    st.task_lost_replies = st.task_lost_replies.saturating_sub(1);
+                    lose
+                };
+                let r = self.apply(&cmd);
+                return if lose {
+                    Err(NodeError::unavailable("reply lost"))
+                } else {
+                    r
+                };
+            }
             if !matches!(
                 cmd,
                 Command::EffectClaim { .. } | Command::EffectOutcome { .. }
@@ -522,17 +551,41 @@ impl NodeApi for FakeNode {
     }
 
     fn view(&self, query: Query) -> ViewStream {
-        let Query::Effects { executor, .. } = query else {
-            return ViewStream::failed(NodeError::unavailable("only effects"));
+        let rows: Vec<Row> = match query {
+            Query::Effects { executor, .. } => self
+                .state()
+                .rows
+                .iter()
+                .filter(|r| executor.as_deref().is_none_or(|x| r.executor == x))
+                .cloned()
+                .map(Row::Effect)
+                .collect(),
+            // the tasks the executor created, as the node shows them
+            Query::Tasks { space, .. } => self
+                .state()
+                .tasks
+                .iter()
+                .enumerate()
+                .map(|(i, (to, ask))| {
+                    Row::Task(TaskRow {
+                        key: format!("{space}|{:012}", i + 1),
+                        space: space.clone(),
+                        task: format!("t{}", i + 1),
+                        seq: i as u64 + 1,
+                        author: EXEC.into(),
+                        to: to.clone(),
+                        external: None,
+                        ask: Some(ask.clone()),
+                        open: true,
+                        closed_as: None,
+                        guarded_for: vec![],
+                        accepted: vec![],
+                        budget: None,
+                    })
+                })
+                .collect(),
+            _ => return ViewStream::failed(NodeError::unavailable("only effects and tasks")),
         };
-        let rows: Vec<Row> = self
-            .state()
-            .rows
-            .iter()
-            .filter(|r| executor.as_deref().is_none_or(|x| r.executor == x))
-            .cloned()
-            .map(Row::Effect)
-            .collect();
         let (sink, stream) = ViewStream::channel();
         sink.send(ViewEvent::Snapshot {
             seq: 1,

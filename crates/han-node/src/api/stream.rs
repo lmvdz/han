@@ -59,7 +59,7 @@ impl ClassApi {
     }
 
     fn permits(&self, cmd: &Command) -> bool {
-        self.class.permits(cmd.class())
+        self.class.permits_command(cmd)
             || matches!(
                 (self.class, cmd),
                 (

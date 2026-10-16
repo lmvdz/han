@@ -80,6 +80,23 @@ pub async fn run(args: ProbeArgs) -> Result<(), Box<dyn std::error::Error>> {
             },
         ),
         (
+            "revert-approve",
+            Command::RevertApprove {
+                space: space.clone(),
+                proposal: "none".into(),
+                note: None,
+                evidence: han_node::api::ApprovalEvidence {
+                    kind: "han.ci/1".into(),
+                    over: "0".repeat(64),
+                    record: han_node::api::EvidenceRef {
+                        hash: "0".repeat(64),
+                        size: 1,
+                        media_type: "application/json".into(),
+                    },
+                },
+            },
+        ),
+        (
             "cancel",
             Command::EffectCancel {
                 space: space.clone(),
@@ -144,8 +161,9 @@ pub async fn run(args: ProbeArgs) -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     let mut leaked = false;
     for (name, cmd) in tries {
-        // An executor refuses an effect it will not run (P-07a): its class lets EffectCancel through to the node.
-        let may = class == ConnectionClass::Executor && name == "cancel";
+        // An executor refuses an effect it will not run (P-07a) and approves its own revert (A2): its class lets
+        // EffectCancel and RevertApprove through to the node.
+        let may = class == ConnectionClass::Executor && matches!(name, "cancel" | "revert-approve");
         match role.api.call(cmd).await {
             Err(NodeError::Denied { message }) if message.contains("may not send") => {
                 leaked |= may;

@@ -274,6 +274,9 @@ pub(crate) struct EffectInfo {
     pub plan: Option<String>,
     /// The digest of the body's change summary (P-17).
     pub change_digest: Option<String>,
+    /// The body's change summary: the delta digest, and the `vcs.land` it reverts (A2).
+    pub change_delta: Option<String>,
+    pub change_revert_of: Option<String>,
     /// The task it is charged to.
     pub task: Option<String>,
     /// Claims so far, and the latest.
@@ -869,6 +872,8 @@ impl SpaceModel {
                         phase: Phase::Open,
                         plan,
                         change_digest: p.change.as_ref().map(han_core::policy::Change::digest),
+                        change_delta: p.change.as_ref().map(|c| c.delta_digest.clone()),
+                        change_revert_of: p.change.as_ref().and_then(|c| c.revert_of.clone()),
                         plan_ok,
                         task: p.task,
                         claims: 0,

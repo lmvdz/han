@@ -41,13 +41,22 @@
 //!   `post_merge_failed` with the evidence, escalated.
 //! * **landed → reverted** (A2, `checks.auto_revert`, off by default): a red run starts a bisect over the
 //!   changes it covered, the landed ones since the last green run, in the order they landed. The lane asks the
-//!   checks backend for `full` on the middle candidate and narrows to the first red one, which is the culprit.
-//!   The culprit's proposer gets a fix-forward `task` with the failing run as evidence. The lane builds the
+//!   checks backend for `full` on the middle candidate and narrows to the first red one. Before that candidate
+//!   is reverted the lane runs `full` on it once more: only a red that reproduces makes it the culprit. A green
+//!   re-run marks it `flaky` (the item's `reason` and `flaky`), escalated and not reverted, and so does a
+//!   backend that cannot run it again (the red is unconfirmed); the changes behind it wait with it. The re-run
+//!   is journalled before it is asked for, so a restart reads it. The culprit's proposer gets a fix-forward
+//!   `task` with the failing run as evidence (the first line of its ask names the culprit, so a task whose
+//!   reply was lost is adopted, not made twice). The lane builds the
 //!   revert as a squash commit whose tree is the tree the culprit landed on ([`han_vcs::Vcs::tree_commit`]), so
 //!   its delta is the exact inverse of the culprit's, and proposes it as a `vcs.land` whose `change.revertOf`
 //!   names the culprit (architecture.md P-17), with a bundle of that one commit. It approves the proposal itself
-//!   with the failing run as evidence; Policy accepts a machine's approval only at tier 0 and 1 (the tier of a
-//!   revert is its culprit's), so a revert of a tier 2 or 3 change, or of a never-auto path, waits for a human.
+//!   with the failing run as evidence, through the node's narrow executor command `RevertApprove` (the node
+//!   signs only for an open revert this actor proposed, on `han.ci/1` evidence over the reverted delta;
+//!   `EffectApprove` stays closed to an executor); Policy accepts a machine's approval only at tier 0 and 1
+//!   (the tier of a revert is its culprit's), so a revert of a tier 2 or 3 change, or of a never-auto path,
+//!   waits for a human. A proposal Policy refuses (a budgeted space wants a task the lane was not given) is
+//!   not retried: the culprit is escalated with the reason and a person reverts it.
 //!   The revert then goes the normal way (fast checks, compare-and-swap). If later changes touched its paths it
 //!   conflicts: it stays queued, *stalled*, with the conflict record, and nothing is forced. When it lands the
 //!   culprit becomes `reverted`; when its own post-merge run is green, the changes the red run covered that
@@ -64,7 +73,7 @@
 //!
 //! * `change`: `{item, proposal, repo, ref, lane, state, position?, deadline?, stalled?, reason?, detail?,
 //!   commit?, onto?, branch?, pr?, conflict?, evidence?, postMergeFailed?, escalated?, revertOf?, revertedBy?,
-//!   revertProposal?, fixTask?, needsHuman?, seq, at}`; `seq` counts one change's items from 1; `conflict` and
+//!   revertProposal?, fixTask?, needsHuman?, flaky?, seq, at}`; `seq` counts one change's items from 1; `conflict` and
 //!   `evidence` are `BlobRef`s;
 //! * `lane`: `{item, repo, ref, instance, depth, batchSize, parallel, running: [{n, members}], seq, at}`.
 //!
@@ -172,6 +181,24 @@ struct Cand {
     commit: String,
 }
 
+/// The re-run of `full` on the candidate culprit before it is reverted (A2): the red result has to reproduce.
+/// Journalled before the backend is asked, so a restart reads the answer instead of asking twice.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Rerun {
+    /// The candidate's commit.
+    commit: String,
+    /// The backend is being (or was) asked to run it again.
+    #[serde(default)]
+    asked: bool,
+    /// What the backend answered: `false` when it cannot run it again. `None` until it answered (also after a
+    /// restart in between: the run is then read as it is).
+    #[serde(default)]
+    accepted: Option<bool>,
+    /// When it was asked (wall seconds).
+    #[serde(default)]
+    since: i64,
+}
+
 /// The search for the change that broke a red post-merge run (A2). The candidates are the landed changes up to
 /// the red one, in the order they landed; the last is known red. `lo..=hi` holds the first red one: the middle
 /// candidate is run, red narrows to `lo..=mid`, green to `mid+1..=hi`.
@@ -188,6 +215,10 @@ struct Bisect {
     /// When the current candidate's run was asked for (wall seconds).
     #[serde(default)]
     since: i64,
+    /// The search is down to one candidate and `full` is run on it once more; only a red that reproduces makes
+    /// it the culprit.
+    #[serde(default)]
+    rerun: Option<Rerun>,
     /// The culprit is found.
     #[serde(default)]
     done: bool,
@@ -211,6 +242,13 @@ struct Culprit {
     /// The lane could not approve it (Policy needs a person: tier 2 or more, a never-auto path): it waits.
     #[serde(default)]
     needs_human: bool,
+    /// Why the lane does not act, a person has to: the red did not reproduce (`flaky`), it could not be
+    /// re-run, or the revert cannot be proposed (for example in a budgeted space). Nothing is dropped.
+    #[serde(default)]
+    held: Option<String>,
+    /// The red did not reproduce on the re-run: the change is marked `flaky` and not reverted.
+    #[serde(default)]
+    flaky: bool,
 }
 
 /// The lane's record of one change, kept in the journal file.
@@ -453,6 +491,35 @@ enum Prep {
     Retry(String),
     /// A revert that cannot be applied to the tip: stalled with the conflict record, the lane goes on.
     Stalled(String),
+}
+
+/// Why the lane's proposal of a revert did not go through.
+enum Proposal {
+    /// Policy refuses it (or finds it invalid), and will again: a person has to revert the change.
+    Refused(String),
+    /// Not now: try again.
+    Retry(String),
+}
+
+impl From<String> for Proposal {
+    fn from(s: String) -> Self {
+        Proposal::Retry(s)
+    }
+}
+
+impl From<&str> for Proposal {
+    fn from(s: &str) -> Self {
+        Proposal::Retry(s.to_owned())
+    }
+}
+
+/// Why a candidate culprit is not reverted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    /// The red did not reproduce.
+    Flaky,
+    /// The backend could not run it again, so the red was not confirmed.
+    Unconfirmed,
 }
 
 /// Why the lane's approval of its own revert did not go through.
@@ -750,8 +817,11 @@ impl Lane {
             if let Some(t) = &cu.fix_task {
                 o.insert("fixTask".into(), json!(t));
             }
-            if cu.needs_human {
+            if cu.needs_human || cu.held.is_some() {
                 o.insert("needsHuman".into(), json!(true));
+            }
+            if cu.flaky {
+                o.insert("flaky".into(), json!(true));
             }
         }
         b
@@ -1947,7 +2017,7 @@ impl Lane {
         rep: &mut PassReport,
     ) -> Result<(), ExecError> {
         if repo.checks.auto_revert {
-            self.start_bisect(all, idxs, now, rep).await?;
+            self.start_bisect(all, idxs).await?;
             for &t in idxs {
                 if all[t].bisect.as_ref().is_some_and(|b| !b.done) {
                     self.probe(all, idxs, t, repo, now, rep).await?;
@@ -1965,13 +2035,7 @@ impl Lane {
     /// Takes the first change whose post-merge run is red and has not been looked into, and makes the list
     /// of the changes that run covered: the changes that landed since the last green one (the ones still
     /// `landed`), up to and including it, in the order they landed. One search runs at a time per lane.
-    async fn start_bisect(
-        &self,
-        all: &mut [Change],
-        idxs: &[usize],
-        now: i64,
-        rep: &mut PassReport,
-    ) -> Result<(), ExecError> {
+    async fn start_bisect(&self, all: &mut [Change], idxs: &[usize]) -> Result<(), ExecError> {
         if idxs
             .iter()
             .any(|&i| all[i].bisect.as_ref().is_some_and(|b| !b.done))
@@ -2005,10 +2069,18 @@ impl Lane {
         if let Some(k) = culprit {
             let by = all[k].proposal.clone();
             let mut c = all[t].clone();
-            c.detail = Some(format!(
-                "the post-merge run is red because of {}, which is being reverted",
-                short(&by)
-            ));
+            c.detail = Some(
+                match all[k].culprit.as_ref().and_then(|cu| cu.held.as_ref()) {
+                    Some(why) => format!(
+                        "the post-merge run is red; {} is the suspect and is not reverted: {why}",
+                        short(&by)
+                    ),
+                    None => format!(
+                        "the post-merge run is red because of {}, which is being reverted",
+                        short(&by)
+                    ),
+                },
+            );
             c.covered_by = Some(by);
             self.checkpoint(&mut c).await?;
             all[t] = c;
@@ -2071,9 +2143,6 @@ impl Lane {
         ));
         self.checkpoint(&mut c).await?;
         all[t] = c;
-        if hi == 0 {
-            self.finish_bisect(all, idxs, t, now, rep).await?;
-        }
         Ok(())
     }
 
@@ -2093,8 +2162,11 @@ impl Lane {
         let Some(mut b) = c.bisect.clone() else {
             return Ok(());
         };
-        if b.done || b.lo >= b.hi {
+        if b.done {
             return Ok(());
+        }
+        if b.lo >= b.hi {
+            return self.confirm(all, idxs, t, repo, now, rep).await;
         }
         let mid = b.lo + (b.hi - b.lo) / 2;
         let cand = b.candidates[mid].clone();
@@ -2158,7 +2230,7 @@ impl Lane {
         if finished {
             c.problem = None;
             all[t] = c;
-            return self.finish_bisect(all, idxs, t, now, rep).await;
+            return self.confirm(all, idxs, t, repo, now, rep).await;
         }
         c.detail = Some(format!(
             "bisecting the red post-merge run: {n} candidate(s) left, running {}",
@@ -2166,6 +2238,231 @@ impl Lane {
         ));
         self.settle_stall(&mut c, now, rep).await?;
         all[t] = c;
+        Ok(())
+    }
+
+    /// The search of `all[t]` is down to one candidate. Before it is reverted, `full` is run on it once more
+    /// (the backend is asked to run it again, and the answer is read): a red that reproduces makes it the
+    /// culprit; a green is a flake, so the change is marked `flaky` and escalated, not reverted; a backend that
+    /// cannot run it again leaves the red unconfirmed, which is escalated too. The state is journalled before
+    /// the backend is asked, so a restart reads the run instead of asking again.
+    async fn confirm(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        t: usize,
+        repo: &RepoTarget,
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        let mut c = all[t].clone();
+        let Some(mut b) = c.bisect.clone() else {
+            return Ok(());
+        };
+        if b.done {
+            return Ok(());
+        }
+        let cand = b.candidates[b.hi].clone();
+        let req = CheckRequest {
+            repo: repo.clone(),
+            commit: cand.commit.clone(),
+            branch: c.refname.strip_prefix("refs/heads/").map(str::to_owned),
+            stage: Stage::Full,
+            names: repo.checks.full.clone(),
+        };
+        let mut rr = b
+            .rerun
+            .clone()
+            .filter(|r| r.commit == cand.commit)
+            .unwrap_or_else(|| Rerun {
+                commit: cand.commit.clone(),
+                ..Rerun::default()
+            });
+        if !rr.asked {
+            rr.asked = true;
+            rr.since = now;
+            b.rerun = Some(rr.clone());
+            c.bisect = Some(b.clone());
+            c.detail = Some(format!(
+                "running the post-merge run of {} again to see whether the red reproduces",
+                short(&cand.commit)
+            ));
+            self.checkpoint(&mut c).await?;
+            let reds: Vec<String> = b
+                .red
+                .get(&cand.commit)
+                .and_then(|e| serde_json::from_str::<ChecksEvidence>(e).ok())
+                .into_iter()
+                .flat_map(|e| e.checks)
+                .filter(|r| r.verdict() == Verdict::Red)
+                .map(|r| r.name)
+                .collect();
+            let names = if reds.is_empty() {
+                repo.checks.full.clone()
+            } else {
+                reds
+            };
+            match self.checks.rerun(&req, &names).await {
+                Ok(accepted) => rr.accepted = Some(accepted),
+                Err(e) => {
+                    // Not known to have been asked: ask again at the next pass.
+                    rr.asked = false;
+                    c.problem = Some(format!("the post-merge re-run could not be asked for: {e}"));
+                }
+            }
+            b.rerun = Some(rr);
+            c.bisect = Some(b);
+            self.settle_stall(&mut c, now, rep).await?;
+            all[t] = c;
+            return Ok(());
+        }
+        let key = format!("{}#rerun#{}", c.proposal, cand.commit);
+        if !self.due(&key, now, repo.checks.poll_secs) {
+            return Ok(());
+        }
+        let runs = match self.checks.poll(&req).await {
+            Ok(r) => r,
+            Err(e) => {
+                c.problem = Some(format!("the checks backend could not be read: {e}"));
+                self.settle_stall(&mut c, now, rep).await?;
+                all[t] = c;
+                return Ok(());
+            }
+        };
+        c.problem = None;
+        let verdicts: Vec<Verdict> = repo
+            .checks
+            .full
+            .iter()
+            .map(|n| verdict_of(&runs, n))
+            .collect();
+        let evidence = ChecksEvidence::new(&cand.commit, self.checks.name_for(repo), &runs)
+            .canonical()
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default();
+        let red = verdicts.contains(&Verdict::Red);
+        if !red && !verdicts.iter().all(|v| *v == Verdict::Green) {
+            if verdicts.contains(&Verdict::Missing)
+                && now - rr.since > i64::try_from(repo.checks.appear_secs).unwrap_or(i64::MAX)
+            {
+                c.problem = Some(format!(
+                    "the post-merge re-run of {} has not appeared after {} s: nothing is pending",
+                    short(&cand.commit),
+                    repo.checks.appear_secs
+                ));
+            }
+            c.detail = Some(format!(
+                "waiting for the post-merge run of {} to finish again",
+                short(&cand.commit)
+            ));
+            self.settle_stall(&mut c, now, rep).await?;
+            all[t] = c;
+            return Ok(());
+        }
+        if rr.accepted == Some(false) {
+            // Whatever the backend shows is the old run: the red is not confirmed.
+            let why = format!(
+                "the checks backend cannot run the post-merge run of {} again, so its red was not confirmed",
+                short(&cand.commit)
+            );
+            return self
+                .park(all, idxs, t, c, b, &cand, Held::Unconfirmed, why, now, rep)
+                .await;
+        }
+        if red {
+            // It reproduced: the new run is the evidence.
+            b.red.insert(cand.commit.clone(), evidence);
+            c.bisect = Some(b);
+            self.checkpoint(&mut c).await?;
+            all[t] = c;
+            return self.finish_bisect(all, idxs, t, now, rep).await;
+        }
+        let why = format!(
+            "the post-merge run of {} was red, and green when run again: flaky, not reverted",
+            short(&cand.commit)
+        );
+        self.park(all, idxs, t, c, b, &cand, Held::Flaky, why, now, rep)
+            .await
+    }
+
+    /// The candidate is not reverted: the search ends, the candidate is `flaky` (or its red was unconfirmed),
+    /// escalated with the reason, and the changes behind it wait with it. Nobody gets a fix-forward task for
+    /// a change nothing proved broken; a person decides.
+    #[allow(clippy::too_many_arguments)]
+    async fn park(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        t: usize,
+        mut tc: Change,
+        mut b: Bisect,
+        cand: &Cand,
+        held: Held,
+        why: String,
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        b.done = true;
+        let behind: Vec<String> = b.candidates[b.hi + 1..]
+            .iter()
+            .map(|c| c.proposal.clone())
+            .collect();
+        let red = b.red.get(&cand.commit).cloned();
+        tc.bisect = Some(b);
+        tc.problem = None;
+        self.settle_stall(&mut tc, now, rep).await?;
+        all[t] = tc;
+        let Some(k) = idxs
+            .iter()
+            .copied()
+            .find(|&j| all[j].proposal == cand.proposal)
+        else {
+            return Ok(());
+        };
+        let mut kc = all[k].clone();
+        let told = kc.post_merge_failed;
+        kc.culprit = Some(Culprit {
+            at: now,
+            held: Some(why.clone()),
+            flaky: held == Held::Flaky,
+            needs_human: true,
+            ..Culprit::default()
+        });
+        kc.post_merge_failed = true;
+        kc.reason = Some(
+            match held {
+                Held::Flaky => "flaky",
+                Held::Unconfirmed => "post_merge_failed",
+            }
+            .into(),
+        );
+        kc.detail = Some(why.clone());
+        kc.problem = None;
+        if let Some(e) = red {
+            kc.evidence_json = Some(e);
+            kc.evidence = None;
+        }
+        tracing::error!(proposal = %kc.proposal, "lane: {why}");
+        if !told || held == Held::Flaky {
+            rep.escalated.push((kc.proposal.clone(), why.clone()));
+        }
+        self.settle_stall(&mut kc, now, rep).await?;
+        let suspect = kc.proposal.clone();
+        all[k] = kc;
+        for p in behind {
+            let Some(j) = idxs.iter().copied().find(|&j| all[j].proposal == p) else {
+                continue;
+            };
+            let mut c = all[j].clone();
+            c.detail = Some(format!(
+                "the post-merge run is red; {} is the suspect and is not reverted: {why}",
+                short(&suspect)
+            ));
+            c.covered_by = Some(suspect.clone());
+            self.checkpoint(&mut c).await?;
+            all[j] = c;
+        }
         Ok(())
     }
 
@@ -2259,7 +2556,7 @@ impl Lane {
         let Some(mut cu) = c.culprit.clone() else {
             return Ok(());
         };
-        if now < c.retry_after {
+        if cu.held.is_some() || now < c.retry_after {
             return Ok(());
         }
         let retry = i64::try_from(repo.checks.poll_secs).unwrap_or(30).max(1);
@@ -2312,7 +2609,24 @@ impl Lane {
                     self.checkpoint(&mut c).await?;
                     id
                 }
-                Err(why) => {
+                Err(Proposal::Refused(why)) => {
+                    // Policy refuses the lane's proposal and will again (a budgeted space asks for a task the
+                    // lane was not given, for example): it is not retried, a person reverts the change.
+                    let why = format!("the revert cannot be proposed: {why}");
+                    tracing::warn!(proposal = %c.proposal, "lane: {why}");
+                    cu.held = Some(why.clone());
+                    cu.needs_human = true;
+                    c.culprit = Some(cu);
+                    c.detail = Some(format!(
+                        "post-merge run red: {why}; a person has to revert {}",
+                        short(&c.proposal)
+                    ));
+                    rep.escalated.push((c.proposal.clone(), why));
+                    self.settle_stall(&mut c, now, rep).await?;
+                    all[k] = c;
+                    return Ok(());
+                }
+                Err(Proposal::Retry(why)) => {
                     stop(&mut c, format!("the revert was not proposed: {why}"));
                     self.settle_stall(&mut c, now, rep).await?;
                     all[k] = c;
@@ -2374,6 +2688,22 @@ impl Lane {
     /// The fix-forward task for the culprit's proposer, with the failing run as evidence (its blob's hash and
     /// the failing checks, named in the ask).
     async fn fix_task(&self, c: &Change) -> Result<String, String> {
+        // The first line of the ask names the culprit, so a task this lane created and lost the answer of (a crash
+        // after the send) is found again and taken instead of made twice.
+        let marker = format!("[han-lane fix-forward {}]", c.proposal);
+        let actor = self.exec.actor();
+        let existing = self
+            .exec
+            .tasks(&c.space)
+            .await
+            .map_err(|e| format!("reading the tasks: {e}"))?;
+        if let Some(t) = existing.iter().find(|t| {
+            t.author == actor
+                && t.to == [c.proposer.clone()]
+                && t.ask.as_deref().is_some_and(|a| a.starts_with(&marker))
+        }) {
+            return Ok(t.task.clone());
+        }
         let evidence: Option<ChecksEvidence> = c
             .evidence_json
             .as_deref()
@@ -2404,7 +2734,7 @@ impl Lane {
             .map(|p| p.commit.clone())
             .unwrap_or_default();
         let ask = format!(
-            "Fix forward: your change {} landed on {} of {} as {commit}, and the post-merge run failed on it.\n\
+            "{marker}\nFix forward: your change {} landed on {} of {} as {commit}, and the post-merge run failed on it.\n\
              Failing: {}\nEvidence: the lane's record of the failing run, blob {blob}.\n\
              The lane reverts the change (a revert of a change of tier 2 or 3, or on a path no machine may approve, \
              waits for a person's approval). Land a new change that does what you meant and passes the post-merge run.",
@@ -2442,7 +2772,7 @@ impl Lane {
         c: &Change,
         cu: &Culprit,
         rows: &[EffectRow],
-    ) -> Result<String, String> {
+    ) -> Result<String, Proposal> {
         let actor = self.exec.actor().to_owned();
         let plan_of = |r: &EffectRow| {
             r.plan
@@ -2540,16 +2870,23 @@ impl Lane {
                 expires_at: None,
             })
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| match e {
+                NodeError::Denied { message } | NodeError::Invalid { message } => {
+                    Proposal::Refused(message)
+                }
+                e => Proposal::Retry(e.to_string()),
+            })?;
         match r {
             CallResult::Receipt { id, .. } => Ok(id),
-            other => Err(format!("unexpected answer {other:?}")),
+            other => Err(Proposal::Retry(format!("unexpected answer {other:?}"))),
         }
     }
 
     /// The lane's own approval of the revert it proposed, with the failing run over the culprit's delta as
-    /// evidence. Policy decides whether it counts: a machine's approval counts at tier 0 and 1 under a rule
-    /// that names this executor (`revert: true`), and never above; a refusal means a person has to approve.
+    /// evidence, through the node's narrow executor command (`Command::RevertApprove`: no person is asked; the
+    /// node checks that the proposal is open, this actor's, a revert, and the evidence). Policy decides whether
+    /// it counts: a machine's approval counts at tier 0 and 1 under a rule that names this executor
+    /// (`revert: true`), and never above; a refusal means a person has to approve.
     async fn approve_revert(&self, c: &Change, revert: &str) -> Result<(), Approval> {
         let p = c
             .prepared
@@ -2574,20 +2911,19 @@ impl Lane {
         let sent = self
             .exec
             .node()
-            .call(Command::EffectApprove {
+            .call(Command::RevertApprove {
                 space: c.space.clone(),
                 proposal: revert.to_owned(),
-                expires_at: None,
                 note: Some(format!(
                     "the post-merge run failed on {}: reverting {}",
                     short(&p.commit),
                     short(&c.proposal)
                 )),
-                evidence: Some(ApprovalEvidence {
+                evidence: ApprovalEvidence {
                     kind: REVERT_EVIDENCE_KIND.into(),
                     over,
                     record,
-                }),
+                },
             })
             .await;
         match sent {

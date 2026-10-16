@@ -154,6 +154,14 @@ struct ChecksState {
     started: Vec<String>,
     reruns: Vec<Vec<String>>,
     broken: bool,
+    /// The commits whose `full` run was asked for again.
+    full_reruns: Vec<String>,
+    /// The backend cannot run `full` again.
+    no_full_rerun: bool,
+    /// What a commit's `full` run becomes once it was asked for again.
+    after_full_rerun: HashMap<String, Vec<CheckRun>>,
+    /// Polls that still say `in_progress` after a re-run, per commit.
+    rerun_pending: HashMap<String, u32>,
 }
 
 #[derive(Default)]
@@ -176,6 +184,20 @@ impl FakeChecks {
             .unwrap()
             .full_by_commit
             .insert(commit.to_owned(), runs);
+    }
+    /// What the commit's `full` run becomes once it was asked for again.
+    fn after_full_rerun(&self, commit: &str, runs: Vec<CheckRun>) {
+        self.0
+            .lock()
+            .unwrap()
+            .after_full_rerun
+            .insert(commit.to_owned(), runs);
+    }
+    fn no_full_rerun(&self) {
+        self.0.lock().unwrap().no_full_rerun = true;
+    }
+    fn full_reruns(&self) -> Vec<String> {
+        self.0.lock().unwrap().full_reruns.clone()
     }
     fn started(&self) -> Vec<String> {
         self.0.lock().unwrap().started.clone()
@@ -206,6 +228,13 @@ impl Checks for FakeChecks {
         if st.broken {
             return Err(CheckError("the backend is down".into()));
         }
+        if req.stage == Stage::Full
+            && let Some(n) = st.rerun_pending.get_mut(&req.commit)
+            && *n > 0
+        {
+            *n -= 1;
+            return Ok(req.names.iter().map(|n| run(n, "in_progress")).collect());
+        }
         Ok(match req.stage {
             Stage::Fast => st.fast.clone(),
             Stage::Full => st
@@ -215,8 +244,19 @@ impl Checks for FakeChecks {
                 .unwrap_or_else(|| st.full.clone()),
         })
     }
-    async fn rerun(&self, _: &CheckRequest, names: &[String]) -> Result<bool, CheckError> {
+    async fn rerun(&self, req: &CheckRequest, names: &[String]) -> Result<bool, CheckError> {
         let mut st = self.0.lock().unwrap();
+        if req.stage == Stage::Full {
+            st.full_reruns.push(req.commit.clone());
+            if st.no_full_rerun {
+                return Ok(false);
+            }
+            st.rerun_pending.insert(req.commit.clone(), 1);
+            if let Some(next) = st.after_full_rerun.remove(&req.commit) {
+                st.full_by_commit.insert(req.commit.clone(), next);
+            }
+            return Ok(true);
+        }
         st.reruns.push(names.to_vec());
         if let Some(next) = st.after_rerun.take() {
             st.fast = next;
@@ -1950,7 +1990,17 @@ async fn a_tier_1_culprit_is_reverted_automatically_and_its_agent_gets_a_fix_for
         "squashed into one commit"
     );
 
-    // The lane approved it with the failing run over the culprit's delta as evidence.
+    // The red was reproduced before it was reverted: `full` ran on the culprit once more.
+    assert_eq!(rig.checks.full_reruns(), std::slice::from_ref(&commit));
+    // The lane approved it through its own narrow command, never `EffectApprove` (SR-06), with the failing
+    // run over the culprit's delta as evidence.
+    assert!(
+        !rig.node
+            .state()
+            .commands
+            .iter()
+            .any(|c| matches!(c, han_node::api::Command::EffectApprove { .. }))
+    );
     let signed = rig.node.state().signed.clone();
     assert_eq!(signed.len(), 1);
     assert_eq!(&signed[0].0, rv);
@@ -2246,6 +2296,11 @@ async fn a_restart_in_the_middle_of_a_revert_carries_on_without_repeating_a_step
     assert_eq!(reverts(&rig).len(), 1, "one revert proposal");
     assert_eq!(rig.node.state().tasks.len(), 1, "one task");
     assert_eq!(rig.node.state().signed.len(), 1, "one approval");
+    assert_eq!(
+        rig.checks.full_reruns().len(),
+        1,
+        "the re-run was asked for once, whatever the restarts"
+    );
     assert_eq!(rig.w.show("main", "a.txt"), "a");
     let rv = reverts(&rig)[0].0.clone();
     assert_eq!(
@@ -2299,4 +2354,222 @@ async fn a_revert_of_something_this_executor_did_not_land_is_refused() {
         assert!(last["detail"].as_str().unwrap().contains(why), "{last}");
     }
     assert_eq!(rig.w.show("main", "b.txt"), "b");
+}
+
+/// Every pass is a restart: a new executor and lane read the journal.
+async fn restarting(rig: &Rig, done: impl Fn(&Rig) -> bool) {
+    for _ in 0..25 {
+        let (exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        drop(lane);
+        drop(exec);
+        if done(rig) {
+            return;
+        }
+    }
+    panic!("not done after 25 restarts");
+}
+
+/// A change landed on a tier 1 file whose `full` run then turns red; returns the proposal, the commit it
+/// landed as, and the lane.
+async fn red_culprit(rig: &Rig) -> (String, String, Lane, Arc<Executor>) {
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    let commit = landed_commit(rig, &p);
+    failing(&commit, rig);
+    (p, commit, lane, exec)
+}
+
+#[tokio::test]
+async fn a_red_that_does_not_reproduce_is_flaky_escalated_and_not_reverted() {
+    let rig = revert_rig();
+    let (p, commit, lane, _exec) = red_culprit(&rig).await;
+    rig.checks
+        .after_full_rerun(&commit, vec![run("full", "success")]);
+    let (_, escalated) = until(&lane, &rig, |rig| rig.last(&p)["reason"] == "flaky").await;
+    for _ in 0..6 {
+        lane.pass().await.unwrap();
+    }
+    assert_eq!(
+        rig.checks.full_reruns(),
+        std::slice::from_ref(&commit),
+        "re-run once"
+    );
+    assert!(escalated.contains(&p), "{escalated:?}");
+    let last = rig.last(&p);
+    assert_eq!(last["state"], "landed");
+    assert_eq!(last["reason"], "flaky");
+    assert_eq!(last["flaky"], true);
+    assert_eq!(last["postMergeFailed"], true);
+    assert_eq!(last["escalated"], true);
+    assert_eq!(last["needsHuman"], true);
+    assert!(last["detail"].as_str().unwrap().contains("flaky"), "{last}");
+    // The first red run is the evidence it was suspected on.
+    assert_eq!(
+        rig.blob(&last["evidence"])["checks"][0]["conclusion"],
+        "failure"
+    );
+    // Nothing was proposed, approved or asked of its agent, and the ref did not move.
+    assert!(reverts(&rig).is_empty());
+    assert!(rig.node.state().signed.is_empty());
+    assert!(rig.node.state().tasks.is_empty());
+    assert_eq!(rig.w.tip(), commit);
+}
+
+#[tokio::test]
+async fn a_flaky_suspect_keeps_the_changes_behind_it_waiting_too() {
+    let rig = revert_rig();
+    let one = rig.land("one", "a.txt", "a, edited\n");
+    let two = rig.land("two", "b.txt", "b, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    for _ in 0..3 {
+        lane.pass().await.unwrap();
+    }
+    let (c1, c2) = (landed_commit(&rig, &one), landed_commit(&rig, &two));
+    rig.checks.full(vec![run("full", "success")]);
+    rig.checks.full_for(&c1, vec![run("full", "failure")]);
+    rig.checks.full_for(&c2, vec![run("full", "failure")]);
+    rig.checks
+        .after_full_rerun(&c1, vec![run("full", "success")]);
+    until(&lane, &rig, |rig| rig.last(&one)["reason"] == "flaky").await;
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert_eq!(rig.last(&one)["flaky"], true);
+    assert_eq!(rig.last(&two)["state"], "landed");
+    assert_eq!(rig.last(&two)["postMergeFailed"], true);
+    assert!(
+        rig.last(&two)["detail"]
+            .as_str()
+            .unwrap()
+            .contains("not reverted"),
+        "{}",
+        rig.last(&two)
+    );
+    assert_eq!(
+        rig.checks.full_reruns(),
+        [c1],
+        "no search starts again on the change behind"
+    );
+    assert!(reverts(&rig).is_empty());
+    assert!(rig.node.state().tasks.is_empty());
+}
+
+#[tokio::test]
+async fn a_restart_in_the_middle_of_a_rerun_neither_asks_twice_nor_reverts_a_flake() {
+    let rig = revert_rig();
+    let p = rig.land("one", "a.txt", "a, edited\n");
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let commit;
+    {
+        let (exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        commit = landed_commit(&rig, &p);
+        drop(lane);
+        drop(exec);
+    }
+    failing(&commit, &rig);
+    rig.checks
+        .after_full_rerun(&commit, vec![run("full", "success")]);
+    restarting(&rig, |rig| rig.last(&p)["reason"] == "flaky").await;
+    for _ in 0..3 {
+        let (exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        drop(lane);
+        drop(exec);
+    }
+    assert_eq!(
+        rig.checks.full_reruns(),
+        std::slice::from_ref(&commit),
+        "asked once"
+    );
+    assert!(reverts(&rig).is_empty());
+    assert!(rig.node.state().tasks.is_empty());
+    assert_eq!(rig.w.tip(), commit);
+}
+
+#[tokio::test]
+async fn a_backend_that_cannot_run_it_again_leaves_the_red_unconfirmed_and_escalated() {
+    let rig = revert_rig();
+    let (p, commit, lane, _exec) = red_culprit(&rig).await;
+    rig.checks.no_full_rerun();
+    let (_, escalated) = until(&lane, &rig, |rig| {
+        rig.last(&p)["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("cannot run"))
+    })
+    .await;
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert!(escalated.contains(&p));
+    let last = rig.last(&p);
+    assert_eq!(last["state"], "landed");
+    assert_eq!(last["reason"], "post_merge_failed");
+    assert!(last.get("flaky").is_none());
+    assert_eq!(last["needsHuman"], true);
+    assert!(reverts(&rig).is_empty());
+    assert!(rig.node.state().tasks.is_empty());
+    assert_eq!(rig.w.tip(), commit);
+    assert_eq!(rig.checks.full_reruns().len(), 1, "asked once");
+}
+
+#[tokio::test]
+async fn a_fix_forward_task_created_before_a_lost_reply_is_adopted_not_made_twice() {
+    let rig = revert_rig();
+    rig.node.state().task_lost_replies = 1;
+    let (p, _commit, lane, _exec) = red_culprit(&rig).await;
+    // The step that failed is tried again after `poll_secs`.
+    for _ in 0..25 {
+        lane.pass().await.unwrap();
+        rig.wall.advance(2);
+        if rig.states(&p).last().map(String::as_str) == Some("reverted") {
+            break;
+        }
+    }
+    assert_eq!(rig.last(&p)["state"], "reverted");
+    let tasks = rig.node.state().tasks.clone();
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    assert!(
+        tasks[0]
+            .1
+            .starts_with(&format!("[han-lane fix-forward {p}]"))
+    );
+    assert_eq!(rig.last(&p)["fixTask"], "t1");
+}
+
+#[tokio::test]
+async fn a_revert_policy_refuses_is_escalated_to_a_person_with_the_reason_and_not_retried() {
+    let rig = revert_rig();
+    rig.node.state().deny_own_proposals =
+        Some("budgeted space: cost in the space's unit required".into());
+    let (p, commit, lane, _exec) = red_culprit(&rig).await;
+    let (_, escalated) = until(&lane, &rig, |rig| rig.last(&p).get("needsHuman").is_some()).await;
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert!(escalated.contains(&p));
+    let last = rig.last(&p);
+    assert_eq!(last["state"], "landed");
+    assert_eq!(last["needsHuman"], true);
+    let detail = last["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("cannot be proposed") && detail.contains("budgeted space"),
+        "{detail}"
+    );
+    // Not retried every pass, and not dropped: the agent still has its task and the evidence is up.
+    let proposals = rig
+        .node
+        .state()
+        .commands
+        .iter()
+        .filter(|c| matches!(c, han_node::api::Command::EffectPropose { .. }))
+        .count();
+    assert_eq!(proposals, 1);
+    assert_eq!(rig.node.state().tasks.len(), 1);
+    assert!(last.get("evidence").is_some());
+    assert_eq!(rig.w.tip(), commit);
 }
