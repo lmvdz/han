@@ -48,7 +48,18 @@ pub struct DoctorArgs {
     /// permissions the landing lane needs. Off by default: `han doctor` otherwise makes no network request.
     #[arg(long)]
     check_github_app: bool,
+    /// Run only the checks that need the executor's files (its key, `exec.json`), as the executor's user
+    /// (`sudo -u han-exec han doctor --exec-only`). The other checks need the node's socket and data, which
+    /// that user cannot reach: run plain `han doctor` as the node's user for those. Each run lists what the
+    /// other one covers.
+    #[arg(long)]
+    exec_only: bool,
 }
+
+/// The OS user of the node and of the executor on a runner (`han runner setup`'s defaults); only used to
+/// say which command to run.
+const HAN_USER: &str = "han";
+const EXEC_USER: &str = "han-exec";
 
 /// One thing that is wrong.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -74,6 +85,116 @@ pub struct Report {
     pub data: String,
     /// The findings, in the order the checks run.
     pub findings: Vec<Finding>,
+    /// The OS user that ran the checks.
+    pub user: String,
+    /// `full`, or `exec-only` (`--exec-only`).
+    pub mode: &'static str,
+    /// Every check of this run: `ok`, `problem` (its findings are above) or `skipped` with the reason.
+    pub checks: Vec<Check>,
+}
+
+/// How one check ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Ok,
+    Problem,
+    Skipped,
+}
+
+/// One check of a run, such as `land.github.permissions`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Check {
+    pub id: String,
+    pub status: Status,
+    /// Why a skipped check did not run, with the command that covers it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A check this process could not run, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Skip {
+    pub check: &'static str,
+    pub reason: String,
+}
+
+/// Which user can run a check: the node's (its socket and data directory) or the executor's (its files).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Node,
+    Exec,
+}
+
+/// A check, and the finding ids (prefixes) that say it found a problem.
+struct Spec {
+    id: &'static str,
+    side: Side,
+    ids: &'static [&'static str],
+}
+
+const SPECS: &[Spec] = &[
+    Spec {
+        id: "node",
+        side: Side::Node,
+        ids: &["node.", "link.", "outbox.", "profile."],
+    },
+    Spec {
+        id: "registry",
+        side: Side::Node,
+        ids: &["registry.", "harness.", "agent."],
+    },
+    Spec {
+        id: "sandbox",
+        side: Side::Node,
+        ids: &["sandbox."],
+    },
+    Spec {
+        id: "toolchain",
+        side: Side::Node,
+        ids: &["toolchain."],
+    },
+    Spec {
+        id: "presence",
+        side: Side::Node,
+        ids: &["presence."],
+    },
+    Spec {
+        id: "process.stale-binary",
+        side: Side::Node,
+        ids: &["process."],
+    },
+    Spec {
+        id: "github.service",
+        side: Side::Node,
+        ids: &["github."],
+    },
+    Spec {
+        id: "land",
+        side: Side::Node,
+        ids: &["land.executor.", "land.checks."],
+    },
+    Spec {
+        id: "land.watch",
+        side: Side::Node,
+        ids: &["land.watch."],
+    },
+    Spec {
+        id: "executor.github",
+        side: Side::Exec,
+        ids: &["executor.github."],
+    },
+    Spec {
+        id: "land.github.permissions",
+        side: Side::Exec,
+        ids: &["land.github."],
+    },
+];
+
+fn spec_of(finding_id: &str) -> Option<&'static Spec> {
+    SPECS
+        .iter()
+        .find(|s| s.ids.iter().any(|p| finding_id.starts_with(p)))
 }
 
 // ───────────────────────── facts ─────────────────────────
@@ -183,6 +304,9 @@ pub struct ExecutorFacts {
     pub key_exists: bool,
     /// The key file's permission bits (Unix).
     pub key_mode: Option<u32>,
+    /// The key's directory or file refuses this user: whether it exists is not known (`key_exists` is then
+    /// true and `key_mode` `None`, so no finding is made of it).
+    pub key_unreadable: bool,
     /// What `exec.json` says of each repository.
     pub repos: Vec<RepoFact>,
     /// What GitHub says the write App's installation may do, when `--check-github-app` asked (`Err`: why it
@@ -260,6 +384,14 @@ pub struct Facts {
     pub github: Option<GithubFacts>,
     /// The sessions of actors that are not agents of `agents.json`, in the spaces where the `land` flow is on.
     pub lane_sessions: Vec<LaneSessionFact>,
+    /// The OS user running this process.
+    pub user: String,
+    /// `--exec-only`: only the executor-side checks run.
+    pub exec_only: bool,
+    /// `--check-github-app` was given.
+    pub check_app: bool,
+    /// The checks this process could not run, with why (not findings: nothing is known to be wrong).
+    pub skips: Vec<Skip>,
 }
 
 // ───────────────────────── analysis ─────────────────────────
@@ -308,6 +440,13 @@ fn finding(
 pub fn analyze(f: &Facts) -> Vec<Finding> {
     let data = q(f.data.to_string_lossy());
     let mut out = Vec::new();
+    if f.exec_only {
+        if let Some(e) = &f.executor {
+            executor_findings(e, &mut out);
+            app_findings(e, &mut out);
+        }
+        return out;
+    }
     node_findings(f, &data, &mut out);
     agent_findings(f, &data, &mut out);
     toolchain_findings(f, &data, &mut out);
@@ -348,6 +487,78 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
             ),
             format!("sudo systemctl restart han-{}", s.role),
         ));
+    }
+    // what this process could not look at is not a finding
+    out.retain(|x| spec_of(&x.id).is_none_or(|spec| !f.skips.iter().any(|k| k.check == spec.id)));
+    out
+}
+
+/// Whether `agents.json` turns the `land` flow on anywhere.
+fn land_is_on(file: &AgentsFile) -> bool {
+    file.finish.iter().any(|(space, entry)| {
+        file.land_for(space, None).is_some()
+            || entry
+                .repos
+                .keys()
+                .any(|r| file.land_for(space, Some(r)).is_some())
+    })
+}
+
+/// Every check of this run and how it ended. A check with a finding is `problem`; one this process could not
+/// run is `skipped` with the command that covers it; the rest are `ok`. A check that does not apply on this
+/// machine (no executor, `land` off) is not listed.
+pub fn checks(f: &Facts, findings: &[Finding]) -> Vec<Check> {
+    let land_on = f.agents.as_ref().is_ok_and(land_is_on);
+    let node_cmd = format!("run as {HAN_USER}, or `sudo -u {HAN_USER} han doctor`");
+    let mut out = Vec::new();
+    for spec in SPECS {
+        let skipped_by_facts = f.skips.iter().find(|k| k.check == spec.id);
+        let applies = match spec.id {
+            "presence" => f.presence.is_some(),
+            "process.stale-binary" => f.linux,
+            "github.service" => f.github.is_some(),
+            "land" | "land.watch" => land_on,
+            "executor.github" => f.executor.is_some(),
+            "land.github.permissions" => f.executor.is_some() && (land_on || f.exec_only),
+            _ => true,
+        };
+        let skip = if f.exec_only && spec.side == Side::Node {
+            Some(format!("not part of --exec-only; {node_cmd}"))
+        } else if let Some(k) = skipped_by_facts {
+            Some(k.reason.clone())
+        } else if spec.id == "land.github.permissions" && applies && !f.check_app {
+            Some(format!(
+                "it asks GitHub, so only on request: add --check-github-app (`sudo -u {EXEC_USER} han doctor --exec-only --check-github-app`)"
+            ))
+        } else if spec.id == "land.github.permissions"
+            && applies
+            && f.executor
+                .as_ref()
+                .is_some_and(|e| e.app_permissions.is_none())
+        {
+            Some("exec.json has no `github` block to ask GitHub about".to_owned())
+        } else if f.exec_only && spec.side == Side::Exec && f.executor.is_none() {
+            Some("no readable exec.json on this machine (see --exec-dir)".to_owned())
+        } else if spec.id == "land.watch" && applies && f.node.is_err() {
+            Some("the node did not answer".to_owned())
+        } else {
+            None
+        };
+        let problem = findings
+            .iter()
+            .any(|x| spec.ids.iter().any(|p| x.id.starts_with(p)));
+        let listed = applies || skipped_by_facts.is_some() || (f.exec_only && skip.is_some());
+        let (status, reason) = match skip {
+            _ if problem => (Status::Problem, None),
+            Some(why) if listed => (Status::Skipped, Some(why)),
+            _ if !listed => continue,
+            _ => (Status::Ok, None),
+        };
+        out.push(Check {
+            id: spec.id.to_owned(),
+            status,
+            reason,
+        });
     }
     out
 }
@@ -500,6 +711,11 @@ fn land_findings(f: &Facts, out: &mut Vec<Finding>) {
     let (Some(e), false) = (&f.executor, on.is_empty()) else {
         return;
     };
+    app_findings(e, out);
+}
+
+/// What GitHub said the write App may do, against what the landing lane needs (`--check-github-app`).
+fn app_findings(e: &ExecutorFacts, out: &mut Vec<Finding>) {
     let Some(perms) = &e.app_permissions else {
         return;
     };
@@ -712,21 +928,40 @@ fn github_note(g: &GithubFacts) -> String {
     format!("note: han-github is {state}")
 }
 
+/// The executor's directory: `dir`, or the runner's on Linux.
+fn exec_dir_of(dir: Option<&Path>) -> Option<PathBuf> {
+    match dir {
+        Some(d) => Some(d.to_path_buf()),
+        None if cfg!(target_os = "linux") => Some(PathBuf::from(crate::executor::RUNNER_DIR)),
+        None => None,
+    }
+}
+
+/// The OS user running this process, as the shell says.
+fn current_user() -> String {
+    ["USER", "LOGNAME", "USERNAME"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+/// `path` exists but this user may not open it.
+fn denied(path: &Path) -> bool {
+    matches!(std::fs::File::open(path), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
 /// Reads the executor's directory, when there is one.
 fn executor_facts(dir: Option<&Path>) -> Option<ExecutorFacts> {
-    let dir = match dir {
-        Some(d) => d.to_path_buf(),
-        None if cfg!(target_os = "linux") => PathBuf::from(crate::executor::RUNNER_DIR),
-        None => return None,
-    };
+    let dir = exec_dir_of(dir)?;
     let cfg: han_exec::ExecConfig =
         serde_json::from_slice(&std::fs::read(dir.join("exec.json")).ok()?).ok()?;
     let github = cfg
         .github
         .map(|g| (g.app_id, g.installation_id, PathBuf::from(g.private_key)));
-    let meta = github
-        .as_ref()
-        .and_then(|(_, _, k)| std::fs::metadata(k).ok());
+    let meta = github.as_ref().map(|(_, _, k)| std::fs::metadata(k));
+    let key_unreadable =
+        matches!(&meta, Some(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied);
+    let meta = meta.and_then(Result::ok);
     #[cfg(unix)]
     let key_mode = {
         use std::os::unix::fs::PermissionsExt;
@@ -748,8 +983,9 @@ fn executor_facts(dir: Option<&Path>) -> Option<ExecutorFacts> {
     Some(ExecutorFacts {
         dir,
         has_repos: !cfg.repos.is_empty(),
-        key_exists: meta.is_some(),
+        key_exists: meta.is_some() || key_unreadable,
         key_mode,
+        key_unreadable,
         github,
         repos,
         app_permissions: None,
@@ -1350,10 +1586,46 @@ pub async fn gather(
     exec_dir: Option<&Path>,
     github_dir: Option<&Path>,
     check_github_app: bool,
+    exec_only: bool,
 ) -> Facts {
     let linux = cfg!(target_os = "linux");
+    let user = current_user();
+    let mut skips: Vec<Skip> = Vec::new();
+    if exec_only {
+        return gather_exec_only(data, endpoint, exec_dir, check_github_app, user).await;
+    }
     let node = node_facts(endpoint).await;
-    let agents = AgentsFile::load(data);
+    if node.is_err()
+        && matches!(
+            RpcClient::connect(endpoint).await,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
+        )
+    {
+        let why = format!(
+            "needs the node socket {endpoint}, which {user} may not open: run as {HAN_USER}, or `sudo -u {HAN_USER} han doctor`"
+        );
+        for check in ["node", "land.watch"] {
+            skips.push(Skip {
+                check,
+                reason: why.clone(),
+            });
+        }
+    }
+    let agents = if denied(&data.join("agents.json")) {
+        let why = format!(
+            "needs the node's data directory {}, which {user} may not read: run as {HAN_USER}, or `sudo -u {HAN_USER} han doctor`",
+            data.display()
+        );
+        for check in ["registry", "sandbox", "toolchain", "land", "land.watch"] {
+            skips.push(Skip {
+                check,
+                reason: why.clone(),
+            });
+        }
+        Err(why)
+    } else {
+        AgentsFile::load(data)
+    };
     let mut harnesses = BTreeMap::new();
     let mut logins = BTreeMap::new();
     let mut os_users = BTreeMap::new();
@@ -1423,7 +1695,17 @@ pub async fn gather(
         toolchain = toolchain_facts(data, file, repos);
     }
     let mut executor = executor_facts(exec_dir);
-    if check_github_app && let Some(e) = &mut executor {
+    skips.extend(executor_skips(
+        exec_dir,
+        executor.as_ref(),
+        &user,
+        false,
+        check_github_app,
+    ));
+    if check_github_app
+        && let Some(e) = &mut executor
+        && !e.key_unreadable
+    {
         e.app_permissions = app_permissions(&e.dir).await;
     }
     let lane_sessions = match &agents {
@@ -1446,6 +1728,95 @@ pub async fn gather(
         executor,
         github: github_facts(github_dir),
         lane_sessions,
+        user,
+        exec_only: false,
+        check_app: check_github_app,
+        skips,
+    }
+}
+
+/// Why the executor-side checks cannot run as this user: `exec.json` or the key refuses it.
+fn executor_skips(
+    exec_dir: Option<&Path>,
+    executor: Option<&ExecutorFacts>,
+    user: &str,
+    exec_only: bool,
+    check_app: bool,
+) -> Vec<Skip> {
+    let refused = match (executor, exec_dir_of(exec_dir)) {
+        (Some(e), _) => e
+            .key_unreadable
+            .then(|| format!("the write App key {}", key_path(e))),
+        (None, Some(dir)) => {
+            denied(&dir.join("exec.json")).then(|| format!("{}", dir.join("exec.json").display()))
+        }
+        (None, None) => None,
+    };
+    let Some(what) = refused else {
+        return Vec::new();
+    };
+    // from a run of `--exec-only` the advice would be circular
+    let cmd = if exec_only {
+        format!("run as {EXEC_USER}")
+    } else {
+        format!(
+            "run as {EXEC_USER}, or `sudo -u {EXEC_USER} han doctor --exec-only{}`",
+            if check_app { " --check-github-app" } else { "" }
+        )
+    };
+    let reason = format!("needs the executor key: {what} is not readable by {user}: {cmd}");
+    ["executor.github", "land.github.permissions"]
+        .into_iter()
+        .map(|check| Skip {
+            check,
+            reason: reason.clone(),
+        })
+        .collect()
+}
+
+fn key_path(e: &ExecutorFacts) -> String {
+    e.github
+        .as_ref()
+        .map(|(_, _, k)| k.display().to_string())
+        .unwrap_or_default()
+}
+
+/// `--exec-only`: reads only the executor's directory.
+async fn gather_exec_only(
+    data: &Path,
+    endpoint: &str,
+    exec_dir: Option<&Path>,
+    check_github_app: bool,
+    user: String,
+) -> Facts {
+    let mut executor = executor_facts(exec_dir);
+    let skips = executor_skips(exec_dir, executor.as_ref(), &user, true, check_github_app);
+    if check_github_app
+        && let Some(e) = &mut executor
+        && !e.key_unreadable
+    {
+        e.app_permissions = app_permissions(&e.dir).await;
+    }
+    Facts {
+        data: data.to_path_buf(),
+        linux: cfg!(target_os = "linux"),
+        node: Err(endpoint.to_owned()),
+        agents: Err("not read by --exec-only".to_owned()),
+        harnesses: BTreeMap::new(),
+        logins: BTreeMap::new(),
+        os_users: BTreeMap::new(),
+        presence: None,
+        toolchain: ToolchainFacts::default(),
+        mxc_loopback_blocked: None,
+        sandbox_refusals: BTreeMap::new(),
+        stale: Vec::new(),
+        executor,
+        github: None,
+        lane_sessions: Vec::new(),
+        user,
+        exec_only: true,
+        check_app: check_github_app,
+        skips,
     }
 }
 
@@ -1527,21 +1898,46 @@ async fn lane_sessions(endpoint: &str, file: &AgentsFile) -> Vec<LaneSessionFact
 // ───────────────────────── the command ─────────────────────────
 
 /// The report of `findings`.
-pub fn report(data: &Path, findings: Vec<Finding>) -> Report {
+pub fn report(f: &Facts, findings: Vec<Finding>) -> Report {
     Report {
         schema: SCHEMA,
         healthy: findings.is_empty(),
-        data: data.to_string_lossy().into_owned(),
+        data: f.data.to_string_lossy().into_owned(),
+        user: f.user.clone(),
+        mode: if f.exec_only { "exec-only" } else { "full" },
+        checks: checks(f, &findings),
         findings,
     }
 }
 
-/// Text for a person: one line of cause, one of fix, per finding.
+/// Text for a person: who ran, an `ok` or `skipped` line per check, then one line of cause and one of fix per
+/// finding.
 pub fn render(r: &Report) -> String {
-    if r.healthy {
-        return "healthy: no problems found".to_owned();
+    let mut s = format!("checked as {} ({} run), data {}\n", r.user, r.mode, r.data);
+    let mut skipped = 0;
+    for c in &r.checks {
+        match (c.status, &c.reason) {
+            (Status::Ok, _) => s.push_str(&format!("ok {}\n", c.id)),
+            (Status::Skipped, why) => {
+                skipped += 1;
+                s.push_str(&format!(
+                    "skipped {}: {}\n",
+                    c.id,
+                    why.as_deref().unwrap_or("not run")
+                ));
+            }
+            (Status::Problem, _) => {}
+        }
     }
-    let mut s = String::new();
+    if r.healthy {
+        s.push_str("healthy: no problems found");
+        if skipped > 0 {
+            s.push_str(&format!(
+                " ({skipped} check(s) skipped above: not looked at, not known to be fine)"
+            ));
+        }
+        return s;
+    }
     for f in &r.findings {
         s.push_str(&format!(
             "problem: {} [{}]\n  cause: {}\n  fix:   {}\n",
@@ -1564,9 +1960,10 @@ pub async fn run(args: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
         args.exec_dir.as_deref(),
         args.github_dir.as_deref(),
         args.check_github_app,
+        args.exec_only,
     )
     .await;
-    let r = report(&args.data, analyze(&facts));
+    let r = report(&facts, analyze(&facts));
     if args.json {
         println!("{}", serde_json::to_string_pretty(&r)?);
     } else {
@@ -1611,6 +2008,10 @@ mod tests {
             executor: None,
             github: None,
             lane_sessions: Vec::new(),
+            user: "han".into(),
+            exec_only: false,
+            check_app: false,
+            skips: Vec::new(),
         }
     }
 
@@ -1632,9 +2033,9 @@ mod tests {
     fn a_healthy_machine_has_no_findings_and_says_so() {
         let f = healthy();
         assert!(analyze(&f).is_empty());
-        let r = report(&f.data, analyze(&f));
+        let r = report(&f, analyze(&f));
         assert!(r.healthy);
-        assert!(render(&r).starts_with("healthy"));
+        assert!(render(&r).contains("healthy: no problems found"));
         let j = serde_json::to_value(&r).unwrap();
         assert_eq!(j["schema"], "han-doctor/1");
         assert_eq!(j["healthy"], true);
@@ -1983,6 +2384,7 @@ mod tests {
             github: Some((7, 8, PathBuf::from("/x/github-app.pem"))),
             key_exists: true,
             key_mode: Some(0o600),
+            key_unreadable: false,
             repos: Vec::new(),
             app_permissions: None,
         }
@@ -2264,7 +2666,7 @@ private_key = {:?}
     fn the_json_schema_is_stable() {
         let mut f = healthy();
         f.node = Err("e".into());
-        let j = serde_json::to_value(report(&f.data, analyze(&f))).unwrap();
+        let j = serde_json::to_value(report(&f, analyze(&f))).unwrap();
         assert_eq!(j["healthy"], false);
         let first = &j["findings"][0];
         let mut keys: Vec<&str> = first
@@ -2277,6 +2679,194 @@ private_key = {:?}
         assert_eq!(keys, ["cause", "fix", "id", "subject"]);
         let mut top: Vec<&str> = j.as_object().unwrap().keys().map(String::as_str).collect();
         top.sort_unstable();
-        assert_eq!(top, ["data", "findings", "healthy", "schema"]);
+        assert_eq!(
+            top,
+            [
+                "checks", "data", "findings", "healthy", "mode", "schema", "user"
+            ]
+        );
+    }
+
+    fn status_of(r: &Report, id: &str) -> Option<(Status, Option<String>)> {
+        r.checks
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| (c.status, c.reason.clone()))
+    }
+
+    fn run(f: &Facts) -> Report {
+        report(f, analyze(f))
+    }
+
+    #[test]
+    fn every_passing_check_prints_an_ok_line_and_says_who_ran() {
+        let mut f = land_facts();
+        f.user = "han".into();
+        f.check_app = true;
+        f.executor.as_mut().unwrap().app_permissions = Some(Ok([
+            ("contents", "write"),
+            ("checks", "read"),
+            ("statuses", "read"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()));
+        let r = run(&f);
+        assert!(r.healthy, "{:#?}", r.findings);
+        let t = render(&r);
+        assert!(
+            t.starts_with(
+                "checked as han (full run), data /d
+"
+            ),
+            "{t}"
+        );
+        for id in [
+            "node",
+            "registry",
+            "land",
+            "executor.github",
+            "land.github.permissions",
+        ] {
+            assert!(
+                t.contains(&format!(
+                    "ok {id}
+"
+                )),
+                "{id} in {t}"
+            );
+        }
+        assert!(t.ends_with("healthy: no problems found"), "{t}");
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["user"], "han");
+        assert_eq!(j["mode"], "full");
+        assert!(
+            j["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == "land.github.permissions" && c["status"] == "ok")
+        );
+    }
+
+    #[test]
+    fn a_check_with_a_finding_is_a_problem_not_ok() {
+        let mut f = healthy();
+        f.node = Err("e".into());
+        let r = run(&f);
+        assert_eq!(status_of(&r, "node").unwrap().0, Status::Problem);
+        assert!(!render(&r).contains("ok node"));
+    }
+
+    #[test]
+    fn the_app_check_is_skipped_with_the_command_that_asks_when_it_was_not_requested() {
+        let f = land_facts();
+        let r = run(&f);
+        let (status, why) = status_of(&r, "land.github.permissions").unwrap();
+        assert_eq!(status, Status::Skipped);
+        let why = why.unwrap();
+        assert!(why.contains("--check-github-app"), "{why}");
+        assert!(render(&r).contains("skipped land.github.permissions: "));
+        assert!(render(&r).contains("(1 check(s) skipped above"));
+    }
+
+    #[test]
+    fn an_unreadable_key_is_a_skip_naming_the_executor_user_and_never_a_finding() {
+        let mut f = land_facts();
+        f.user = "han".into();
+        let e = f.executor.as_mut().unwrap();
+        e.key_unreadable = true;
+        e.key_mode = None;
+        let reason = "needs the executor key: /x/github-app.pem is not readable by han: run as han-exec, or `sudo -u han-exec han doctor --exec-only`";
+        for check in ["executor.github", "land.github.permissions"] {
+            f.skips.push(Skip {
+                check,
+                reason: reason.into(),
+            });
+        }
+        // the key problem would also be a false finding if it were read as missing
+        assert!(analyze(&f).is_empty(), "{:#?}", analyze(&f));
+        let r = run(&f);
+        for id in ["executor.github", "land.github.permissions"] {
+            assert_eq!(
+                status_of(&r, id),
+                Some((Status::Skipped, Some(reason.to_owned()))),
+                "{id}"
+            );
+        }
+        assert!(render(&r).contains(&format!("skipped executor.github: {reason}")));
+    }
+
+    #[test]
+    fn a_node_socket_the_user_may_not_open_is_a_skip_not_node_down() {
+        let mut f = healthy();
+        f.user = "han-exec".into();
+        f.node = Err("/run/han/node.sock".into());
+        let why = "needs the node socket /run/han/node.sock, which han-exec may not open: run as han, or `sudo -u han han doctor`";
+        f.skips.push(Skip {
+            check: "node",
+            reason: why.into(),
+        });
+        assert!(analyze(&f).is_empty(), "{:#?}", analyze(&f));
+        let r = run(&f);
+        assert_eq!(
+            status_of(&r, "node"),
+            Some((Status::Skipped, Some(why.into())))
+        );
+    }
+
+    #[test]
+    fn exec_only_runs_the_executor_checks_and_tells_what_the_node_user_must_cover() {
+        let mut f = land_facts();
+        f.exec_only = true;
+        f.user = "han-exec".into();
+        f.node = Err("e".into());
+        f.agents = Err("not read by --exec-only".into());
+        f.check_app = true;
+        f.executor.as_mut().unwrap().app_permissions = Some(Ok([
+            ("contents", "write"),
+            ("checks", "read"),
+            ("statuses", "read"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()));
+        assert!(analyze(&f).is_empty(), "{:#?}", analyze(&f));
+        let t = render(&run(&f));
+        assert!(t.starts_with("checked as han-exec (exec-only run)"), "{t}");
+        assert!(
+            t.contains(
+                "ok executor.github
+"
+            ),
+            "{t}"
+        );
+        assert!(
+            t.contains(
+                "ok land.github.permissions
+"
+            ),
+            "{t}"
+        );
+        assert!(
+            t.contains(
+                "skipped node: not part of --exec-only; run as han, or `sudo -u han han doctor`"
+            ),
+            "{t}"
+        );
+        assert!(!t.contains("registry.agents-json"), "{t}");
+        // a missing key still shows as a finding in this run
+        f.executor.as_mut().unwrap().key_exists = false;
+        assert_eq!(only(&f).id, "executor.github.key-missing");
+    }
+
+    #[test]
+    fn exec_only_without_an_executor_says_so() {
+        let mut f = healthy();
+        f.exec_only = true;
+        let r = run(&f);
+        let (status, why) = status_of(&r, "executor.github").unwrap();
+        assert_eq!(status, Status::Skipped);
+        assert!(why.unwrap().contains("no readable exec.json"));
     }
 }
