@@ -105,6 +105,9 @@ pub struct NodeState {
     /// Policy refuses the executor's own proposals with this reason (a budgeted space asks for a task the
     /// lane was not given).
     pub deny_own_proposals: Option<String>,
+    /// A budgeted space (P-06): its budgeted tasks, `(id, open)`. Policy then refuses the executor's revert
+    /// unless it names the task its culprit named, which is open, and carries a cost.
+    pub budget_tasks: Option<Vec<(String, bool)>>,
     /// The next task creations are applied and then answer `unavailable` (a crash after the send).
     pub task_lost_replies: u32,
     /// The approvals the executor signed: `(proposal, evidence)`.
@@ -334,7 +337,9 @@ impl FakeNode {
                     time: String::new(),
                 })
             }
-            Command::EffectPropose { plan, .. } => {
+            Command::EffectPropose {
+                plan, task, cost, ..
+            } => {
                 if let Some(why) = &st.deny_own_proposals {
                     return Err(NodeError::denied(why.clone()));
                 }
@@ -348,7 +353,34 @@ impl FakeNode {
                     .as_str()
                     .unwrap()
                     .to_owned();
+                if let Some(tasks) = &st.budget_tasks {
+                    if cost.is_none() {
+                        return Err(NodeError::denied(
+                            "budgeted space: cost in the space's unit required",
+                        ));
+                    }
+                    let json: Value = serde_json::from_str(&text).unwrap();
+                    let culprit = json
+                        .pointer("/args/change/revertOf")
+                        .and_then(Value::as_str)
+                        .and_then(|of| st.rows.iter().find(|r| r.proposal == of))
+                        .and_then(|r| r.task.clone());
+                    let exact = task.is_some() && *task == culprit;
+                    if !(exact
+                        && tasks
+                            .iter()
+                            .any(|(t, open)| Some(t) == task.as_ref() && *open))
+                    {
+                        return Err(NodeError::denied(
+                            "agents spend only from a budgeted task assigned to them",
+                        ));
+                    }
+                }
                 let id = Self::push_row(&mut st, EXEC, &action, &text, &digest);
+                if let Some(r) = st.rows.iter_mut().find(|r| r.proposal == id) {
+                    r.task = task.clone();
+                    r.cost = cost.clone();
+                }
                 Ok(CallResult::Receipt {
                     space: SPACE.into(),
                     seq: st.head,
@@ -563,12 +595,30 @@ impl NodeApi for FakeNode {
                 .map(Row::Effect)
                 .collect(),
             // the tasks the executor created, as the node shows them
-            Query::Tasks { space, .. } => self
-                .state()
-                .tasks
-                .iter()
-                .enumerate()
-                .map(|(i, (to, ask))| {
+            Query::Tasks { space, .. } => {
+                let st = self.state();
+                let budgeted = st.budget_tasks.iter().flatten().map(|(id, open)| {
+                    Row::Task(TaskRow {
+                        key: format!("{space}|{id}"),
+                        space: space.clone(),
+                        task: id.clone(),
+                        seq: 0,
+                        author: "@owner:a.localhost".into(),
+                        to: vec!["@agent:a.localhost".into()],
+                        external: None,
+                        ask: None,
+                        open: *open,
+                        closed_as: (!*open).then(|| "done".to_owned()),
+                        guarded_for: vec![],
+                        accepted: vec![],
+                        budget: Some(han_node::api::TaskBudget {
+                            unit: "USD-cent".into(),
+                            amount: 100,
+                        }),
+                    })
+                });
+                // the tasks the executor created, as the node shows them
+                let created = st.tasks.iter().enumerate().map(|(i, (to, ask))| {
                     Row::Task(TaskRow {
                         key: format!("{space}|{:012}", i + 1),
                         space: space.clone(),
@@ -584,8 +634,9 @@ impl NodeApi for FakeNode {
                         accepted: vec![],
                         budget: None,
                     })
-                })
-                .collect(),
+                });
+                budgeted.chain(created).collect()
+            }
             _ => return ViewStream::failed(NodeError::unavailable("only effects and tasks")),
         };
         let (sink, stream) = ViewStream::channel();

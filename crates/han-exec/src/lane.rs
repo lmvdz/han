@@ -55,8 +55,10 @@
 //!   signs only for an open revert this actor proposed, on `han.ci/1` evidence over the reverted delta;
 //!   `EffectApprove` stays closed to an executor); Policy accepts a machine's approval only at tier 0 and 1
 //!   (the tier of a revert is its culprit's), so a revert of a tier 2 or 3 change, or of a never-auto path,
-//!   waits for a human. A proposal Policy refuses (a budgeted space wants a task the lane was not given) is
-//!   not retried: the culprit is escalated with the reason and a person reverts it.
+//!   waits for a human. In a budgeted space the revert names the task the culprit named, charged at the culprit's
+//!   cost, while that task is open and budgeted (P-06, round 33). A proposal Policy refuses (the culprit's task is
+//!   closed or absent, in a budgeted space) is not retried: the culprit is escalated with the reason and a
+//!   person reverts it.
 //!   The revert then goes the normal way (fast checks, compare-and-swap). If later changes touched its paths it
 //!   conflicts: it stays queued, *stalled*, with the conflict record, and nothing is forced. When it lands the
 //!   culprit becomes `reverted`; when its own post-merge run is green, the changes the red run covered that
@@ -2857,6 +2859,27 @@ impl Lane {
             },
             "argsBlob": blob,
         });
+        // P-06 (round 33): in a budgeted space a revert may name the task its culprit named, while that task
+        // is open and budgeted, and is charged there at the culprit's cost.
+        let culprit = rows
+            .iter()
+            .find(|r| r.space == c.space && r.proposal == c.proposal);
+        let mut charge = None;
+        if let Some((task, cost)) = culprit.and_then(|r| r.task.clone().zip(r.cost.clone())) {
+            let tasks = self
+                .exec
+                .tasks(&c.space)
+                .await
+                .map_err(|e| Proposal::Retry(format!("reading the culprit's task: {e}")))?;
+            if tasks
+                .iter()
+                .any(|t| t.task == task && t.open && t.budget.is_some())
+            {
+                charge = Some((task, cost));
+            }
+        }
+        let named = charge.is_some();
+        let (task, cost) = charge.unzip();
         let r = self
             .exec
             .node()
@@ -2864,13 +2887,21 @@ impl Lane {
                 space: c.space.clone(),
                 executor: actor,
                 plan: plan.to_string(),
-                task: None,
-                cost: None,
+                task,
+                cost,
                 repeatable: false,
                 expires_at: None,
             })
             .await
             .map_err(|e| match e {
+                // Without the culprit's task a budgeted space refuses the revert, and will again.
+                NodeError::Denied { message } | NodeError::Invalid { message }
+                    if !named && message.contains("budgeted space") =>
+                {
+                    Proposal::Refused(format!(
+                        "the culprit's task is closed or absent ({message})"
+                    ))
+                }
                 NodeError::Denied { message } | NodeError::Invalid { message } => {
                     Proposal::Refused(message)
                 }
