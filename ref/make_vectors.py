@@ -147,6 +147,8 @@ def hexify(vec):
         e["refs"] = [h.get(r, r) for r in e["refs"]]
         for f in ID_FIELDS:
             if f in e["body"] and e["body"][f] in h: e["body"][f] = h[e["body"][f]]
+        ch = e["body"].get("change")
+        if isinstance(ch, dict) and ch.get("revertOf") in h: ch["revertOf"] = h[ch["revertOf"]]    # A2: a revert names a proposal
         if "succeeds" in e["body"]:
             t = e["body"]["succeeds"]["through"]
             t["id"] = h.get(t["id"], t["id"])
@@ -2441,6 +2443,116 @@ v.step(E("pol4", "policy.set", O, {"policy": policy(approvals=[{"action": "vcs.l
 v.step(lprop("u1", chg([("src/a.rs", "modify", 1)], label="u1")), "allow", check={"effects.u1.gate": MISSING}, note="no gates in the policy: no gate on the effect")
 v.step(lappr("z1", "u1", author=O), "denied", note="the tier rule does not apply to an effect with no gate")
 v.step(lappr("z2", "u1", author=M), "allow").step(claim("cu1", "u1"), "allow", note="the next rule does")
+add(v.done())
+
+# ── A2: post-merge revert (round 33, implemented ahead of the round) ──
+def rprop(id, of, files, author=X, executor=X, label=None, **kw):
+    """A revert: a vcs.land whose change names the landed effect `of` (A2). `files` are the paths the inverse touches."""
+    c = chg(files, label=label or id)
+    c["revertOf"] = of
+    return lprop(id, c, author=author, executor=executor, **kw)
+
+def landed(v, id, files, approver=O, author=P, ev=None):
+    """A vcs.land proposed, approved, claimed and succeeded (labels: id, id+'a', 'c'+id, 'o'+id)."""
+    v.step(lprop(id, chg(files, label=id), author=author), "allow")
+    v.step(lappr(id + "a", id, author=approver, evidence=ev), "allow")
+    v.step(claim("c" + id, id), "allow")
+    v.step(outc("o" + id, "c" + id, "succeeded", "yes"), "allow", check={f"effects.{id}.phase": "succeeded"})
+
+def ci(label):
+    return {"kind": "han.ci/1", "over": digest_of("delta:" + label)}
+
+v = V("revert-of-validity", ["P-17", "P-08"], "round 33, A2: change.revertOf names a succeeded vcs.land of this space (else invalid, or denied while it has not landed); its shape is a digest; a revert is at least the tier of the change it reverts and never lower, whatever its own summary says, and a land with no summary or gate counts as tier 3; the rule predicate `revert` is true or absent")
+team(v, policy(gates=GATES))
+landed(v, "l1", [("src/a.rs", "modify", 3)], approver=O)
+landed(v, "l2", [("payments/pay.rs", "modify", 3)], approver=O)
+v.step(ms("mh", O, H3, "owner"), "allow")
+v.step(lprop("l3", chg([("migrations/001.sql", "add", 3)], label="l3"), author=M), "allow")
+v.step(lappr("l3a", "l3", author=O), "allow").step(lappr("l3b", "l3", author=H3), "allow")
+v.step(claim("cl3", "l3"), "allow").step(outc("ol3", "cl3", "succeeded", "yes"), "allow")
+v.step(lprop("l3n", author=M), "allow", check={"effects.l3n.gate": {"tier": 3}}, note="a land with no summary is tier 3")
+v.step(lappr("l3na", "l3n", author=O), "allow").step(lappr("l3nb", "l3n", author=H3), "allow")
+v.step(claim("cl3n", "l3n"), "allow").step(outc("ol3n", "cl3n", "succeeded", "yes"), "allow")
+v.step(lprop("open1", chg([("src/b.rs", "modify", 1)], label="open1")), "allow", note="proposed, never claimed: phase open")
+v.step(prop("gp", action="git.push"), "allow").step(claim("cgp", "gp"), "allow").step(outc("ogp", "cgp", "succeeded", "yes"), "allow")
+v.step(lprop("fl", chg([("src/c.rs", "modify", 1)], label="fl")), "allow").step(lappr("fla", "fl", author=O), "allow").step(claim("cfl", "fl"), "allow").step(outc("ofl", "cfl", "failed", "yes"), "allow", check={"effects.fl.phase": "failed"})
+v.step(rprop("r1", "l1", [("src/a.rs", "modify", 3)]), "allow", check={"effects.r1.gate.tier": 1, "effects.r1.gate.revertOf": "l1", "effects.r1.gate.revertedDigest": digest_of("delta:l1"), "effects.r1.gate.deltaDigest": digest_of("delta:r1")}, note="a revert of a succeeded vcs.land")
+v.step(rprop("r1b", "l1", [("src/a.rs", "modify", 3)], author=M), "allow", note="anyone who may propose may name it; the executor binds the inverse")
+v.step(rprop("r2", "l2", [("docs/x.md", "modify", 1)]), "allow", check={"effects.r2.gate.tier": 2}, note="its own summary says docs (tier 0): a revert of a tier 2 change is tier 2")
+v.step(rprop("r3", "l3", [("docs/x.md", "modify", 1)]), "allow", check={"effects.r3.gate.tier": 3}, note="and of a tier 3 change, tier 3")
+v.step(rprop("r3n", "l3n", [("docs/x.md", "modify", 1)]), "allow", check={"effects.r3n.gate.tier": 3}, note="a land with no summary was tier 3")
+v.step(rprop("r4", "l1", [("migrations/z.sql", "add", 1)]), "allow", check={"effects.r4.gate.tier": 3}, note="its own summary may raise the tier")
+v.step(rprop("rr", "r1", [("src/a.rs", "modify", 3)]), "denied", note="r1 has not landed yet")
+v.step(rprop("x1", "open1", [("src/b.rs", "modify", 1)]), "denied", note="an effect that is open")
+v.step(rprop("x2", "fl", [("src/c.rs", "modify", 1)]), "denied", note="an effect that failed")
+v.step(rprop("x3", "gp", [("src/a.rs", "modify", 1)]), "invalid", note="a succeeded effect that is no vcs.land")
+v.step(rprop("x4", "0" * 64, [("src/a.rs", "modify", 1)]), "invalid", note="no such effect")
+v.step(rprop("x5", "abc", [("src/a.rs", "modify", 1)]), "invalid", note="no digest")
+v.step(rprop("x6", "A" * 64, [("src/a.rs", "modify", 1)]), "invalid", note="capitals")
+c = chg([("src/a.rs", "modify", 1)], label="x7"); c["revertOf"] = 7
+v.step(lprop("x7", c), "invalid", note="a number")
+v.step(rprop("x8", "l1", [("src/a.rs", "modify", 1)], action="git.push"), "invalid", note="a change on another action is invalid, a revert too")
+v.step(E("pol1", "policy.set", O, {"policy": policy(gates=GATES, approvals=[{"action": "vcs.land", "revert": True, "approvers": [X], "evidence": "han.ci/1", "maxTier": 1}])}), "allow", note="revert: true")
+v.step(E("pol2", "policy.set", O, {"policy": policy(gates=GATES, approvals=[{"action": "vcs.land", "revert": False, "approvers": [X]}])}), "invalid", note="revert: false is not a predicate")
+v.step(E("pol3", "policy.set", O, {"policy": policy(gates=GATES, approvals=[{"action": "vcs.land", "revert": "yes", "approvers": [X]}])}), "invalid", note="revert is a boolean")
+add(v.done())
+
+LANE = X
+REVERT_RULES = [{"action": "vcs.land", "revert": True, "maxTier": 1, "approvers": [LANE, "owner"], "evidence": "han.ci/1"}] + LAND_RULES
+v = V("revert-rule", ["P-17", "P-08", "P-07"], "round 33, A2: the rule predicate `revert` covers only a revert; the lane executor approves its own revert proposal with a han.ci/1 record over the reverted delta, exempt from separateApprover for exactly that case (a machine that is both proposer and executor); it never lifts the human requirement of tier 2 or 3 or of a never-auto path, nor does it help a human or any other approver")
+v.prof(R, REVIEWER)
+team(v, policy(gates=GATES, approvals=REVERT_RULES, separateApprover=True))
+v.step(ms("mr", O, R, "member"), "allow")
+landed(v, "l1", [("src/a.rs", "modify", 3)], approver=O)
+landed(v, "l2", [("payments/pay.rs", "modify", 3)], approver=P, author=M)
+landed(v, "l3", [(".github/workflows/ci.yml", "modify", 2)], approver=O)
+# tier 1: the lane approves its own revert
+v.step(rprop("r1", "l1", [("src/a.rs", "modify", 3)]), "allow", check={"effects.r1.gate.tier": 1})
+v.step(claim("cr1x", "r1"), "denied", note="E3: no approval yet")
+v.step(lappr("a0", "r1", author=X), "denied", note="no evidence")
+v.step(lappr("a1", "r1", author=X, evidence=ci("r1")), "denied", note="the record is over the revert's own delta, not the reverted one")
+v.step(lappr("a2", "r1", author=X, evidence=dict(ci("l1"), kind="han.review/1")), "denied", note="a record of another kind")
+v.step(lappr("a3", "r1", author=X, evidence=ci("other")), "denied", note="over another delta")
+v.step(lappr("a4", "r1", author=X, evidence=ci("l1")), "allow", check={"effects.r1.approvals.0.evidence": ci("l1")}, note="the failing run over the reverted delta; the proposer approves its own proposal under separateApprover")
+v.step(claim("cr1", "r1"), "allow", check={"effects.r1.claims.0.approval": "a4"})
+v.step(outc("or1", "cr1", "succeeded", "yes"), "allow", check={"effects.r1.phase": "succeeded"})
+# the exemption is narrow
+v.step(rprop("r1c", "l1", [("src/a.rs", "modify", 3)], author=X, executor=O), "allow")
+v.step(lappr("b1", "r1c", author=X, evidence=ci("l1")), "denied", note="the approver is the proposer but not the executor: separateApprover holds")
+v.step(rprop("r1d", "l1", [("src/a.rs", "modify", 3)], author=O, executor=O), "allow")
+v.step(lappr("b2", "r1d", author=O), "denied", note="a human proposer and executor: no exemption")
+v.step(rprop("r1e", "l1", [("src/a.rs", "modify", 3)], author=M), "allow")
+v.step(lappr("b3", "r1e", author=X, evidence=ci("l1")), "allow").step(claim("cr1e", "r1e"), "allow", note="proposed by another: the lane approves as any approver")
+v.step(rprop("r1f", "l1", [("src/a.rs", "modify", 3)], author=M), "allow")
+v.step(lappr("b4", "r1f", author=O), "allow").step(claim("cr1f", "r1f"), "allow", note="an owner approves a revert with no evidence")
+v.step(rprop("r1g", "l1", [("src/a.rs", "modify", 3)], author=M), "allow")
+v.step(lappr("b5", "r1g", author=R, evidence=ci("l1")), "denied", note="the reviewer is not named by the revert rule")
+v.step(lprop("n1", chg([("src/n.rs", "modify", 1)], label="n1"), author=X), "allow", check={"effects.n1.gate.revertOf": MISSING})
+v.step(lappr("b6", "n1", author=X, evidence=ci("n1")), "denied", note="the rule is for a revert only; this is not one, and the next rule does not name the lane")
+# tier 2 and 3, never-auto: a human, whatever the rule says
+v.step(rprop("r2", "l2", [("payments/pay.rs", "modify", 3)]), "allow", check={"effects.r2.gate.tier": 2, "effects.r2.gate.owners": [P, R]})
+v.step(lappr("c1", "r2", author=X, evidence=ci("l2")), "denied", note="tier 2: no machine counts, the revert rule is for tier 0 and 1 anyway")
+v.step(lappr("c2", "r2", author=R, evidence=ci("l2")), "denied", note="nor the reviewer")
+v.step(lappr("c3", "r2", author=P), "allow").step(claim("cr2", "r2"), "allow", check={"effects.r2.claims.0.approval": "c3"}, note="the path owner, as for any tier 2 land")
+v.step(rprop("r3", "l3", [(".github/workflows/ci.yml", "modify", 2)]), "allow", check={"effects.r3.gate.tier": 2}, note="a never-auto path")
+v.step(lappr("d1", "r3", author=X, evidence=ci("l3")), "denied", note="never-auto: a human")
+v.step(lappr("d2", "r3", author=O), "allow").step(claim("cr3", "r3"), "allow")
+# a revert rule with no maxTier still lifts nothing at tier 2 and above
+v.step(E("pol", "policy.set", O, {"policy": policy(gates=GATES, separateApprover=True, approvals=[{"action": "vcs.land", "revert": True, "approvers": [LANE], "evidence": "han.ci/1"}] + LAND_RULES)}), "allow")
+v.step(rprop("r2b", "l2", [("payments/pay.rs", "modify", 3)]), "allow", check={"effects.r2b.gate.tier": 2})
+v.step(lappr("e1", "r2b", author=X, evidence=ci("l2")), "denied", note="whatever the rule says, no machine counts at tier 2")
+v.step(rprop("r3b", "l3", [(".github/workflows/ci.yml", "modify", 2)]), "allow", check={"effects.r3b.gate.tier": 2})
+v.step(lappr("e2", "r3b", author=X, evidence=ci("l3")), "denied", note="nor on a never-auto path")
+v.step(rprop("r1h", "l1", [("src/a.rs", "modify", 3)]), "allow")
+v.step(lappr("e3", "r1h", author=X, evidence=ci("l1")), "allow").step(claim("cr1h", "r1h"), "allow", note="and tier 1 still works")
+# a revert of a change that had no summary: tier 3, two humans
+v.step(E("pol4", "policy.set", O, {"policy": policy(gates=GATES, separateApprover=True, approvals=REVERT_RULES)}), "allow")
+v.step(lprop("l4x", author=M), "allow")
+v.step(lappr("l4xa", "l4x", author=O), "allow").step(lappr("l4xb", "l4x", author=P), "allow").step(claim("cl4x", "l4x"), "allow").step(outc("ol4x", "cl4x", "succeeded", "yes"), "allow")
+v.step(rprop("r4", "l4x", [("docs/x.md", "modify", 1)]), "allow", check={"effects.r4.gate.tier": 3}, note="its own summary is docs; the change it reverts had none")
+v.step(lappr("f1", "r4", author=X, evidence=ci("l4x")), "denied")
+v.step(lappr("f2", "r4", author=O), "allow").step(claim("cr4x", "r4"), "denied", note="tier 3: two humans")
+v.step(lappr("f3", "r4", author=P), "allow").step(claim("cr4", "r4"), "allow")
 add(v.done())
 
 # ── R-01 id derivation ──

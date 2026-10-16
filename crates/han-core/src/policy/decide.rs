@@ -11,7 +11,8 @@ use super::guard::{
     Key, Pick, abandon_after, approval_candidates, budget_change_ok, counts, effect_guarded_for,
     effect_source, expired, guard_approval, guard_status, guards_of, in_guards, is_human,
     key_status, needs, over_bound, pick_approval, reads, remaining, role_of, rule_for, secs,
-    server_of, space_unit, task_guarded_for, task_source, unbounded_guards, usable, writes,
+    self_revert_approval, server_of, space_unit, task_guarded_for, task_source, unbounded_guards,
+    usable, writes,
 };
 use super::state::{Effect, Phase, Source, SpaceState, Task};
 use super::{Ctx, MAX_ATTEMPTS, MAX_GUARDED_FOR, MAX_OPEN_APPROVALS, MAX_OPEN_SESSIONS, Verdict};
@@ -568,6 +569,15 @@ fn propose(
     if b.change.is_some() && b.action != "vcs.land" {
         return invalid("a change summary belongs to a vcs.land"); // P-17
     }
+    if let Some(of) = b.change.as_ref().and_then(|c| c.revert_of.as_ref()) {
+        // A2: a revert names a vcs.land of this space that has landed
+        let Some(target) = state.effects.get(of).filter(|e| e.action == "vcs.land") else {
+            return invalid("revertOf names no vcs.land of this space");
+        };
+        if target.phase != Phase::Succeeded {
+            return deny("revertOf names a vcs.land that has not succeeded");
+        }
+    }
     Verdict::Allow
 }
 
@@ -601,7 +611,10 @@ fn approve(
         if !rule.is_some_and(|r| counts(state, eff, r, author, kind, b.evidence.as_ref())) {
             return deny("not an approver for this action");
         }
-        if state.policy.separate_approver && author == eff.proposer {
+        if state.policy.separate_approver
+            && author == eff.proposer
+            && !rule.is_some_and(|r| self_revert_approval(eff, r, author, kind))
+        {
             return deny("separate approver required");
         }
         let counted = approval_candidates(state, eff, ctx.secs)

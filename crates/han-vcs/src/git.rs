@@ -2111,6 +2111,32 @@ impl Vcs for GitVcs {
         }))
     }
 
+    fn tree_commit(
+        &self,
+        dir: &Path,
+        parent: &str,
+        tree_of: &str,
+        message: &str,
+        author: &str,
+        committer_time: i64,
+    ) -> Result<String> {
+        if committer_time < 0 {
+            return Err(VcsError::Invalid("committer time before the epoch".into()));
+        }
+        let parent = self.commit_of(dir, parent)?;
+        let tree_of = self.commit_of(dir, tree_of)?;
+        let tree = self
+            .git(Some(dir))?
+            .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+            .arg(format!("{tree_of}^{{tree}}"))
+            .text()
+            .ok()
+            .filter(|s| is_hex_id(s))
+            .ok_or_else(|| VcsError::NotFound(format!("no tree of {tree_of}")))?;
+        let s = self.scratch(dir)?;
+        self.commit_with(&s, &tree, &parent, message, author, committer_time)
+    }
+
     fn is_ancestor(&self, dir: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
         if !is_hex_id(ancestor) || !(is_hex_id(descendant) || descendant == "HEAD") {
             return Err(VcsError::Invalid(

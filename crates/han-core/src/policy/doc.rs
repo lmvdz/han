@@ -175,6 +175,10 @@ pub struct ApprovalRule {
     /// Distinct approvals a claim consumes, 1 to 3 (at tier 3, at least 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<u8>,
+    /// Only a revert (`change.revertOf`) is covered, and the lane's own approval of it is exempt from
+    /// `separateApprover` (A2). Always `true` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revert: Option<bool>,
 }
 
 /// The class of a path (P-17); its tier floor is docs, tests and generated 0, code 1, sensitive 2, critical 3.

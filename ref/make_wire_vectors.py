@@ -968,6 +968,7 @@ steps += put(bo, 9, e, c, r)
 steps += [{"conn": ca, "send": {"id": 10, "call": "blobGet", "args": {"ref": REF_REVIEW, "space": EG}}}, {"conn": ca, "expect": {"id": 10, "ok": {"data": W.b64(REVIEW), "size": len(REVIEW), "offset": 0}}}]
 e, c, r = oa("x", "effect.claim", {"proposal": p1, "attempt": 1, "instance": "k1", "window": SP_POLICY["launchWindow"]}, space=EG, tag="eg-claim-1")
 steps += put(xc, 11, e, c, r)
+eg_claim1 = r["id"]
 r33.append(vec("C3", "P-17, G-01: run after C2. In `%s`, whose policy has gates and a tier-0/1 rule, alice proposes a `vcs.land` whose body carries the change summary (the plan's `args.change`) and bob approves it with `evidence {kind, over}` in the body and the review record's BlobRef in the content; both are ordered with exact receipts, the record blob is readable by carol once referenced (`effect.approve.evidence` is a reference position), and x's claim is ordered: the approval counts" % EG,
                steps, ["P-17", "G-01", "§5", "E3"], "ok x7; blobGet not_found, then ok", source="maker (oracle: ref/wire.py Home)"))
 
@@ -996,6 +997,51 @@ steps += eg_try("alice", al, "policy.set", {"policy": dict(GATE_POLICY, approval
 steps += eg_try("alice", al, "policy.set", {"policy": dict(GATE_POLICY, approvals=[{"action": "vcs.land", "minTier": 1, "maxTier": 3, "humans": True, "evidence": "han.review/1", "needs": 3, "approvers": ["@path-owner", "owner"]}])}, None, "good-rule", "ok")
 r33.append(vec("C4", "P-17, R-09: run after C3. In `%s` a proposal's `change` that is unsorted, has a total below its files, `truncated: false`, a rename without a source, a path with `..` or an unknown member is invalid, so is a `tier` member and a `change` on another action; a truncated summary is ordered; an approval's `evidence` without `over`, with a bad kind or an extra member, or whose content `evidence` is no BlobRef, is invalid, and carol, not an owner for a tier-3 effect, is denied; a `policy.set` with `small` above `large` or a rule with `maxTier` 9 is invalid and a rule with every new member is ordered" % EG,
                steps, ["P-17", "R-09", "§5"], "invalid x8; ok; invalid x5; denied; invalid x2; ok", source="maker (oracle: ref/wire.py Home)"))
+
+# C5 (A2): the lane's own pre-approved revert. x proposes a revert of the landed p1 and approves it itself under separateApprover.
+REV_DELTA = hashlib.sha256(b"delta:eg-revert").hexdigest()
+CI = b'{"schema":"han.ci/1","verdict":"red"}'
+REF_CI = {"hash": hashlib.sha256(CI).hexdigest(), "size": len(CI), "type": "application/vnd.han.ci+json"}
+REVERT_POLICY = dict(GATE_POLICY, separateApprover=True,
+                     approvals=[{"action": "vcs.land", "revert": True, "maxTier": 1, "approvers": [xc], "evidence": "han.ci/1"}, {"action": "vcs.land", "approvers": ["@path-owner", "owner"]}])
+def eg_revert(of, files, delta=REV_DELTA, action="vcs.land"):
+    ch = {"repo": "github:o/r", "deltaDigest": delta, "total": len(files), "files": files, "revertOf": of}
+    plan_ = {"action": action, "target": "github:o/r", "args": {"ref": "refs/heads/main", "base": "b" * 40, "to": "c" * 40, "deltaDigest": delta, "tier": 0, "rebase": "none", "change": ch}}
+    return plan_, {"executor": xc, "action": action, "planDigest": hashlib.sha256(P.jcs(plan_)).hexdigest(), "repeatable": False, "change": ch}
+RFILES = [{"path": "docs/a.md", "kind": "modify", "lines": 3}, {"path": "docs/b.md", "kind": "delete", "lines": 4}]
+e, c, r = oa("alice", "policy.set", {"policy": REVERT_POLICY}, space=EG, tag="eg-revert-policy")
+steps = put(al, eg_id(), e, c, r)
+plan_r, body_r = eg_revert("0" * 64, RFILES)
+steps += eg_try("x", xc, "effect.propose", body_r, {"plan": plan_r}, "revert-unknown", "invalid")
+plan_r, body_r = eg_revert("abc", RFILES)
+steps += eg_try("x", xc, "effect.propose", body_r, {"plan": plan_r}, "revert-badid", "invalid")
+plan_r, body_r = eg_revert(p2, RFILES)
+steps += eg_try("x", xc, "effect.propose", body_r, {"plan": plan_r}, "revert-open", "denied")
+plan_r, body_r = eg_revert(p1, RFILES)
+steps += eg_try("x", xc, "effect.propose", body_r, {"plan": plan_r}, "revert-not-landed", "denied")
+e, c, r = oa("x", "effect.outcome", {"claim": eg_claim1, "result": "succeeded", "started": "yes"}, space=EG, tag="eg-land-outcome")
+steps += put(xc, eg_id(), e, c, r)
+plan_g2, body_g2 = eg_revert(p1, RFILES, action="git.push")
+steps += eg_try("x", xc, "effect.propose", body_g2, {"plan": plan_g2}, "revert-other-action", "invalid")
+e, c, r = oa("x", "effect.propose", body_r, {"plan": plan_r}, space=EG, tag="eg-revert-propose")
+steps += put(xc, eg_id(), e, c, r)
+p3 = r["id"]
+steps += [{"conn": xc, "send": {"id": eg_id(), "call": "blobPut", "args": {"ref": REF_CI, "offset": 0, "data": W.b64(CI)}}}]
+steps += [{"conn": xc, "expect": {"id": eg_n[0], "ok": {"have": len(CI), "complete": True}}}]
+steps += eg_try("x", xc, "effect.approve", {"proposal": p3, "planDigest": body_r["planDigest"], "evidence": {"kind": "han.ci/1", "over": REV_DELTA}}, {"evidence": REF_CI}, "revert-own-delta", "denied")
+steps += eg_try("x", xc, "effect.approve", {"proposal": p3, "planDigest": body_r["planDigest"]}, None, "revert-no-evidence", "denied")
+e, c, r = oa("x", "effect.approve", {"proposal": p3, "planDigest": body_r["planDigest"], "evidence": {"kind": "han.ci/1", "over": DELTA}}, {"evidence": REF_CI}, space=EG, tag="eg-revert-approve")
+steps += put(xc, eg_id(), e, c, r)
+e, c, r = oa("x", "effect.claim", {"proposal": p3, "attempt": 1, "instance": "k1", "window": SP_POLICY["launchWindow"]}, space=EG, tag="eg-revert-claim")
+steps += put(xc, eg_id(), e, c, r)
+plan_t, body_t = eg_revert(p1, [{"path": "payments/p.rs", "kind": "modify", "lines": 3}], delta=hashlib.sha256(b"delta:eg-revert2").hexdigest())
+e, c, r = oa("x", "effect.propose", body_t, {"plan": plan_t}, space=EG, tag="eg-revert-propose-2")
+steps += put(xc, eg_id(), e, c, r)
+p4 = r["id"]
+steps += eg_try("x", xc, "effect.approve", {"proposal": p4, "planDigest": body_t["planDigest"], "evidence": {"kind": "han.ci/1", "over": DELTA}}, {"evidence": REF_CI}, "revert-tier2", "denied")
+steps += eg_try("bob", bo, "effect.approve", {"proposal": p4, "planDigest": body_t["planDigest"]}, None, "revert-tier2-path-owner", "ok")
+r33.append(vec("C5", "A2, P-17: run after C4 and C3. In `%s` (policy: `separateApprover`, a `revert` rule for the lane `x` with evidence `han.ci/1`, maxTier 1), a `change.revertOf` that names no effect, is no digest, names an open effect or names an effect that has not succeeded (p1 is claimed) is refused (invalid, invalid, denied, denied) and so is a `revertOf` on another action; once x reports p1 succeeded, x proposes a revert of p1 (the summary carries `revertOf`), its approval with a `han.ci/1` record over its own delta or without evidence is denied, and over the reverted delta (p1's) it is ordered although x is the proposer, and x's claim is ordered; a revert of p1 whose summary touches `payments/` is tier 2, x's approval is denied and the path owner bob's is ordered. Expected values come from `ref/wire.py`'s `Home`." % EG,
+               steps, ["A2", "P-17", "P-08", "E3"], "invalid x2; denied x2; ok; invalid; ok x4; denied x2; ok x2; denied; ok", source="maker (oracle: ref/wire.py Home)"))
 
 def dump_vectors(path, doc):
     """One step per line: the paging vector holds a thousand."""

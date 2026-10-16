@@ -11,6 +11,8 @@
 //!    └── ref moved ──────┴──── ref moved ──────────┘                          post-merge red:
 //!                        │                                                    stays landed, escalated
 //!                        └─▶ rejected (conflict | test | dependency | policy)
+//!
+//! landed ─ post-merge red, `checks.auto_revert` ─▶ bisect ─▶ culprit ─▶ revert proposed ─▶ ... landed ─▶ reverted
 //! ```
 //!
 //! * **queued**: the change waits for the lane's slot and for every `dependsOn` proposal to be `landed` or
@@ -36,7 +38,20 @@
 //!   prepares again on the new tip.
 //! * **landed → confirmed**: the lane reads the landed commit's `checks.full` runs. All green: `confirmed`. A
 //!   repository with no `full` set confirms at once. A red run leaves the change `landed` and reports it
-//!   `post_merge_failed` with the evidence, escalated (an automatic revert is a later slice).
+//!   `post_merge_failed` with the evidence, escalated.
+//! * **landed → reverted** (A2, `checks.auto_revert`, off by default): a red run starts a bisect over the
+//!   changes it covered, the landed ones since the last green run, in the order they landed. The lane asks the
+//!   checks backend for `full` on the middle candidate and narrows to the first red one, which is the culprit.
+//!   The culprit's proposer gets a fix-forward `task` with the failing run as evidence. The lane builds the
+//!   revert as a squash commit whose tree is the tree the culprit landed on ([`han_vcs::Vcs::tree_commit`]), so
+//!   its delta is the exact inverse of the culprit's, and proposes it as a `vcs.land` whose `change.revertOf`
+//!   names the culprit (architecture.md P-17), with a bundle of that one commit. It approves the proposal itself
+//!   with the failing run as evidence; Policy accepts a machine's approval only at tier 0 and 1 (the tier of a
+//!   revert is its culprit's), so a revert of a tier 2 or 3 change, or of a never-auto path, waits for a human.
+//!   The revert then goes the normal way (fast checks, compare-and-swap). If later changes touched its paths it
+//!   conflicts: it stays queued, *stalled*, with the conflict record, and nothing is forced. When it lands the
+//!   culprit becomes `reverted`; when its own post-merge run is green, the changes the red run covered that
+//!   landed before it become `confirmed`. A revert whose own post-merge run is red is escalated, never reverted.
 //!
 //! **Liveness.** Every state has a deadline ([`crate::Deadlines`]). A change past it, or with nothing
 //! pending, is *stalled* with its reason, and the item says so. The lane never waits silently.
@@ -48,8 +63,9 @@
 //! on it, told apart by `item`:
 //!
 //! * `change`: `{item, proposal, repo, ref, lane, state, position?, deadline?, stalled?, reason?, detail?,
-//!   commit?, onto?, branch?, pr?, conflict?, evidence?, postMergeFailed?, escalated?, seq, at}`; `seq`
-//!   counts one change's items from 1; `conflict` and `evidence` are `BlobRef`s;
+//!   commit?, onto?, branch?, pr?, conflict?, evidence?, postMergeFailed?, escalated?, revertOf?, revertedBy?,
+//!   revertProposal?, fixTask?, needsHuman?, seq, at}`; `seq` counts one change's items from 1; `conflict` and
+//!   `evidence` are `BlobRef`s;
 //! * `lane`: `{item, repo, ref, instance, depth, batchSize, parallel, running: [{n, members}], seq, at}`.
 //!
 //! Records of the lane live in the executor's journal file (`lane_changes`), so a restart carries on.
@@ -59,7 +75,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use han_node::api::{CallResult, Command, EffectRow, EvidenceRef, NodeError};
+use han_node::api::{ApprovalEvidence, CallResult, Command, EffectRow, EvidenceRef, NodeError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -78,6 +94,12 @@ const FINAL_REPUBLISH_SECS: i64 = 7 * 86_400;
 /// How often a change that is not final has its item sent again when its repository does not say.
 pub const DEFAULT_REPUBLISH_SECS: u64 = 60;
 
+/// The kind of record a revert's approval cites: the failing run, over the delta of the change reverted (A2).
+pub const REVERT_EVIDENCE_KIND: &str = "han.ci/1";
+
+/// A revert that conflicts with later changes is prepared again after this many seconds at the soonest.
+const REVERT_RETRY_SECS: i64 = 300;
+
 /// A lost claim attempt that did not start (not a lost compare-and-swap) is tried again this many times.
 const MAX_NOT_STARTED: u32 = 3;
 
@@ -95,6 +117,8 @@ pub enum State {
     Landed,
     /// Landed, and the post-merge checks are green (or there are none).
     Confirmed,
+    /// Landed, broke the post-merge run, and a revert of it has landed (A2).
+    Reverted,
     /// Out, with a reason.
     Rejected,
     /// The proposal was cancelled before the lane landed it.
@@ -110,6 +134,7 @@ impl State {
             State::Landing => "landing",
             State::Landed => "landed",
             State::Confirmed => "confirmed",
+            State::Reverted => "reverted",
             State::Rejected => "rejected",
             State::Cancelled => "cancelled",
         }
@@ -117,7 +142,10 @@ impl State {
 
     /// Whether nothing more happens to a change in this state.
     pub fn is_final(self) -> bool {
-        matches!(self, State::Confirmed | State::Rejected | State::Cancelled)
+        matches!(
+            self,
+            State::Confirmed | State::Reverted | State::Rejected | State::Cancelled
+        )
     }
 }
 
@@ -135,6 +163,54 @@ struct Prepared {
     /// The pull request, once there is one.
     #[serde(default)]
     pr: Option<String>,
+}
+
+/// A change a red post-merge run covered: a landed change, with the commit it landed as.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Cand {
+    proposal: String,
+    commit: String,
+}
+
+/// The search for the change that broke a red post-merge run (A2). The candidates are the landed changes up to
+/// the red one, in the order they landed; the last is known red. `lo..=hi` holds the first red one: the middle
+/// candidate is run, red narrows to `lo..=mid`, green to `mid+1..=hi`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Bisect {
+    candidates: Vec<Cand>,
+    lo: usize,
+    hi: usize,
+    /// The failing run (canonical JSON of a [`ChecksEvidence`]) of each commit known red.
+    red: BTreeMap<String, String>,
+    /// The commit the checks backend was last asked to run.
+    #[serde(default)]
+    started: Option<String>,
+    /// When the current candidate's run was asked for (wall seconds).
+    #[serde(default)]
+    since: i64,
+    /// The culprit is found.
+    #[serde(default)]
+    done: bool,
+}
+
+/// What the lane has done about a change that broke the post-merge run (A2). Each step is kept as soon as it
+/// is done, so a restart carries on and nothing is proposed or sent twice.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Culprit {
+    /// When the culprit was found (wall seconds): the time of the revert commit.
+    at: i64,
+    /// The fix-forward task for the proposer.
+    #[serde(default)]
+    fix_task: Option<String>,
+    /// The revert's proposal.
+    #[serde(default)]
+    revert: Option<String>,
+    /// The lane approved the revert.
+    #[serde(default)]
+    approved: bool,
+    /// The lane could not approve it (Policy needs a person: tier 2 or more, a never-auto path): it waits.
+    #[serde(default)]
+    needs_human: bool,
 }
 
 /// The lane's record of one change, kept in the journal file.
@@ -194,6 +270,24 @@ struct Change {
     /// The rejection has not reached the log yet: the executor's `effect.cancel` is still to be sent.
     #[serde(default)]
     cancel_pending: bool,
+    /// The order the change landed in, per lane (1, 2, ...): the order a red run's candidates are in.
+    #[serde(default)]
+    landed_seq: u64,
+    /// A revert (A2): the proposal it undoes.
+    #[serde(default)]
+    revert_of: Option<String>,
+    /// The search this change's red run started (A2).
+    #[serde(default)]
+    bisect: Option<Bisect>,
+    /// This change broke the post-merge run (A2).
+    #[serde(default)]
+    culprit: Option<Culprit>,
+    /// This change's red run is the culprit's doing: the proposal it is waiting on (A2).
+    #[serde(default)]
+    covered_by: Option<String>,
+    /// The revert that undid this change, once it landed (A2).
+    #[serde(default)]
+    reverted_by: Option<String>,
     /// The record as last written (not itself written).
     #[serde(skip)]
     saved: String,
@@ -323,8 +417,9 @@ fn lane_branch(repo: &RepoTarget, refname: &str, proposal: &str) -> String {
     format!("{}{r}/{p}", repo.lane_branch_prefix)
 }
 
-/// What a plan says the lane needs: the repository, the ref and the proposals it depends on.
-fn plan_info(row: &EffectRow) -> Result<(String, String, Vec<String>), String> {
+/// What a plan says the lane needs: the repository, the ref, the proposals it depends on and, for a revert, the
+/// proposal it undoes.
+fn plan_info(row: &EffectRow) -> Result<(String, String, Vec<String>, Option<String>), String> {
     let plan: Value =
         serde_json::from_str(row.plan.as_deref().ok_or("the proposal carries no plan")?)
             .map_err(|e| format!("the plan is not JSON: {e}"))?;
@@ -345,12 +440,26 @@ fn plan_info(row: &EffectRow) -> Result<(String, String, Vec<String>), String> {
         .flatten()
         .filter_map(|d| d.get("proposal").and_then(Value::as_str).map(str::to_owned))
         .collect();
-    Ok((repo, refname.to_owned(), deps))
+    let revert_of = plan
+        .pointer("/args/change/revertOf")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok((repo, refname.to_owned(), deps, revert_of))
 }
 
 enum Prep {
     Ready,
     Done,
+    Retry(String),
+    /// A revert that cannot be applied to the tip: stalled with the conflict record, the lane goes on.
+    Stalled(String),
+}
+
+/// Why the lane's approval of its own revert did not go through.
+enum Approval {
+    /// Policy (or the node) refuses a machine's approval: a person has to approve.
+    Human(String),
+    /// Not now: try again.
     Retry(String),
 }
 
@@ -480,13 +589,18 @@ impl Lane {
     }
 
     async fn upload(&self, space: &str, text: &str) -> Option<Value> {
+        self.upload_bytes(space, "application/json", text.as_bytes())
+            .await
+    }
+
+    async fn upload_bytes(&self, space: &str, media_type: &str, bytes: &[u8]) -> Option<Value> {
         let r = self
             .exec
             .node()
             .call(Command::BlobPut {
                 space: space.to_owned(),
-                media_type: "application/json".into(),
-                data: han_core::base64url::encode(text.as_bytes()),
+                media_type: media_type.to_owned(),
+                data: han_core::base64url::encode(bytes),
             })
             .await;
         match r {
@@ -622,6 +736,23 @@ impl Lane {
         if c.post_merge_failed {
             o.insert("postMergeFailed".into(), json!(true));
             o.insert("escalated".into(), json!(true));
+        }
+        if let Some(r) = &c.revert_of {
+            o.insert("revertOf".into(), json!(r));
+        }
+        if let Some(r) = &c.reverted_by {
+            o.insert("revertedBy".into(), json!(r));
+        }
+        if let Some(cu) = &c.culprit {
+            if let Some(r) = &cu.revert {
+                o.insert("revertProposal".into(), json!(r));
+            }
+            if let Some(t) = &cu.fix_task {
+                o.insert("fixTask".into(), json!(t));
+            }
+            if cu.needs_human {
+                o.insert("needsHuman".into(), json!(true));
+            }
         }
         b
     }
@@ -888,9 +1019,9 @@ impl Lane {
                 continue;
             }
             let info = plan_info(row);
-            let (repo, refname, deps) = match &info {
+            let (repo, refname, deps, revert_of) = match &info {
                 Ok(i) => i.clone(),
-                Err(_) => (String::new(), String::new(), Vec::new()),
+                Err(_) => (String::new(), String::new(), Vec::new(), None),
             };
             // Default-off: a repository with no landing refs has no lane.
             if info.is_ok() && self.repo(&repo).is_none() {
@@ -925,6 +1056,12 @@ impl Lane {
                 retry_after: 0,
                 stalled_since: None,
                 cancel_pending: false,
+                landed_seq: 0,
+                revert_of,
+                bisect: None,
+                culprit: None,
+                covered_by: None,
+                reverted_by: None,
                 saved: String::new(),
             };
             if let Err(why) = info {
@@ -957,6 +1094,8 @@ impl Lane {
                 all[i] = c;
             }
         }
+        // A red post-merge run: find the culprit, revert it (A2).
+        self.revert_flow(all, idxs, rows, &repo, now, rep).await?;
         // The change in the slot.
         for &i in idxs {
             if !matches!(all[i].state, State::Testing | State::Landing) {
@@ -1031,7 +1170,8 @@ impl Lane {
             }
             c.position = Some(position);
             if now < c.retry_after {
-                blocked = true;
+                // a stalled revert does not hold up the changes behind it
+                blocked = c.revert_of.is_none();
                 self.settle_stall(&mut c, now, rep).await?;
                 all[i] = c;
                 continue;
@@ -1046,6 +1186,10 @@ impl Lane {
                     c.problem = Some(why);
                     c.retry_after = now + i64::try_from(repo.checks.poll_secs).unwrap_or(30);
                     blocked = true;
+                }
+                Prep::Stalled(why) => {
+                    c.problem = Some(why);
+                    c.retry_after = now + REVERT_RETRY_SECS;
                 }
             }
             self.settle_stall(&mut c, now, rep).await?;
@@ -1080,7 +1224,9 @@ impl Lane {
             {
                 None => waiting.push(format!("dependency {dep} is not known to the lane")),
                 Some(d) => match d.state {
-                    State::Rejected | State::Cancelled => return Deps::Rejected(dep.clone()),
+                    State::Rejected | State::Cancelled | State::Reverted => {
+                        return Deps::Rejected(dep.clone());
+                    }
                     State::Landed | State::Confirmed => {}
                     s => waiting.push(format!("waiting for dependency {dep} ({})", s.as_str())),
                 },
@@ -1160,6 +1306,11 @@ impl Lane {
                 return Ok(Prep::Done);
             }
         };
+        // A2: a revert is the exact inverse of a change this executor landed (X-13), or it is refused here
+        if let Err(why) = self.exec.check_revert(row, &plan) {
+            self.reject(c, "policy", &why, None, None, now).await?;
+            return Ok(Prep::Done);
+        }
         let key = IdempotencyKey {
             space: row.space.clone(),
             proposal: row.proposal.clone(),
@@ -1260,9 +1411,7 @@ impl Lane {
                     touched.join(", ")
                 );
                 let text = canonical(&record).unwrap_or_else(|_| record.to_string());
-                self.reject(c, "conflict", &detail, None, Some(text), now)
-                    .await?;
-                return Ok(Prep::Done);
+                return self.conflicted(c, &detail, text, now).await;
             }
             han_vcs::RebaseOutcome::Conflict(r) => {
                 let mut record = serde_json::to_value(&r).unwrap_or_default();
@@ -1274,9 +1423,7 @@ impl Lane {
                 let paths: Vec<&str> = r.conflicts.iter().map(|x| x.path.as_str()).collect();
                 let detail = format!("conflicts with {}: {}", short(&onto), paths.join(", "));
                 let text = canonical(&record).unwrap_or_else(|_| record.to_string());
-                self.reject(c, "conflict", &detail, None, Some(text), now)
-                    .await?;
-                return Ok(Prep::Done);
+                return self.conflicted(c, &detail, text, now).await;
             }
         };
 
@@ -1329,6 +1476,30 @@ impl Lane {
         }
         self.enter(c, State::Testing, now).await?;
         Ok(Prep::Ready)
+    }
+
+    /// A change that does not apply to the tip. It is rejected (`conflict`), gated again, with the record. A
+    /// revert (A2) is not: nothing is cancelled and nothing is forced, it stays queued, stalled, with the
+    /// record, and the lane goes on with the changes behind it.
+    async fn conflicted(
+        &self,
+        c: &mut Change,
+        detail: &str,
+        record: String,
+        now: i64,
+    ) -> Result<Prep, ExecError> {
+        if c.revert_of.is_none() {
+            self.reject(c, "conflict", detail, None, Some(record), now)
+                .await?;
+            return Ok(Prep::Done);
+        }
+        if c.conflict_json.as_deref() != Some(record.as_str()) {
+            c.conflict_json = Some(record);
+            c.conflict = None;
+        }
+        Ok(Prep::Stalled(format!(
+            "the revert does not apply: {detail}; later changes touched its paths"
+        )))
     }
 
     /// The pull request of a lane branch, opened or found; `None` when the repository has no GitHub side or
@@ -1596,6 +1767,7 @@ impl Lane {
         if report.result == "succeeded" {
             c.not_started = 0;
             c.detail = Some(detail.to_owned());
+            c.landed_seq = self.next_landed_seq(c)?;
             self.enter(c, State::Landed, now).await?;
             return self.watch_post_merge(c, repo, now, rep).await;
         }
@@ -1743,6 +1915,741 @@ impl Lane {
         }
         c.detail = None;
         self.enter(c, State::Confirmed, now).await
+    }
+
+    // ───────────────────────── revert (A2) ─────────────────────────
+
+    /// The next landing number of a lane: 1, 2, ... for the changes of one `(space, repo, ref)` in the order they
+    /// landed. It is kept in the journal, so it does not repeat after a restart.
+    fn next_landed_seq(&self, c: &Change) -> Result<u64, ExecError> {
+        let key = format!("lane-landed|{}|{}|{}", c.space, c.repo, c.refname);
+        let n = self
+            .exec
+            .with_ledger(|l| l.meta_get(&key))?
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+            + 1;
+        self.exec
+            .with_ledger(|l| l.meta_put(&key, &n.to_string()))?;
+        Ok(n)
+    }
+
+    /// After a red post-merge run, for a repository that reverts (A2): finds the change that broke it (a
+    /// bisect over the changes the run covered), tells its proposer, proposes the revert and, where Policy lets
+    /// a machine, approves it. Then settles what a landed revert means for the changes around it.
+    async fn revert_flow(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        rows: &mut Vec<EffectRow>,
+        repo: &RepoTarget,
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        if repo.checks.auto_revert {
+            self.start_bisect(all, idxs, now, rep).await?;
+            for &t in idxs {
+                if all[t].bisect.as_ref().is_some_and(|b| !b.done) {
+                    self.probe(all, idxs, t, repo, now, rep).await?;
+                }
+            }
+            for &k in idxs {
+                if all[k].state == State::Landed && all[k].culprit.is_some() {
+                    self.act_on_culprit(all, k, rows, repo, now, rep).await?;
+                }
+            }
+        }
+        self.reconcile(all, idxs, now).await
+    }
+
+    /// Takes the first change whose post-merge run is red and has not been looked into, and makes the list
+    /// of the changes that run covered: the changes that landed since the last green one (the ones still
+    /// `landed`), up to and including it, in the order they landed. One search runs at a time per lane.
+    async fn start_bisect(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        if idxs
+            .iter()
+            .any(|&i| all[i].bisect.as_ref().is_some_and(|b| !b.done))
+        {
+            return Ok(());
+        }
+        let mut reds: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let c = &all[i];
+                c.state == State::Landed
+                    && c.post_merge_failed
+                    && c.revert_of.is_none()
+                    && c.bisect.is_none()
+                    && c.culprit.is_none()
+                    && c.covered_by.is_none()
+                    && c.prepared.is_some()
+            })
+            .collect();
+        reds.sort_by_key(|&i| (all[i].landed_seq, all[i].order));
+        let Some(&t) = reds.first() else {
+            return Ok(());
+        };
+        // Red because a culprit that landed before it is still in: its revert settles it.
+        let culprit = idxs.iter().copied().find(|&j| {
+            all[j].state == State::Landed
+                && all[j].culprit.is_some()
+                && all[j].landed_seq < all[t].landed_seq
+        });
+        if let Some(k) = culprit {
+            let by = all[k].proposal.clone();
+            let mut c = all[t].clone();
+            c.detail = Some(format!(
+                "the post-merge run is red because of {}, which is being reverted",
+                short(&by)
+            ));
+            c.covered_by = Some(by);
+            self.checkpoint(&mut c).await?;
+            all[t] = c;
+            return Ok(());
+        }
+        let key = |j: usize| (all[j].landed_seq, all[j].order);
+        let mut cands: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .filter(|&j| {
+                let c = &all[j];
+                c.state == State::Landed
+                    && c.revert_of.is_none()
+                    && c.culprit.is_none()
+                    && c.covered_by.is_none()
+                    && c.prepared.is_some()
+                    && key(j) <= key(t)
+            })
+            .collect();
+        cands.sort_by_key(|&j| key(j));
+        let candidates: Vec<Cand> = cands
+            .iter()
+            .map(|&j| Cand {
+                proposal: all[j].proposal.clone(),
+                commit: all[j]
+                    .prepared
+                    .as_ref()
+                    .map(|p| p.commit.clone())
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let hi = candidates
+            .iter()
+            .position(|c| c.proposal == all[t].proposal)
+            .unwrap_or(0);
+        let mut candidates = candidates;
+        candidates.truncate(hi + 1);
+        let commit = all[t]
+            .prepared
+            .as_ref()
+            .map(|p| p.commit.clone())
+            .unwrap_or_default();
+        let red: BTreeMap<String, String> = all[t]
+            .evidence_json
+            .clone()
+            .map(|e| (commit, e))
+            .into_iter()
+            .collect();
+        let n = candidates.len();
+        let mut c = all[t].clone();
+        c.bisect = Some(Bisect {
+            candidates,
+            lo: 0,
+            hi,
+            red,
+            ..Bisect::default()
+        });
+        c.detail = Some(format!(
+            "bisecting the red post-merge run over {n} landed change(s)"
+        ));
+        self.checkpoint(&mut c).await?;
+        all[t] = c;
+        if hi == 0 {
+            self.finish_bisect(all, idxs, t, now, rep).await?;
+        }
+        Ok(())
+    }
+
+    /// One step of the search of `all[t]`: runs `full` on the middle candidate (through the checks backend)
+    /// and reads it. Red narrows to the candidates up to it, green to the ones after it; one left is the
+    /// culprit.
+    async fn probe(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        t: usize,
+        repo: &RepoTarget,
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        let mut c = all[t].clone();
+        let Some(mut b) = c.bisect.clone() else {
+            return Ok(());
+        };
+        if b.done || b.lo >= b.hi {
+            return Ok(());
+        }
+        let mid = b.lo + (b.hi - b.lo) / 2;
+        let cand = b.candidates[mid].clone();
+        let req = CheckRequest {
+            repo: repo.clone(),
+            commit: cand.commit.clone(),
+            branch: c.refname.strip_prefix("refs/heads/").map(str::to_owned),
+            stage: Stage::Full,
+            names: repo.checks.full.clone(),
+        };
+        if b.started.as_deref() != Some(cand.commit.as_str()) {
+            if let Err(e) = self.checks.start(&req).await {
+                tracing::warn!(proposal = %c.proposal, "lane: starting the post-merge run of a candidate: {e}");
+            }
+            b.started = Some(cand.commit.clone());
+            b.since = now;
+        }
+        let key = format!("{}#bisect#{}", c.proposal, cand.commit);
+        if self.due(&key, now, repo.checks.poll_secs) {
+            match self.checks.poll(&req).await {
+                Err(e) => {
+                    c.problem = Some(format!("the checks backend could not be read: {e}"));
+                }
+                Ok(runs) => {
+                    c.problem = None;
+                    let verdicts: Vec<Verdict> = repo
+                        .checks
+                        .full
+                        .iter()
+                        .map(|n| verdict_of(&runs, n))
+                        .collect();
+                    if verdicts.contains(&Verdict::Red) {
+                        let ev =
+                            ChecksEvidence::new(&cand.commit, self.checks.name_for(repo), &runs)
+                                .canonical()
+                                .ok()
+                                .and_then(|bytes| String::from_utf8(bytes).ok())
+                                .unwrap_or_default();
+                        b.red.insert(cand.commit.clone(), ev);
+                        b.hi = mid;
+                        b.started = None;
+                    } else if verdicts.iter().all(|v| *v == Verdict::Green) {
+                        b.lo = mid + 1;
+                        b.started = None;
+                    } else if verdicts.contains(&Verdict::Missing)
+                        && now - b.since
+                            > i64::try_from(repo.checks.appear_secs).unwrap_or(i64::MAX)
+                    {
+                        c.problem = Some(format!(
+                            "the post-merge run of {} has not appeared after {} s: nothing is pending",
+                            short(&cand.commit),
+                            repo.checks.appear_secs
+                        ));
+                    }
+                }
+            }
+        }
+        let n = b.hi - b.lo + 1;
+        let finished = b.lo >= b.hi;
+        c.bisect = Some(b);
+        if finished {
+            c.problem = None;
+            all[t] = c;
+            return self.finish_bisect(all, idxs, t, now, rep).await;
+        }
+        c.detail = Some(format!(
+            "bisecting the red post-merge run: {n} candidate(s) left, running {}",
+            short(&cand.commit)
+        ));
+        self.settle_stall(&mut c, now, rep).await?;
+        all[t] = c;
+        Ok(())
+    }
+
+    /// The search of `all[t]` is down to one candidate: it is the culprit. Its proposer is told (the lane acts
+    /// on it next), the changes that landed after it, whose runs it made red, wait for its revert.
+    async fn finish_bisect(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        t: usize,
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        let mut tc = all[t].clone();
+        let Some(mut b) = tc.bisect.clone() else {
+            return Ok(());
+        };
+        b.done = true;
+        let cand = b.candidates[b.hi].clone();
+        let behind: Vec<String> = b.candidates[b.hi + 1..]
+            .iter()
+            .map(|c| c.proposal.clone())
+            .collect();
+        let evidence = b.red.get(&cand.commit).cloned();
+        let n = b.candidates.len();
+        tc.bisect = Some(b);
+        self.settle_stall(&mut tc, now, rep).await?;
+        all[t] = tc;
+        let Some(k) = idxs
+            .iter()
+            .copied()
+            .find(|&j| all[j].proposal == cand.proposal)
+        else {
+            return Ok(());
+        };
+        let mut kc = all[k].clone();
+        let told = kc.post_merge_failed;
+        kc.culprit = Some(Culprit {
+            at: now,
+            ..Culprit::default()
+        });
+        kc.post_merge_failed = true;
+        kc.reason = Some("post_merge_failed".into());
+        let detail = format!(
+            "broke the post-merge run: the first red of {n} landed change(s), on {}",
+            short(&cand.commit)
+        );
+        kc.detail = Some(detail.clone());
+        kc.problem = None;
+        if let Some(e) = evidence {
+            kc.evidence_json = Some(e);
+            kc.evidence = None;
+        }
+        tracing::error!(proposal = %kc.proposal, "lane: {detail}");
+        if !told {
+            rep.escalated.push((kc.proposal.clone(), detail));
+        }
+        self.settle_stall(&mut kc, now, rep).await?;
+        let culprit = kc.proposal.clone();
+        all[k] = kc;
+        for p in behind {
+            let Some(j) = idxs.iter().copied().find(|&j| all[j].proposal == p) else {
+                continue;
+            };
+            let mut c = all[j].clone();
+            c.detail = Some(format!(
+                "the post-merge run is red because of {}, which is being reverted",
+                short(&culprit)
+            ));
+            c.covered_by = Some(culprit.clone());
+            self.checkpoint(&mut c).await?;
+            all[j] = c;
+        }
+        Ok(())
+    }
+
+    /// What the lane does about a culprit, one step at a time, each kept before the next: the failing run goes
+    /// up as a blob, the proposer gets the fix-forward task, the revert is proposed, and the lane approves it
+    /// as far as Policy lets a machine (tier 0 and 1 with the failing run as evidence). The rest waits for a
+    /// person, and the item says so.
+    async fn act_on_culprit(
+        &self,
+        all: &mut [Change],
+        k: usize,
+        rows: &mut Vec<EffectRow>,
+        repo: &RepoTarget,
+        now: i64,
+        rep: &mut PassReport,
+    ) -> Result<(), ExecError> {
+        let mut c = all[k].clone();
+        let Some(mut cu) = c.culprit.clone() else {
+            return Ok(());
+        };
+        if now < c.retry_after {
+            return Ok(());
+        }
+        let retry = i64::try_from(repo.checks.poll_secs).unwrap_or(30).max(1);
+        let stop = |c: &mut Change, why: String| {
+            c.problem = Some(why);
+            c.retry_after = now + retry;
+        };
+        c.problem = None;
+        if c.evidence.is_none()
+            && let Some(text) = c.evidence_json.clone()
+        {
+            match self.upload(&c.space, &text).await {
+                Some(r) => c.evidence = Some(r),
+                None => {
+                    stop(
+                        &mut c,
+                        "the failing run's evidence could not be uploaded".into(),
+                    );
+                    self.settle_stall(&mut c, now, rep).await?;
+                    all[k] = c;
+                    return Ok(());
+                }
+            }
+        }
+        // The proposer's fix-forward task.
+        if cu.fix_task.is_none() {
+            match self.fix_task(&c).await {
+                Ok(id) => cu.fix_task = Some(id),
+                Err(why) => {
+                    stop(
+                        &mut c,
+                        format!("the fix-forward task was not created: {why}"),
+                    );
+                    self.settle_stall(&mut c, now, rep).await?;
+                    all[k] = c;
+                    return Ok(());
+                }
+            }
+            c.culprit = Some(cu.clone());
+            self.checkpoint(&mut c).await?;
+        }
+        // The revert, proposed once.
+        let revert = match cu.revert.clone() {
+            Some(id) => id,
+            None => match self.propose_revert(&c, &cu, rows).await {
+                Ok(id) => {
+                    cu.revert = Some(id.clone());
+                    c.culprit = Some(cu.clone());
+                    lock(&self.mem).rows_stale = true;
+                    self.checkpoint(&mut c).await?;
+                    id
+                }
+                Err(why) => {
+                    stop(&mut c, format!("the revert was not proposed: {why}"));
+                    self.settle_stall(&mut c, now, rep).await?;
+                    all[k] = c;
+                    return Ok(());
+                }
+            },
+        };
+        // Where the revert stands.
+        let record = all
+            .iter()
+            .find(|r| r.space == c.space && r.proposal == revert)
+            .map(|r| (r.state, r.reason.clone(), r.detail.clone()));
+        if let Some((State::Rejected | State::Cancelled, reason, detail)) = record {
+            let why = format!(
+                "the revert {} ended {}: {}",
+                short(&revert),
+                reason.unwrap_or_default(),
+                detail.unwrap_or_default()
+            );
+            c.retry_after = 0;
+            c.problem = Some(why);
+            self.settle_stall(&mut c, now, rep).await?;
+            all[k] = c;
+            return Ok(());
+        }
+        let row = self.row_of(rows, &c.space, &revert).await?;
+        if let Some(row) = row
+            && row.phase == "open"
+            && row.approvals.is_empty()
+            && !cu.needs_human
+            && !cu.approved
+        {
+            match self.approve_revert(&c, &revert).await {
+                Ok(()) => {
+                    cu.approved = true;
+                    lock(&self.mem).rows_stale = true;
+                }
+                Err(Approval::Human(why)) => {
+                    tracing::warn!(proposal = %c.proposal, "lane: the revert {revert} waits for a person: {why}");
+                    cu.needs_human = true;
+                }
+                Err(Approval::Retry(why)) => stop(&mut c, format!("approving the revert: {why}")),
+            }
+            c.culprit = Some(cu.clone());
+        }
+        c.detail = Some(if cu.needs_human {
+            format!(
+                "post-merge run red: revert {} proposed, waiting for a person to approve it",
+                short(&revert)
+            )
+        } else {
+            format!("post-merge run red: reverting through {}", short(&revert))
+        });
+        self.settle_stall(&mut c, now, rep).await?;
+        all[k] = c;
+        Ok(())
+    }
+
+    /// The fix-forward task for the culprit's proposer, with the failing run as evidence (its blob's hash and
+    /// the failing checks, named in the ask).
+    async fn fix_task(&self, c: &Change) -> Result<String, String> {
+        let evidence: Option<ChecksEvidence> = c
+            .evidence_json
+            .as_deref()
+            .and_then(|t| serde_json::from_str(t).ok());
+        let reds: Vec<String> = evidence
+            .iter()
+            .flat_map(|e| &e.checks)
+            .filter(|r| r.verdict() == Verdict::Red)
+            .map(|r| match &r.url {
+                Some(u) => format!("{} ({}, {u})", r.name, r.conclusion),
+                None => format!("{} ({})", r.name, r.conclusion),
+            })
+            .collect();
+        let blob = c
+            .evidence
+            .as_ref()
+            .map(|r| {
+                format!(
+                    "{} ({} bytes)",
+                    r["hash"].as_str().unwrap_or_default(),
+                    r["size"]
+                )
+            })
+            .unwrap_or_default();
+        let commit = c
+            .prepared
+            .as_ref()
+            .map(|p| p.commit.clone())
+            .unwrap_or_default();
+        let ask = format!(
+            "Fix forward: your change {} landed on {} of {} as {commit}, and the post-merge run failed on it.\n\
+             Failing: {}\nEvidence: the lane's record of the failing run, blob {blob}.\n\
+             The lane reverts the change (a revert of a change of tier 2 or 3, or on a path no machine may approve, \
+             waits for a person's approval). Land a new change that does what you meant and passes the post-merge run.",
+            c.proposal,
+            c.refname,
+            c.repo,
+            if reds.is_empty() {
+                "(see the evidence)".to_owned()
+            } else {
+                reds.join(", ")
+            }
+        );
+        let r = self
+            .exec
+            .node()
+            .call(Command::TaskCreate {
+                space: c.space.clone(),
+                to: vec![c.proposer.clone()],
+                ask,
+                external: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        match r {
+            CallResult::Receipt { id, .. } => Ok(id),
+            other => Err(format!("unexpected answer {other:?}")),
+        }
+    }
+
+    /// Proposes the revert of `c` as a `vcs.land`: a squash commit on the commit `c` landed as, with the tree
+    /// `c` landed on, so its delta is the exact inverse of `c`'s (X-13 checks that again before a claim). A
+    /// proposal this executor already made for `c` (it restarted after the send) is taken instead.
+    async fn propose_revert(
+        &self,
+        c: &Change,
+        cu: &Culprit,
+        rows: &[EffectRow],
+    ) -> Result<String, String> {
+        let actor = self.exec.actor().to_owned();
+        let plan_of = |r: &EffectRow| {
+            r.plan
+                .as_deref()
+                .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        };
+        for r in rows {
+            if r.space == c.space
+                && r.action == "vcs.land"
+                && r.proposer == actor
+                && plan_of(r).is_some_and(|p| {
+                    p.pointer("/args/change/revertOf").and_then(Value::as_str)
+                        == Some(c.proposal.as_str())
+                })
+            {
+                return Ok(r.proposal.clone());
+            }
+        }
+        let p = c.prepared.as_ref().ok_or("nothing was prepared")?;
+        let key = IdempotencyKey {
+            space: c.space.clone(),
+            proposal: c.proposal.clone(),
+            attempt: 0,
+        };
+        let vcs = self.exec.plain_ctx(&key).vcs;
+        let dir = PathBuf::from(&p.repository);
+        let title = rows
+            .iter()
+            .find(|r| r.space == c.space && r.proposal == c.proposal)
+            .and_then(plan_of)
+            .map_or_else(
+                || format!("change {}", short(&c.proposal)),
+                |plan| crate::actions::commit_title(&plan),
+            );
+        let subject: String = format!("Revert \"{title}\"")
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(200)
+            .collect();
+        let message = format!(
+            "{subject}\n\nHAN-Reverts: {}\nHAN-Reason: the post-merge run failed on {}\n",
+            c.proposal, p.commit
+        );
+        let revert = vcs
+            .tree_commit(
+                &dir,
+                &p.commit,
+                &p.onto,
+                &message,
+                &author_of(&actor),
+                cu.at,
+            )
+            .map_err(|e| format!("building the revert commit: {e}"))?;
+        let delta = vcs
+            .delta(&dir, &p.commit, &revert)
+            .map_err(|e| format!("the delta of the revert: {e}"))?;
+        let lines = vcs
+            .delta_lines(&dir, &p.commit, &revert, &delta)
+            .map_err(|e| format!("the size of the revert: {e}"))?;
+        let change = han_vcs::land_change_of(&c.repo, &delta, &lines, Some(&c.proposal))
+            .map_err(|e| format!("the revert's change summary: {e}"))?;
+        let digest = delta.digest().map_err(|e| e.to_string())?;
+        let bundle = vcs
+            .bundle(&dir, &p.commit, &revert)
+            .map_err(|e| format!("bundling the revert: {e}"))?;
+        let blob = self
+            .upload_bytes(&c.space, han_vcs::BUNDLE_MEDIA_TYPE, &bundle)
+            .await
+            .ok_or("the revert's bundle could not be uploaded")?;
+        let plan = json!({
+            "action": "vcs.land",
+            "target": c.repo,
+            "args": {
+                "ref": c.refname,
+                "base": p.commit,
+                "to": revert,
+                "deltaDigest": digest,
+                "tier": 1,
+                "rebase": "path-disjoint",
+                "title": subject,
+                "change": serde_json::to_value(&change).map_err(|e| e.to_string())?,
+            },
+            "argsBlob": blob,
+        });
+        let r = self
+            .exec
+            .node()
+            .call(Command::EffectPropose {
+                space: c.space.clone(),
+                executor: actor,
+                plan: plan.to_string(),
+                task: None,
+                cost: None,
+                repeatable: false,
+                expires_at: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        match r {
+            CallResult::Receipt { id, .. } => Ok(id),
+            other => Err(format!("unexpected answer {other:?}")),
+        }
+    }
+
+    /// The lane's own approval of the revert it proposed, with the failing run over the culprit's delta as
+    /// evidence. Policy decides whether it counts: a machine's approval counts at tier 0 and 1 under a rule
+    /// that names this executor (`revert: true`), and never above; a refusal means a person has to approve.
+    async fn approve_revert(&self, c: &Change, revert: &str) -> Result<(), Approval> {
+        let p = c
+            .prepared
+            .as_ref()
+            .ok_or_else(|| Approval::Retry("nothing was prepared".into()))?;
+        let record =
+            c.evidence.as_ref().and_then(evidence_ref).ok_or_else(|| {
+                Approval::Retry("the failing run's evidence is not uploaded".into())
+            })?;
+        let key = IdempotencyKey {
+            space: c.space.clone(),
+            proposal: c.proposal.clone(),
+            attempt: 0,
+        };
+        let over = self
+            .exec
+            .plain_ctx(&key)
+            .vcs
+            .delta(std::path::Path::new(&p.repository), &p.onto, &p.commit)
+            .and_then(|d| d.digest())
+            .map_err(|e| Approval::Retry(format!("the culprit's delta: {e}")))?;
+        let sent = self
+            .exec
+            .node()
+            .call(Command::EffectApprove {
+                space: c.space.clone(),
+                proposal: revert.to_owned(),
+                expires_at: None,
+                note: Some(format!(
+                    "the post-merge run failed on {}: reverting {}",
+                    short(&p.commit),
+                    short(&c.proposal)
+                )),
+                evidence: Some(ApprovalEvidence {
+                    kind: REVERT_EVIDENCE_KIND.into(),
+                    over,
+                    record,
+                }),
+            })
+            .await;
+        match sent {
+            Ok(_) => Ok(()),
+            Err(NodeError::Denied { message }) => Err(Approval::Human(message)),
+            Err(e) => Err(Approval::Retry(e.to_string())),
+        }
+    }
+
+    /// What a landed revert means: its culprit is `reverted`; and once the revert's own post-merge run is green,
+    /// the changes that landed before it and wait on a red run are `confirmed` (the run contains them).
+    async fn reconcile(
+        &self,
+        all: &mut [Change],
+        idxs: &[usize],
+        now: i64,
+    ) -> Result<(), ExecError> {
+        for &r in idxs {
+            let Some(of) = all[r].revert_of.clone() else {
+                continue;
+            };
+            if !matches!(all[r].state, State::Landed | State::Confirmed) {
+                continue;
+            }
+            let by = all[r].proposal.clone();
+            let space = all[r].space.clone();
+            let culprit = idxs
+                .iter()
+                .copied()
+                .find(|&k| all[k].space == space && all[k].proposal == of);
+            if let Some(k) = culprit
+                && all[k].state == State::Landed
+            {
+                let mut c = all[k].clone();
+                c.reverted_by = Some(by.clone());
+                c.detail = Some(format!("reverted by {}", short(&by)));
+                c.problem = None;
+                self.enter(&mut c, State::Reverted, now).await?;
+                all[k] = c;
+            }
+            if all[r].state != State::Confirmed {
+                continue;
+            }
+            for &j in idxs {
+                if all[j].state == State::Landed
+                    && all[j].revert_of.is_none()
+                    && all[j].landed_seq > 0
+                    && all[j].landed_seq < all[r].landed_seq
+                {
+                    let mut c = all[j].clone();
+                    c.detail = Some(format!(
+                        "confirmed by the green post-merge run of the revert {}",
+                        short(&by)
+                    ));
+                    c.post_merge_failed = false;
+                    c.reason = None;
+                    self.enter(&mut c, State::Confirmed, now).await?;
+                    all[j] = c;
+                }
+            }
+        }
+        Ok(())
     }
 
     // ───────────────────────── lane items ─────────────────────────
