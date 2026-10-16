@@ -11,6 +11,8 @@
 //! | `team.who_is_on(issue\|path)` | `team_who_is_on` | who works on an issue or a path |
 //! | `team.read(session, budget_tokens)` | `team_read` | one session, layered and cheapest first, within a budget |
 //! | `team.overlaps()` | `team_overlaps` | where work meets |
+//! | (round 33) | `land_status` | where the session's `land` proposals and check-only tries stand |
+//! | (round 33, P-17) | `land_try` | runs the landing lane's fast checks on the session's work and lands nothing: a `vcs.try` |
 //!
 //! MCP allows dots in tool names, but model APIs do not (Anthropic's tool names match
 //! `^[a-zA-Z0-9_-]{1,128}$`, and harnesses prefix them, as in `mcp__han__team_read`), so the MCP names use
@@ -33,13 +35,14 @@ use serde_json::Value;
 pub use tools::{HanTools, tool_list};
 
 /// The MCP names of the tools, in the order they are listed. A snapshot test pins this list (SR-29).
-pub const TOOL_NAMES: [&str; 6] = [
+pub const TOOL_NAMES: [&str; 7] = [
     "propose",
     "team_sessions",
     "team_who_is_on",
     "team_read",
     "team_overlaps",
     "land_status",
+    "land_try",
 ];
 
 /// The longest `summary` an agent may give, in characters.

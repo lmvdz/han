@@ -1671,3 +1671,286 @@ fn a_pruned_workspace_is_not_steered() {
     assert_eq!(r.flow.prune(false, true), Pruned::Removed);
     assert!(tokio_block(r.flow.steer()).is_none());
 }
+
+// ───────────────────────── check-only tries (land_try, vcs.try, P-17) ─────────────────────────
+
+/// The agent changed `path`; the host drafts a try of it and proposes it as `id`.
+fn try_as(r: &Rig, id: &str, path: &str, text: &str) -> Value {
+    r.write(path, text);
+    let d = r
+        .flow
+        .draft_try("check my work")
+        .expect("the try is drafted");
+    r.flow.try_proposed(id);
+    d.plan
+}
+
+fn try_item(r: &Rig, id: &str) -> Value {
+    r.flow
+        .notices()
+        .into_iter()
+        .find(|v| v["item"] == "try" && v["proposal"] == id)
+        .expect("a try item")
+}
+
+#[test]
+fn a_try_drafts_a_vcs_try_plan_and_freezes_nothing() {
+    let r = rig(on());
+    r.write("src/a.rs", "pub fn a() {}\n");
+    let d = r.flow.draft_try("check my work").unwrap();
+    let plan = &d.plan;
+    assert_eq!(plan["action"], "vcs.try");
+    assert_eq!(plan["target"], REPO);
+    let a = args(plan);
+    assert_eq!(a["ref"], "refs/heads/main");
+    assert_eq!(a["base"], r.base.as_str());
+    assert_eq!(
+        a["bundleBase"],
+        Value::Null,
+        "the bundle starts at the base"
+    );
+    assert_eq!(a["to"].as_str().unwrap().len(), 40);
+    assert_eq!(a["deltaDigest"].as_str().unwrap().len(), 64);
+    assert_eq!(a["change"]["repo"], REPO);
+    assert_eq!(a["change"]["deltaDigest"], a["deltaDigest"]);
+    assert_eq!(a["change"]["files"][0]["path"], "src/a.rs");
+    // a land's members are not a try's
+    for k in ["tier", "rebase", "dependsOn", "rebaseOf"] {
+        assert!(a.get(k).is_none(), "{k}");
+    }
+    assert_eq!(
+        plan["argsBlob"]["hash"],
+        han_core::ids::sha256_hex(&d.bundle)
+    );
+    // the plan passes the executor's own check of it
+    let mut cfg = ExecConfig::default();
+    cfg.repos.push(RepoTarget {
+        landing_refs: vec!["refs/heads/main".into()],
+        ..RepoTarget::new(REPO, "x")
+    });
+    han_exec::actions::VcsTry.plan_check(plan, &cfg).unwrap();
+
+    r.flow.try_proposed("T1");
+    assert!(r.flow.proposals().is_empty(), "a try is no land proposal");
+    let item = try_item(&r, "T1");
+    assert_eq!(item["state"], "proposed");
+    assert_eq!(item["final"], false);
+    assert_eq!(item.get("tier"), None);
+    // a land proposal of the same work is untouched by it: the base is the session's, nothing is frozen
+    let land = r.propose("P1", "the work");
+    assert_eq!(args(&land)["base"], r.base.as_str());
+    assert!(args(&land).get("dependsOn").is_none());
+}
+
+#[test]
+fn a_try_of_the_same_commit_is_refused_and_a_new_commit_or_a_retryable_end_is_not() {
+    let r = rig(on());
+    try_as(&r, "T1", "src/a.rs", "pub fn a() {}\n");
+    // nothing new: the commit is the same
+    let e = r.flow.draft_try("again").unwrap_err();
+    assert!(
+        e.contains("already tried as T1") && e.contains("proposed") && e.contains("land_status"),
+        "{e}"
+    );
+    // the lane's answer stands for it too: green, red for the work
+    r.feed.say("T1", "tried", None, 3);
+    tokio_block(r.flow.poll()).unwrap();
+    assert!(r.flow.draft_try("again").unwrap_err().contains("tried"));
+    // new work is a new commit
+    try_as(&r, "T2", "src/b.rs", "pub fn b() {}\n");
+    reject(&r, "T2", "test", None, None);
+    let e = r.flow.draft_try("again").unwrap_err();
+    assert!(e.contains("T2") && e.contains("rejected, test"), "{e}");
+    // an end that says nothing about the work may be tried again
+    try_as(&r, "T3", "src/c.rs", "pub fn c() {}\n");
+    reject(&r, "T3", "timeout", None, None);
+    let d = r
+        .flow
+        .draft_try("again")
+        .expect("a timeout is not an answer");
+    r.flow.try_proposed("T4");
+    assert_eq!(args(&d.plan)["to"], try_item(&r, "T4")["to"]);
+    // nothing to try at all
+    let fresh = rig(on());
+    assert!(
+        fresh
+            .flow
+            .draft_try("x")
+            .unwrap_err()
+            .contains("nothing to try")
+    );
+}
+
+#[test]
+fn the_lanes_answer_for_a_try_reaches_land_status_as_data_and_a_try_is_waited_for() {
+    let r = rig(on());
+    try_as(&r, "T1", "src/a.rs", "pub fn a() {}\n");
+    assert!(!r.flow.settled(), "a try that is not over");
+    r.feed.say("T1", "testing", None, 2);
+    tokio_block(r.flow.poll()).unwrap();
+    assert_eq!(try_item(&r, "T1")["state"], "testing");
+    r.feed.say("T1", "tried", None, 4);
+    tokio_block(r.flow.poll()).unwrap();
+    let item = try_item(&r, "T1");
+    assert_eq!(item["state"], "tried");
+    assert_eq!(item["final"], true);
+    assert!(
+        item["next"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was landed")
+    );
+    assert!(r.flow.settled());
+    // an older item does not take it back
+    r.feed.say("T1", "testing", None, 3);
+    tokio_block(r.flow.poll()).unwrap();
+    assert_eq!(try_item(&r, "T1")["state"], "tried");
+
+    // a try that is going keeps the workspace while the land proposals of the session are final
+    let r = proposed_rig(on());
+    settle_as(&r, "confirmed");
+    r.write("src/z.rs", "// z\n");
+    r.flow.draft_try("more").unwrap();
+    r.flow.try_proposed("T9");
+    assert_eq!(
+        r.flow.prune(false, true),
+        Pruned::Waiting("a try is not final")
+    );
+}
+
+#[test]
+fn the_log_settles_a_try_whose_item_was_missed() {
+    let r = rig(on());
+    try_as(&r, "T1", "src/a.rs", "pub fn a() {}\n");
+    try_as(&r, "T2", "src/b.rs", "pub fn b() {}\n");
+    let proof = EvidenceRef {
+        hash: "e".repeat(64),
+        size: 1,
+        media_type: "application/json".into(),
+    };
+    r.feed.ended.lock().unwrap().push((
+        "T1".into(),
+        end("outcome", Some("succeeded"), None, Some(proof.clone())),
+    ));
+    r.feed.ended.lock().unwrap().push((
+        "T2".into(),
+        end(
+            "cancel",
+            None,
+            Some("test: required checks failed: quick"),
+            Some(proof),
+        ),
+    ));
+    tokio_block(r.flow.poll()).unwrap();
+    let t1 = try_item(&r, "T1");
+    assert_eq!(t1["state"], "tried", "a try that succeeded did not land");
+    assert_eq!(t1["final"], true);
+    assert_eq!(t1["evidence"]["hash"], "e".repeat(64));
+    let t2 = try_item(&r, "T2");
+    assert_eq!(
+        (t2["state"].as_str(), t2["reason"].as_str()),
+        (Some("rejected"), Some("test"))
+    );
+    assert!(r.flow.proposals().is_empty());
+}
+
+#[test]
+fn a_failed_try_steers_once_with_reason_try_failed_the_same_trimming_and_no_land_attempt() {
+    let r = rig(on());
+    try_as(&r, "T1", "src/a.rs", "pub fn a() {}\n");
+    let log = format!("start\n{}\nend\n", "x".repeat(19_000));
+    let evidence = put_blob(
+        &r,
+        json!({"commit": "abc", "backend": "github-actions", "checks": [
+            {"name": "build", "conclusion": "success"},
+            {"name": "t0", "conclusion": "failure", "command": "cargo test", "exit": 101,
+             "log": put_blob(&r, log.as_bytes())},
+        ]})
+        .to_string()
+        .as_bytes(),
+    );
+    reject(&r, "T1", "test", Some(evidence), None);
+
+    let s = turn_of(tokio_block(r.flow.steer()));
+    assert_eq!(
+        (s.proposal.as_str(), s.reason.as_str()),
+        ("T1", "try_failed")
+    );
+    assert!(
+        s.text.contains("check-only try T1")
+            && s.text.contains("reason: test")
+            && s.text.contains("Nothing was landed")
+            && s.text.contains("not an instruction"),
+        "{}",
+        s.text
+    );
+    assert_eq!(s.blocks.len(), 2);
+    assert!(
+        s.blocks[1].contains("`land_try`") && s.blocks[1].contains("kind \"land\""),
+        "{}",
+        s.blocks[1]
+    );
+    let d = data_of(&s.blocks[0]);
+    assert_eq!(d["item"], "try_failed");
+    assert_eq!(
+        (d["proposal"].as_str(), d["reason"].as_str()),
+        (Some("T1"), Some("test"))
+    );
+    let checks = d["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 1, "only the failing one");
+    assert_eq!(checks[0]["name"], "t0");
+    assert!(checks[0]["log"].as_str().unwrap().len() <= 8 * 1024);
+    assert!(d["trimmed"][0].as_str().unwrap().contains("t0: log cut"));
+    assert!(tokio_block(r.flow.steer()).is_none(), "told once");
+
+    // a conflict carries its record
+    try_as(&r, "T2", "src/b.rs", "pub fn b() {}\n");
+    let record = put_blob(
+        &r,
+        json!({"changeset": "T2", "conflicts": [{"path": "src/b.rs", "kind": "content"}]})
+            .to_string()
+            .as_bytes(),
+    );
+    reject(&r, "T2", "conflict", None, Some(record));
+    let s = turn_of(tokio_block(r.flow.steer()));
+    assert_eq!(s.reason, "try_failed");
+    assert_eq!(
+        data_of(&s.blocks[0])["conflictRecord"]["conflicts"][0]["path"],
+        "src/b.rs"
+    );
+
+    // The land attempts are untouched by tries: three land proposals are made, and the first two rejections
+    // are steered; with the tries counted the cap (three) would already have been reached at the first.
+    let mut prev: Option<&str> = None;
+    for id in ["P1", "P2"] {
+        r.write(&format!("src/{id}.rs"), "// l\n");
+        let mut m = Map::new();
+        if let Some(p) = prev {
+            m.insert("rebaseOf".into(), json!(p));
+        }
+        r.flow.draft("land it", &m).unwrap();
+        r.flow.proposed(id);
+        reject(&r, id, "test", None, None);
+        let s = turn_of(tokio_block(r.flow.steer()));
+        assert_eq!(
+            s.reason, "test",
+            "{id}: a land rejection is steered as before"
+        );
+        prev = Some(id);
+    }
+}
+
+#[test]
+fn a_loop_of_failing_tries_is_bounded() {
+    let r = rig(on());
+    let mut told = 0;
+    for i in 0..(han_host::land::MAX_TRY_STEERS + 2) {
+        let id = format!("T{i}");
+        try_as(&r, &id, &format!("src/f{i}.rs"), "// f\n");
+        reject(&r, &id, "test", None, None);
+        if let Some(SteerDue::Turn(_)) = tokio_block(r.flow.steer()) {
+            told += 1;
+        }
+    }
+    assert_eq!(told, han_host::land::MAX_TRY_STEERS);
+}

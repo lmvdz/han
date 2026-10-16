@@ -1828,6 +1828,33 @@ impl Vcs for GitVcs {
         }
     }
 
+    fn delete_branch(
+        &self,
+        dir: &Path,
+        remote: &str,
+        refname: &str,
+        auth: Option<&RemoteAuth>,
+    ) -> Result<()> {
+        if !refname.starts_with("refs/heads/") || refname.contains(':') {
+            return Err(VcsError::Invalid(format!("not a branch ref: {refname}")));
+        }
+        if self.remote_ref(dir, remote, refname, auth)?.is_none() {
+            return Ok(());
+        }
+        let out = self
+            .git_auth(Some(dir), remote, auth)?
+            .args(["push", "--porcelain", "--no-verify", "--end-of-options"])
+            .arg(remote)
+            .arg(format!(":{refname}"))
+            .run();
+        match out {
+            Ok(_) => Ok(()),
+            // Someone deleted it in the meantime: the branch is gone, which is all that was asked.
+            Err(_) if self.remote_ref(dir, remote, refname, auth)?.is_none() => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     fn bundle(&self, dir: &Path, base: &str, head: &str) -> Result<Vec<u8>> {
         let base = self.commit_of(dir, base)?;
         let head = self.commit_of(dir, head)?;
