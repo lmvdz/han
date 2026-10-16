@@ -287,7 +287,14 @@ async fn a_step_that_overruns_is_killed_and_reported() {
 #[tokio::test]
 async fn the_run_timeout_bounds_the_whole_run() {
     let f = fixture();
-    let base = head(&f);
+    // a test that sleeps, so the run outlasts its timeout however fast the machine builds
+    let (_, body) = lib(
+        "c",
+        None,
+        "        std::thread::sleep(std::time::Duration::from_secs(300));
+",
+    );
+    let base = commit_file(&f, "crates/c/src/lib.rs", &body);
     let r = runner(&f, |c| {
         c.profile = Profile {
             fast: vec![cargo_step("one", None), cargo_step("two", None)],
