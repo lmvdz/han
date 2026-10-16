@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use common::*;
 use han_exec::actions::{GitPush, HttpRequest, OpenPr};
+use han_exec::checks::{CheckRequest, Checks, GithubChecks, Stage};
 use han_exec::github::{GithubMinter, JwtSource};
 use han_exec::{Action, ExecConfig, GithubApp, PlanError, RepoTarget, Report, Secret};
 use serde_json::{Value, json};
@@ -20,6 +21,10 @@ const CANARY: &str = "ghs_CANARYinstallationTOKEN0123456789";
 struct Seen {
     requests: Vec<(String, String, String, String)>, // method, path, authorization, body
     existing_pr: bool,
+    /// The workflow run 55's `run_attempt`, and the attempt and conclusion of its job 99's check run.
+    run_attempt: u64,
+    job_attempt: u64,
+    conclusion: String,
 }
 
 /// A one-request-per-connection HTTP/1.1 server answering like GitHub.
@@ -99,6 +104,27 @@ async fn mock_github(seen: Arc<Mutex<Seen>>) -> String {
                             200,
                             json!({"id": 7, "permissions": {"contents": "write", "checks": "read", "metadata": "read"}}),
                         )
+                    } else if method == "GET"
+                        && path.starts_with("/repos/o/r/commits/abc/check-runs")
+                    {
+                        (
+                            200,
+                            json!({"total_count": 1, "check_runs": [{"id": 99, "name": "full",
+                                "status": "completed", "conclusion": st.conclusion,
+                                "html_url": "https://example/job/99",
+                                "details_url": "https://github.com/o/r/actions/runs/55/job/99"}]}),
+                        )
+                    } else if method == "GET" && path.starts_with("/repos/o/r/commits/abc/status") {
+                        (200, json!({"statuses": []}))
+                    } else if method == "GET" && path == "/repos/o/r/actions/runs/55" {
+                        (200, json!({"id": 55, "run_attempt": st.run_attempt}))
+                    } else if method == "GET" && path == "/repos/o/r/actions/jobs/99" {
+                        (200, json!({"id": 99, "run_attempt": st.job_attempt}))
+                    } else if method == "POST"
+                        && path == "/repos/o/r/actions/runs/55/rerun-failed-jobs"
+                    {
+                        st.run_attempt += 1;
+                        (201, json!({}))
                     } else if method == "POST" && path == "/hook" {
                         (204, Value::Null)
                     } else {
@@ -238,6 +264,102 @@ async fn the_installations_permissions_are_read_with_the_app_jwt_and_no_token_is
     assert_eq!(st.requests.len(), 1);
     assert_eq!(st.requests[0].1, "/app/installations/7");
     assert_eq!(st.requests[0].2, "Bearer test-app-jwt");
+}
+
+fn full_request() -> CheckRequest {
+    CheckRequest {
+        repo: RepoTarget {
+            github: Some("o/r".into()),
+            ..RepoTarget::new("github:o/r", "https://github.invalid/o/r.git")
+        },
+        commit: "abc".into(),
+        branch: Some("main".into()),
+        stage: Stage::Full,
+        names: vec!["full".into()],
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rerun_runs_the_failed_jobs_with_an_actions_token_and_poll_reads_the_new_attempt() {
+    let seen = Arc::new(Mutex::new(Seen {
+        run_attempt: 1,
+        job_attempt: 1,
+        conclusion: "failure".into(),
+        ..Seen::default()
+    }));
+    let api = mock_github(seen.clone()).await;
+    let (_rig, minter) = github_rig(&api);
+    let checks = GithubChecks::new(minter);
+    let req = full_request();
+    assert_eq!(
+        checks.poll(&req).await.unwrap()[0].conclusion,
+        "failure",
+        "before a re-run the red is the answer"
+    );
+    assert!(checks.rerun(&req, &["full".into()]).await.unwrap());
+    {
+        let st = seen.lock().unwrap();
+        // the endpoint, and a token with the one permission it needs (plus checks read to find the run)
+        assert!(st.requests.iter().any(|r| r.0 == "POST"
+            && r.1 == "/repos/o/r/actions/runs/55/rerun-failed-jobs"
+            && r.2.contains(CANARY)));
+        let last = token_bodies(&st).pop().unwrap();
+        assert_eq!(
+            last,
+            json!({"repositories": ["r"], "permissions": {"checks": "read", "actions": "write"}})
+        );
+        assert_eq!(st.run_attempt, 2);
+    }
+    // GitHub has not started the new attempt: the old red is not the answer
+    let runs = checks.poll(&req).await.unwrap();
+    assert_eq!(runs[0].conclusion, "pending");
+    assert_eq!(
+        token_bodies(&seen.lock().unwrap()).pop().unwrap(),
+        json!({"repositories": ["r"], "permissions": {"actions": "read"}})
+    );
+    // the new attempt ran and passed
+    {
+        let mut st = seen.lock().unwrap();
+        st.job_attempt = 2;
+        st.conclusion = "success".into();
+    }
+    assert_eq!(checks.poll(&req).await.unwrap()[0].conclusion, "success");
+    // the asking is over: no more job reads
+    let before = seen.lock().unwrap().requests.len();
+    assert_eq!(checks.poll(&req).await.unwrap()[0].conclusion, "success");
+    let st = seen.lock().unwrap();
+    assert!(
+        !st.requests[before..]
+            .iter()
+            .any(|r| r.1.starts_with("/repos/o/r/actions/jobs"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rerun_of_a_name_with_no_actions_run_asks_for_nothing() {
+    let seen = Arc::new(Mutex::new(Seen {
+        run_attempt: 1,
+        job_attempt: 1,
+        conclusion: "failure".into(),
+        ..Seen::default()
+    }));
+    let api = mock_github(seen.clone()).await;
+    let (_rig, minter) = github_rig(&api);
+    let checks = GithubChecks::new(minter);
+    assert!(
+        !checks
+            .rerun(&full_request(), &["other".into()])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.0 == "POST" && r.1.contains("rerun"))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
