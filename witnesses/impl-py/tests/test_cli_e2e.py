@@ -65,7 +65,7 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     # evidence of the kind the rule names, over the delta digest; the record is a blob the content names
     S2 = "gt:a.localhost"
     env.actor("rev", "agent", operator="@ana:a.localhost")
-    rules = '[{"action": "vcs.land", "maxTier": 1, "approvers": ["member", "owner"], "evidence": "han.review/1"}, {"action": "vcs.land", "approvers": ["owner"]}]'
+    rules = '[{"action": "vcs.try", "approvers": ["owner"], "proposer": true}, {"action": "vcs.land", "maxTier": 1, "approvers": ["member", "owner"], "evidence": "han.review/1"}, {"action": "vcs.land", "approvers": ["owner"]}]'
     gates = '{"small": 20, "large": 500, "paths": [{"glob": "docs/**", "class": "docs"}], "owners": []}'
     await han(env, "ana", "space", "create", S2, "--set", f"approvals={rules}", "--set", f"gates={gates}")
     for who in ("bob", "exec", "rev"): await han(env, "ana", "member", "set", S2, f"@{who}:a.localhost", "member")
@@ -81,6 +81,15 @@ async def test_keygen_space_member_propose_approve_status(env, tmp_path):
     assert code == 1 and "go together" in err                                          # the three evidence flags are one record
     assert (await han(env, "rev", "approve", S2, lid[:10], "--evidence", str(review), "--evidence-kind", "han.review/1", "--evidence-over", over)).startswith("approving")
     assert f"{lid[:8]} open" in await han(env, "ana", "status", S2) and "approvals 1" in await han(env, "ana", "status", S2)
+    # P-17 (round 33): a check-only try carries no change summary in its body, and under a `proposer: true` rule nobody's approval is asked;
+    # a revert (A2) names a land that has succeeded, and this one is still open
+    tryp = tmp_path / "try.json"; tryp.write_text(json.dumps({"action": "vcs.try", "target": "github:o/r", "args": {"ref": "refs/heads/main", "change": change}}))
+    tid = last_id(await han(env, "bob", "propose", S2, "--executor", "@exec:a.localhost", "--plan", str(tryp)))
+    rec = [json.loads(l) for l in (await han(env, "bob", "read", S2, "--json")).splitlines()][-1]
+    assert rec["entry"]["body"]["action"] == "vcs.try" and "change" not in rec["entry"]["body"]
+    assert (await han(env, "ana", "approve", S2, tid[:10], ok=False))[0] == 1
+    rev = tmp_path / "revert.json"; rev.write_text(json.dumps({"action": "vcs.land", "target": "github:o/r", "args": {"ref": "refs/heads/main", "change": dict(change, revertOf=lid)}}))
+    assert (await han(env, "bob", "propose", S2, "--executor", "@exec:a.localhost", "--plan", str(rev), ok=False))[0] == 1
 
 async def test_task_and_read_json(env):
     """6.3, 3: `task` assigns work with an ask, `read --json` prints the records as JSON lines."""

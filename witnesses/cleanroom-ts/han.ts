@@ -128,12 +128,12 @@ export type ExtensionKind = `${string}.${string}`;
 export interface Plan { action: string; target: string; args?: Json; argsBlob?: BlobRef }   // target ≤ 1024 bytes; sha256(JCS(plan)) = planDigest
 // Only this shape is normative. What target and args mean belongs to the action and its executor. Informative, from the reference executor:
 // (semantic gates, P-17, round 33: the types follow)
-export interface Change { repo: string; deltaDigest: Hex; total: number; files: ChangeFile[]; truncated?: true }   // at most MAX_CHANGE_FILES files in ascending order of the UTF-8 bytes of path; its JCS at most MAX_CHANGE_BYTES
+export interface Change { repo: string; deltaDigest: Hex; total: number; files: ChangeFile[]; truncated?: true; revertOf?: EntryId }   // at most MAX_CHANGE_FILES files in ascending order of the UTF-8 bytes of path; its JCS at most MAX_CHANGE_BYTES
 export interface ChangeFile { path: string; kind: "add" | "modify" | "delete" | "rename"; lines: number; fromPath?: string }
 export interface ApprovalEvidence { kind: string /* [a-z0-9][a-z0-9./_-]{0,63} */; over: Hex /* the delta digest */ }
 export interface ApprovalRule {
   action: string; approvers: ("owner" | "member" | "guest" | ActorId | "@path-owner")[];
-  minTier?: 0 | 1 | 2 | 3; maxTier?: 0 | 1 | 2 | 3; humans?: boolean; evidence?: string; needs?: 1 | 2 | 3;
+  minTier?: 0 | 1 | 2 | 3; maxTier?: 0 | 1 | 2 | 3; humans?: boolean; evidence?: string; needs?: 1 | 2 | 3; revert?: true; proposer?: true;
 }
 export interface GatesDoc {
   small: number; large: number;
@@ -200,7 +200,7 @@ export interface SpaceState {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      gate?: { tier: 0 | 1 | 2 | 3; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[] };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates
+      gate?: { tier: 0 | 1 | 2 | 3; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[]; revertOf?: EntryId; revertedDigest?: Hex };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates
       guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then guards(proposer), then guards(executor) at the proposal (Z1); fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId; evidence?: ApprovalEvidence }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
