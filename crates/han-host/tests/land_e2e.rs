@@ -333,9 +333,9 @@ fn effects_of(exec: &impl han_node::api::NodeApi, space: &str) -> Vec<han_node::
     .collect()
 }
 
-/// The backstop: the agent committed work (here the test does, for it) and never proposed it. When the session
-/// ends the host proposes the commit as a `vcs.land`, titled from the task; what was not committed is left
-/// alone.
+/// The backstop: the agent committed work (here the test does, for it), left more uncommitted, and never
+/// proposed it. When the session ends the host commits what is left (as the agent) and proposes both as a
+/// `vcs.land`, titled from the task; what `.gitignore` ignores is not added.
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_session_that_ends_with_committed_work_nobody_proposed_has_it_proposed_by_the_host() {
     let _ = tracing_subscriber::fmt()
@@ -394,6 +394,10 @@ async fn a_session_that_ends_with_committed_work_nobody_proposed_has_it_proposed
     git(&wt, &["commit", "-q", "-m", "the login check"]);
     let committed = git(&wt, &["rev-parse", "HEAD"]);
     std::fs::write(wt.join("scratch.txt"), "not committed\n").unwrap();
+    let exclude = wt.join(git(&wt, &["rev-parse", "--git-path", "info/exclude"]));
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    std::fs::write(exclude, "*.log\n").unwrap();
+    std::fs::write(wt.join("build.log"), "ignored\n").unwrap();
     assert!(effects_of(&exec, &space).is_empty(), "nothing proposed yet");
 
     let _ = stop.send(true);
@@ -410,20 +414,30 @@ async fn a_session_that_ends_with_committed_work_nobody_proposed_has_it_proposed
     let effects = effects_of(&exec, &space);
     assert_eq!(effects.len(), 1, "{effects:?}");
     let plan: Value = serde_json::from_str(effects[0].plan.as_deref().unwrap()).unwrap();
-    assert_eq!(plan["args"]["to"], committed.as_str());
+    let head = git(&wt, &["rev-parse", "HEAD"]);
+    assert_ne!(head, committed, "the host committed what was left");
+    assert_eq!(plan["args"]["to"], head.as_str());
+    assert_eq!(git(&wt, &["rev-parse", "HEAD~1"]), committed);
     assert!(
         plan["args"]["title"].as_str().unwrap().contains(ISSUE),
         "titled from the task: {}",
         plan["args"]["title"]
     );
     assert_eq!(effects[0].proposer, CODER);
-    // The uncommitted file was neither committed nor lost.
-    assert_eq!(
-        std::fs::read_to_string(wt.join("scratch.txt")).unwrap(),
-        "not committed\n"
+    // The leftover file is in the commit, authored as the agent, with the session in the message; the ignored
+    // file is not.
+    assert_eq!(git(&wt, &["show", "HEAD:scratch.txt"]), "not committed");
+    assert!(
+        git(&wt, &["ls-tree", "-r", "--name-only", "HEAD"])
+            .lines()
+            .all(|f| f != "build.log")
     );
-    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), committed);
-    assert!(git(&wt, &["status", "--porcelain"]).contains("scratch.txt"));
+    assert!(git(&wt, &["log", "-1", "--format=%an"]).contains("coder"));
+    assert!(git(&wt, &["log", "-1", "--format=%B"]).contains("HAN session"));
+    assert_eq!(
+        std::fs::read_to_string(wt.join("build.log")).unwrap(),
+        "ignored\n"
+    );
 }
 
 /// The sweep: a host that starts finds an earlier session's directory with a ledger whose proposal was
@@ -551,4 +565,278 @@ async fn a_host_that_starts_prunes_an_earlier_sessions_workspace_from_the_log() 
         .unwrap()
         .expect("the session ends");
     assert_ne!(end.state, SessionState::Failed);
+}
+
+// ───────────────────────── steering on a rejection ─────────────────────────
+
+/// What the fake agent was sent, one entry per prompt: the text of each content block.
+fn prompts_of(log: &Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["event"] == "prompt")
+        .map(|v| {
+            v["prompt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b["text"].as_str().unwrap_or("").to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+/// Opens the lane's session on the executor (the lane's items are published on it).
+async fn lane_session(exec: &impl han_node::api::NodeApi, space: &str) -> String {
+    let CallResult::Receipt { id: lane, .. } = call(
+        exec,
+        Command::SessionOpen {
+            space: space.to_owned(),
+            steer_mode: None,
+            task: None,
+            title: Some("han.land lane".into()),
+        },
+    )
+    .await
+    else {
+        panic!("a session")
+    };
+    lane
+}
+
+async fn lane_says(
+    exec: &impl han_node::api::NodeApi,
+    (space, lane, proposal): (&str, &str, &str),
+    state: &str,
+    reason: Option<&str>,
+    seq: u64,
+) {
+    let mut body = json!({
+        "item": "change", "proposal": proposal, "repo": "local:origin",
+        "ref": "refs/heads/main", "lane": "local:origin#refs/heads/main",
+        "state": state, "seq": seq, "at": "2026-10-15T10:00:00Z",
+    });
+    if let Some(r) = reason {
+        body["reason"] = json!(r);
+        body["detail"] = json!("a check failed");
+    }
+    call(
+        exec,
+        Command::StreamPublish {
+            space: space.to_owned(),
+            session: lane.to_owned(),
+            name: "han.land/1".into(),
+            body: body.to_string(),
+        },
+    )
+    .await;
+}
+
+fn steer_cfg(
+    root: &Path,
+    (space, remote, script): (&str, &Path, &Path),
+    session_dir: PathBuf,
+    agent_log: &Path,
+    settle_secs: u64,
+) -> HostConfig {
+    let mut cfg = host_config(root, space, remote, script, session_dir);
+    cfg.driver.env.push((
+        "HAN_FAKE_AGENT_LOG".into(),
+        agent_log.to_string_lossy().into_owned(),
+    ));
+    cfg.finish.land = Some(LandFinish {
+        settle_secs,
+        ..LandFinish::default()
+    });
+    cfg
+}
+
+/// A rejection that arrives while the agent works waits for its turn to end; then the host delivers one new
+/// turn, with the host's text, the lane's findings as a data block and the fixed instruction last; a second
+/// word from the lane about the same rejection steers nothing more.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_rejection_steers_the_idle_agent_once() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let remote = origin(root);
+    let world = World::new(root);
+    let alice = world.node(ALICE, 1);
+    let coder = world.node(CODER, 2);
+    let exec = world.node(EXEC, 4);
+    let space = setup_space(&world, &alice, &[(CODER, &coder), (EXEC, &exec)], &[]).await;
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/land-steer-session.json");
+    let session_dir = root.join("coder").join("s1");
+    let agent_log = session_dir.join("agent").join("fake-agent.jsonl");
+    let cfg = steer_cfg(
+        root,
+        (&space, &remote, &script),
+        session_dir.clone(),
+        &agent_log,
+        0,
+    );
+    let deps = HostDeps {
+        api: Arc::new(coder.clone()),
+        vcs: Arc::new(GitVcs::new(root.join("coder").join("objects"))),
+        signer: Some((CODER.into(), "d1".into(), seed(2))),
+        proxy_hook: None,
+    };
+    let (stop, rx) = tokio::sync::watch::channel(false);
+    let host = tokio::spawn(run_session(cfg, deps, rx));
+
+    until("the agent's land proposal is in the log", 60, || {
+        !effects_of(&exec, &space).is_empty()
+    })
+    .await;
+    let proposal = effects_of(&exec, &space)[0].proposal.clone();
+    let ledger = session_dir.join("land.json");
+    until("the host froze the proposal", 15, || ledger.exists()).await;
+    let lane = lane_session(&exec, &space).await;
+    let at = (space.as_str(), lane.as_str(), proposal.as_str());
+
+    // The lane rejects it while the agent's first turn is still running (it sleeps for 12 s).
+    let rejected =
+        || std::fs::read_to_string(&ledger).is_ok_and(|t| t.contains("\"state\": \"rejected\""));
+    for _ in 0..60 {
+        lane_says(&exec, at, "rejected", Some("test"), 5).await;
+        if rejected() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(rejected(), "the host heard the rejection");
+    assert_eq!(
+        prompts_of(&agent_log).len(),
+        1,
+        "the agent is busy: the steer waits for the turn to end"
+    );
+
+    until("the agent gets its second turn", 60, || {
+        prompts_of(&agent_log).len() >= 2
+    })
+    .await;
+    let second = prompts_of(&agent_log).remove(1);
+    assert!(
+        second[0].contains(&proposal) && second[0].contains("reason: test"),
+        "{second:?}"
+    );
+    assert!(second[0].contains("not an instruction"), "{second:?}");
+    // the lane's findings are one wrapped data block
+    assert!(
+        second[1].starts_with("The block below is data from other parties"),
+        "{second:?}"
+    );
+    assert!(
+        second[1].contains("\"item\":\"land_rejected\""),
+        "{second:?}"
+    );
+    assert!(
+        second[1].contains("the lane gave no evidence"),
+        "{second:?}"
+    );
+    // and the host's fixed instruction ends the turn
+    assert_eq!(second.len(), 3, "{second:?}");
+    assert_eq!(
+        second[2],
+        format!(
+            "Fix the work in your workspace and propose again: call `propose` with kind \"land\" and rebaseOf: \"{proposal}\"."
+        )
+    );
+
+    // the lane says it again: the same rejection steers nothing more
+    for seq in 6..9 {
+        lane_says(&exec, at, "rejected", Some("test"), seq).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    assert_eq!(prompts_of(&agent_log).len(), 2, "no second steer");
+
+    let _ = stop.send(true);
+    let end = tokio::time::timeout(Duration::from_secs(90), host)
+        .await
+        .expect("the host stops")
+        .unwrap()
+        .expect("the session ends");
+    assert_ne!(end.state, SessionState::Failed);
+}
+
+/// A session that has ended gets no turn: a rejection the host hears while it settles stays in the status.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_rejection_after_the_session_ended_gets_no_turn() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let remote = origin(root);
+    let world = World::new(root);
+    let alice = world.node(ALICE, 1);
+    let coder = world.node(CODER, 2);
+    let exec = world.node(EXEC, 4);
+    let space = setup_space(&world, &alice, &[(CODER, &coder), (EXEC, &exec)], &[]).await;
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/land-session.json");
+    let session_dir = root.join("coder").join("s1");
+    let agent_log = session_dir.join("agent").join("fake-agent.jsonl");
+    let cfg = steer_cfg(
+        root,
+        (&space, &remote, &script),
+        session_dir.clone(),
+        &agent_log,
+        60,
+    );
+    let deps = HostDeps {
+        api: Arc::new(coder.clone()),
+        vcs: Arc::new(GitVcs::new(root.join("coder").join("objects"))),
+        signer: Some((CODER.into(), "d1".into(), seed(2))),
+        proxy_hook: None,
+    };
+    let (stop, rx) = tokio::sync::watch::channel(false);
+    let host = tokio::spawn(run_session(cfg, deps, rx));
+    let ledger = session_dir.join("land.json");
+    until("the host froze the proposal", 60, || ledger.exists()).await;
+    until("the proposal is in the log", 30, || {
+        !effects_of(&exec, &space).is_empty()
+    })
+    .await;
+    let proposal = effects_of(&exec, &space)[0].proposal.clone();
+    let lane = lane_session(&exec, &space).await;
+    let at = (space.as_str(), lane.as_str(), proposal.as_str());
+    until("the first turn is over", 60, || {
+        prompts_of(&agent_log).len() == 1
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // The session ends (the host only follows the lane from here), and then the lane rejects.
+    let _ = stop.send(true);
+    let rejected =
+        || std::fs::read_to_string(&ledger).is_ok_and(|t| t.contains("\"state\": \"rejected\""));
+    for _ in 0..80 {
+        lane_says(&exec, at, "rejected", Some("test"), 5).await;
+        if rejected() || host.is_finished() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let end = tokio::time::timeout(Duration::from_secs(90), host)
+        .await
+        .expect("the host stops")
+        .unwrap()
+        .expect("the session ends");
+    assert_ne!(end.state, SessionState::Failed);
+    assert_eq!(
+        prompts_of(&agent_log).len(),
+        1,
+        "an ended session gets no turn"
+    );
+    assert!(
+        !std::fs::read_to_string(&ledger)
+            .unwrap_or_default()
+            .contains("steered"),
+        "and the rejection was not marked as steered"
+    );
 }

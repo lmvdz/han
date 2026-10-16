@@ -33,6 +33,10 @@ pub enum DriverKind {
     },
     /// An effect or outcome that names the agent.
     Effect,
+    /// The host itself (the author is the agent): a turn it starts for the agent, with data it fetched from
+    /// outside (a rejected land proposal's CI logs). Not an outside instruction, so it taints nothing, but
+    /// its data is outside content: a guarded agent takes it in the stricter mode.
+    Host,
 }
 
 /// The instruction behind a turn.
@@ -96,6 +100,9 @@ pub fn decide_mode(
         && !guarded_for.is_empty()
     {
         reasons.push("the driving task records guarded agents");
+    }
+    if driver.kind == DriverKind::Host && agent_guarded {
+        reasons.push("the turn carries data from outside");
     }
     if agent_guarded && taint.is_tainted(agent)? {
         reasons.push("the agent took an outside instruction and is guarded");
@@ -397,6 +404,23 @@ mod tests {
         assert_eq!(d.mode, Mode::Auto);
         let d = decide_mode(AGENT, &steer(OP), &facts(&[AGENT]), &t, true, false).unwrap();
         assert_eq!(d.mode, Mode::Strict);
+    }
+
+    #[test]
+    fn a_host_turn_is_not_outside_and_is_strict_for_a_guarded_agent_only() {
+        let t = TaintStore::in_memory().unwrap();
+        let host = Driver {
+            author: AGENT.into(),
+            kind: DriverKind::Host,
+            space: SP.into(),
+            seq: 0,
+        };
+        let d = decide_mode(AGENT, &host, &facts(&[]), &t, false, true).unwrap();
+        assert_eq!((d.mode, d.outside), (Mode::Auto, false));
+        assert!(!t.is_tainted(AGENT).unwrap());
+        let d = decide_mode(AGENT, &host, &facts(&[AGENT]), &t, false, true).unwrap();
+        assert_eq!((d.mode, d.outside), (Mode::Strict, false));
+        assert!(!t.is_tainted(AGENT).unwrap());
     }
 
     #[test]

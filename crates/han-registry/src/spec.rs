@@ -114,9 +114,11 @@ pub struct LandFinish {
     /// final one, in seconds. 0: it follows only while the session lives.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub settle_secs: u64,
-    /// The host's backstop: when the session ends with commits after its last proposal (or with no proposal)
-    /// that were never proposed, the host proposes them as a `vcs.land`, titled from the task. Uncommitted
-    /// work is never committed for it; it is reported `unlanded`. Default true (on whenever `land` is on).
+    /// The host's backstop: when the session ends with work after its last proposal (or with no proposal)
+    /// that was never proposed, the host commits what is uncommitted (as the agent; what `.gitignore` ignores
+    /// is not added), and proposes it with the commits as a `vcs.land`, titled from the task. A last proposal
+    /// that was rejected or cancelled leaves the work to the agent's `rebaseOf`. Default true (on whenever
+    /// `land` is on).
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub auto_propose: bool,
 }
