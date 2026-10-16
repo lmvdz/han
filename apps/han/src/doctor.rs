@@ -340,6 +340,7 @@ pub struct RepoFact {
     pub required: Vec<String>,
     pub full: Vec<String>,
     pub rerun: u32,
+    pub auto_revert: bool,
 }
 
 /// A session of another actor (an executor's lane, for one) as this node's operator sees it.
@@ -618,18 +619,18 @@ pub fn checks(f: &Facts, findings: &[Finding]) -> Vec<Check> {
 const DEFAULT_LAND_REF: &str = "refs/heads/main";
 
 /// The permissions the landing lane asks GitHub for: the push (`contents`), the checks it reads, and, when
-/// the repository lets it rerun a red check, the checks it writes.
+/// the repository lets it rerun a red check (`rerun`, or `auto_revert`, which re-runs the culprit's post-merge
+/// run before it reverts), the Actions it runs again.
 fn app_permission_needs(e: &ExecutorFacts) -> Vec<(&'static str, &'static str)> {
-    let checks = if e.repos.iter().any(|r| r.rerun > 0) {
-        "write"
-    } else {
-        "read"
-    };
-    vec![
+    let mut needs = vec![
         ("contents", "write"),
-        ("checks", checks),
+        ("checks", "read"),
         ("statuses", "read"),
-    ]
+    ];
+    if e.repos.iter().any(|r| r.rerun > 0 || r.auto_revert) {
+        needs.push(("actions", "write"));
+    }
+    needs
 }
 
 /// Whether `have` (what GitHub granted) covers `need` (`read` or `write`).
@@ -803,7 +804,7 @@ fn app_findings(e: &ExecutorFacts, out: &mut Vec<Finding>) {
                         missing.join("; ")
                     ),
                     format!(
-                        "GitHub: Settings > Developer settings > GitHub Apps > the write App > Permissions: Contents read and write, Checks read-only (read and write when `rerun` is above 0), Commit statuses read-only; then the owner accepts the change on installation {inst}"
+                        "GitHub: Settings > Developer settings > GitHub Apps > the write App > Permissions: Contents read and write, Checks read-only, Commit statuses read-only, Actions read and write when `rerun` is above 0 or `auto_revert` is on; then the owner accepts the change on installation {inst}"
                     ),
                 ));
             }
@@ -1225,6 +1226,7 @@ fn executor_facts(dir: Option<&Path>) -> Option<ExecutorFacts> {
             required: r.checks.required.clone(),
             full: r.checks.full.clone(),
             rerun: r.checks.rerun,
+            auto_revert: r.checks.auto_revert,
         })
         .collect();
     Some(ExecutorFacts {
@@ -2705,6 +2707,7 @@ mod tests {
             required: vec!["quick".into()],
             full: Vec::new(),
             rerun: 0,
+            auto_revert: false,
         }];
         f.executor = Some(e);
         f.lane_sessions = vec![LaneSessionFact {
@@ -2827,10 +2830,19 @@ mod tests {
         );
         assert!(x.cause.contains("checks: read (has none)"), "{}", x.cause);
         assert!(x.fix.contains("installation 8"), "{}", x.fix);
-        // a rerun needs checks: write
+        // a rerun needs actions: write
         f.executor.as_mut().unwrap().app_permissions = perms(&all);
         f.executor.as_mut().unwrap().repos[0].rerun = 1;
-        assert!(only(&f).cause.contains("checks: write (has read)"));
+        assert!(only(&f).cause.contains("actions: write (has none)"));
+        // so does an auto-revert, which runs the culprit's post-merge checks again
+        f.executor.as_mut().unwrap().repos[0].rerun = 0;
+        f.executor.as_mut().unwrap().repos[0].auto_revert = true;
+        assert!(only(&f).cause.contains("actions: write (has none)"));
+        let mut with_actions = all.to_vec();
+        with_actions.push(("actions", "write"));
+        f.executor.as_mut().unwrap().app_permissions = perms(&with_actions);
+        assert!(analyze(&f).is_empty());
+        f.executor.as_mut().unwrap().repos[0].auto_revert = false;
         // GitHub could not be asked
         f.executor.as_mut().unwrap().app_permissions =
             Some(Err("installation request: HTTP 401".into()));

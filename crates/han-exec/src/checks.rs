@@ -9,7 +9,9 @@
 //! * [`GithubChecks`]: GitHub Actions. It runs by itself once the lane has pushed the commit to its lane
 //!   branch (and, for the post-merge stage, once the commit is on the target ref), so [`Checks::start`] has
 //!   nothing to do; `poll` lists the commit's check runs and commit statuses with the App's installation
-//!   token (`checks: read`, `statuses: read`, one repository, SR-67).
+//!   token (`checks: read`, `statuses: read`, one repository, SR-67). `rerun` runs the failed jobs of the
+//!   workflow runs behind the named check runs (`actions: write`, minted for that call alone) and remembers the
+//!   attempt it asked for, so `poll` does not answer with the attempt that was red (`actions: read` for that).
 //! * A warm runner (PR 4) has to be told to run a commit, which is what [`Checks::start`] is for, and it can
 //!   answer `poll` from its own results. It does not need GitHub.
 //!
@@ -17,7 +19,8 @@
 //! backend}`, a plain value whose canonical form ([`ChecksEvidence::canonical`]) is what an executor instance
 //! key signs, so the evidence can travel with the landed change.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -219,13 +222,35 @@ pub trait Checks: Send + Sync + 'static {
 /// side.
 pub struct GithubChecks {
     minter: Arc<GithubMinter>,
+    /// The re-runs asked for, by `(repository, commit)`: until `poll` sees the new attempt of a run, the old
+    /// attempt's conclusion is not the answer.
+    asked: Mutex<HashMap<(String, String), Vec<Asked>>>,
+}
+
+/// A named check run whose workflow run was asked to run its failed jobs again.
+#[derive(Clone, Debug)]
+struct Asked {
+    name: String,
+    run_id: u64,
+    /// The `run_attempt` the re-run starts (the one before, plus one).
+    attempt: u64,
 }
 
 impl GithubChecks {
     /// A backend that reads with the App's installation tokens.
     pub fn new(minter: Arc<GithubMinter>) -> GithubChecks {
-        GithubChecks { minter }
+        GithubChecks {
+            minter,
+            asked: Mutex::new(HashMap::new()),
+        }
     }
+}
+
+/// The workflow run behind a check run: its `details_url` is `…/actions/runs/<run>/job/<job>`.
+fn run_id_of(c: &Value) -> Option<u64> {
+    let url = c.get("details_url").and_then(Value::as_str)?;
+    let rest = url.split("/actions/runs/").nth(1)?;
+    rest.split('/').next()?.parse().ok()
 }
 
 /// Pages of at most 100 are read up to this many.
@@ -256,6 +281,15 @@ impl Checks for GithubChecks {
             .await
             .map_err(CheckError)?;
         let sha = &req.commit;
+        let asked: Vec<Asked> = self
+            .asked
+            .lock()
+            .expect("asked lock")
+            .get(&(gh.to_owned(), sha.clone()))
+            .cloned()
+            .unwrap_or_default();
+        let mut actions: Option<octocrab::Octocrab> = None;
+        let mut seen_new: Vec<(u64, String)> = Vec::new();
         let mut runs = Vec::new();
         for page in 1..=MAX_PAGES {
             let list: Value = octo
@@ -284,10 +318,48 @@ impl Checks for GithubChecks {
                     (_, Some(done)) => done,
                     _ => "pending".to_owned(),
                 };
+                let mut conclusion = conclusion;
+                if let Some(a) = asked
+                    .iter()
+                    .find(|a| a.name == name && run_id_of(c) == Some(a.run_id))
+                {
+                    // The check run of a job asked to run again: its own run attempt says which attempt it is.
+                    let id = c.get("id").and_then(Value::as_u64).unwrap_or(0);
+                    if actions.is_none() {
+                        actions = Some(
+                            self.minter
+                                .client(gh, &[("actions", "read")])
+                                .await
+                                .map_err(CheckError)?,
+                        );
+                    }
+                    let job: Value = actions
+                        .as_ref()
+                        .expect("minted above")
+                        .get(format!("/repos/{gh}/actions/jobs/{id}"), None::<&()>)
+                        .await
+                        .map_err(|_| CheckError("reading a job's run attempt failed".into()))?;
+                    let attempt = job.get("run_attempt").and_then(Value::as_u64).unwrap_or(0);
+                    if attempt < a.attempt {
+                        conclusion = "pending".to_owned();
+                    } else {
+                        seen_new.push((a.run_id, a.name.clone()));
+                    }
+                }
                 runs.push(CheckRun::new(&name, &conclusion, str_of(c, "html_url")));
             }
             if items.len() < 100 || runs.len() as u64 >= total {
                 break;
+            }
+        }
+        if !seen_new.is_empty() {
+            // Every name asked about whose new attempt is in: the asking is over.
+            let mut g = self.asked.lock().expect("asked lock");
+            if let Some(v) = g.get_mut(&(gh.to_owned(), sha.clone())) {
+                v.retain(|a| !seen_new.contains(&(a.run_id, a.name.clone())));
+                if v.is_empty() {
+                    g.remove(&(gh.to_owned(), sha.clone()));
+                }
             }
         }
         let status: Value = octo
@@ -316,11 +388,15 @@ impl Checks for GithubChecks {
         Ok(runs)
     }
 
+    /// Runs the failed jobs of the workflow runs behind the named check runs (`POST
+    /// /repos/{o}/{r}/actions/runs/{run}/rerun-failed-jobs`, which needs `actions: write`; the check runs are
+    /// listed with `checks: read`). The token is minted for this call and the one repository. A check run that
+    /// is not an Actions job (a commit status, another app's check) cannot be run again here and is skipped.
     async fn rerun(&self, req: &CheckRequest, names: &[String]) -> Result<bool, CheckError> {
         let gh = gh_of(req)?;
         let octo = self
             .minter
-            .client(gh, &[("checks", "write")])
+            .client(gh, &[("checks", "read"), ("actions", "write")])
             .await
             .map_err(CheckError)?;
         let sha = &req.commit;
@@ -331,28 +407,63 @@ impl Checks for GithubChecks {
             )
             .await
             .map_err(|_| CheckError("listing check runs failed".into()))?;
-        let mut asked = false;
+        // The runs to run again, with the names that sit in each.
+        let mut by_run: Vec<(u64, Vec<String>)> = Vec::new();
         for c in list
             .get("check_runs")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
         {
-            let (Some(name), Some(id)) = (str_of(c, "name"), c.get("id").and_then(Value::as_u64))
-            else {
+            let (Some(name), Some(run)) = (str_of(c, "name"), run_id_of(c)) else {
                 continue;
             };
-            if names.contains(&name) {
-                let _: Value = octo
-                    .post(
-                        format!("/repos/{gh}/check-runs/{id}/rerequest"),
-                        None::<&()>,
-                    )
-                    .await
-                    .map_err(|_| CheckError(format!("asking for {name} to run again failed")))?;
-                asked = true;
+            if !names.contains(&name) {
+                continue;
+            }
+            match by_run.iter_mut().find(|(r, _)| *r == run) {
+                Some((_, ns)) => ns.push(name),
+                None => by_run.push((run, vec![name])),
             }
         }
-        Ok(asked)
+        let mut asked = Vec::new();
+        for (run, ns) in by_run {
+            let before: Value = octo
+                .get(format!("/repos/{gh}/actions/runs/{run}"), None::<&()>)
+                .await
+                .map_err(|_| CheckError("reading a workflow run failed".into()))?;
+            let attempt = before
+                .get("run_attempt")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            let _: Value = octo
+                .post(
+                    format!("/repos/{gh}/actions/runs/{run}/rerun-failed-jobs"),
+                    None::<&()>,
+                )
+                .await
+                .map_err(|_| {
+                    CheckError(format!(
+                        "asking for the failed jobs of workflow run {run} to run again failed"
+                    ))
+                })?;
+            asked.extend(ns.into_iter().map(|name| Asked {
+                name,
+                run_id: run,
+                attempt: attempt + 1,
+            }));
+        }
+        if asked.is_empty() {
+            return Ok(false);
+        }
+        let mut g = self.asked.lock().expect("asked lock");
+        let slot = g.entry((gh.to_owned(), sha.clone())).or_default();
+        slot.retain(|a| {
+            !asked
+                .iter()
+                .any(|n| n.run_id == a.run_id && n.name == a.name)
+        });
+        slot.extend(asked);
+        Ok(true)
     }
 }
