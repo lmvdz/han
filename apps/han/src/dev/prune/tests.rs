@@ -32,7 +32,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// A bare `origin`, the main checkout `v1`, a second clone `other` that lands work on origin, and room for
 /// worktrees named `wt-*` and for a workspace outside the root.
 struct Repo {
-    tmp: tempfile::TempDir,
+    _tmp: tempfile::TempDir,
     /// `tmp` as git spells it: symlinks resolved (macOS /var is /private/var) and Windows 8.3 names expanded.
     dir: PathBuf,
     main: PathBuf,
@@ -60,7 +60,7 @@ impl Repo {
         git(&main, &["commit", "-q", "-m", "base"]);
         git(&main, &["push", "-q", "-u", "origin", "main"]);
         git(t, &["clone", "-q", &origin.to_string_lossy(), "other"]);
-        Self { tmp, dir, main }
+        Self { _tmp: tmp, dir, main }
     }
 
     fn path(&self, name: &str) -> PathBuf {
