@@ -179,7 +179,16 @@ pub struct ApprovalRule {
     /// `separateApprover` (A2). Always `true` when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revert: Option<bool>,
+    /// The proposal itself satisfies E3: no approval is asked, made or consumed (P-17, round 33). Always `true`
+    /// when present, and valid only on a rule for the check-only action [`CHECK_ONLY`] with no other member than
+    /// `action` and `approvers`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposer: Option<bool>,
 }
+
+/// The one action a rule with `proposer` may name: `vcs.try` runs a landing lane's checks on a change and lands
+/// nothing (P-17, round 33).
+pub const CHECK_ONLY: &str = "vcs.try";
 
 /// The class of a path (P-17); its tier floor is docs, tests and generated 0, code 1, sensitive 2, critical 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

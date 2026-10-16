@@ -112,7 +112,7 @@ pub fn bundle_base(plan: &Value) -> String {
 }
 
 /// The plan's `change` as a valid summary (architecture.md P-17): the shape and the bounds Policy checks.
-fn change_of(c: &Value) -> Result<han_vcs::Change, PlanError> {
+pub(super) fn change_of(c: &Value) -> Result<han_vcs::Change, PlanError> {
     let text = serde_json::to_string(c).map_err(|e| PlanError::Schema(e.to_string()))?;
     let v = han_core::json::parse(text.as_bytes())
         .map_err(|e| PlanError::Schema(format!("the change summary: {e}")))?;
@@ -173,7 +173,7 @@ pub fn depends_cycle(edges: &BTreeMap<String, Vec<String>>) -> Option<Vec<String
         .find_map(|n| visit(n, edges, &mut Vec::new(), &mut done))
 }
 
-fn short(s: &str) -> &str {
+pub(super) fn short(s: &str) -> &str {
     &s[..s.len().min(8)]
 }
 

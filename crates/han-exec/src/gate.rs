@@ -16,6 +16,10 @@ pub struct GateInput {
     pub changes: Option<ChangeSummary>,
     /// Authors of the open approvals the node shows.
     pub approvals: Vec<String>,
+    /// Whether Policy says the proposal itself satisfies E3 for this effect (the rule that applies has
+    /// `proposer: true`, P-17): the node reports it in the effect row. The executor keeps no list of actions that
+    /// need no approval; it asks Policy.
+    pub proposer_suffices: bool,
 }
 
 /// The gate's decision.
@@ -37,12 +41,13 @@ pub trait Gate: Send + Sync + 'static {
     fn decide(&self, input: &GateInput) -> GateDecision;
 }
 
-/// The pre-round-33 gate: everything needs at least one approval.
+/// The pre-round-33 gate: everything needs at least one approval, except where Policy says the proposal itself
+/// suffices (a `proposer: true` rule, which it allows only for a check-only action).
 pub struct NeedsApproval;
 
 impl Gate for NeedsApproval {
     fn decide(&self, input: &GateInput) -> GateDecision {
-        if input.approvals.is_empty() {
+        if input.approvals.is_empty() && !input.proposer_suffices {
             GateDecision::NeedsApproval {
                 why: format!(
                     "{} reaches outside the sandbox: every such action needs an approval until risk tiers \

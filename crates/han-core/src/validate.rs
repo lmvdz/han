@@ -13,6 +13,7 @@ use crate::json::{self, MAX_SAFE_INT, Value};
 use crate::limits::{
     MAX_BLOB_BYTES, MAX_CONTENT_BYTES, MAX_DENIED_SERVERS, MAX_HEADER_BYTES, MAX_LIST,
 };
+use crate::policy::CHECK_ONLY;
 use crate::policy::gate::{
     MAX_CHANGE_BYTES, MAX_CHANGE_FILES, MAX_GATE_RULES, PATH_OWNER, is_evidence_kind, is_glob,
     is_repo_name, is_repo_path,
@@ -204,6 +205,7 @@ fn approval_rule(v: &Value) -> bool {
             "evidence",
             "needs",
             "revert",
+            "proposer",
         ],
     ) else {
         return false;
@@ -238,6 +240,12 @@ fn approval_rule(v: &Value) -> bool {
         && m.get("needs")
             .is_none_or(|n| matches!(n, Value::Int(i) if (1..=3).contains(i)))
         && m.get("revert").is_none_or(|r| *r == Value::Bool(true))
+        // P-17: `proposer` is `true`, on the check-only action and a rule with nothing else on it
+        && m.get("proposer").is_none_or(|p| {
+            *p == Value::Bool(true)
+                && m["action"].as_str() == Some(CHECK_ONLY)
+                && m.keys().all(|k| matches!(k.as_str(), "action" | "approvers" | "proposer"))
+        })
 }
 
 fn rule_repo(m: &BTreeMap<String, Value>) -> bool {

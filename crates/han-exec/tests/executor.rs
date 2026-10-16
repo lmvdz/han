@@ -391,3 +391,45 @@ fn plan_check_takes_a_bundle_blob_or_a_source() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn the_gate_waits_for_an_approval_unless_policy_says_the_proposer_suffices() {
+    let counter = Counter::new();
+    let rig = Rig::new(vec![counter.clone()]);
+    let p = rig.node.propose(&count_plan(1));
+    let ex = rig.executor();
+    let r = ex.step().await.unwrap();
+    assert_eq!(r.waiting, vec![p.clone()]);
+    assert_eq!(rig.node.claims(), 0);
+
+    // Policy's report (the rule that applies has `proposer: true`, P-17): the gate does not wait, and nothing
+    // in the executor names the action.
+    rig.node.set_proposer_suffices(&p, true);
+    let r = ex.step().await.unwrap();
+    assert_eq!(r.claimed, vec![p.clone()]);
+    assert_eq!(
+        r.reported,
+        vec![(p.clone(), Report::new("succeeded", "yes"))]
+    );
+    assert_eq!(rig.node.claims(), 1);
+    assert_eq!(counter.world.load(Ordering::SeqCst), 1);
+
+    // The decision itself, for each combination.
+    use han_exec::{Gate, GateDecision, GateInput, NeedsApproval};
+    let input = |approvals: &[&str], proposer_suffices| GateInput {
+        action: "any.action".into(),
+        target: "t".into(),
+        changes: None,
+        approvals: approvals.iter().map(|a| (*a).to_owned()).collect(),
+        proposer_suffices,
+    };
+    assert!(matches!(
+        NeedsApproval.decide(&input(&[], false)),
+        GateDecision::NeedsApproval { .. }
+    ));
+    assert_eq!(NeedsApproval.decide(&input(&[], true)), GateDecision::Run);
+    assert_eq!(
+        NeedsApproval.decide(&input(&["@a:b.c"], false)),
+        GateDecision::Run
+    );
+}

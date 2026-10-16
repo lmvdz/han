@@ -8,11 +8,11 @@ use super::body::{
 };
 use super::doc::{ActorKind, AllowAgents, JoinMode, NewRole, Role, SteerMode};
 use super::guard::{
-    Key, Pick, abandon_after, approval_candidates, budget_change_ok, counts, effect_guarded_for,
-    effect_source, expired, guard_approval, guard_status, guards_of, in_guards, is_human,
-    key_status, needs, over_bound, pick_approval, reads, remaining, role_of, rule_for, secs,
-    self_revert_approval, server_of, space_unit, task_guarded_for, task_source, unbounded_guards,
-    usable, writes,
+    Key, Pick, abandon_after, approval_candidates, asks_approval, budget_change_ok, counts,
+    effect_guarded_for, effect_source, expired, guard_approval, guard_status, guards_of, in_guards,
+    is_human, key_status, needs, over_bound, pick_approval, reads, remaining, role_of, rule_for,
+    secs, self_revert_approval, server_of, space_unit, task_guarded_for, task_source,
+    unbounded_guards, usable, writes,
 };
 use super::state::{Effect, Phase, Source, SpaceState, Task};
 use super::{Ctx, MAX_ATTEMPTS, MAX_GUARDED_FOR, MAX_OPEN_APPROVALS, MAX_OPEN_SESSIONS, Verdict};
@@ -635,6 +635,9 @@ fn approve(
         let kind = ctx
             .profile(author)
             .map_or(ActorKind::Human, |p| p.actor_kind);
+        if rule.is_some_and(|r| r.proposer == Some(true)) {
+            return deny("the rule asks no approval: the proposer suffices");
+        }
         if !rule.is_some_and(|r| counts(state, eff, r, author, kind, b.evidence.as_ref())) {
             return deny("not an approver for this action");
         }
@@ -693,7 +696,7 @@ fn claim(
     if b.window != state.policy.launch_window {
         return deny("E5 claim's window is not the space's launchWindow");
     }
-    if rule_for(state, eff).is_some() {
+    if asks_approval(state, eff) {
         match pick_approval(state, eff, ctx).0 {
             Pick::Unpinned => return invalid("approver profile not pinned"),
             Pick::None => return deny("E3 no usable approval"),

@@ -169,6 +169,8 @@ impl FakeNode {
                 .flatten()
                 .and_then(|p| han_exec::actions::change_digest(&p)),
             gate_tier: None,
+            // the real node reports it from the policy's rule for the action; a test turns it on by hand
+            proposer_suffices: false,
             delta_digest: None,
             task: None,
             phase: "open".into(),
@@ -203,6 +205,17 @@ impl FakeNode {
         for r in &mut st.rows {
             r.head = head;
         }
+    }
+
+    /// Policy's report that the rule for the proposal's action lets the proposer suffice (P-17): no approval.
+    pub fn set_proposer_suffices(&self, proposal: &str, on: bool) {
+        let mut st = self.state();
+        st.rows
+            .iter_mut()
+            .find(|r| r.proposal == proposal)
+            .unwrap()
+            .proposer_suffices = on;
+        Self::bump(&mut st);
     }
 
     pub fn row(&self, proposal: &str) -> EffectRow {
@@ -271,7 +284,7 @@ impl FakeNode {
                 if r.phase != "open" || *attempt != r.claims + 1 || *window != r.launch_window {
                     return Err(NodeError::denied("E5"));
                 }
-                if r.approvals.is_empty() {
+                if r.approvals.is_empty() && !r.proposer_suffices {
                     return Err(NodeError::denied("E3: no approval"));
                 }
                 r.claims += 1;

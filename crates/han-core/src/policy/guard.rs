@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 use super::doc::{ActorKind, ApprovalRule, PolicyDoc, Role};
-use super::gate::{Evidence, PATH_OWNER};
+use super::gate::{Evidence, Gate, PATH_OWNER};
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -149,15 +149,31 @@ static DEFAULT_GATED_RULE: LazyLock<ApprovalRule> = LazyLock::new(|| ApprovalRul
     evidence: None,
     needs: None,
     revert: None,
+    proposer: None,
 });
 
 /// P-08 (round 33): the rule that applies to `eff`: the first whose action matches and whose tier predicate
 /// (`minTier`, `maxTier`) holds. A rule with a tier predicate never applies to an effect without a gate. A
 /// gated effect of tier 1 or more that no rule covers needs an owner.
 pub(super) fn rule_for<'a>(state: &'a SpaceState, eff: &Effect) -> Option<&'a ApprovalRule> {
-    let g = eff.gate.as_ref();
-    for r in &state.policy.approvals {
-        if r.action != eff.action && r.action != "*" {
+    rule_in(&state.policy.approvals, &eff.action, eff.gate.as_ref())
+}
+
+/// P-17 (round 33): whether the proposal itself satisfies E3 under the rule that applies to an effect of `action`
+/// that has no gate (a `vcs.try` has none): the first rule that matches carries `proposer`. This is what Policy
+/// reports to an executor, so that its local gate asks for an approval only where E3 does.
+pub fn proposer_suffices(approvals: &[ApprovalRule], action: &str) -> bool {
+    rule_in(approvals, action, None).is_some_and(|r| r.proposer == Some(true))
+}
+
+/// The rule of `approvals` that applies to an effect of `action` with `gate` (see [`rule_for`]).
+fn rule_in<'a>(
+    approvals: &'a [ApprovalRule],
+    action: &str,
+    g: Option<&Gate>,
+) -> Option<&'a ApprovalRule> {
+    for r in approvals {
+        if r.action != action && r.action != "*" {
             continue;
         }
         if r.revert == Some(true) && g.is_none_or(|g| g.revert_of.is_none()) {
@@ -174,6 +190,12 @@ pub(super) fn rule_for<'a>(state: &'a SpaceState, eff: &Effect) -> Option<&'a Ap
         return Some(r);
     }
     g.filter(|g| g.tier >= 1).map(|_| &*DEFAULT_GATED_RULE)
+}
+
+/// P-07 E3: whether a claim of `eff` consumes approvals of the rule that applies: there is a rule and it does
+/// not let the proposer suffice (P-17, round 33).
+pub(super) fn asks_approval(state: &SpaceState, eff: &Effect) -> bool {
+    rule_for(state, eff).is_some_and(|r| r.proposer != Some(true))
 }
 
 /// P-08, P-17: whether an approval by `actor` (of `kind`, with `evidence`) counts under `rule`: the actor
@@ -256,8 +278,8 @@ pub(super) fn approval_candidates<'e>(
     eff: &'e Effect,
     now: i64,
 ) -> Vec<&'e Approval> {
-    let Some(rule) = rule_for(state, eff) else {
-        return Vec::new();
+    let Some(rule) = rule_for(state, eff).filter(|r| r.proposer != Some(true)) else {
+        return Vec::new(); // under a proposer rule no approval is asked, so none is a candidate (P-17)
     };
     eff.approvals
         .iter()

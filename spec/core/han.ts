@@ -158,6 +158,7 @@ export interface ApprovalRule {
   evidence?: string;                                    // a non-human approval counts only with evidence of this kind over the effect's gate.deltaDigest
   needs?: 1 | 2 | 3;                                    // distinct approvals a claim consumes (2 at least at tier 3)
   revert?: true;                                        // A2: the rule covers only a revert (gate.revertOf); its evidence is over gate.revertedDigest; the lane approving its own revert is exempt from separateApprover
+  proposer?: true;                                      // P-17 (round 33): the proposal itself satisfies E3, no approval is asked; only on action "vcs.try" (check-only), with no member but action, approvers and proposer; guards (P-15) and budgets (P-06) still apply
 }
 export interface GatesDoc {
   small: number; large: number;                         // lines: tier 0 only up to `small`; more than `large` is at least tier 2

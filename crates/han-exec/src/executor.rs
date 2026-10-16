@@ -576,6 +576,7 @@ impl Executor {
                 .and_then(|a| a.get("changes"))
                 .and_then(|c| serde_json::from_value(c.clone()).ok()),
             approvals: row.approvals.clone(),
+            proposer_suffices: row.proposer_suffices,
         });
         if let GateDecision::NeedsApproval { .. } = decision {
             out.waiting.push(row.proposal.clone());
@@ -745,6 +746,7 @@ impl Executor {
                 .and_then(|a| a.get("changes"))
                 .and_then(|c| serde_json::from_value(c.clone()).ok()),
             approvals: row.approvals.clone(),
+            proposer_suffices: row.proposer_suffices,
         });
         if let GateDecision::NeedsApproval { .. } = decision {
             return Ok(LaneClaim::NeedsApproval);
