@@ -412,6 +412,15 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 - the `land` finish flow, when `agents.json` turns it on (9.1): the executor has no such repository or does not list the target ref in `landing_refs`, has no required checks, or runs a full stage the flow says it does not have; the executor's lane session cannot be watched (the space's `sessions.watch`); with `--check-github-app`, the write App lacks Contents write, Checks read or Commit statuses read;
 - Linux: `han seq`, `han node` or `han exec` processes whose binary was replaced on disk (`/proc/<pid>/exe` reads `(deleted)`).
 
+**Who runs it.** On a runner two users each see half of the machine: `han` opens the node's socket and reads its data, `han-exec` reads the executor's key. No single user gets every check, so `han doctor` says so instead of failing: its first line is `checked as <user>`, then every check prints `ok <check>` when it passed or `skipped <check>: <why>` when this user could not look, with the command that covers it. A skipped check is not a finding (nothing is known to be wrong), and `healthy` says how many were skipped. The checks are `node`, `registry`, `sandbox`, `toolchain`, `presence`, `process.stale-binary`, `github.service`, `land`, `land.watch`, `executor.github` and `land.github.permissions`; one that does not apply on the machine (no executor, `land` off) is not listed.
+
+```sh
+sudo -u han      han doctor --data /var/lib/han/node --repo /srv/repos/han
+sudo -u han-exec han doctor --exec-only --check-github-app
+```
+
+`--exec-only` runs only `executor.github` and `land.github.permissions` (the App check, with `--check-github-app`) and skips the rest with `not part of --exec-only; run as han, or sudo -u han han doctor`. The plain run, as `han`, skips those two with `needs the executor key: ... run as han-exec, or sudo -u han-exec han doctor --exec-only`, and as `han-exec` skips `node` (the socket refuses it) and the checks on `agents.json`. Together the two runs cover everything. A passing App check prints `ok land.github.permissions`.
+
 `--json` prints the report for scripts. The schema is `han-doctor/1`, and fields are only added, never renamed or removed, within it:
 
 ```json
@@ -419,6 +428,12 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
   "schema": "han-doctor/1",
   "healthy": false,
   "data": "/var/lib/han/node",
+  "user": "han",
+  "mode": "full",
+  "checks": [
+    { "id": "node", "status": "ok" },
+    { "id": "land.github.permissions", "status": "skipped", "reason": "needs the executor key: ..." }
+  ],
   "findings": [
     {
       "id": "agent.login.missing",
@@ -430,7 +445,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 }
 ```
 
-`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`, `github.config-invalid`, `github.config-missing`, `github.key-missing`, `github.key-mode`, `github.not-running`, `land.executor.repo-missing`, `land.executor.landing-ref`, `land.checks.none`, `land.checks.full-stage`, `land.watch.denied`, `land.github.permissions`, `land.github.unreadable`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it.
+`id` is a stable name of the kind of problem (`node.down`, `link.misconfigured`, `outbox.blocking`, `profile.missing`, `node.problem`, `registry.agents-json`, `registry.os-user`, `registry.os-user-missing`, `registry.sandbox`, `registry.toolchain`, `harness.missing`, `harness.broken`, `harness.files-missing`, `agent.login.missing`, `toolchain.rust.location`, `toolchain.rust.missing`, `toolchain.rust.pin-missing`, `presence.settings`, `presence.backend`, `presence.polkit`, `process.stale-binary`, `github.config-invalid`, `github.config-missing`, `github.key-missing`, `github.key-mode`, `github.not-running`, `land.executor.repo-missing`, `land.executor.landing-ref`, `land.checks.none`, `land.checks.full-stage`, `land.watch.denied`, `land.github.permissions`, `land.github.unreadable`); `subject` is what it is about (an agent, a space, a path, a process); `cause` is one line; `fix` is the command to run (a part in `<angle brackets>` is for you to fill in). `healthy` is `findings` being empty, and the exit code follows it. `user` is who ran the checks, `mode` is `full` or `exec-only`, and `checks` lists every check with its `status` (`ok`, `problem` or `skipped`) and, for a skipped one, the `reason`.
 
 ### 8.2 By hand
 

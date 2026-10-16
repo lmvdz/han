@@ -198,7 +198,7 @@ fn doctor_names_the_flags_until_the_executor_has_its_app() {
     );
     assert!(o.status.success(), "{}", all(&o));
     let r = all(&doctor());
-    assert!(!r.contains("executor.github"), "{r}");
+    assert!(!r.contains("executor.github."), "{r}");
 
     let dest = Path::new(&exec).join("github-app.pem");
     #[cfg(unix)]
@@ -209,4 +209,58 @@ fn doctor_names_the_flags_until_the_executor_has_its_app() {
     }
     std::fs::remove_file(&dest).unwrap();
     assert!(all(&doctor()).contains("executor.github.key-missing"));
+}
+
+#[test]
+fn doctor_exec_only_prints_who_ran_ok_lines_and_what_the_node_user_must_cover() {
+    let t = tempfile::tempdir().unwrap();
+    let exec = t.path().join("exec").to_string_lossy().into_owned();
+    let data = t.path().join("data").to_string_lossy().into_owned();
+    let key = pem(t.path(), "app.pem", PEM, 0o600);
+    let o = add(
+        &exec,
+        &data,
+        &[
+            "--github-app",
+            "4242",
+            "--github-installation",
+            "7",
+            "--github-key",
+            &key,
+        ],
+    );
+    assert!(o.status.success(), "{}", all(&o));
+    let o = Command::new(HAN)
+        .no_window()
+        .args([
+            "doctor",
+            "--exec-only",
+            "--data",
+            &data,
+            "--exec-dir",
+            &exec,
+        ])
+        .env("USER", "han-exec")
+        .env_remove("HAN_DATA")
+        .output()
+        .expect("han runs");
+    let out = all(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(
+        out.starts_with("checked as han-exec (exec-only run)"),
+        "{out}"
+    );
+    assert!(out.contains("ok executor.github\n"), "{out}");
+    assert!(
+        out.contains(
+            "skipped node: not part of --exec-only; run as han, or `sudo -u han han doctor`"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains(BODY), "the key is never printed");
+    // the App check asks GitHub, so it says how to be asked
+    assert!(
+        out.contains("skipped land.github.permissions") && out.contains("--check-github-app"),
+        "{out}"
+    );
 }
