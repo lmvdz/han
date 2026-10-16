@@ -315,6 +315,11 @@ fn login_check_says_only_whether_a_login_exists() {
 
 #[test]
 fn install_service_dry_run_shows_a_per_user_service_and_changes_nothing() {
+    // `install-service` writes a Windows task or a systemd user unit; there is no macOS service (launchd).
+    if cfg!(target_os = "macos") {
+        eprintln!("skipped: install-service is for Windows and Linux");
+        return;
+    }
     let out = han(&[
         "node",
         "install-service",

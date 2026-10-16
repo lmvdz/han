@@ -50,6 +50,20 @@ fn bare_copy(from: &Path, to: &Path, user: &str) {
     );
 }
 
+/// A task for the stack's issue addressed to `agent`, which `han agent start --issue` needs (the issue text is
+/// the task's): the stack's own task is addressed to its own agent, not to the one these tests add.
+async fn task_for_issue(s: &Stack, agent: &str) {
+    let c = s.client().await;
+    c.call(Call::TaskCreate {
+        space: s.space(),
+        to: vec![agent.to_owned()],
+        ask: "Reject short tokens".into(),
+        external: Some(s.get("issue")),
+    })
+    .await
+    .expect("the task for the issue is created");
+}
+
 /// The executor as `han-exec`, with the dev stack's executor key and a config whose remote it owns.
 fn executor_as_exec_user(s: &Stack, source: &Path, landing: &Path) -> Child {
     let exec_dir = s.dir.join("exec");
@@ -98,7 +112,7 @@ fn executor_as_exec_user(s: &Stack, source: &Path, landing: &Path) -> Child {
             &s.executor(),
             "--space",
             &s.space(),
-            "--home-ticket",
+            "--home",
             &s.ticket(),
             "--keys",
             EXEC_DIR,
@@ -169,6 +183,7 @@ async fn an_os_user_agents_push_lands_through_an_executor_that_cannot_read_its_w
         "--allow-advisory",
     ]);
     let agent = format!("@coder2:{}", s.get("server"));
+    task_for_issue(&s, &agent).await;
     han(&[
         "agent",
         "start",
@@ -312,6 +327,7 @@ async fn an_os_user_agents_sandbox_is_checked_by_its_host_not_by_the_node() {
         "bwrap",
     ]);
     let agent = format!("@coder3:{}", s.get("server"));
+    task_for_issue(&s, &agent).await;
     let (ok, out, err) = run(&[
         "agent",
         "start",

@@ -175,6 +175,8 @@ async fn a_role_starts_with_a_cleared_environment() {
                 .any(|k| k.eq_ignore_ascii_case(key))
                 // set by the test harness inside the child itself
                 || key == "RUST_TEST_THREADS"
+                // macOS adds it to every process it starts
+                || (cfg!(target_os = "macos") && key == "__CF_USER_TEXT_ENCODING")
                 || key.is_empty(),
             "the child inherited {key}"
         );
