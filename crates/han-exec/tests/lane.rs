@@ -1630,6 +1630,238 @@ fn the_config_is_per_repository_and_defaults_are_off() {
     );
 }
 
+// ───────────────────────── check-only tries (vcs.try, P-17) ─────────────────────────
+
+impl Rig {
+    /// The plan of trying `to`: a land's plan without `tier` and `rebase`.
+    fn try_plan(&self, to: &str) -> Value {
+        let mut plan = self.plan(to, json!({}));
+        plan["action"] = json!("vcs.try");
+        let args = plan["args"].as_object_mut().unwrap();
+        args.remove("tier");
+        args.remove("rebase");
+        args.insert("title".into(), json!(format!("Try {}", &to[..7])));
+        plan
+    }
+
+    /// Proposes a try of a change of one file. Policy says the proposer suffices: nobody approves it.
+    fn try_it(&self, name: &str, file: &str, content: &str) -> String {
+        let to = self.w.change(name, file, content);
+        let p = self.node.propose(&self.try_plan(&to));
+        self.node.set_proposer_suffices(&p, true);
+        p
+    }
+
+    /// The try branches the lane left on the remote.
+    fn branches(&self) -> String {
+        git(&self.w.remote, &["branch", "--list", "han/try/*"])
+    }
+}
+
+#[tokio::test]
+async fn a_green_try_runs_the_checks_lands_nothing_and_removes_its_branch() {
+    let rig = Rig::new();
+    rig.checks.fast(vec![run("quick", "queued")]);
+    let tip = rig.w.tip();
+    let p = rig.try_it("one", "a.txt", "a, edited\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+
+    // Squash-rebased onto the ref's tip and pushed to han/try/<id>, where CI runs on that exact commit.
+    assert_eq!(rig.states(&p), ["queued", "testing"]);
+    let testing = rig.last(&p);
+    let commit = testing["commit"].as_str().unwrap().to_owned();
+    assert_eq!(testing["try"], true);
+    assert_eq!(testing["branch"], "han/try/p1");
+    assert_eq!(testing["onto"], tip.as_str());
+    assert_eq!(
+        git(&rig.w.remote, &["rev-parse", "refs/heads/han/try/p1"]),
+        commit
+    );
+    assert_eq!(
+        git(&rig.w.remote, &["rev-parse", &format!("{commit}^")]),
+        tip
+    );
+    assert_eq!(rig.node.claims(), 0);
+
+    rig.checks.fast(green());
+    lane.pass().await.unwrap();
+    assert_eq!(rig.states(&p), ["queued", "testing", "landing", "tried"]);
+    assert!(rig.items(&p).iter().all(|i| i["try"] == true));
+    // Nothing landed: the ref is where it was, and the main branch has not got the edit.
+    assert_eq!(rig.w.tip(), tip);
+    assert_eq!(rig.w.show("main", "a.txt"), "a");
+    // The effect succeeded, with the checks' record as the outcome's evidence.
+    assert_eq!(rig.node.claims(), 1);
+    assert_eq!(
+        rig.node.state().outcomes,
+        [(p.clone(), "succeeded".to_owned(), "yes".to_owned())]
+    );
+    let proof = rig.items(&p)[2]["evidence"].clone();
+    let sent = rig.outcome_evidence();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1.as_ref().expect("evidence").hash, proof["hash"]);
+    let evidence = rig.blob(&proof);
+    assert_eq!(evidence["commit"], commit.as_str());
+    assert_eq!(evidence["checks"][0]["conclusion"], "success");
+    assert_eq!(rig.node.row(&p).phase, "done");
+    assert!(rig.cancels().is_empty());
+    // The branch is gone, and the lane's own branch was never made.
+    assert_eq!(rig.branches(), "");
+    assert_eq!(rig.checks.commits(Stage::Fast), vec![commit]);
+    // Told once, and cleaned once.
+    rig.wall.advance(1);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.node.claims(), 1);
+    assert_eq!(rig.states(&p).len(), 4);
+}
+
+#[tokio::test]
+async fn a_try_has_a_group_of_its_own_and_never_takes_the_land_slot() {
+    let rig = Rig::new();
+    rig.checks.fast(vec![run("quick", "queued")]);
+    let land = rig.land("one", "a.txt", "a, edited\n");
+    let t = rig.try_it("two", "b.txt", "b, tried\n");
+    let land2 = rig.land("three", "c.txt", "c, edited\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+
+    // The land and the try are both testing; the second land waits for the land's slot, not for the try.
+    assert_eq!(rig.states(&land), ["queued", "testing"]);
+    assert_eq!(rig.states(&t), ["queued", "testing"]);
+    assert_eq!(rig.last(&land2)["state"], "queued");
+    assert_eq!(rig.last(&land2)["detail"], "waiting for the lane's slot");
+    assert_eq!(rig.branches().trim(), format!("han/try/{t}"));
+    git(
+        &rig.w.remote,
+        &["rev-parse", &format!("refs/heads/han/lane/main/{land}")],
+    );
+
+    rig.checks.fast(green());
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert_eq!(rig.last(&land)["state"], "confirmed");
+    assert_eq!(rig.last(&land2)["state"], "confirmed");
+    assert_eq!(rig.last(&t)["state"], "tried");
+    // Only the lands moved the ref; the try's change (b.txt) is not on it.
+    assert_eq!(rig.w.show("main", "a.txt"), "a, edited");
+    assert_eq!(rig.w.show("main", "c.txt"), "c, edited");
+    assert_eq!(rig.w.show("main", "b.txt"), "b");
+    assert_eq!(rig.branches(), "");
+    // The lane's own items name the lands only.
+    for i in rig.node.items("han.land/1") {
+        if i["item"] == "lane" {
+            let running = i["running"].to_string();
+            assert!(!running.contains(&t), "{i}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_red_try_is_cancelled_with_the_test_reason_and_the_evidence_and_removes_its_branch() {
+    let rig = Rig::new();
+    rig.checks
+        .fast(vec![run("quick", "failure"), run("lint", "success")]);
+    let tip = rig.w.tip();
+    let p = rig.try_it("one", "a.txt", "a, edited\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+
+    assert_eq!(rig.states(&p), ["queued", "testing", "rejected"]);
+    let last = rig.last(&p);
+    assert_eq!(last["reason"], "test");
+    assert_eq!(rig.node.claims(), 0);
+    assert_eq!(rig.w.tip(), tip);
+    let cancels = rig.cancels();
+    assert_eq!(cancels.len(), 1, "{cancels:?}");
+    assert_eq!(cancels[0].0, p);
+    assert!(cancels[0].1.starts_with("test: "), "{:?}", cancels[0]);
+    assert!(cancels[0].1.contains("quick"), "{:?}", cancels[0]);
+    let proof = cancels[0].2.as_ref().expect("the failing checks");
+    assert_eq!(proof.hash, last["evidence"]["hash"].as_str().unwrap());
+    let evidence = rig.blob(&last["evidence"]);
+    assert_eq!(evidence["checks"][1]["name"], "quick");
+    assert_eq!(evidence["checks"][1]["conclusion"], "failure");
+    assert_eq!(rig.node.row(&p).phase, "done");
+    assert!(rig.node.state().outcomes.is_empty());
+    assert_eq!(rig.branches(), "", "the red try's branch is deleted");
+}
+
+#[tokio::test]
+async fn a_try_that_conflicts_with_the_tip_is_cancelled_with_the_conflict_record() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    let p = rig.try_it("one", "a.txt", "a, edited\n");
+    rig.w.advance("a.txt", "a, edited by someone else\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+
+    assert_eq!(rig.states(&p), ["queued", "rejected"]);
+    let last = rig.last(&p);
+    assert_eq!(last["reason"], "conflict");
+    let record = rig.blob(&last["conflict"]);
+    assert_eq!(record["conflicts"][0]["path"], "a.txt");
+    let cancels = rig.cancels();
+    assert_eq!(cancels.len(), 1, "{cancels:?}");
+    assert!(cancels[0].1.starts_with("conflict: "), "{:?}", cancels[0]);
+    assert_eq!(
+        cancels[0].2.as_ref().expect("the record").hash,
+        last["conflict"]["hash"].as_str().unwrap()
+    );
+    assert_eq!(rig.node.claims(), 0);
+    assert_eq!(rig.branches(), "", "nothing was pushed");
+}
+
+#[tokio::test]
+async fn a_try_that_needs_an_approval_waits_for_one_and_a_cancelled_try_leaves_the_lane() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    let to = rig.w.change("one", "a.txt", "a, edited\n");
+    // No rule lets the proposer suffice here: Policy would ask for an approval.
+    let p = rig.node.propose(&rig.try_plan(&to));
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert!(rig.items(&p).is_empty(), "the lane waits for the approval");
+    rig.node.approve(&p);
+    lane.pass().await.unwrap();
+    assert_eq!(rig.states(&p), ["queued", "testing", "landing", "tried"]);
+
+    // One cancelled while it is testing leaves the lane, and its branch goes.
+    rig.checks.fast(vec![run("quick", "queued")]);
+    let q = rig.try_it("two", "b.txt", "b, edited\n");
+    lane.pass().await.unwrap();
+    assert_eq!(rig.states(&q), ["queued", "testing"]);
+    rig.node.state().rows.iter_mut().for_each(|r| {
+        if r.proposal == q {
+            r.phase = "done".into();
+        }
+    });
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&q)["state"], "cancelled");
+    assert_eq!(
+        rig.branches(),
+        "",
+        "the cancelled try's branch is deleted too"
+    );
+}
+
+#[tokio::test]
+async fn the_generic_claim_loop_never_claims_vcs_try() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    let p = rig.try_it("one", "a.txt", "a, edited\n");
+    let (exec, _lane) = rig.boot();
+    for _ in 0..3 {
+        let r = exec.step().await.unwrap();
+        assert!(r.claimed.is_empty() && r.launched.is_empty(), "{r:?}");
+        assert!(r.refused.is_empty() && r.waiting.is_empty(), "{r:?}");
+    }
+    assert_eq!(rig.node.claims(), 0);
+    assert_eq!(rig.node.row(&p).phase, "open");
+    assert!(actions::VcsTry.lane_only());
+}
+
 // ───────────────────────── GitHub ─────────────────────────
 
 const CANARY: &str = "ghs_CANARYinstallationTOKEN0123456789";
@@ -1714,6 +1946,9 @@ async fn mock_github(seen: Arc<Mutex<Seen>>) -> String {
                             201,
                             json!({"number": 5, "html_url": "https://example/pr/5"}),
                         )
+                    } else if method == "PATCH" && path == "/repos/o/r/pulls/5" {
+                        st.pr_open = false;
+                        (200, json!({"number": 5, "state": "closed"}))
                     } else if method == "GET"
                         && path.starts_with("/repos/o/r/commits/")
                         && path.contains("/check-runs")
@@ -1882,6 +2117,84 @@ async fn the_lane_opens_a_pull_request_and_reads_github_checks() {
         .filter(|r| r.0 == "POST" && r.1 == "/repos/o/r/pulls")
         .count();
     assert_eq!(creates, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_try_opens_a_draft_pull_request_for_ci_and_closes_it_and_deletes_the_branch_after() {
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let api = mock_github(seen.clone()).await;
+    let mut rig = Rig::with(|r| {
+        r.name = "github:o/r".into();
+        r.github = Some("o/r".into());
+        r.checks.required = vec!["quick".into(), "ci/legacy".into()];
+    });
+    let app = GithubApp {
+        app_id: 1,
+        installation_id: 7,
+        api_base: Some(api),
+        private_key: String::new(),
+    };
+    rig.config.github = Some(app.clone());
+    let minter = Arc::new(GithubMinter::new(&app, Box::new(StaticJwt)).unwrap());
+    rig.minter = Some(minter.clone());
+    let to = rig.w.change(
+        "one",
+        "a.txt",
+        "a, edited
+",
+    );
+    let mut plan = rig.try_plan(&to);
+    plan["target"] = json!("github:o/r");
+    let p = rig.node.propose(&plan);
+    rig.node.set_proposer_suffices(&p, true);
+    let (exec, _) = rig.boot();
+    let lane = Lane::new(exec, Arc::new(GithubChecks::new(minter)), rig.wall.clone());
+    let tip = rig.w.tip();
+
+    // The repo's CI runs on pull requests, so the try gets a draft one from han/try/<id>.
+    lane.pass().await.unwrap();
+    assert_eq!(rig.states(&p), ["queued", "testing"]);
+    let testing = rig.last(&p);
+    assert_eq!(testing["pr"], "pull request #5 https://example/pr/5");
+    assert_eq!(testing["branch"], "han/try/p1");
+    let commit = testing["commit"].as_str().unwrap().to_owned();
+    assert_eq!(
+        git(&rig.w.remote, &["rev-parse", "refs/heads/han/try/p1"]),
+        commit
+    );
+    {
+        let st = seen.lock().unwrap();
+        let creates: Vec<&(String, String, String, String)> = st
+            .requests
+            .iter()
+            .filter(|r| r.0 == "POST" && r.1 == "/repos/o/r/pulls")
+            .collect();
+        assert_eq!(creates.len(), 1);
+        let body: Value = serde_json::from_str(&creates[0].3).unwrap();
+        assert_eq!(body["head"], "han/try/p1");
+        assert_eq!(body["base"], "main");
+        assert_eq!(body["draft"], true);
+        assert_eq!(body["title"], format!("try: Try {}", &to[..7]));
+        assert!(!st.requests.iter().any(|r| r.0 == "PATCH"), "still open");
+    }
+
+    // Green: the effect succeeds, nothing lands, the pull request is closed and the branch deleted.
+    seen.lock().unwrap().checks_ready = true;
+    lane.pass().await.unwrap();
+    assert_eq!(rig.states(&p), ["queued", "testing", "landing", "tried"]);
+    assert_eq!(rig.w.tip(), tip);
+    assert_eq!(rig.branches(), "");
+    let st = seen.lock().unwrap();
+    let closes: Vec<&(String, String, String, String)> =
+        st.requests.iter().filter(|r| r.0 == "PATCH").collect();
+    assert_eq!(closes.len(), 1, "{:?}", st.requests);
+    assert_eq!(closes[0].1, "/repos/o/r/pulls/5");
+    assert_eq!(
+        serde_json::from_str::<Value>(&closes[0].3).unwrap(),
+        json!({"state": "closed"})
+    );
+    assert!(!st.pr_open);
+    assert!(closes[0].2.contains(CANARY));
 }
 
 // ───────────────────────── the revert of a change that broke the post-merge run (A2) ─────────────────────────

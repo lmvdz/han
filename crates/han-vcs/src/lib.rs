@@ -591,6 +591,22 @@ pub trait Vcs: Send + Sync + 'static {
     /// Moves a ref on a remote by compare-and-swap, pushing the objects `new` needs from `dir`.
     fn land(&self, dir: &Path, spec: &LandSpec, auth: Option<&RemoteAuth>) -> Result<LandOutcome>;
 
+    /// Deletes the branch `refname` (a full `refs/heads/...` name) from `remote`; a branch that is not there is
+    /// already deleted, so it succeeds. A landing lane removes the branch of a check-only try with it.
+    fn delete_branch(
+        &self,
+        dir: &Path,
+        remote: &str,
+        refname: &str,
+        auth: Option<&RemoteAuth>,
+    ) -> Result<()> {
+        let _ = (dir, remote, refname, auth);
+        Err(VcsError::Invalid(format!(
+            "{} deletes no branches",
+            self.name()
+        )))
+    }
+
     /// The commits `base..head` of the repository at `dir` as one self-describing file (for git, a bundle
     /// whose one ref, [`BUNDLE_REF`], is `head` and whose prerequisite is `base`). The host hands it to an
     /// executor that can't read `dir` (R15).

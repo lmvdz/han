@@ -64,6 +64,15 @@
 //!   culprit becomes `reverted`; when its own post-merge run is green, the changes the red run covered that
 //!   landed before it become `confirmed`. A revert whose own post-merge run is red is escalated, never reverted.
 //!
+//! **Check-only tries** (`vcs.try`, architecture.md P-17). The same machine runs a try: the lane squash-rebases the
+//! approved change onto the ref's tip, pushes the commit to `han/try/<proposal>`, opens a *draft* pull request from
+//! it (so that CI runs, as for a land) and tests it. A try has a group of its own, so it never takes the land slot of
+//! its ref and a land never waits for it. Red or a conflict ends in the executor's `effect.cancel` with a `test:` or
+//! `conflict:` reason and the evidence, as for a land. Green claims the effect through [`Executor::claim_for_lane`];
+//! `vcs.try` verifies the lane's instruction, moves no ref, and the outcome is `succeeded` with the checks' record
+//! as evidence (the state is `tried`). Whatever the end, the lane then closes the pull request and deletes the
+//! branch; the record says so until it has (a restart carries on).
+//!
 //! **Liveness.** Every state has a deadline ([`crate::Deadlines`]). A change past it, or with nothing
 //! pending, is *stalled* with its reason, and the item says so. The lane never waits silently.
 //!
@@ -98,6 +107,9 @@ use crate::{ExecError, Executor, IdempotencyKey, LaneInstruction, PlanError, Rep
 
 /// The profile the lane's items carry.
 pub const PROFILE: &str = "han.land/1";
+
+/// The branch prefix the lane pushes a check-only try's commit to: `han/try/<first 12 characters of the proposal id>`.
+pub const TRY_BRANCH_PREFIX: &str = "han/try/";
 
 /// How long a final change's item is sent again after a restart, in seconds (a week).
 const FINAL_REPUBLISH_SECS: i64 = 7 * 86_400;
@@ -134,6 +146,8 @@ pub enum State {
     Rejected,
     /// The proposal was cancelled before the lane landed it.
     Cancelled,
+    /// A check-only try (`vcs.try`) whose checks were green and whose effect succeeded; nothing landed.
+    Tried,
 }
 
 impl State {
@@ -148,6 +162,7 @@ impl State {
             State::Reverted => "reverted",
             State::Rejected => "rejected",
             State::Cancelled => "cancelled",
+            State::Tried => "tried",
         }
     }
 
@@ -155,7 +170,7 @@ impl State {
     pub fn is_final(self) -> bool {
         matches!(
             self,
-            State::Confirmed | State::Reverted | State::Rejected | State::Cancelled
+            State::Confirmed | State::Reverted | State::Rejected | State::Cancelled | State::Tried
         )
     }
 }
@@ -328,6 +343,12 @@ struct Change {
     /// The revert that undid this change, once it landed (A2).
     #[serde(default)]
     reverted_by: Option<String>,
+    /// A check-only try (`vcs.try`): it runs the checks and lands nothing, in a group of its own.
+    #[serde(default)]
+    check_only: bool,
+    /// The try is over and its pull request and branch are still to be removed.
+    #[serde(default)]
+    cleanup: bool,
     /// The record as last written (not itself written).
     #[serde(skip)]
     saved: String,
@@ -455,6 +476,27 @@ fn lane_branch(repo: &RepoTarget, refname: &str, proposal: &str) -> String {
         .take(12)
         .collect();
     format!("{}{r}/{p}", repo.lane_branch_prefix)
+}
+
+/// The branch of a check-only try: `han/try/<first 12 characters of the proposal id>`.
+fn try_branch(proposal: &str) -> String {
+    let p: String = proposal
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(12)
+        .collect();
+    format!("{TRY_BRANCH_PREFIX}{p}")
+}
+
+/// The number of the pull request in `pull request #N URL`.
+fn pr_number(pr: &str) -> Option<u64> {
+    let digits: String = pr
+        .split_once('#')?
+        .1
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
 }
 
 /// What a plan says the lane needs: the repository, the ref, the proposals it depends on and, for a revert, the
@@ -595,7 +637,68 @@ impl Lane {
             self.put(c)?;
         }
         self.publish(c).await?;
-        self.send_cancel(c).await
+        self.send_cancel(c).await?;
+        self.clean_try(c).await
+    }
+
+    /// Removes what a finished try left on the remote: its pull request is closed and its branch deleted. It is
+    /// kept in the record (`cleanup`) until both are done, so a failure or a restart tries again; a branch that
+    /// is not there is already gone.
+    async fn clean_try(&self, c: &mut Change) -> Result<(), ExecError> {
+        if !c.cleanup {
+            return Ok(());
+        }
+        let (Some(p), Some(repo)) = (
+            c.prepared.clone(),
+            self.exec.config().repo(&c.repo).cloned(),
+        ) else {
+            c.cleanup = false;
+            return self.put(c);
+        };
+        let mut done = true;
+        if let (Some(pr), Some(gh), Some(minter)) =
+            (p.pr.as_deref(), repo.github.as_deref(), self.exec.github())
+            && let Some(n) = pr_number(pr)
+            && let Err(e) = crate::actions::close_pr(minter, gh, n).await
+        {
+            tracing::warn!(proposal = %c.proposal, "lane: closing the try's pull request: {e}");
+            done = false;
+        }
+        let key = IdempotencyKey {
+            space: c.space.clone(),
+            proposal: c.proposal.clone(),
+            attempt: 0,
+        };
+        let ctx = self.exec.plain_ctx(&key);
+        let plan = json!({"target": c.repo});
+        match write_auth(&plan, &ctx).await {
+            Err(e) => {
+                tracing::warn!(proposal = %c.proposal, "lane: the try's branch cannot be deleted: {e}");
+                done = false;
+            }
+            Ok(auth) => {
+                let vcs = ctx.vcs.clone();
+                let mut dir = PathBuf::from(&p.repository);
+                if !dir.exists() {
+                    match vcs.fetch_ref(&repo.remote, auth.as_ref(), &c.refname) {
+                        Ok(Some((d, _))) => dir = d,
+                        _ => dir = PathBuf::new(),
+                    }
+                }
+                let full = format!("refs/heads/{}", p.branch);
+                if dir.as_os_str().is_empty() {
+                    tracing::warn!(proposal = %c.proposal, "lane: no repository to delete {full} from; it stays");
+                } else if let Err(e) = vcs.delete_branch(&dir, &repo.remote, &full, auth.as_ref()) {
+                    tracing::warn!(proposal = %c.proposal, "lane: deleting {full}: {e}");
+                    done = false;
+                }
+            }
+        }
+        if done {
+            c.cleanup = false;
+            self.put(c)?;
+        }
+        Ok(())
     }
 
     async fn publish(&self, c: &mut Change) -> Result<(), ExecError> {
@@ -773,6 +876,9 @@ impl Lane {
             "at": format_time(self.wall.now_secs()),
         });
         let o = b.as_object_mut().expect("an object");
+        if c.check_only {
+            o.insert("try".into(), json!(true));
+        }
         if let Some(p) = c.position {
             o.insert("position".into(), json!(p));
         }
@@ -833,6 +939,9 @@ impl Lane {
 
     async fn enter(&self, c: &mut Change, state: State, now: i64) -> Result<(), ExecError> {
         c.state = state;
+        if c.check_only && state.is_final() && c.prepared.is_some() {
+            c.cleanup = true;
+        }
         c.entered = now;
         c.problem = None;
         c.stalled = None;
@@ -1041,11 +1150,17 @@ impl Lane {
             }
         }
 
-        let mut groups: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
+        // A check-only try has a group of its own, so it never takes the land slot of its ref.
+        let mut groups: BTreeMap<(String, String, String, bool), Vec<usize>> = BTreeMap::new();
         for (i, c) in all.iter().enumerate() {
             if !c.state.is_final() {
                 groups
-                    .entry((c.space.clone(), c.repo.clone(), c.refname.clone()))
+                    .entry((
+                        c.space.clone(),
+                        c.repo.clone(),
+                        c.refname.clone(),
+                        c.check_only,
+                    ))
                     .or_default()
                     .push(i);
             }
@@ -1068,13 +1183,15 @@ impl Lane {
                 self.publish(c).await?;
             }
             self.send_cancel(c).await?;
+            self.clean_try(c).await?;
             self.republish(c, now).await;
         }
         self.lane_items(&all, now).await;
         Ok(rep)
     }
 
-    /// Makes a record for every approved `vcs.land` effect of a configured repository that has none.
+    /// Makes a record for every approved `vcs.land` effect of a configured repository that has none, and for
+    /// every open `vcs.try` that needs no approval (Policy says the proposer suffices) or has one.
     async fn discover(&self, rows: &[EffectRow], now: i64) -> Result<(), ExecError> {
         let known: Vec<(String, String)> = self
             .exec
@@ -1083,9 +1200,9 @@ impl Lane {
             .map(|(s, p, _)| (s, p))
             .collect();
         for row in rows {
-            if row.action != "vcs.land"
+            if !matches!(row.action.as_str(), "vcs.land" | "vcs.try")
                 || row.phase != "open"
-                || row.approvals.is_empty()
+                || (row.approvals.is_empty() && !row.proposer_suffices)
                 || known.contains(&(row.space.clone(), row.proposal.clone()))
             {
                 continue;
@@ -1134,6 +1251,8 @@ impl Lane {
                 culprit: None,
                 covered_by: None,
                 reverted_by: None,
+                check_only: row.action == "vcs.try",
+                cleanup: false,
                 saved: String::new(),
             };
             if let Err(why) = info {
@@ -1364,10 +1483,11 @@ impl Lane {
         repo: &RepoTarget,
         now: i64,
     ) -> Result<Prep, ExecError> {
-        let Some(action) = self.exec.action_of("vcs.land") else {
-            return Ok(Prep::Retry(
-                "vcs.land is not an action of this executor".into(),
-            ));
+        let kind = if c.check_only { "vcs.try" } else { "vcs.land" };
+        let Some(action) = self.exec.action_of(kind) else {
+            return Ok(Prep::Retry(format!(
+                "{kind} is not an action of this executor"
+            )));
         };
         let (_, plan) = match check_plan(row, action.as_ref(), self.exec.config()) {
             Ok(p) => p,
@@ -1434,11 +1554,19 @@ impl Lane {
             }
             Err(e) => return Ok(Prep::Retry(format!("fetching {refname}: {e}"))),
         };
-        let message = format!(
-            "{}\n\nHAN-Proposal: {}\n",
-            crate::actions::commit_title(&plan),
-            row.proposal
-        );
+        let message = if c.check_only {
+            format!(
+                "{}\n\nHAN-Try: {}\n",
+                crate::actions::try_title(&plan),
+                row.proposal
+            )
+        } else {
+            format!(
+                "{}\n\nHAN-Proposal: {}\n",
+                crate::actions::commit_title(&plan),
+                row.proposal
+            )
+        };
         let time = row
             .approved_at
             .as_deref()
@@ -1500,8 +1628,15 @@ impl Lane {
         };
 
         // The commit under test goes to the lane branch, and CI runs on that exact commit.
-        let branch = lane_branch(repo, refname, &row.proposal);
-        if let Err(e) = check_branch(&branch, std::slice::from_ref(&repo.lane_branch_prefix)) {
+        let (branch, prefix) = if c.check_only {
+            (try_branch(&row.proposal), TRY_BRANCH_PREFIX)
+        } else {
+            (
+                lane_branch(repo, refname, &row.proposal),
+                repo.lane_branch_prefix.as_str(),
+            )
+        };
+        if let Err(e) = check_branch(&branch, &[prefix.to_owned()]) {
             self.reject(c, "policy", &e.to_string(), None, None, now)
                 .await?;
             return Ok(Prep::Done);
@@ -1538,7 +1673,9 @@ impl Lane {
             repository: dir.to_string_lossy().into_owned(),
             pr: None,
         };
-        prepared.pr = self.open_pr(repo, &prepared, &plan, &row.proposal).await;
+        prepared.pr = self
+            .open_pr(repo, &prepared, &plan, &row.proposal, c.check_only)
+            .await;
         c.prepared = Some(prepared.clone());
         c.detail = None;
         c.reruns = 0;
@@ -1582,16 +1719,31 @@ impl Lane {
         p: &Prepared,
         plan: &Value,
         proposal: &str,
+        check_only: bool,
     ) -> Option<String> {
         let gh = repo.github.as_deref()?;
         let minter = self.exec.github()?;
         let refname = arg(plan, "ref");
         let base = refname.strip_prefix("refs/heads/").unwrap_or(refname);
-        let title = crate::actions::commit_title(plan);
-        let body = format!(
-            "HAN lane branch for proposal {proposal}. The lane tests this exact commit and lands it on {base} by compare-and-swap."
-        );
-        match crate::actions::ensure_pr(minter, gh, &p.branch, base, &title, &body).await {
+        // A try's pull request is a draft, only there so that CI runs; the lane closes it afterwards.
+        let (title, body) = if check_only {
+            (
+                format!("try: {}", crate::actions::try_title(plan)),
+                format!(
+                    "HAN check-only try for proposal {proposal}. The lane runs the checks on this exact commit and lands nothing; it closes this pull request and deletes the branch afterwards."
+                ),
+            )
+        } else {
+            (
+                crate::actions::commit_title(plan),
+                format!(
+                    "HAN lane branch for proposal {proposal}. The lane tests this exact commit and lands it on {base} by compare-and-swap."
+                ),
+            )
+        };
+        match crate::actions::ensure_pr(minter, gh, &p.branch, base, &title, &body, check_only)
+            .await
+        {
             Ok(d) => Some(d),
             Err(e) => {
                 tracing::warn!(proposal, "lane: opening the pull request: {e}");
@@ -1646,7 +1798,9 @@ impl Lane {
             && repo.github.is_some()
             && let Ok(plan) = serde_json::from_str::<Value>(row.plan.as_deref().unwrap_or(""))
         {
-            let pr = self.open_pr(repo, &p, &plan, &c.proposal).await;
+            let pr = self
+                .open_pr(repo, &p, &plan, &c.proposal, c.check_only)
+                .await;
             if let Some(prepared) = c.prepared.as_mut() {
                 prepared.pr = pr;
             }
@@ -1709,19 +1863,22 @@ impl Lane {
             }
             return Ok(());
         }
-        // All green. Has the ref moved? Then this commit is not the one that would land: prepare again.
-        let tip = self.tip(row, repo, &p.repository).await;
-        match tip {
-            Ok(t) if t.as_deref() != Some(p.onto.as_str()) => {
-                return self.requeue(c, "the ref moved while testing", now).await;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                c.problem = Some(format!("reading the ref: {e}"));
-                return Ok(());
+        // All green. Has the ref moved? Then this commit is not the one that would land: prepare again. (A try
+        // lands nothing: what it reports is that this commit passed.)
+        if !c.check_only {
+            let tip = self.tip(row, repo, &p.repository).await;
+            match tip {
+                Ok(t) if t.as_deref() != Some(p.onto.as_str()) => {
+                    return self.requeue(c, "the ref moved while testing", now).await;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    c.problem = Some(format!("reading the ref: {e}"));
+                    return Ok(());
+                }
             }
         }
-        if row.approvals.is_empty() {
+        if row.approvals.is_empty() && !row.proposer_suffices {
             // The approvals lapsed or were withdrawn: nothing can claim, and someone has to approve again.
             c.problem = Some("waiting for an approval: the checks are green".into());
             return Ok(());
@@ -1836,6 +1993,11 @@ impl Lane {
         now: i64,
         rep: &mut PassReport,
     ) -> Result<(), ExecError> {
+        if report.result == "succeeded" && c.check_only {
+            c.not_started = 0;
+            c.detail = Some(detail.to_owned());
+            return self.enter(c, State::Tried, now).await;
+        }
         if report.result == "succeeded" {
             c.not_started = 0;
             c.detail = Some(detail.to_owned());
@@ -3024,7 +3186,7 @@ impl Lane {
     /// One `lane` item per `(space, repo, ref)` whose depth or running set changed since the last one.
     async fn lane_items(&self, all: &[Change], now: i64) {
         let mut lanes: BTreeMap<(String, String, String), Vec<&Change>> = BTreeMap::new();
-        for c in all {
+        for c in all.iter().filter(|c| !c.check_only) {
             lanes
                 .entry((c.space.clone(), c.repo.clone(), c.refname.clone()))
                 .or_default()

@@ -301,7 +301,8 @@ async fn the_tool_list_is_the_reviewed_allow_list() {
             "team_who_is_on",
             "team_read",
             "team_overlaps",
-            "land_status"
+            "land_status",
+            "land_try"
         ]
     );
     assert_eq!(names, TOOL_NAMES);
@@ -377,6 +378,40 @@ async fn propose_goes_to_the_host_and_says_it_has_not_run() {
     .await;
     assert_eq!(r.is_error, Some(true));
     assert_eq!(rig.bridge.calls.lock().unwrap().proposals.len(), 1);
+}
+
+#[tokio::test]
+async fn land_try_proposes_a_check_only_try_and_points_at_land_status() {
+    let rig = rig().await;
+    let r = call(&rig, "land_try", json!({"summary": "run the checks"})).await;
+    assert_ne!(r.is_error, Some(true));
+    let text = serde_json::to_string(&r.content).unwrap();
+    assert!(
+        text.contains("Try E-1 started")
+            && text.contains("lands nothing")
+            && text.contains("land_status")
+    );
+    assert_eq!(structured(&r)["status"], "tried");
+    {
+        let calls = rig.bridge.calls.lock().unwrap();
+        assert_eq!(
+            calls.used,
+            vec![("land_try".into(), "run the checks".into())]
+        );
+        // the host builds the plan, never the agent: the tool names the kind and nothing else
+        assert_eq!(calls.proposals[0].kind, "try");
+        assert_eq!(calls.proposals[0].effect, json!({}));
+    }
+    // no `summary`: refused before the host sees it
+    let r = call(&rig, "land_try", json!({})).await;
+    assert_eq!(r.is_error, Some(true));
+    assert_eq!(rig.bridge.calls.lock().unwrap().proposals.len(), 1);
+
+    // a refusal (the same commit was tried already) is a tool error naming why
+    let rig = rig_with(vec![], true).await;
+    let r = call(&rig, "land_try", json!({"summary": "again"})).await;
+    assert_eq!(r.is_error, Some(true));
+    assert_eq!(structured(&r)["status"], "refused");
 }
 
 #[tokio::test]

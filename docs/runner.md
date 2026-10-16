@@ -567,6 +567,18 @@ Landing has three settings, each set by a command, none by hand. The default is 
 
 `han doctor [--check-github-app]` checks the lot (`land.*` in 8.1) and prints the fix for each. The GitHub App check asks GitHub, with the App's JWT, what the installation may do (Contents write, Checks read, Commit statuses read; Actions write when a repository sets `rerun` above 0 or turns `auto_revert` on), so it is only done when asked.
 
+### 9.1a Check-only tries (`land_try`)
+
+An agent that cannot build or test in its sandbox asks for the lane's fast checks on its work without landing it: the MCP tool `land_try` (next to `land_status`) commits the workspace as the agent, bundles it and proposes a `vcs.try` (P-17). The lane squash-rebases it onto the ref's tip, pushes the commit to `han/try/<id>`, opens a **draft** pull request from it (the repository's CI runs on pull requests and on pushes to `main` only) and tests that exact commit, in a group of its own, so it never takes the land slot. Green: the effect succeeds with the checks as evidence. Red or a conflict: the lane cancels it with a `test:` or `conflict:` reason and the evidence, and the host steers the agent once (reason `try_failed`). Either way the lane closes the pull request and deletes the branch. Nothing lands, and a try counts toward no land attempt cap (a separate bound of eight steers keeps a loop of failing tries finite). Asking again for the same commit is refused: the answer is in `land_status`.
+
+It needs the space's policy to say that the proposal suffices, or the try waits for an approval like any other action. Put this rule before any `"*"` rule (the first rule that applies decides), with `han space policy <space> <file>`:
+
+```json
+{"action": "vcs.try", "approvers": ["owner"], "proposer": true}
+```
+
+`proposer: true` is valid on `vcs.try` and nowhere else. A guarded agent's try still needs its guard's approval (P-15), and in a budgeted space a try is charged to the agent's task like any effect (P-06). The executor's gate reads the rule's answer from the node (`proposerSuffices` in the Effects view), not from a list of actions of its own. The write App needs nothing beyond the lane's: Contents write for the branch, Pull requests write for the draft.
+
 ### 9.2 The machine reviewer (tier 1)
 
 A landing of tier 0 or 1 (P-17) may be approved by a **machine reviewer** instead of a person: an independent model reads the change and returns a typed verdict, recorded as a `han.review/1` record over the landing's delta digest. It is off unless configured, it never approves tier 2 or 3, and Policy decides whether its approval counts. `han review run` is the service (crate `han-review`; the pipeline and the record are described there).

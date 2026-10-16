@@ -1,0 +1,27 @@
+{
+  "agent": {"name": "pi-acp", "version": "0.0.34"},
+  "modes": {"current": "off", "available": ["off"]},
+  "turns": [
+    {"steps": [
+      {"type": "tool_call", "id": "toolu_w1", "title": "write src/auth/login.rs", "kind": "edit", "locations": ["src/auth/login.rs"], "rawInput": {"path": "src/auth/login.rs"}},
+      {"type": "write_file", "path": "src/auth/login.rs", "content": "pub fn login(user: &str) -> bool {\n    !user.is_empty()\n}\n"},
+      {"type": "tool_update", "id": "toolu_w1", "status": "completed", "output": "Wrote src/auth/login.rs"},
+      {"type": "mcp_call", "id": "toolu_t1", "server": "han", "tool": "land_try", "args": {"summary": "Run the checks on the login check"}},
+      {"type": "mcp_call", "id": "toolu_s1", "server": "han", "tool": "land_status", "args": {"summary": "See where the try stands"}},
+      {"type": "message", "text": "The checks are running; nothing is proposed for landing yet."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "tool_call", "id": "toolu_w2", "title": "write src/auth/login.rs", "kind": "edit", "locations": ["src/auth/login.rs"], "rawInput": {"path": "src/auth/login.rs"}},
+      {"type": "write_file", "path": "src/auth/login.rs", "content": "pub fn login(user: &str, token: &str) -> bool {\n    !user.is_empty() && token.len() >= 8\n}\n"},
+      {"type": "tool_update", "id": "toolu_w2", "status": "completed", "output": "Wrote src/auth/login.rs"},
+      {"type": "mcp_call", "id": "toolu_t2", "server": "han", "tool": "land_try", "args": {"summary": "Run the checks again on the fixed login check"}},
+      {"type": "message", "text": "Fixed; the checks run again."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]},
+    {"steps": [
+      {"type": "message", "text": "Nothing more to do."},
+      {"type": "end", "stopReason": "end_turn"}
+    ]}
+  ]
+}

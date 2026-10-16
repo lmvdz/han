@@ -73,7 +73,7 @@ async fn find_pr(octo: &octocrab::Octocrab, gh: &str, head: &str) -> Result<Foun
 
 /// A pull request for `head` into `base` on `gh` (`owner/name`): the open one when there is one (a push to
 /// `head` already updated it), else a new one. Returns what it found or opened, as `pull request #N URL`.
-/// The landing lane calls this for the branch it pushes the commit under test to.
+/// The landing lane calls this for the branch it pushes the commit under test to; `draft` for a check-only try's.
 pub(crate) async fn ensure_pr(
     minter: &crate::github::GithubMinter,
     gh: &str,
@@ -81,12 +81,16 @@ pub(crate) async fn ensure_pr(
     base: &str,
     title: &str,
     body: &str,
+    draft: bool,
 ) -> Result<String, String> {
     let octo = minter.client(gh, &[("pull_requests", "write")]).await?;
     if let Found::Open(d) = find_pr(&octo, gh, head).await? {
         return Ok(d);
     }
-    let req = json!({"title": title, "head": head, "base": base, "body": body});
+    let mut req = json!({"title": title, "head": head, "base": base, "body": body});
+    if draft {
+        req["draft"] = json!(true);
+    }
     match octo.post(format!("/repos/{gh}/pulls"), Some(&req)).await {
         Ok::<Value, _>(pr) => Ok(describe(&pr)),
         // The request went out; whether GitHub made the pull request is known from a lookup.
@@ -95,6 +99,21 @@ pub(crate) async fn ensure_pr(
             Found::None => Err("creating the pull request failed".into()),
         },
     }
+}
+
+/// Closes pull request `number` on `gh` (`owner/name`); one that is closed already is closed.
+pub(crate) async fn close_pr(
+    minter: &crate::github::GithubMinter,
+    gh: &str,
+    number: u64,
+) -> Result<(), String> {
+    let octo = minter.client(gh, &[("pull_requests", "write")]).await?;
+    let req = json!({"state": "closed"});
+    let _: Value = octo
+        .patch(format!("/repos/{gh}/pulls/{number}"), Some(&req))
+        .await
+        .map_err(|_| "closing the pull request failed".to_string())?;
+    Ok(())
 }
 
 fn describe(pr: &Value) -> String {

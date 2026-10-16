@@ -475,6 +475,13 @@ impl Shared {
                 let draft = flow.draft_with(&req.summary, &effect, commit)?;
                 Ok((draft.plan, Some(draft.bundle)))
             }
+            "try" => {
+                let flow = self.land.as_ref().ok_or(
+                    "land is not enabled for this space and repository: there is no landing lane to run checks",
+                )?;
+                let draft = flow.draft_try(&req.summary)?;
+                Ok((draft.plan, Some(draft.bundle)))
+            }
             "http_request" => {
                 let url = effect
                     .get("url")
@@ -497,7 +504,7 @@ impl Shared {
                 ))
             }
             other => Err(format!(
-                "unknown kind {other}: use git_push, open_pr, http_request or land"
+                "unknown kind {other}: use git_push, open_pr, http_request or land (land_try runs the checks)"
             )),
         }
     }
@@ -720,12 +727,20 @@ async fn propose_plan(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
 /// Makes the proposal, and keeps the land flow's ledger in step: a `land` proposal that exists is frozen, one
 /// that was refused leaves no trace.
 async fn propose_effect(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
-    let land = sh.land.clone().filter(|_| req.kind == "land");
+    let try_run = req.kind == "try";
+    let land = sh
+        .land
+        .clone()
+        .filter(|_| req.kind == "land" || req.kind == "try");
     let answer = propose_plan(sh, req).await;
     if let Some(flow) = land {
         match &answer {
             ProposeAnswer::Proposed { id, .. } | ProposeAnswer::Queued { id } => {
-                flow.proposed(id);
+                if try_run {
+                    flow.try_proposed(id);
+                } else {
+                    flow.proposed(id);
+                }
             }
             ProposeAnswer::Refused { .. } => flow.abandon(),
         }
@@ -1529,11 +1544,15 @@ async fn run_opened(
                 let Some(flow) = shared.land.clone() else { continue };
                 match flow.steer().await {
                     Some(crate::land::SteerDue::Turn(s)) => {
-                        shared.signal(Signal::Summary(format!(
-                            "land proposal {} was rejected ({}): the agent is told to fix it and propose again",
-                            s.proposal.chars().take(12).collect::<String>(),
-                            s.reason
-                        )));
+                        let id = s.proposal.chars().take(12).collect::<String>();
+                        shared.signal(Signal::Summary(if s.reason == "try_failed" {
+                            format!("check-only try {id} failed: the agent is told what the lane found")
+                        } else {
+                            format!(
+                                "land proposal {id} was rejected ({}): the agent is told to fix it and propose again",
+                                s.reason
+                            )
+                        }));
                         let driver = Driver {
                             author: cfg.agent.clone(),
                             kind: DriverKind::Host,
@@ -1930,8 +1949,10 @@ async fn turn(
         step: match (&driver.kind, decision.mode) {
             (DriverKind::Task { .. }, Mode::Strict) => "working on the task (strict)".into(),
             (DriverKind::Task { .. }, Mode::Auto) => "working on the task".into(),
-            (DriverKind::Host, Mode::Strict) => "fixing a rejected land proposal (strict)".into(),
-            (DriverKind::Host, Mode::Auto) => "fixing a rejected land proposal".into(),
+            (DriverKind::Host, Mode::Strict) => {
+                "fixing a rejected land proposal or try (strict)".into()
+            }
+            (DriverKind::Host, Mode::Auto) => "fixing a rejected land proposal or try".into(),
             (_, Mode::Strict) => format!("steered by {} (strict)", driver.author),
             (_, Mode::Auto) => format!("steered by {}", driver.author),
         },

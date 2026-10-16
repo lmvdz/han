@@ -12,7 +12,7 @@ pub use git_push::GitPush;
 pub use http_request::{HttpRequest, is_public};
 pub use land::{REF_MOVED, VcsLand, bundle_base, change_digest, commit_title, depends_cycle};
 pub use open_pr::OpenPr;
-pub(crate) use open_pr::ensure_pr;
+pub(crate) use open_pr::{close_pr, ensure_pr};
 pub use vcs_try::{VcsTry, try_title};
 
 use crate::{Action, ActionCtx, PlanError};
