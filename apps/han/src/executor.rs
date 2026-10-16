@@ -115,6 +115,9 @@ enum ExecutorCmd {
         /// How many times a red required check is asked to run again before the change is rejected.
         #[arg(long)]
         rerun: Option<u32>,
+        /// Whether the lane reverts the change that breaks the post-merge run (`true`/`false`; default off).
+        #[arg(long)]
+        auto_revert: Option<bool>,
         /// Deadline of `queued`, in seconds.
         #[arg(long)]
         queued_secs: Option<u64>,
@@ -146,6 +149,7 @@ pub struct LandingEdit {
     pub poll_secs: Option<u64>,
     pub appear_secs: Option<u64>,
     pub rerun: Option<u32>,
+    pub auto_revert: Option<bool>,
     pub queued_secs: Option<u64>,
     pub testing_secs: Option<u64>,
     pub landing_secs: Option<u64>,
@@ -236,6 +240,9 @@ fn apply_landing(cfg: &mut ExecConfig, name: &str, edit: &LandingEdit) -> Res<bo
     }
     if let Some(v) = edit.rerun {
         r.checks.rerun = v;
+    }
+    if let Some(v) = edit.auto_revert {
+        r.checks.auto_revert = v;
     }
     if let Some(v) = edit.queued_secs {
         r.deadlines.queued_secs = v;
@@ -418,6 +425,7 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
             poll_secs,
             appear_secs,
             rerun,
+            auto_revert,
             queued_secs,
             testing_secs,
             landing_secs,
@@ -433,6 +441,7 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
                 poll_secs,
                 appear_secs,
                 rerun,
+                auto_revert,
                 queued_secs,
                 testing_secs,
                 landing_secs,

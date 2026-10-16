@@ -173,7 +173,14 @@ pub fn fold(state: Option<&SpaceState>, record: &Record, ctx: &Ctx) -> Result<Sp
                 // P-15: fixed now, never shrinks
                 guarded_for: effect_guarded_for(&s, ctx, author, &b.executor, b.task.as_deref()),
                 // P-17: fixed now, from the policy in force
-                gate: gate_of(&s.policy, &b.action, b.change.as_ref(), ctx, author),
+                gate: gate_of(
+                    &s.policy,
+                    &b.action,
+                    b.change.as_ref(),
+                    &s.effects,
+                    ctx,
+                    author,
+                ),
                 expires_at: b.expires_at.clone(),
                 approvals: Vec::new(),
                 claims: Vec::new(),

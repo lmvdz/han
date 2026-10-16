@@ -148,6 +148,7 @@ static DEFAULT_GATED_RULE: LazyLock<ApprovalRule> = LazyLock::new(|| ApprovalRul
     humans: None,
     evidence: None,
     needs: None,
+    revert: None,
 });
 
 /// P-08 (round 33): the rule that applies to `eff`: the first whose action matches and whose tier predicate
@@ -158,6 +159,9 @@ pub(super) fn rule_for<'a>(state: &'a SpaceState, eff: &Effect) -> Option<&'a Ap
     for r in &state.policy.approvals {
         if r.action != eff.action && r.action != "*" {
             continue;
+        }
+        if r.revert == Some(true) && g.is_none_or(|g| g.revert_of.is_none()) {
+            continue; // A2: the revert predicate covers only a revert
         }
         let predicated = r.min_tier.is_some() || r.max_tier.is_some();
         if predicated
@@ -201,13 +205,33 @@ pub(super) fn counts(
             return false;
         }
         if let Some(k) = &rule.evidence {
-            let over = g.and_then(|g| g.delta_digest.as_deref());
+            // A2: a revert rule's evidence names the failing run over the *reverted* delta
+            let over = if rule.revert == Some(true) {
+                g.and_then(|g| g.reverted_digest.as_deref())
+            } else {
+                g.and_then(|g| g.delta_digest.as_deref())
+            };
             if !evidence.is_some_and(|e| e.kind == *k && Some(e.over.as_str()) == over) {
                 return false;
             }
         }
     }
     true
+}
+
+/// A2: whether `author` approving `eff` is the lane approving its own revert, which `separateApprover` does not
+/// stop: the rule is a revert rule, the author is a machine and is both the proposer and the executor. A machine
+/// never counts at tier 2 or more (`counts`), so this lifts nothing there.
+pub(super) fn self_revert_approval(
+    eff: &Effect,
+    rule: &ApprovalRule,
+    author: &str,
+    kind: ActorKind,
+) -> bool {
+    rule.revert == Some(true)
+        && kind != ActorKind::Human
+        && author == eff.proposer
+        && author == eff.executor
 }
 
 /// P-07 E3 (round 33): the distinct approvals a claim consumes under the rule: its `needs`, and two when the
@@ -249,7 +273,11 @@ pub(super) fn approval_candidates<'e>(
                 a.evidence.as_ref(),
             )
         })
-        .filter(|a| !(state.policy.separate_approver && a.author == eff.proposer))
+        .filter(|a| {
+            !(state.policy.separate_approver
+                && a.author == eff.proposer
+                && !self_revert_approval(eff, rule, &a.author, a.actor_kind))
+        })
         .collect()
 }
 

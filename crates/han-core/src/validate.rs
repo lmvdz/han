@@ -203,6 +203,7 @@ fn approval_rule(v: &Value) -> bool {
             "humans",
             "evidence",
             "needs",
+            "revert",
         ],
     ) else {
         return false;
@@ -236,6 +237,7 @@ fn approval_rule(v: &Value) -> bool {
             .is_none_or(|e| str_with(e, is_evidence_kind))
         && m.get("needs")
             .is_none_or(|n| matches!(n, Value::Int(i) if (1..=3).contains(i)))
+        && m.get("revert").is_none_or(|r| *r == Value::Bool(true))
 }
 
 fn rule_repo(m: &BTreeMap<String, Value>) -> bool {
@@ -286,7 +288,14 @@ pub fn change_summary(v: &Value) -> bool {
     let Some(m) = within(
         v,
         &["repo", "deltaDigest", "total", "files"],
-        &["repo", "deltaDigest", "total", "files", "truncated"],
+        &[
+            "repo",
+            "deltaDigest",
+            "total",
+            "files",
+            "truncated",
+            "revertOf",
+        ],
     ) else {
         return false;
     };
@@ -301,6 +310,9 @@ pub fn change_summary(v: &Value) -> bool {
         return false;
     }
     if m.get("truncated").is_some_and(|t| *t != Value::Bool(true)) {
+        return false;
+    }
+    if m.get("revertOf").is_some_and(|r| !hex(r)) {
         return false;
     }
     let mut last: Option<&str> = None;

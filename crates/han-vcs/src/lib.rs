@@ -732,6 +732,27 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// A commit on `parent` whose tree is the tree of `tree_of` (both commits of the repository at `dir`),
+    /// written without touching any checkout. With `parent` a commit and `tree_of` its own parent, the commit
+    /// is the exact inverse of `tree_of..parent`: its delta from `parent` is the delta from `parent` back to
+    /// `tree_of`, which a landing lane lands as a revert (A2). The commit is a function of the arguments, as
+    /// [`Vcs::squash_rebase`]'s is.
+    fn tree_commit(
+        &self,
+        dir: &Path,
+        parent: &str,
+        tree_of: &str,
+        message: &str,
+        author: &str,
+        committer_time: i64,
+    ) -> Result<String> {
+        let _ = (dir, parent, tree_of, message, author, committer_time);
+        Err(VcsError::Invalid(format!(
+            "{} makes no tree commits",
+            self.name()
+        )))
+    }
+
     /// Whether `ancestor` is `descendant` or one of its ancestors, in the repository at `dir`. Both are
     /// commit ids (the descendant may be `HEAD`). A host asks it before it bases new work on a commit it already proposed.
     fn is_ancestor(&self, dir: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -817,6 +838,17 @@ fn is_valid(c: &Change) -> bool {
 /// in order, each with its size from `lines`, as many as fit the summary's bounds; when not all do, a prefix
 /// and `truncated`. `repo` is the plan's `target`.
 pub fn land_change(repo: &str, delta: &Delta, lines: &[u64]) -> Result<Change> {
+    land_change_of(repo, delta, lines, None)
+}
+
+/// [`land_change`] for a revert (A2): the summary names the `vcs.land` effect it inverts as `revertOf`, and the
+/// bounds are those of the summary with it.
+pub fn land_change_of(
+    repo: &str,
+    delta: &Delta,
+    lines: &[u64],
+    revert_of: Option<&str>,
+) -> Result<Change> {
     if lines.len() != delta.entries.len() {
         return Err(VcsError::Invalid(
             "a size for every entry of the delta".into(),
@@ -829,6 +861,7 @@ pub fn land_change(repo: &str, delta: &Delta, lines: &[u64]) -> Result<Change> {
         total,
         files: Vec::new(),
         truncated: (total > 0).then_some(true),
+        revert_of: revert_of.map(str::to_owned),
     };
     if !is_valid(&Change {
         files: Vec::new(),

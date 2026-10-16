@@ -707,6 +707,12 @@ impl Executor {
             Ok(p) => p,
             Err(e) => return Ok(refused(e)),
         };
+        if let Err(why) = self.check_revert(row, &plan) {
+            return Ok(LaneClaim::Refused {
+                permanent: true,
+                why,
+            });
+        }
         let decision = self.cfg.gate.decide(&GateInput {
             action: row.action.clone(),
             target: crate::plan_target(&plan).to_owned(),
@@ -753,6 +759,48 @@ impl Executor {
                 Flow::Ran(outcome, report) => LaneClaim::Ran { outcome, report },
             },
         )
+    }
+
+    /// X-13, A2: a plan whose `args.change.revertOf` names a land is a revert only if that land is one this
+    /// executor made (its journal holds a succeeded lane attempt of the proposal), and the plan's delta is the
+    /// exact inverse of what that land changed: the delta from the landed commit back to the tip it landed on
+    /// has the plan's `deltaDigest`. `Err` is the reason; no claim is made.
+    pub(crate) fn check_revert(&self, row: &EffectRow, plan: &Value) -> Result<(), String> {
+        let Some(of) = plan
+            .pointer("/args/change/revertOf")
+            .and_then(Value::as_str)
+        else {
+            return Ok(());
+        };
+        let attempts = lock(&self.ledger)
+            .attempts_of(&row.space, of)
+            .map_err(|e| e.to_string())?;
+        let landed = attempts
+            .iter()
+            .rev()
+            .find_map(|a| {
+                let succeeded = a.report.as_ref().is_some_and(|r| r.result == "succeeded");
+                a.lane.as_ref().filter(|_| succeeded)
+            })
+            .ok_or_else(|| format!("revertOf {of} is no land this executor made"))?;
+        let want = plan
+            .pointer("/args/deltaDigest")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let inverse = self
+            .cfg
+            .vcs
+            .delta(&landed.repository, &landed.commit, &landed.onto)
+            .and_then(|d| d.digest())
+            .map_err(|e| format!("the inverse of {of}: {e}"))?;
+        if inverse != want {
+            return Err(format!(
+                "the plan's delta is not the inverse of the change {of} landed (delta {} is not {})",
+                &want[..want.len().min(8)],
+                &inverse[..inverse.len().min(8)]
+            ));
+        }
+        Ok(())
     }
 
     // ───────────────────────── the loop ─────────────────────────

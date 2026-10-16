@@ -4,9 +4,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeMap;
+
 use super::Ctx;
 use super::doc::{ActorKind, GatesDoc, PathClass, PolicyDoc};
-use crate::types::ActorId;
+use super::state::Effect;
+use crate::types::{ActorId, EntryId};
 
 /// Files a change summary lists.
 pub const MAX_CHANGE_FILES: usize = 64;
@@ -119,6 +122,10 @@ pub struct Change {
     /// Present (true) when `files` leaves paths out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
+    /// A revert (A2): the `vcs.land` effect of this space whose delta this change inverts. Policy checks that
+    /// it is a succeeded `vcs.land`; the executor checks the inverse (X-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revert_of: Option<EntryId>,
 }
 
 impl Change {
@@ -157,6 +164,12 @@ pub struct Gate {
     /// The path owners, or the proposer's confirmed operator when none matched.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owners: Vec<ActorId>,
+    /// The `vcs.land` effect this change reverts (A2); fixed at the proposal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revert_of: Option<EntryId>,
+    /// The reverted effect's delta digest: what a revert rule's evidence must be over (A2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverted_digest: Option<String>,
 }
 
 // ───────────────────────── globs and paths ─────────────────────────
@@ -311,6 +324,7 @@ pub(super) fn gate_of(
     policy: &PolicyDoc,
     action: &str,
     change: Option<&Change>,
+    effects: &BTreeMap<EntryId, Effect>,
     ctx: &Ctx,
     author: &str,
 ) -> Option<Gate> {
@@ -319,7 +333,14 @@ pub(super) fn gate_of(
         return None;
     }
     // what is not shown is not known: no summary fails closed, like a truncated one
-    let tier = change.map_or(3, |ch| tier_of(gates, ch));
+    let mut tier = change.map_or(3, |ch| tier_of(gates, ch));
+    // A2: a revert is at least the tier of the change it reverts (one with no gate is not known: tier 3)
+    let reverted = change
+        .and_then(|ch| ch.revert_of.as_ref())
+        .and_then(|id| effects.get(id));
+    if let Some(r) = reverted {
+        tier = tier.max(r.gate.as_ref().map_or(3, |g| g.tier));
+    }
     let mut owners: Vec<ActorId> = Vec::new();
     if let Some(ch) = change {
         for f in &ch.files {
@@ -350,5 +371,9 @@ pub(super) fn gate_of(
         delta_digest: change.map(|c| c.delta_digest.clone()),
         change_digest: change.map(Change::digest),
         owners,
+        revert_of: change.and_then(|c| c.revert_of.clone()),
+        reverted_digest: reverted
+            .and_then(|r| r.gate.as_ref())
+            .and_then(|g| g.delta_digest.clone()),
     })
 }

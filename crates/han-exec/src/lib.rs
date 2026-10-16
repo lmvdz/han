@@ -329,6 +329,11 @@ pub struct ChecksConfig {
     /// (default 0).
     #[serde(default)]
     pub rerun: u32,
+    /// Whether the lane reverts the change that broke the post-merge run (A2): it bisects the landed changes
+    /// the red run covered, proposes a revert of the culprit and, when Policy lets it (tier 0 and 1), approves
+    /// it itself. Default off: a red run is then only escalated.
+    #[serde(default)]
+    pub auto_revert: bool,
 }
 
 fn default_required() -> Vec<String> {
@@ -352,6 +357,7 @@ impl Default for ChecksConfig {
             poll_secs: default_poll_secs(),
             appear_secs: default_appear_secs(),
             rerun: 0,
+            auto_revert: false,
         }
     }
 }
