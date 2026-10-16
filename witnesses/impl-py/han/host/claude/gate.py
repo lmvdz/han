@@ -2,6 +2,7 @@
 testable without the SDK. It knows nothing of HAN entries: a `world` decision names the action the host will propose."""
 from __future__ import annotations
 import os, re
+from ...paths import portable_relative
 from dataclasses import dataclass, field
 
 FILE_TOOLS = ("Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep")
@@ -79,9 +80,12 @@ COMMANDS = {
     "touch": Cmd(pos="wpath", write=True),
 }
 LOCAL_BASH = tuple(COMMANDS)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 def inside(root: str, path: str) -> bool:
     """Is `path` (relative to `root` if not absolute; symlinks resolved) within `root`?"""
+    if not isinstance(path, str) or _CONTROL.search(path): return False
+    if not os.path.isabs(path) and not portable_relative(path, True): return False      # a drive form is a relative name to POSIX: refuse it everywhere
     root = os.path.realpath(root)
     full = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
     try: return os.path.commonpath([os.path.normcase(full), os.path.normcase(root)]) == os.path.normcase(root)
@@ -114,7 +118,7 @@ class Gate:
         if any(not isinstance(p, str) or not inside(self.cwd, p) for p in paths):
             return Decision("deny", f"{tool}: path is outside the workspace" + (PROPOSE_HINT if mode == "strict" and tool in WRITE_TOOLS else ""))
         pat = inp.get("pattern") if tool == "Glob" else None       # a glob can climb out with .. or an absolute prefix
-        if isinstance(pat, str) and (os.path.isabs(pat) or re.match(r"^[A-Za-z]:", pat) or ".." in re.split(r"[\\/]", pat)):
+        if isinstance(pat, str) and not portable_relative(pat, True):
             return Decision("deny", "Glob: pattern leaves the workspace")
         return Decision("allow")
 
@@ -136,7 +140,7 @@ class Gate:
         """E7: a path argument names something inside the workspace. `~` (home expansion), UNC (`\\\\`, `//`), drive letters, absolute
         paths and `..` are refused outright; anything else must resolve inside (symlinks resolved)."""
         if not p or "~" in p or "//" in p or "\\\\" in p: return False
-        if os.path.isabs(p) or re.match(r"^[A-Za-z]:", p) or ".." in re.split(r"[\\/]", p): return False
+        if not portable_relative(p, True): return False
         return inside(self.cwd, p)
 
     def _check_value(self, kind: str, v: str, strict: bool) -> str | None:

@@ -98,7 +98,7 @@ The spec's [§8](spec/core/architecture.md) binding (`han/1`) runs over QUIC wit
 - an executor;
 - an agent host (a scripted agent and a Claude Code driver);
 - a verifier, federation between servers, and a CLI;
-- <!--s:impl_n-->241<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
+- <!--s:impl_n-->245<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
 
 **The honest gaps:**
 - **Interop:** the TypeScript and Python witnesses have been run against each other on the legacy WebSocket carrier ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations). Over QUIC, only the Rust implementation runs the wire vectors so far; there is no second QUIC implementation to interoperate with.
