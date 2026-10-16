@@ -695,20 +695,31 @@ def _task_cancel(state, entry, ctx, role):
     if entry["author"] != t["author"] and role != "owner": return deny("only asker or owner")
     return ALLOW
 
+def _revert_task(state, ctx, author, b):
+    """P-06 (round 33): a non-human's proposal of a revert in a budgeted space may name exactly the task its reverted `vcs.land` named,
+    if that task is open and budgeted. Then neither the assignee check nor the agent's own-task check applies to it."""
+    if not space_unit(state) or ctx["profiles"][author]["actorKind"] == "human": return False
+    if b.get("action") != "vcs.land" or "task" not in b or "revertOf" not in b.get("change", {}): return False
+    target = state["effects"].get(b["change"]["revertOf"])
+    if target is None or target["action"] != "vcs.land" or target["phase"] != "succeeded": return False
+    t = state["tasks"].get(b["task"])
+    return target.get("task") == b["task"] and bool(t) and t["open"] and bool(t.get("left"))
+
 def _propose(state, entry, ctx, role):
     b, author = entry["body"], entry["author"]
     if role not in ("owner", "member"): return deny("not allowed to propose")
+    revert_task = _revert_task(state, ctx, author, b)
     if "task" in b:
         t = state["tasks"].get(b["task"])
         if not t: return invalid("no such task")
         if not t["open"]: return deny("task not open")
-        if author not in t["to"] and role != "owner": return deny("only an assignee or owner charges a task")
+        if author not in t["to"] and role != "owner" and not revert_task: return deny("only an assignee or owner charges a task")
     unit = space_unit(state)
     if unit and ("cost" not in b or b["cost"]["unit"] != unit): return deny("budgeted space: cost in the space's unit required")
     if not _accountable(state, ctx, author): return deny("agent's operator confirmation withdrawn")
     if unit and ctx["profiles"][author]["actorKind"] != "human":
         mine = _budgeted_tasks_of(state, author)
-        if b.get("task") not in mine: return deny("agents spend only from a budgeted task assigned to them")
+        if b.get("task") not in mine and not revert_task: return deny("agents spend only from a budgeted task assigned to them")
     if over_bound(effect_guarded_for(state, ctx, author, b["executor"], b.get("task")), author, b["executor"]):
         return deny("too many guarded tasks; close some")                       # P-15: the bound is kept, never exceeded
     if "change" in b and b["action"] != "vcs.land": return invalid("a change summary belongs to a vcs.land")   # P-17

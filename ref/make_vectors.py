@@ -2591,6 +2591,53 @@ v.step(lappr("wa3", "w3", author=O), "allow").step(claim("cw3x", "w3"), "denied"
 v.step(lappr("wa3h", "w3", author=H3), "allow").step(claim("cw3", "w3"), "allow", check={"effects.w3.claims.0.approval": "wa3", "effects.w3.claims.0.coApprovals": ["wa3h"]})
 add(v.done())
 
+v = V("revert-budget", ["P-06", "P-16", "P-17", "P-07 E6"], "round 33, A2: in a budgeted space a non-human's proposal that carries change.revertOf may name exactly the task the reverted vcs.land named, if that task is open and budgeted (it need not be an assignee); the revert's cost is reserved from and charged to that task; a different task, a closed, unbudgeted or absent task, a reverted land that is not a landed vcs.land, and a proposal with no revertOf are denied as before; a human proposer is unaffected")
+team(v, policy(budget=USD(1000)))
+v.step(ms("mh", O, H3, "member"), "allow")
+for t, n in (("t1", 300), ("t2", 300), ("t3", 100), ("t5", 110), ("t8", 100)):
+    v.step(E(t, "task", O, {"to": [P], "budget": USD(n)}), "allow")
+v.step(E("t7", "task", O, {"to": [P]}), "allow", note="no budget of its own")
+def landc(id, task, cost):
+    v.step(lprop(id, chg([("src/a.rs", "modify", 1)], label=id), cost=USD(cost), task=task), "allow")
+    v.step(claim("c" + id, id), "allow").step(outc("o" + id, "c" + id, "succeeded", "yes", cost=USD(cost)), "allow", check={f"effects.{id}.phase": "succeeded"})
+landc("l1", "t1", 50); landc("l2", "t2", 50); landc("l3", "t3", 50); landc("l5", "t5", 50); landc("l7", "t7", 10); landc("l8", "t8", 50)
+v.step(lprop("l4", chg([("src/a.rs", "modify", 1)], label="l4"), cost=USD(10)), "allow", note="a human's land with no task: charged to the space")
+v.step(claim("cl4", "l4"), "allow").step(outc("ol4", "cl4", "succeeded", "yes", cost=USD(10)), "allow")
+v.step(lprop("l6", chg([("src/a.rs", "modify", 1)], label="l6"), cost=USD(10), task="t1"), "allow", note="proposed, never claimed")
+v.step(E("t4", "task", O, {"to": [P]}), "allow", check={"tasks.t1.left": USD(250)})
+# the exact task, open and budgeted: allowed and charged
+v.step(rprop("r1", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), task="t1"), "allow", check={"effects.r1.task": "t1"}, note="the lane is no assignee of t1, yet it names the task l1 named")
+v.step(claim("cr1", "r1"), "allow", check={"tasks.t1.left": USD(200), "budgetLeft": USD(70)}, note="E6: reserved from t1")
+v.step(outc("or1", "cr1", "succeeded", "yes", cost=USD(40)), "allow", check={"tasks.t1.left": USD(210)}, note="settled on t1: the 10 not spent is refunded to t1")
+v.step(prop("gp", cost=USD(10), task="t1"), "allow").step(claim("cgp", "gp"), "allow").step(outc("ogp", "cgp", "succeeded", "yes", cost=USD(10)), "allow")
+v.step(rprop("rg", "gp", [("src/a.rs", "modify", 1)], cost=USD(10), task="t1"), "denied", note="gp succeeded under t1 but is no vcs.land: the exception does not apply")
+# another task, whatever its state or budget
+v.step(rprop("r2", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), task="t2"), "denied", note="another budgeted task, though open")
+v.step(rprop("r2b", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), task="t4"), "denied", note="another task")
+v.step(rprop("r7", "l7", [("src/a.rs", "modify", 1)], cost=USD(10), task="t7"), "denied", note="the right task but it has no budget: the space would pay")
+v.step(rprop("r4", "l4", [("src/a.rs", "modify", 1)], cost=USD(10), task="t1"), "denied", note="the reverted land named no task")
+v.step(rprop("r4n", "l4", [("src/a.rs", "modify", 1)], cost=USD(10)), "denied", note="no task at all")
+v.step(rprop("r1n", "l1", [("src/a.rs", "modify", 1)], cost=USD(50)), "denied", note="no task, though l1 named one")
+v.step(rprop("r6", "l6", [("src/a.rs", "modify", 1)], cost=USD(10), task="t1"), "denied", note="l6 has not landed")
+v.step(lprop("n1", chg([("src/a.rs", "modify", 1)], label="n1"), cost=USD(10), task="t1", author=X), "denied", note="no revertOf: as before")
+v.step(E("c3", "task.update", P, {"task": "t3", "state": "done"}), "allow")
+v.step(rprop("r3", "l3", [("src/a.rs", "modify", 1)], cost=USD(50), task="t3"), "denied", note="the task is closed")
+# the task closes between proposal and claim
+v.step(rprop("r8", "l8", [("src/a.rs", "modify", 1)], cost=USD(50), task="t8"), "allow")
+v.step(E("c8", "task.update", P, {"task": "t8", "state": "done"}), "allow")
+v.step(claim("cr8", "r8"), "denied", note="E5: the task is closed")
+# the budget is checked at claim
+v.step(rprop("r5", "l5", [("src/a.rs", "modify", 1)], cost=USD(50), task="t5"), "allow", check={"effects.r5.task": "t5"})
+v.step(rprop("r5b", "l5", [("src/a.rs", "modify", 1)], cost=USD(50), task="t5"), "allow")
+v.step(claim("cr5", "r5"), "allow", check={"tasks.t5.left": USD(10)})
+v.step(claim("cr5b", "r5b"), "denied", note="E6: t5 has 10 left")
+# a human proposer is unaffected
+v.step(rprop("h1", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), task="t1", author=M), "denied", note="a human member who is no assignee of t1 still may not charge it")
+v.step(rprop("h2", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), task="t2", author=P), "allow", note="an assignee may name any task of theirs, as before")
+v.step(rprop("h3", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), task="t1", author=O), "allow", note="an owner may charge any task, as before")
+v.step(rprop("h4", "l1", [("src/a.rs", "modify", 1)], cost=USD(50), author=M), "allow", note="a human with no task draws on the space, as before")
+add(v.done())
+
 # ── R-01 id derivation ──
 ENC = {"name": "entry-id", "rules": ["R-01", "§2"], "description": "id = sha256('han-entry-v1\\n' + JCS(entry minus sig)); test the exact preimage",
        "entry": {"v": 1, "space": S, "kind": "message", "author": M, "keyId": "k1", "body": {"to": [O]}, "contentHash": "",

@@ -522,6 +522,31 @@ fn task_cancel(
     Verdict::Allow
 }
 
+/// P-06 (round 33): a non-human's proposal of a revert in a budgeted space may name exactly the task its
+/// reverted `vcs.land` named, if that task is open and budgeted. Then neither the assignee check nor the
+/// agent's own-task check applies to it.
+fn revert_task(state: &SpaceState, ctx: &Ctx, author: &str, b: &Propose) -> bool {
+    if space_unit(state).is_none() || is_human(ctx, author) || b.action != "vcs.land" {
+        return false;
+    }
+    let (Some(task), Some(of)) = (
+        b.task.as_deref(),
+        b.change.as_ref().and_then(|c| c.revert_of.as_ref()),
+    ) else {
+        return false;
+    };
+    let Some(target) = state.effects.get(of) else {
+        return false;
+    };
+    target.action == "vcs.land"
+        && target.phase == Phase::Succeeded
+        && target.task.as_deref() == Some(task)
+        && state
+            .tasks
+            .get(task)
+            .is_some_and(|t| t.open && t.left.is_some())
+}
+
 fn propose(
     state: &SpaceState,
     entry: &PolicyEntry,
@@ -533,6 +558,7 @@ fn propose(
     if !writes(role) {
         return deny("not allowed to propose");
     }
+    let revert_task = revert_task(state, ctx, author, b);
     if let Some(tid) = &b.task {
         let Some(t) = state.tasks.get(tid) else {
             return invalid("no such task");
@@ -540,7 +566,7 @@ fn propose(
         if !t.open {
             return deny("task not open");
         }
-        if !t.to.iter().any(|a| a == author) && role != Some(Role::Owner) {
+        if !t.to.iter().any(|a| a == author) && role != Some(Role::Owner) && !revert_task {
             return deny("only an assignee or owner charges a task");
         }
     }
@@ -555,6 +581,7 @@ fn propose(
     }
     if unit.is_some()
         && !is_human(ctx, author)
+        && !revert_task
         && !b
             .task
             .as_deref()

@@ -2573,3 +2573,65 @@ async fn a_revert_policy_refuses_is_escalated_to_a_person_with_the_reason_and_no
     assert!(last.get("evidence").is_some());
     assert_eq!(rig.w.tip(), commit);
 }
+
+/// A red culprit landed in a budgeted space under the budgeted task `tb` (open or not), at a cost of 50.
+async fn red_budgeted_culprit(rig: &Rig, open: bool) -> (String, Lane) {
+    rig.node.state().budget_tasks = Some(vec![("tb".into(), open)]);
+    let p = rig.land(
+        "one",
+        "a.txt",
+        "a, edited
+",
+    );
+    for r in rig.node.state().rows.iter_mut().filter(|r| r.proposal == p) {
+        r.task = Some("tb".into());
+        r.cost = Some(("USD-cent".into(), 50));
+    }
+    rig.checks.full(vec![run("full", "in_progress")]);
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    failing(&landed_commit(rig, &p), rig);
+    (p, lane)
+}
+
+#[tokio::test]
+async fn in_a_budgeted_space_a_revert_names_the_open_task_its_culprit_named_and_lands() {
+    let rig = revert_rig();
+    let (p, lane) = red_budgeted_culprit(&rig, true).await;
+    until(&lane, &rig, |rig| {
+        rig.states(&p).last().map(String::as_str) == Some("reverted")
+    })
+    .await;
+    assert_eq!(rig.last(&p)["state"], "reverted");
+    let revert = rig
+        .node
+        .state()
+        .rows
+        .iter()
+        .find(|r| r.proposer == EXEC && r.action == "vcs.land")
+        .cloned()
+        .expect("the lane proposed the revert");
+    assert_eq!(revert.task.as_deref(), Some("tb"));
+    assert_eq!(revert.cost, Some(("USD-cent".to_owned(), 50)));
+}
+
+#[tokio::test]
+async fn in_a_budgeted_space_a_revert_whose_culprit_task_is_closed_escalates_with_the_reason() {
+    let rig = revert_rig();
+    let (p, lane) = red_budgeted_culprit(&rig, false).await;
+    let (_, escalated) = until(&lane, &rig, |rig| rig.last(&p).get("needsHuman").is_some()).await;
+    for _ in 0..4 {
+        lane.pass().await.unwrap();
+    }
+    assert!(escalated.contains(&p));
+    let last = rig.last(&p);
+    assert_eq!(last["state"], "landed");
+    assert_eq!(last["needsHuman"], true);
+    let detail = last["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("cannot be proposed")
+            && detail.contains("the culprit's task is closed or absent"),
+        "{detail}"
+    );
+    assert!(reverts(&rig).is_empty());
+}

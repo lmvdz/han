@@ -140,7 +140,7 @@ export interface Change {
   total: number;                 // the entries the delta has; more than files.length exactly when `truncated`
   files: ChangeFile[];
   truncated?: true;              // present when files are left out: tier 3
-  revertOf?: EntryId;            // A2: the succeeded vcs.land of this space this change reverts; the tier is at least that change's
+  revertOf?: EntryId;            // A2: the succeeded vcs.land of this space this change reverts; the tier is at least that change's; a non-human proposer in a budgeted space may name exactly that land's task on the proposal (P-06, round 33)
 }
 export interface ChangeFile {
   path: string;                  // 1–255 bytes, `/`-separated, no empty, `.` or `..` segment, no control character
