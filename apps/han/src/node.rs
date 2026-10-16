@@ -47,6 +47,10 @@ enum NodeCmd {
         /// Print what would be installed and change nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Windows: register the plain action, without `conhost.exe --headless` (which Task Scheduler needs so
+        /// that the node does not stall at startup).
+        #[arg(long)]
+        no_headless: bool,
     },
     /// Removes the background service.
     UninstallService,
@@ -281,6 +285,7 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
             opts,
             no_start,
             dry_run,
+            no_headless,
         }) => {
             let spec = service::Spec {
                 exe: service::current_exe()?,
@@ -288,7 +293,7 @@ pub async fn run(args: NodeArgs) -> Result<(), Box<dyn std::error::Error>> {
             };
             println!(
                 "{}",
-                service::install(&spec, opts.actor()?, !no_start, dry_run)?
+                service::install(&spec, opts.actor()?, !no_start, dry_run, no_headless)?
             );
             Ok(())
         }

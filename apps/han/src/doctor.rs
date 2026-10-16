@@ -259,6 +259,8 @@ pub struct Facts {
     pub github: Option<GithubFacts>,
     /// The sessions of actors that are not agents of `agents.json`, in the spaces where the `land` flow is on.
     pub lane_sessions: Vec<LaneSessionFact>,
+    /// Windows: the `(Execute, Arguments)` of the `HAN Node` scheduled task, when the machine has one.
+    pub node_task: Option<(String, String)>,
 }
 
 // ───────────────────────── analysis ─────────────────────────
@@ -308,6 +310,7 @@ pub fn analyze(f: &Facts) -> Vec<Finding> {
     let data = q(f.data.to_string_lossy());
     let mut out = Vec::new();
     node_findings(f, &data, &mut out);
+    node_task_findings(f, &data, &mut out);
     agent_findings(f, &data, &mut out);
     toolchain_findings(f, &data, &mut out);
     sandbox_findings(f, &data, &mut out);
@@ -752,6 +755,29 @@ fn executor_facts(dir: Option<&Path>) -> Option<ExecutorFacts> {
         repos,
         app_permissions: None,
     })
+}
+
+/// The logon task starts the node through `conhost.exe --headless`: started directly, Task Scheduler leaves a
+/// console program stalled before `main` some of the time.
+fn node_task_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
+    let Some((execute, arguments)) = &f.node_task else {
+        return;
+    };
+    if crate::service::action_is_wrapped(execute, arguments) {
+        return;
+    }
+    let actor = f
+        .node
+        .as_ref()
+        .map_or_else(|_| "<your actor>".to_owned(), |n| q(&n.actor));
+    out.push(finding(
+        "node.task.unwrapped",
+        crate::service::TASK_NAME,
+        format!(
+            "the scheduled task runs {execute} without conhost.exe --headless, and Task Scheduler can leave it stalled before it starts"
+        ),
+        format!("han node install-service --actor {actor} --data {data}"),
+    ));
 }
 
 fn node_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
@@ -1443,6 +1469,7 @@ pub async fn gather(
         executor,
         github: github_facts(github_dir),
         lane_sessions,
+        node_task: crate::service::windows_task_action(),
     }
 }
 
@@ -1608,6 +1635,7 @@ mod tests {
             executor: None,
             github: None,
             lane_sessions: Vec::new(),
+            node_task: None,
         }
     }
 
@@ -1650,6 +1678,28 @@ mod tests {
             x.fix
         );
         assert!(x.fix.contains("--data /d"));
+    }
+
+    #[test]
+    fn a_node_task_without_the_headless_wrapper_is_a_finding_and_a_wrapped_one_is_not() {
+        let mut f = healthy();
+        f.node_task = Some((
+            r"C:\han\han.exe".into(),
+            "node --actor @lars:han.example".into(),
+        ));
+        let x = only(&f);
+        assert_eq!(x.id, "node.task.unwrapped");
+        assert!(
+            x.fix
+                .starts_with("han node install-service --actor @lars:han.example --data /d"),
+            "{}",
+            x.fix
+        );
+        f.node_task = Some((
+            r"%SystemRoot%\System32\conhost.exe".into(),
+            r#"--headless "C:\han\han.exe" node"#.into(),
+        ));
+        assert!(analyze(&f).is_empty());
     }
 
     #[test]
