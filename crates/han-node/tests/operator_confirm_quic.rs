@@ -74,7 +74,13 @@ async fn the_operator_confirms_its_agent_over_quic() {
 }
 
 async fn scenario() {
-    let dir = std::env::temp_dir().join(format!(
+    // a unix socket path holds about a hundred bytes, and macOS's temp dir is half of that
+    let base = if cfg!(target_os = "macos") {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    let dir = base.join(format!(
         "han-opconf-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()

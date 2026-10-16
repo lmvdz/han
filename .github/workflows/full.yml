@@ -141,7 +141,8 @@ jobs:
   # R15 end to end with real OS users (apps/han/tests/e2e/os_user.rs): `han runner setup` makes han-agent1 and
   # han-exec in a systemd container, an OS-user agent (the han-agent@ unit) proposes a git_push, and `han exec`
   # as han-exec lands it without reading the agent's workspace. The build lives under /srv: the agent's unit
-  # has ProtectHome and PrivateTmp, and the binaries' paths are compiled into the test.
+  # has ProtectHome and PrivateTmp, and the binaries' paths are compiled into the test. The binaries are built with
+  # `conformance`, as in the e2e job: the stack reads its presence settings from node.db, and nobody is there to approve.
   e2e-os-users:
     if: github.event.schedule != '43 5 * * *'
     runs-on: ubuntu-latest
@@ -157,8 +158,8 @@ jobs:
         run: sudo mkdir -p /srv/han-target && sudo chown "$(id -u):$(id -g)" /srv/han-target
       - name: Build every binary the stack runs, and the e2e test
         run: |
-          cargo build --workspace --bins --locked
-          cargo test -p han --test e2e --locked --no-run --message-format=json \
+          cargo build --workspace --bins --locked --features han/conformance
+          cargo test -p han --features conformance --test e2e --locked --no-run --message-format=json \
             | jq -r 'select(.executable != null and .target.name == "e2e") | .executable' > /srv/han-target/e2e-path
       - name: A systemd container with git
         run: |
