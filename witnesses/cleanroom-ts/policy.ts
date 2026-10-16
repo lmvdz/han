@@ -42,7 +42,7 @@ export function badPolicyDoc(p: A): string | null {
   if (!["any", "with-operator", "none"].includes(p.allowAgents)) return "policy.allowAgents";
   if (!Array.isArray(p.approvals) || p.approvals.length > 64) return "policy.approvals";
   for (const r of p.approvals) {
-    const e2 = closed(r, ["action", "approvers"], ["minTier", "maxTier", "humans", "evidence", "needs"]); if (e2) return "approval rule: " + e2;
+    const e2 = closed(r, ["action", "approvers"], ["minTier", "maxTier", "humans", "evidence", "needs", "revert", "proposer"]); if (e2) return "approval rule: " + e2;
     if (!isAction(r.action, true)) return "approval rule action";
     if (!Array.isArray(r.approvers) || r.approvers.length === 0) return "approvers";
     for (const a of r.approvers) if (!(["owner", "member", "guest", PATH_OWNER].includes(a) || isActorId(a))) return "approver";
@@ -51,6 +51,12 @@ export function badPolicyDoc(p: A): string | null {
     if ("humans" in r && typeof r.humans !== "boolean") return "approval rule humans";
     if ("evidence" in r && !(typeof r.evidence === "string" && reEvidenceKind.test(r.evidence))) return "approval rule evidence";
     if ("needs" in r && !(isInt(r.needs) && r.needs >= 1 && r.needs <= 3)) return "approval rule needs";
+    if ("revert" in r && r.revert !== true) return "approval rule revert";   // A2: `true` only
+    if ("proposer" in r) {   // P-17 (round 33): `true` only, on exactly "vcs.try", with no member but action, approvers and proposer
+      if (r.proposer !== true) return "approval rule proposer";
+      if (r.action !== "vcs.try") return "approval rule proposer on an action other than vcs.try";
+      if (Object.keys(r).some((k) => !["action", "approvers", "proposer"].includes(k))) return "approval rule proposer beside other members";
+    }
   }
   if (typeof p.separateApprover !== "boolean") return "policy.separateApprover";
   if (p.budget !== null) { const e3 = badBudget(p.budget); if (e3) return e3; }
@@ -154,7 +160,8 @@ function badChangePath(p: A): boolean {
 const byteCmp = (a: string, b: string) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
 /** The shape of a change summary (P-17); null when it is one. */
 function badChange(c: A): string | null {
-  let e = closed(c, ["repo", "deltaDigest", "total", "files"], ["truncated"]); if (e) return "change: " + e;
+  let e = closed(c, ["repo", "deltaDigest", "total", "files"], ["truncated", "revertOf"]); if (e) return "change: " + e;
+  if ("revertOf" in c && !isHex(c.revertOf)) return "change.revertOf";   // A2: an EntryId
   if (typeof c.repo !== "string" || !rePrintable.test(c.repo)) return "change.repo";
   if (!isHex(c.deltaDigest)) return "change.deltaDigest";
   if (!isInt(c.total)) return "change.total";
@@ -202,6 +209,12 @@ function deriveGate(s: SpaceState, ctx: PolicyCtx, proposer: string, b: A): A | 
   const change: A | undefined = b.change;
   const gate: A = { tier: deriveTier(gates, change) };
   if (change) { gate.deltaDigest = change.deltaDigest; gate.changeDigest = sha256(jcs(change)); }
+  if (change?.revertOf !== undefined) {   // A2: never a lower tier than the change it undoes; 3 when that effect had no gate
+    const reverted: A | undefined = (s.effects as A)[change.revertOf];
+    gate.tier = Math.max(gate.tier, reverted?.gate ? reverted.gate.tier : 3);
+    gate.revertOf = change.revertOf;
+    if (reverted?.gate?.deltaDigest !== undefined) gate.revertedDigest = reverted.gate.deltaDigest;
+  }
   const owners: string[] = [];
   for (const f of (change?.files ?? []) as A[]) {
     for (const path of pathsOf(f)) {
@@ -387,25 +400,32 @@ const unexpired = (exp: string | undefined, time: string) => exp === undefined |
 const tierWithin = (r: A, gate: A | undefined): boolean =>
   (r.minTier === undefined && r.maxTier === undefined) || (gate !== undefined && gate.tier >= (r.minTier ?? 0) && gate.tier <= (r.maxTier ?? 3));
 const OWNER_RULE = { action: "*", approvers: ["owner"] };
-/** P-08, P-17: the first rule whose action matches and whose tier predicate holds; a gated effect of tier 1 or more that none covers needs an owner. */
+/** A2: a rule with `revert: true` applies only to an effect whose gate has `revertOf`. */
+const revertWithin = (r: A, gate: A | undefined): boolean => r.revert !== true || gate?.revertOf !== undefined;
+/** P-08, P-17: the first rule whose action matches and whose tier and revert predicates hold; a gated effect of tier 1 or more that none covers needs an owner. */
 const ruleFor = (p: PolicyDoc, ef: A): A | undefined =>
-  p.approvals.find((r: A) => (r.action === ef.action || r.action === "*") && tierWithin(r, ef.gate)) ?? (ef.gate && ef.gate.tier >= 1 ? OWNER_RULE : undefined);
+  p.approvals.find((r: A) => (r.action === ef.action || r.action === "*") && tierWithin(r, ef.gate) && revertWithin(r, ef.gate)) ?? (ef.gate && ef.gate.tier >= 1 ? OWNER_RULE : undefined);
 /** P-17, who counts: a role now that the rule names (a role, an ID, or @path-owner: an author in the effect's gate.owners) and, for a non-human author (by the kind
  *  the approval recorded), a tier below 2, no `humans`, and the evidence the rule asks for, of that kind and over the effect's gate.deltaDigest. */
 function approvalCounts(s: SpaceState, ef: A, rule: A, author: string, kind: string, evidence: A | undefined): boolean {
+  if (rule.proposer === true) return false;   // P-17 (round 33): the proposal itself suffices, no approval is asked
   if (!holds(s, author)) return false;
   const r = roleOf(s, author);
   if (!rule.approvers.some((x: string) => x === author || x === r || (x === PATH_OWNER && (ef.gate?.owners ?? []).includes(author)))) return false;
   if (kind !== "human") {
     if ((ef.gate?.tier ?? 0) >= 2 || rule.humans === true) return false;
-    if (rule.evidence !== undefined && !(evidence !== undefined && evidence.kind === rule.evidence && ef.gate?.deltaDigest !== undefined && evidence.over === ef.gate.deltaDigest)) return false;
+    const over = rule.revert === true ? ef.gate?.revertedDigest : ef.gate?.deltaDigest;   // A2: a revert rule's evidence is over the reverted delta
+    if (rule.evidence !== undefined && !(evidence !== undefined && evidence.kind === rule.evidence && over !== undefined && evidence.over === over)) return false;
   }
   return true;
 }
+/** A2: with `separateApprover` the proposer cannot approve, except the lane approving its own revert: a non-human that is both proposer and executor, under a rule with `revert: true`. */
+const bars = (s: SpaceState, ef: A, rule: A, author: string, kind: string): boolean =>
+  s.policy.separateApprover && author === ef.proposer && !(rule.revert === true && kind !== "human" && author === ef.executor);
 /** P-17, how many approvals a claim consumes (E3): the rule's `needs`, at least 2 at tier 3; none if no approval is needed. */
 function needsOf(s: SpaceState, ef: A): number {
   const rule = ruleFor(s.policy, ef);
-  return rule ? Math.max(rule.needs ?? 1, ef.gate?.tier === 3 ? 2 : 1) : 0;
+  return rule && rule.proposer !== true ? Math.max(rule.needs ?? 1, ef.gate?.tier === 3 ? 2 : 1) : 0;
 }
 const secs = (t: string) => Date.UTC(+t.slice(0, 4), +t.slice(5, 7) - 1, +t.slice(8, 10), +t.slice(11, 13), +t.slice(14, 16), +t.slice(17, 19)) / 1000;
 const abandonAfter = (window: number) => Math.floor((window * 101 + 98) / 99) + 2; // ⌈window·1.01/0.99⌉ + 2
@@ -524,7 +544,7 @@ export function sessionAccess(state: SpaceState, actor: string, session: EntryId
 function candidates(s: SpaceState, e: A, time: string): A[] {
   const rule = ruleFor(s.policy, e);
   if (!rule) return [];
-  return e.approvals.filter((a: A) => openApproval(a, time) && approvalCounts(s, e, rule, a.author, a.actorKind, a.evidence) && !(s.policy.separateApprover && a.author === e.proposer));
+  return e.approvals.filter((a: A) => openApproval(a, time) && approvalCounts(s, e, rule, a.author, a.actorKind, a.evidence) && !bars(s, e, rule, a.author, a.actorKind));
 }
 /** P-01, the actors an entry names, which `decide` needs pinned. */
 function namedActors(state: SpaceState | undefined, e: A): string[] {
@@ -775,6 +795,14 @@ function decideTask(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   return ok;
 }
 
+/** P-06 (round 33): a revert proposal names exactly the task the reverted vcs.land named, which is open and budgeted, the reverted effect having succeeded. */
+function revertsTaskOf(s: SpaceState, b: A): boolean {
+  const reverted: A | undefined = b.change?.revertOf !== undefined ? (s.effects as A)[b.change.revertOf] : undefined;
+  if (!reverted || reverted.action !== "vcs.land" || reverted.phase !== "succeeded" || reverted.task === undefined || reverted.task !== b.task) return false;
+  const t: A | undefined = (s.tasks as A)[b.task];
+  return !!t && t.open && !!t.budget;
+}
+
 function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const b = e.body as A, a = e.author as string;
   if (!isMemberOrOwner(s, a)) return deny("not owner/member");
@@ -783,15 +811,20 @@ function decidePropose(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
     task = (s.tasks as A)[b.task];
     if (!task) return inv("not a task");
     if (!task.open) return deny("task closed");
-    if (!task.to.includes(a) && !isOwner(s, a)) return deny("neither an assignee nor an owner");
+    if (!task.to.includes(a) && !isOwner(s, a) && !(s.policy.budget && kindOf(ctx, a) !== "human" && revertsTaskOf(s, b))) return deny("neither an assignee nor an owner");
   }
   if (s.policy.budget && (!b.cost || b.cost.unit !== s.policy.budget.unit)) return deny("budgeted space needs a cost in its unit");
   if (!accountable(s, ctx, a)) return deny("not accountable");
   if (s.policy.budget && kindOf(ctx, a) !== "human") {
-    if (!task || !task.open || !task.budget || !task.to.includes(a)) return deny("agents must name an open budgeted task assigned to them");
+    if (!task || !task.open || !task.budget || !(task.to.includes(a) || revertsTaskOf(s, b))) return deny("agents must name an open budgeted task assigned to them");
   }
   if (overBound(effectGuardedFor(s, ctx, a, b.executor, b.task), a, b.executor)) return deny("too many guarded tasks; close some");   // P-15: the bound is kept, never exceeded
   if (b.change !== undefined && b.action !== "vcs.land") return inv("change on an action other than vcs.land");   // P-17
+  if (b.change?.revertOf !== undefined) {   // A2
+    const reverted = (s.effects as A)[b.change.revertOf];
+    if (!reverted || reverted.action !== "vcs.land") return inv("revertOf names no vcs.land of this space");
+    if (reverted.phase !== "succeeded") return deny("revertOf names a vcs.land that has not succeeded");
+  }
   return ok;
 }
 
@@ -806,7 +839,7 @@ function decideApprove(s: SpaceState, e: A, ctx: PolicyCtx): Decision {
   const guards = guardsOf(s, ctx, ef);
   if (!(guards.includes(a) && holds(s, a))) {   // a guard approves as a guard (P-15): no rule, no cap
     if (!rule || !approvalCounts(s, ef, rule, a, kindOf(ctx, a), b.evidence)) return deny("not an approver, or the approval could not count under the rule (P-17)");
-    if (s.policy.separateApprover && a === ef.proposer) return deny("proposer cannot approve");
+    if (bars(s, ef, rule, a, kindOf(ctx, a))) return deny("proposer cannot approve");
     if (candidates(s, ef, ctx.time).filter((x: A) => x.author !== a && !guards.includes(x.author)).length >= MAX_OPEN_APPROVALS) return deny("too many open approvals");
   }
   return ok;
@@ -816,7 +849,7 @@ type E3 = { ok: true; approval?: string; coApprovals: string[]; guardApprovals: 
 function e3(s: SpaceState, ef: A, ctx: PolicyCtx): E3 {
   const rule = ruleFor(s.policy, ef);
   const picked: A[] = [], need = needsOf(s, ef);   // P-17: the first `need` usable candidates, by distinct authors
-  if (rule) {
+  if (rule && rule.proposer !== true) {   // P-17 (round 33): under a `proposer: true` rule the proposal suffices, no candidate is walked
     for (const x of candidates(s, ef, ctx.time)) {
       if (!(ctx.profiles as A)?.[x.author]) return { ok: false, code: "invalid", why: "candidate has no pinned profile" };
       if (usable(s, ctx, x) && !picked.some((y) => y.author === x.author)) { picked.push(x); if (picked.length >= need) break; }

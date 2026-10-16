@@ -116,6 +116,7 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
         e.body = walk(body);
         // P-17: a change summary and an approval's evidence hold digests of the delta, not entry ids; the sequencer hashes them as they are
         for (const k of ["change", "evidence"]) if (body && typeof body === "object" && k in body) e.body[k] = clone(body[k]);
+        if (isHex64(e.body?.change?.revertOf)) e.body.change.revertOf = mapId(e.body.change.revertOf);   // A2: revertOf is an entry id
         if (typeof pd === "string") e.body.planDigest = digestMap.get(pd) ?? sha256("digest:" + pd);
         if (e.kind === "effect.propose" && typeof pd === "string" && body && typeof body.action === "string") {
           const plan = { action: body.action, target: "vec/" + pd.slice(0, 12) };
@@ -153,7 +154,7 @@ async function replayOne(f: string, v: A, res: ReplayResult) {
           for (const [p, want] of Object.entries(st.check)) {
             const rp = p.replace(/[0-9a-f]{64}/g, (m) => mapId(m));
             const r = resolvePath(JSON.parse(JSON.stringify(s)), rp);
-            if (jcs(r.found ? r.value : "<missing>") !== jcs(/\.(gate\.(deltaDigest|changeDigest)|evidence)$/.test(p) ? want : walk(want))) bad += " " + p;   // a gate's digests and an approval's evidence are of the change, not entry ids
+            if (jcs(r.found ? r.value : "<missing>") !== jcs(/\.(gate\.(deltaDigest|changeDigest|revertedDigest)|evidence)$/.test(p) ? want : walk(want))) bad += " " + p;   // a gate's digests and an approval's evidence are of the change, not entry ids
           }
           if (bad) { res.fail.push(`${tag}: state check failed:${bad}`); continue; }
         }
