@@ -159,3 +159,35 @@ async fn garbage_gets_a_json_rpc_error_not_a_crash() {
     }
     node.shutdown();
 }
+
+/// The local socket is reachable by its owner only: mode 0600, with no window where it was wider.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_socket_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile_dir("rpc-socket-mode");
+    let endpoint = dir.join("node.sock");
+    let endpoint = endpoint.to_str().unwrap();
+    let _listener = han_node::rpc::listen_local(endpoint).unwrap();
+    let mode = std::fs::metadata(endpoint).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "socket mode was {mode:o}");
+    // A socket left behind by a dead daemon is replaced, and the replacement is owner-only too.
+    drop(_listener);
+    let _again = han_node::rpc::listen_local(endpoint).unwrap();
+    let mode = std::fs::metadata(endpoint).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "rebound socket mode was {mode:o}");
+    // Nothing else is left in the directory on macOS, where the socket is staged in a private subdirectory.
+    let names: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 1, "stray entries: {names:?}");
+}
+
+#[cfg(unix)]
+fn tempfile_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("han-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
