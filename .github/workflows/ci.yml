@@ -1,6 +1,6 @@
 name: ci
 
-# Early development: every PR runs lean jobs in parallel (M4 added the host, executor and their tests: allow 30 min cold). The deep checks run nightly and on demand.
+# Early development: every PR runs lean jobs in parallel (M4 added the host, executor and their tests: allow 30 min cold). The deep checks (full.yml) run for releases and on demand.
 # `quick` is the only required check. It waits for the others, so adding or splitting a job needs no branch-protection change.
 on:
   pull_request:
@@ -65,7 +65,7 @@ jobs:
 
   # Also runs the timeline vectors, the han-net/han-seq wire vectors with the conformance feature (their self
   # dev-dependency), and apps/han/tests/test_mode_gate.rs (the default binary has no test mode, R9). The release
-  # build of that check runs nightly in 'full'. Pull requests test only the affected crates and what depends on them.
+  # build of that check runs in 'full' (releases and on demand). Pull requests test only the affected crates and what depends on them.
   # nextest does not run doc-tests: see `doc-tests`. The five slowest test binaries run in `test-slow`.
   test:
     needs: scope
@@ -127,11 +127,11 @@ jobs:
 
   # The spec checks need no Rust: policy vectors, the three-way consistency of the entry kinds, and (when a Markdown file
   # changed, or on a push) that every <!--s:key--> count and status in the spec text still matches what the checks derive.
-  # The rest of docs-match (a fresh run_all) runs nightly in 'full'.
+  # The rest of docs-match (a fresh run_all) runs in 'full' (releases and on demand).
   # The check passes --allow-stale-results: ref/RESULTS.md (and the interop run record) can only be refreshed by run_all.py and the
   # frozen witnesses, which a separate clean-room PR updates after a core change adds vectors. While they are stale, sync_docs skips the
   # markers derived from them, warns naming the file and the skipped keys, and still checks every marker derived from the current tree.
-  # The nightly 'full' keeps the strict check, so the staleness stays visible there.
+  # The 'full' run (releases and on demand) keeps the strict check, so the staleness stays visible there.
   spec:
     needs: scope
     runs-on: ubuntu-latest
