@@ -378,6 +378,22 @@ note?: string,
 /**
  * The failing run the revert rests on: `han.ci/1` over the reverted change's delta digest.
  */
+evidence: ApprovalEvidence, } | { "type": "review_approve", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The landing's proposal (entry id).
+ */
+proposal: string, 
+/**
+ * A note.
+ */
+note?: string, 
+/**
+ * The review record: `han.review/1` over the landing's delta digest.
+ */
 evidence: ApprovalEvidence, } | { "type": "effect_cancel", 
 /**
  * The space.
@@ -1505,6 +1521,18 @@ plan?: string,
  * from (P-17). An executor checks that it is the plan's `args.change` (X-13).
  */
 change_digest?: string, 
+/**
+ * The risk tier (0 to 3) of a `vcs.land`, derived from the body's change summary and the policy in force
+ * at the proposal, as Policy pins it in the gate (P-17). Absent for other actions, and when the policy has
+ * no `gates`. A reviewer reads it to take only the tiers machine review counts for; Policy still decides
+ * whether any approval counts.
+ */
+gate_tier?: number, 
+/**
+ * The delta digest of the change summary the body carries (the gate's `deltaDigest`): what an approval's
+ * evidence must be over. Absent when the proposal carried no change.
+ */
+delta_digest?: string, 
 /**
  * The task it is charged to.
  */

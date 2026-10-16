@@ -112,6 +112,7 @@ mod linux {
     const AGENT_UNIT: &str = include_str!("../../../integrations/runner/han-agent@.service");
     const EXEC_UNIT: &str = include_str!("../../../integrations/runner/han-exec.service");
     const GITHUB_UNIT: &str = include_str!("../../../integrations/runner/han-github.service");
+    const REVIEW_UNIT: &str = include_str!("../../../integrations/runner/han-review@.service");
     const POLKIT_RULE: &str = include_str!("../../../integrations/runner/50-han-agent.rules");
     const AGENTS_ROOT: &str = "/var/lib/han-agents";
     const NODE_DATA: &str = "/var/lib/han";
@@ -475,6 +476,11 @@ mod linux {
         c.reload |= c.file("/etc/systemd/system/han-agent@.service", AGENT_UNIT, 0o644)?;
         c.reload |= c.file("/etc/systemd/system/han-exec.service", EXEC_UNIT, 0o644)?;
         c.reload |= c.file("/etc/systemd/system/han-github.service", GITHUB_UNIT, 0o644)?;
+        c.reload |= c.file(
+            "/etc/systemd/system/han-review@.service",
+            REVIEW_UNIT,
+            0o644,
+        )?;
         c.file(
             "/etc/polkit-1/rules.d/50-han-agent.rules",
             POLKIT_RULE,
@@ -505,6 +511,11 @@ mod linux {
                 "han-exec.service is {}; enable it when its key, profile and config are ready: systemctl enable --now han-exec",
                 if enabled.is_empty() { "installed, disabled" } else { &enabled }
             ),
+        );
+
+        c.say(
+            "note:",
+            "han-review@.service is installed, not enabled; the machine reviewer is set up as in docs/runner.md 9.2, then: systemctl enable --now han-review@han-agent<N>",
         );
 
         let configured = Path::new(GITHUB_DIR).join("han-github.toml").exists();

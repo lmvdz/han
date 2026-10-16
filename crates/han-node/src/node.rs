@@ -1932,6 +1932,79 @@ impl<T: Transport> Node<T> {
                 self.append(&space, "effect.approve", body, Some(Value::Object(content)))
                     .await
             }
+            Command::ReviewApprove {
+                space,
+                proposal,
+                note,
+                evidence,
+            } => {
+                // The machine reviewer's approval (tier 1): no prompt, so every condition is checked here, and
+                // Policy still decides whether the approval counts (rule, evidence, tier, separate approver).
+                let Some(subject) = inner.engine().review_subject(&space, &proposal) else {
+                    return Err(NodeError::not_found("no such proposal"));
+                };
+                if !subject.open {
+                    return Err(NodeError::conflict(
+                        "the proposal no longer waits for approval",
+                    ));
+                }
+                if subject.action != "vcs.land" {
+                    return Err(NodeError::denied(
+                        "this node approves only a vcs.land after review",
+                    ));
+                }
+                if subject.proposer == inner.cfg.actor {
+                    return Err(NodeError::denied(
+                        "this node does not review a landing its own actor proposed",
+                    ));
+                }
+                match subject.tier {
+                    Some(t) if t <= 1 => {}
+                    Some(_) => {
+                        return Err(NodeError::denied(
+                            "machine review counts for tier 1 at most; this landing needs a person",
+                        ));
+                    }
+                    None => {
+                        return Err(NodeError::denied(
+                            "the node knows no tier for this landing (the policy has no gates)",
+                        ));
+                    }
+                }
+                if evidence.kind != "han.review/1" {
+                    return Err(NodeError::denied(
+                        "a landing is approved on han.review/1 evidence",
+                    ));
+                }
+                match subject.delta_digest.as_deref() {
+                    None => {
+                        return Err(NodeError::denied(
+                            "the node knows no delta digest of this landing",
+                        ));
+                    }
+                    Some(d) if d != evidence.over => {
+                        return Err(NodeError::denied(
+                            "the evidence is not over the delta digest of this landing",
+                        ));
+                    }
+                    Some(_) => {}
+                }
+                let mut content = BTreeMap::new();
+                if let Some(n) = &note {
+                    content.insert("note".to_owned(), s(n));
+                }
+                content.insert("evidence".to_owned(), evidence_ref(&evidence.record));
+                let body = obj([
+                    ("proposal", s(&proposal)),
+                    ("planDigest", s(&subject.digest)),
+                    (
+                        "evidence",
+                        obj([("kind", s(&evidence.kind)), ("over", s(&evidence.over))]),
+                    ),
+                ]);
+                self.append(&space, "effect.approve", body, Some(Value::Object(content)))
+                    .await
+            }
             Command::EffectPropose {
                 space,
                 executor,

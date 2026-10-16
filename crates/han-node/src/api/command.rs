@@ -321,6 +321,26 @@ pub enum Command {
         /// The failing run the revert rests on: `han.ci/1` over the reverted change's delta digest.
         evidence: ApprovalEvidence,
     },
+    /// The tier-1 machine reviewer's approval of a landing it reviewed, an **executor-connection** command like
+    /// [`Command::RevertApprove`]: no person is asked. The node signs an `effect.approve` as its own actor only
+    /// when the proposal is an open `vcs.land` that another actor proposed, whose derived tier is at most 1, and
+    /// the evidence is `han.review/1` over the delta digest of the change summary the proposal carries (the
+    /// gate's `deltaDigest`). Policy still decides whether the approval counts: a non-human approval needs a
+    /// rule that lists this actor with `evidence: "han.review/1"`, never counts at tier 2 or more, and
+    /// `separateApprover` still applies. A face or an agent's host may not send it, and `EffectApprove` stays
+    /// refused to an executor connection (SR-06, SR-106).
+    ReviewApprove {
+        /// The space.
+        space: String,
+        /// The landing's proposal (entry id).
+        proposal: String,
+        /// A note.
+        #[serde(default)]
+        #[ts(optional)]
+        note: Option<String>,
+        /// The review record: `han.review/1` over the landing's delta digest.
+        evidence: ApprovalEvidence,
+    },
     /// Cancels a proposed effect. The effect's executor may cancel it too while it is `open` (round 33,
     /// P-07a): it refuses an effect for good, and says why.
     EffectCancel {
@@ -512,7 +532,8 @@ impl Command {
             | Command::EffectPropose { .. } => CommandClass::Agent,
             Command::EffectClaim { .. }
             | Command::EffectOutcome { .. }
-            | Command::RevertApprove { .. } => CommandClass::Executor,
+            | Command::RevertApprove { .. }
+            | Command::ReviewApprove { .. } => CommandClass::Executor,
         }
     }
 
@@ -560,6 +581,7 @@ impl Command {
             | Command::EffectClaim { .. }
             | Command::EffectOutcome { .. }
             | Command::RevertApprove { .. }
+            | Command::ReviewApprove { .. }
             | Command::OutboxRetry { .. }
             | Command::StreamPublish { .. } => false,
         }
@@ -568,7 +590,10 @@ impl Command {
     /// Whether only an executor connection may send it: it signs as the node's actor with no prompt, so a face
     /// connection (any process of the person's OS user can open it) must not.
     pub fn executor_only(&self) -> bool {
-        matches!(self, Command::RevertApprove { .. })
+        matches!(
+            self,
+            Command::RevertApprove { .. } | Command::ReviewApprove { .. }
+        )
     }
 
     /// Whether an agent's tools may send it (SR-06).

@@ -254,3 +254,25 @@ fn scrub(s: &str, key: &str) -> String {
         s.replace(key, "<redacted>")
     }
 }
+
+/// Whether the route at `base` answers: one unauthenticated `GET` of the base URL. Any HTTP status counts (the
+/// route is there; the key is not sent, so it can't be refused for it). Returns the status. For `han doctor`,
+/// on request only.
+pub async fn probe_route(base: &str, timeout: Duration) -> Result<u16, String> {
+    if !base.starts_with("https://") && !is_loopback_http(base) {
+        return Err("the model route is TLS only (http only to loopback)".into());
+    }
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+    client
+        .get(base)
+        .send()
+        .await
+        .map(|r| r.status().as_u16())
+        .map_err(|e| e.to_string())
+}

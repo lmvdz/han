@@ -774,6 +774,18 @@ pub struct EffectRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub change_digest: Option<String>,
+    /// The risk tier (0 to 3) of a `vcs.land`, derived from the body's change summary and the policy in force
+    /// at the proposal, as Policy pins it in the gate (P-17). Absent for other actions, and when the policy has
+    /// no `gates`. A reviewer reads it to take only the tiers machine review counts for; Policy still decides
+    /// whether any approval counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub gate_tier: Option<u8>,
+    /// The delta digest of the change summary the body carries (the gate's `deltaDigest`): what an approval's
+    /// evidence must be over. Absent when the proposal carried no change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delta_digest: Option<String>,
     /// The task it is charged to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

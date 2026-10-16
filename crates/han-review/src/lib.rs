@@ -12,20 +12,30 @@
 //! confine an approver to tier 1: an approval rule is `{action, approvers}`, the first rule for the action
 //! applies, and one approval from any listed approver satisfies E3 whatever the plan's `tier` says. Listing
 //! the reviewer under `vcs.land` would let it approve tiers 2 and 3 too. Nothing in the repository starts
-//! this crate.
+//! this crate on its own: `han review` does, with `approve` off unless configured, and the node's
+//! `ReviewApprove` (executor connection, tier 1 at most, `han.review/1` evidence over the gate's delta digest)
+//! is the only way a record becomes an approval, with Policy deciding whether it counts.
 //!
 //! * [`record`]: the record, the verdict and the output schema.
 //! * [`independence`]: the vendor and operator-chain rules.
 //! * [`backend`]: the model seam, a fake for tests and an OpenAI-compatible client (OmniRoute).
 //! * [`review`]: the pipeline.
+//! * [`config`], [`ledger`], [`service`]: the long-lived service `han review` runs (R33 PR 6): it watches open
+//!   `vcs.land` proposals of tier 0 or 1, reviews each once per reviewer version, and approves through the
+//!   node's narrow `ReviewApprove` command or messages the proposer. Off unless configured.
 
 pub mod backend;
+pub mod config;
 pub mod independence;
+pub mod ledger;
 pub mod parse;
 pub mod record;
 pub mod review;
+pub mod service;
 
-pub use backend::{FakeBackend, KeyStyle, ModelBackend, ModelReply, ModelRequest, OpenAiCompat};
+pub use backend::{
+    FakeBackend, KeyStyle, ModelBackend, ModelReply, ModelRequest, OpenAiCompat, probe_route,
+};
 pub use independence::{AuthorInfo, Independence, Refusal, ReviewerInfo, independent, vendor_of};
 pub use record::{Finding, Review, ReviewRecord, Severity, Usage, Verdict};
 pub use review::{

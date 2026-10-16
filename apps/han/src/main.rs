@@ -18,6 +18,7 @@ mod homecmd;
 mod host;
 mod keys;
 mod node;
+mod review;
 mod rolenode;
 #[cfg(feature = "conformance")]
 mod roleprobe;
@@ -94,6 +95,8 @@ enum Cmd {
     },
     /// Run the executor role: claim approved effects and run them (holds the credentials).
     Exec(exec::ExecArgs),
+    /// The tier-1 machine reviewer: run it as a service (`run`) or set it up (`set`). Off unless configured.
+    Review(review::ReviewArgs),
     /// Try the commands that approve and govern as a host or an executor and show that its class refuses them.
     #[cfg(feature = "conformance")]
     #[command(hide = true)]
@@ -149,6 +152,7 @@ async fn run(cli: Cli) {
         Cmd::Dev(a) => dev::run(a).await,
         Cmd::Agent(a) => agent::run(a).await,
         Cmd::Exec(a) => exec::run(a).await,
+        Cmd::Review(a) => review::run(a).await,
         Cmd::Host(a) => host::run(*a).await,
         #[cfg(feature = "conformance")]
         Cmd::RoleProbe(a) => roleprobe::run(a).await,

@@ -318,6 +318,12 @@ fn tier_of(gates: &GatesDoc, ch: &Change) -> u8 {
     tier
 }
 
+/// The tier Policy derives for a change summary under `gates`, with no revert floor (P-17). A node reads it to
+/// show a landing's tier before a person or a reviewer looks; the gate pinned in the log stays Policy's.
+pub fn change_tier(gates: &GatesDoc, ch: &Change) -> u8 {
+    tier_of(gates, ch)
+}
+
 /// P-17: the gate of a proposal of `action` with `change`, derived from `policy` and never from a tier the
 /// proposer states; `None` when the policy has no `gates` or the action is not `vcs.land`.
 pub(super) fn gate_of(

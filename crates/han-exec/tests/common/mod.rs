@@ -165,6 +165,8 @@ impl FakeNode {
                 .then(|| serde_json::from_str::<Value>(plan).ok())
                 .flatten()
                 .and_then(|p| han_exec::actions::change_digest(&p)),
+            gate_tier: None,
+            delta_digest: None,
             task: None,
             phase: "open".into(),
             approvals: vec![],

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 async-trait = "0.1"
 han-core.workspace = true
+han-node = { path = "../han-node", version = "0.1.0", default-features = false }
 han-vcs = { path = "../han-vcs", version = "0.1.0" }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
@@ -16,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true }
 tracing.workspace = true
 
 [dev-dependencies]
