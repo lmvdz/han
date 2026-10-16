@@ -81,9 +81,7 @@ pub fn serve_with_clock(
     class: ConnectionClass,
     clock: Arc<ServerClock>,
 ) -> io::Result<RpcServer> {
-    let options = ListenerOptions::new().name(local_name(endpoint)?);
-    let options = restrict(options)?;
-    let listener = options.create_tokio()?;
+    let listener = bind_private(endpoint)?;
     let task = tokio::spawn(async move {
         // Aborting this task drops the set, and the set aborts every connection in it.
         let mut conns = JoinSet::new();
@@ -155,8 +153,55 @@ pub fn serve_roles(api: Arc<dyn NodeApi>, endpoint: &str) -> io::Result<NodeServ
 /// A listener on `endpoint` that only the current user can reach (same restriction as [`serve`]), for local
 /// tools with their own protocol, such as a home's admin socket.
 pub fn listen_local(endpoint: &str) -> io::Result<interprocess::local_socket::tokio::Listener> {
+    bind_private(endpoint)
+}
+
+/// Binds `endpoint` so that only the current user can ever connect to it.
+#[cfg(not(target_os = "macos"))]
+fn bind_private(endpoint: &str) -> io::Result<interprocess::local_socket::tokio::Listener> {
     let options = ListenerOptions::new().name(local_name(endpoint)?);
     restrict(options)?.create_tokio()
+}
+
+/// macOS refuses `fchmod` on a socket (EINVAL, which the listener options report as `Unsupported`), so the
+/// mode cannot be set at creation. The socket is bound inside a fresh directory only its owner can enter,
+/// narrowed to 0600 there, and renamed into place: nobody else can reach it at any point, and a socket left
+/// by a daemon that died is replaced by the rename.
+#[cfg(target_os = "macos")]
+fn bind_private(endpoint: &str) -> io::Result<interprocess::local_socket::tokio::Listener> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    let target = std::path::Path::new(endpoint);
+    let parent = match target.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    };
+    let dir = parent.join(format!(".han-sock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    let bound = stage(&dir, target);
+    let _ = std::fs::remove_dir_all(&dir);
+    bound
+}
+
+/// Binds `<dir>/s`, narrows it to 0600 and moves it to `target`. `dir` is private to the current user.
+#[cfg(target_os = "macos")]
+fn stage(
+    dir: &std::path::Path,
+    target: &std::path::Path,
+) -> io::Result<interprocess::local_socket::tokio::Listener> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let staged = dir.join("s");
+    let staged_str = staged
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket path is not UTF-8"))?;
+    // The staged name goes with its directory; the final name is not this listener's to reclaim.
+    let listener = ListenerOptions::new()
+        .name(local_name(staged_str)?)
+        .reclaim_name(false)
+        .create_tokio()?;
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::rename(&staged, target)?;
+    Ok(listener)
 }
 
 #[cfg(windows)]
@@ -170,7 +215,7 @@ fn restrict(options: ListenerOptions<'_>) -> io::Result<ListenerOptions<'_>> {
     Ok(options.security_descriptor(SecurityDescriptor::deserialize(&sddl)?))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn restrict(options: ListenerOptions<'_>) -> io::Result<ListenerOptions<'_>> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt as _;
     // A socket left by a daemon that died is replaced; the file is readable and writable by its owner only.
