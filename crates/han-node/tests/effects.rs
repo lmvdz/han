@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{World, call, confirm_operator, id_of, space_of, until};
+use common::{World, call, confirm_operator, effect_known, id_of, space_of, until};
 use han_node::api::{
     CallResult, Command, CommandClass, EvidenceRef, NodeApi, NodeError, Query, Row, Window,
 };
@@ -152,6 +152,7 @@ async fn an_effect_is_proposed_approved_claimed_once_and_reported() {
         ("open", 0, 30)
     );
 
+    effect_known(&alice, &space, &proposal).await;
     call(
         &alice,
         Command::EffectApprove {
@@ -817,6 +818,7 @@ async fn a_rule_that_lets_the_proposer_suffice_is_reported_in_the_row_and_needs_
     let refused = exec.call(claim(&pushed)).await.unwrap_err();
     assert!(matches!(refused, NodeError::Denied { .. }), "{refused:?}");
     // Nobody's approval is asked of a try (it would never be consumed).
+    effect_known(&alice, &space, &tried).await;
     let approve = alice
         .call(Command::EffectApprove {
             space: space.clone(),

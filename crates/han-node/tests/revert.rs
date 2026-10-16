@@ -162,6 +162,9 @@ impl Rig {
             effects(&self.exec).iter().any(|e| e.proposal == p)
         })
         .await;
+        // the nodes that act on it next (the owner approves, the coder proposes on) have it, too
+        common::effect_known(&self.alice, &self.space, proposal).await;
+        common::effect_known(&self.coder, &self.space, proposal).await;
     }
 
     /// A land the coder proposes, the owner approves and the executor runs to `succeeded`; returns its id.

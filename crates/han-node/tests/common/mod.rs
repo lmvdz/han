@@ -187,6 +187,31 @@ pub async fn until(what: &str, mut f: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// Waits until `node`'s Effects view knows `proposal` of `space`, for up to 15 s. A proposal made on another node
+/// (or connection) reaches this node by sync, so an approve, claim or cancel sent here first would find "no such
+/// proposal": a client acts on rows it has seen, and a test waits for the same.
+pub async fn effect_known(node: &dyn NodeApi, space: &str, proposal: &str) {
+    for _ in 0..750 {
+        let mut v = node.view(Query::Effects {
+            space: Some(space.into()),
+            executor: None,
+            include_done: true,
+            window: Window::default(),
+        });
+        while let Some(ev) = v.try_next() {
+            if let ViewEvent::Snapshot { rows, .. } = ev
+                && rows
+                    .iter()
+                    .any(|r| matches!(r, Row::Effect(e) if e.proposal == proposal))
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for the node to know proposal {proposal} of {space}");
+}
+
 /// Waits until `node` knows `session` of `space` and its watch of the session's stream is up: a view of the
 /// session opens on a session the node knows (an unknown one fails the view for good), and items published
 /// from now on reach the node (they are not replayed).
