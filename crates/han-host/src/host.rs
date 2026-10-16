@@ -469,8 +469,8 @@ impl Shared {
                 let flow = self.land.as_ref().ok_or(
                     "land is not enabled for this space and repository: use git_push and open_pr",
                 )?;
-                // The host's backstop proposes what is committed and commits nothing (`committedOnly`); an agent
-                // that sets it only gets less.
+                // `committedOnly` proposes what is committed and commits nothing; the host's backstop does not
+                // set it (it commits what is left, as the agent), an agent that does only gets less.
                 let commit = effect.get("committedOnly").and_then(Value::as_bool) != Some(true);
                 let draft = flow.draft_with(&req.summary, &effect, commit)?;
                 Ok((draft.plan, Some(draft.bundle)))
@@ -1500,18 +1500,62 @@ async fn run_opened(
         };
         let text = r24::task_prompt(external.as_deref(), task_id);
         let data = r24::task_data(ask.as_deref(), &r24::data_id());
-        state = turn(&shared, &mut agent, &facts, &taint, driver, text, data).await?;
+        state = turn(
+            &shared,
+            &mut agent,
+            &facts,
+            &taint,
+            driver,
+            text,
+            data.into_iter().collect(),
+        )
+        .await?;
         if let Some(m) = &mirror {
             m.rescan();
         }
     }
 
+    let mut steer_tick = tokio::time::interval(LAND_POLL);
+    steer_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         if *stop.borrow() || state == SessionState::Failed {
             break;
         }
         tokio::select! {
             _ = stop.changed() => break,
+            // Between turns only: this arm runs when no turn does, so a rejection that arrives during a turn
+            // waits for its end.
+            _ = steer_tick.tick(), if shared.land.is_some() => {
+                let Some(flow) = shared.land.clone() else { continue };
+                match flow.steer().await {
+                    Some(crate::land::SteerDue::Turn(s)) => {
+                        shared.signal(Signal::Summary(format!(
+                            "land proposal {} was rejected ({}): the agent is told to fix it and propose again",
+                            s.proposal.chars().take(12).collect::<String>(),
+                            s.reason
+                        )));
+                        let driver = Driver {
+                            author: cfg.agent.clone(),
+                            kind: DriverKind::Host,
+                            space: cfg.space.clone(),
+                            seq: 0,
+                        };
+                        state = turn(&shared, &mut agent, &facts, &taint, driver, s.text, s.blocks)
+                            .await?;
+                        if let Some(m) = &mirror {
+                            m.rescan();
+                        }
+                    }
+                    Some(crate::land::SteerDue::Capped { proposal, reason, attempts }) => {
+                        shared.signal(Signal::Summary(format!(
+                            "land proposal {} was rejected ({reason}) and the session has made {attempts} proposals: \
+                             the agent is not told to try again",
+                            proposal.chars().take(12).collect::<String>()
+                        )));
+                    }
+                    None => {}
+                }
+            }
             ev = inputs.next() => {
                 let Some(ev) = ev else { break };
                 inputs_mirror.apply(ev);
@@ -1537,7 +1581,7 @@ async fn run_opened(
                         space: cfg.space.clone(),
                         seq: i.seq,
                     };
-                    state = turn(&shared, &mut agent, &facts, &taint, driver, text, None).await?;
+                    state = turn(&shared, &mut agent, &facts, &taint, driver, text, Vec::new()).await?;
                     if let Some(m) = &mirror {
                         m.rescan();
                     }
@@ -1765,9 +1809,10 @@ async fn sweep_step(shared: &Arc<Shared>, flow: &Arc<crate::land::Flow>) -> bool
     }
 }
 
-/// The backstop (`autoPropose`): the session is over, and it holds commits after its last proposal (or with no
-/// proposal) that nobody proposed. The host proposes them as a `vcs.land`, titled from the task, so that
-/// nothing is left silently. Uncommitted work is not committed for it; the prune reports it `unlanded`.
+/// The backstop (`autoPropose`): the session is over, and it holds work after its last proposal (or with no
+/// proposal) that nobody proposed: commits, or changes not yet committed. The host commits the latter as the
+/// agent (what `.gitignore` ignores is left out) and proposes it all as a `vcs.land`, titled from the task, so
+/// that nothing is left silently.
 async fn land_backstop(shared: &Arc<Shared>) {
     let Some(flow) = shared.land.clone() else {
         return;
@@ -1781,21 +1826,19 @@ async fn land_backstop(shared: &Arc<Shared>) {
     let answer = propose_effect(
         shared,
         ProposeRequest {
-            summary: "the session ended with committed work that was never proposed".into(),
+            summary: "the session ended with work that was never proposed".into(),
             kind: "land".into(),
-            effect: json!({"committedOnly": true}),
+            effect: json!({}),
         },
     )
     .await;
     let text = match answer {
         ProposeAnswer::Proposed { id, .. } | ProposeAnswer::Queued { id } => format!(
-            "the session ended with committed work nobody proposed: the host proposed it for landing ({})",
+            "the session ended with work nobody proposed: the host committed what was left and proposed it for landing ({})",
             id.chars().take(12).collect::<String>()
         ),
         ProposeAnswer::Refused { reason } => {
-            format!(
-                "committed work was left unproposed, and the host could not propose it: {reason}"
-            )
+            format!("work was left unproposed, and the host could not propose it: {reason}")
         }
     };
     shared.signal(Signal::Summary(text));
@@ -1866,7 +1909,7 @@ async fn turn(
     taint: &TaintStore,
     driver: Driver,
     text: String,
-    data: Option<String>,
+    data: Vec<String>,
 ) -> Result<SessionState, HostError> {
     let cfg = &shared.cfg;
     facts
@@ -1887,6 +1930,8 @@ async fn turn(
         step: match (&driver.kind, decision.mode) {
             (DriverKind::Task { .. }, Mode::Strict) => "working on the task (strict)".into(),
             (DriverKind::Task { .. }, Mode::Auto) => "working on the task".into(),
+            (DriverKind::Host, Mode::Strict) => "fixing a rejected land proposal (strict)".into(),
+            (DriverKind::Host, Mode::Auto) => "fixing a rejected land proposal".into(),
             (_, Mode::Strict) => format!("steered by {} (strict)", driver.author),
             (_, Mode::Auto) => format!("steered by {}", driver.author),
         },
@@ -1896,7 +1941,7 @@ async fn turn(
         .turn(
             TurnInput {
                 text,
-                data_blocks: data.into_iter().collect(),
+                data_blocks: data,
             },
             decision.mode,
         )
