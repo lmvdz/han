@@ -73,7 +73,8 @@ pub struct LaneChange {
     pub proposal: String,
     /// `queued`, `testing`, `landing`, `landed`, `confirmed`, `rejected`, `cancelled` (or `reverted`).
     pub state: String,
-    /// The rejection reason: `conflict`, `test`, `dependency`, `policy`, `timeout`, `post_merge_failed`.
+    /// The rejection reason: `conflict`, `test`, `dependency`, `policy`, `timeout`, `post_merge_failed`, or
+    /// `flaky` (a landed change whose red post-merge run did not reproduce).
     pub reason: Option<String>,
     /// What the lane says about it.
     pub detail: Option<String>,

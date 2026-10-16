@@ -362,7 +362,23 @@ note?: string,
 /**
  * The record the approval rests on, for a rule that asks for evidence (P-17).
  */
-evidence?: ApprovalEvidence, } | { "type": "effect_cancel", 
+evidence?: ApprovalEvidence, } | { "type": "revert_approve", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The revert's proposal (entry id).
+ */
+proposal: string, 
+/**
+ * A note.
+ */
+note?: string, 
+/**
+ * The failing run the revert rests on: `han.ci/1` over the reverted change's delta digest.
+ */
+evidence: ApprovalEvidence, } | { "type": "effect_cancel", 
 /**
  * The space.
  */

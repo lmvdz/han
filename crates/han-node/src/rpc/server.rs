@@ -423,7 +423,7 @@ async fn connection(
         let params = msg.params.unwrap_or(Value::Null);
         match msg.method.as_deref() {
             Some("call") => match serde_json::from_value::<Command>(params) {
-                Ok(cmd) if !class.permits(cmd.class()) => {
+                Ok(cmd) if !class.permits_command(&cmd) => {
                     let e = NodeError::denied(format!(
                         "a {class:?} connection may not send a {:?} command",
                         cmd.class()

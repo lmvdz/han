@@ -98,6 +98,16 @@ pub(crate) struct ApprovalSubject {
     pub requester: String,
 }
 
+/// What the lane's own approval of a revert is checked against (see [`Engine::revert_subject`]).
+#[derive(Clone, Debug)]
+pub(crate) struct RevertSubject {
+    pub digest: String,
+    pub open: bool,
+    pub proposer: String,
+    pub reverted: Option<String>,
+    pub reverted_digest: Option<String>,
+}
+
 impl NoTimeline {
     fn err<T>() -> Result<T, NodeError> {
         Err(NodeError::unavailable(
@@ -569,6 +579,26 @@ impl Engine {
             action: e.action.clone(),
             target,
             requester: e.proposer.clone(),
+        })
+    }
+
+    /// What `RevertApprove` checks of a proposal: whether it waits for approval, who proposed it, the land it
+    /// reverts and that land's delta digest (the gate's `revertedDigest`, when the node knows it).
+    pub(crate) fn revert_subject(&self, space: &str, proposal: &str) -> Option<RevertSubject> {
+        let m = self.spaces.get(space)?;
+        let e = m.effects.get(proposal)?;
+        let reverted = e.change_revert_of.clone();
+        let reverted_digest = reverted
+            .as_deref()
+            .and_then(|r| m.effects.get(r))
+            .filter(|r| r.action == "vcs.land")
+            .and_then(|r| r.change_delta.clone());
+        Some(RevertSubject {
+            digest: e.plan_digest.clone(),
+            open: crate::model::effect_open(e, &self.now),
+            proposer: e.proposer.clone(),
+            reverted,
+            reverted_digest,
         })
     }
 
