@@ -6,6 +6,7 @@
 //! * Faces depend only on han-node's API types: with `default-features = false` the crate has no han-core,
 //!   han-net, han-seq, storage or keys, and the face sources use nothing of han-node but `api` and `rpc`.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,6 +17,7 @@ fn root() -> PathBuf {
 /// The names of the normal (non-dev, non-build) dependencies of a package, as `cargo tree` prints them.
 fn tree(args: &[&str]) -> Vec<String> {
     let out = Command::new(env!("CARGO"))
+        .no_window()
         .current_dir(root())
         .args(["tree", "--offline", "-e", "normal", "--prefix", "none"])
         .args(args)

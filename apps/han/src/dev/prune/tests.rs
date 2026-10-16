@@ -1,6 +1,7 @@
 //! The pruner against real temporary git repositories (worktrees, a squash merge, patch-equivalent commits)
 //! and a fake GitHub.
 
+use han_proc::NoWindow as _;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -11,6 +12,7 @@ use crate::dev::git::Worktree;
 /// Runs git in `dir`, with an identity, and returns its stdout.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .arg("-C")
         .arg(dir)
         .args(["-c", "core.autocrlf=false"])
@@ -163,6 +165,7 @@ impl Repo {
 
     fn branch_exists(&self, b: &str) -> bool {
         Command::new("git")
+            .no_window()
             .arg("-C")
             .arg(&self.main)
             .args(["show-ref", "-q", "--verify", &format!("refs/heads/{b}")])

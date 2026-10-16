@@ -1,11 +1,13 @@
 //! `han doctor` and `han agent set`, run as the real binary on a data directory with no node running.
 
+use han_proc::NoWindow as _;
 use std::process::Command;
 
 const HAN: &str = env!("CARGO_BIN_EXE_han");
 
 fn han(args: &[&str]) -> std::process::Output {
     Command::new(HAN)
+        .no_window()
         .args(args)
         .env_remove("HAN_DATA")
         .output()

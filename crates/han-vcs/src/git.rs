@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use base64::Engine as _;
+use han_proc::NoWindow as _;
 use sha2::{Digest, Sha256};
 
 use crate::merge::{self, parse_changes, parse_merge_tree};
@@ -400,6 +401,7 @@ impl GitVcs {
     fn git(&self, cwd: Option<&Path>) -> Result<Git> {
         self.ensure_root()?;
         let mut cmd = Command::new(&self.git);
+        cmd.no_window();
         for (k, _) in std::env::vars_os() {
             let name = k.to_string_lossy().to_ascii_uppercase();
             if name.starts_with("GIT_") || name == "SSH_ASKPASS" || name.starts_with("GCM_") {

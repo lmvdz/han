@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -59,6 +60,7 @@ pub fn advisory() -> bool {
 
 pub fn run(args: &[&str]) -> (bool, String, String) {
     let out = Command::new(HAN)
+        .no_window()
         .env("HAN_PRESENCE_LIVE", "1")
         .args(args)
         .env("HAN_RELAY", "none")
@@ -113,6 +115,7 @@ impl Stack {
         // Output goes to a file, not a pipe: the stack's services outlive `dev up` and must not hold a pipe
         // that the test would wait on.
         let status = Command::new(HAN)
+            .no_window()
             .env("HAN_PRESENCE_LIVE", "1")
             .args(&args)
             .envs(env.iter().copied())
@@ -193,6 +196,7 @@ impl Stack {
         ));
         let file = std::fs::File::create(&out).unwrap();
         let status = Command::new(HAN)
+            .no_window()
             .env("HAN_PRESENCE_LIVE", "1")
             .args(&a)
             .stdin(Stdio::null())
@@ -235,6 +239,7 @@ impl Stack {
     pub fn kill_host(&self) {
         let pattern = format!("host --spec {}", self.dir.display());
         let status = Command::new("pkill")
+            .no_window()
             .args(["-KILL", "-f", &pattern])
             .status()
             .expect("pkill runs");
@@ -380,6 +385,7 @@ impl Drop for Stack {
     fn drop(&mut self) {
         let dir = self.dir.to_string_lossy().into_owned();
         let _ = Command::new(HAN)
+            .no_window()
             .env("HAN_PRESENCE_LIVE", "1")
             .args(["dev", "down", "--dir", &dir])
             .stdin(Stdio::null())
@@ -391,6 +397,7 @@ impl Drop for Stack {
 
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .args(args)

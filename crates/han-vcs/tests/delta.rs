@@ -4,6 +4,7 @@
 
 #![allow(missing_docs)]
 
+use han_proc::NoWindow as _;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ fn run_git(dir: &Path, env: &[(&str, &str)], args: &[&str], stdin: Option<&[u8]>
         std::fs::write(&empty, b"").unwrap();
     }
     let mut cmd = Command::new("git");
+    cmd.no_window();
     cmd.current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &empty)

@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 async-trait = "0.1"
 base64.workspace = true
+han-proc = { workspace = true, features = ["tokio"] }
 han-core.workspace = true
 octocrab = { version = "=0.54.4", default-features = false, features = ["default-client", "rustls", "rustls-ring", "tracing"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }

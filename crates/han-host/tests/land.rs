@@ -2,6 +2,7 @@
 //! the lane's states in the status, and pruning on every final state. The lane is played by a fake feed that
 //! serves `han.land/1` change items; `lane_items_reach_the_host_through_the_node` covers the real path.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,7 @@ const REPO: &str = "local:origin";
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])

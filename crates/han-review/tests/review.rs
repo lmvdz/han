@@ -2,6 +2,7 @@
 
 #![allow(missing_docs)]
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -19,6 +20,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
         std::fs::write(&empty, b"").unwrap();
     }
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &empty)

@@ -1,6 +1,7 @@
 //! `han shim selftest` never outlives its launcher: it ends by itself at its deadline, and the sandbox probe
 //! that runs it leaves no copy of it running from this target directory.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -24,6 +25,7 @@ impl Drop for Reaped {
 #[cfg(windows)]
 fn command_lines() -> Vec<String> {
     let out = Command::new("powershell")
+        .no_window()
         .args([
             "-NoProfile",
             "-Command",
@@ -84,6 +86,7 @@ fn an_orphaned_selftest_exits_by_itself() {
     let started = Instant::now();
     let mut child = Reaped(
         Command::new(&han)
+            .no_window()
             .args([
                 "shim",
                 "selftest",

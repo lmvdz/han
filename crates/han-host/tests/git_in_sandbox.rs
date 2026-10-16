@@ -7,6 +7,7 @@
 //! into the shared store, and the host's bundle for the executor (R15) still carries the commit. A backend that is
 //! missing skips with a message.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -43,6 +44,7 @@ fn available(b: SandboxBackend) -> bool {
 /// The test's own git, with no user or system configuration.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .args([
@@ -197,7 +199,11 @@ async fn run(
 /// The directory of git on this machine (Windows: where MXC must be allowed to read it).
 #[cfg(windows)]
 fn which_git() -> Result<PathBuf, ()> {
-    let out = Command::new("where").arg("git").output().map_err(|_| ())?;
+    let out = Command::new("where")
+        .no_window()
+        .arg("git")
+        .output()
+        .map_err(|_| ())?;
     let first = String::from_utf8_lossy(&out.stdout)
         .lines()
         .next()
@@ -260,6 +266,7 @@ async fn confines_git(backend: Preference) {
     assert_ne!(head, f.ws.base);
     let shared = store.parent().unwrap().to_path_buf();
     let in_shared = Command::new("git")
+        .no_window()
         .current_dir(&shared)
         .args(["cat-file", "-e", &head])
         .status()

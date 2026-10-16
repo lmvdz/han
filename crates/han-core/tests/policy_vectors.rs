@@ -2,11 +2,13 @@
 //! binary, which checks each verdict and the folded state after every step as
 //! `ref/run_vectors.py` does.
 
+use han_proc::NoWindow as _;
 use std::process::Command;
 
 #[test]
 fn every_policy_vector_passes() {
     let out = Command::new(env!("CARGO_BIN_EXE_han-conform"))
+        .no_window()
         .output()
         .expect("han-conform runs");
     let text = String::from_utf8_lossy(&out.stdout);
@@ -33,6 +35,7 @@ fn a_failing_vector_is_reported_in_the_fuzz_protocol() {
     let vector = r#"{"name":"x","profiles":{},"steps":[{"entry":{"id":"","v":2,"space":"s:a.example","kind":"message","author":"@a:a.example","keyId":"k","body":{},"contentHash":"","refs":[],"seen":0,"nonce":"n","time":"2026-10-10T12:00:00Z"},"time":"2026-10-10T12:00:00Z","expect":"allow"}]}"#;
     std::fs::write(dir.join("seed1.json"), vector).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_han-conform"))
+        .no_window()
         .arg(&dir)
         .output()
         .unwrap();

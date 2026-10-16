@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use han_host::driver::{builtin, login_present};
+use han_proc::NoWindow as _;
 use han_registry::{AgentEdit, AgentsFile, HarnessInstall, Registry};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -69,7 +70,11 @@ pub fn parse_node_major(out: &str) -> Option<u32> {
 }
 
 fn node_major(node: &Path) -> Option<u32> {
-    let out = Command::new(node).arg("--version").output().ok()?;
+    let out = Command::new(node)
+        .no_window()
+        .arg("--version")
+        .output()
+        .ok()?;
     parse_node_major(&String::from_utf8_lossy(&out.stdout))
 }
 
@@ -134,6 +139,7 @@ fn resolve_node(data: &Path, asked: Option<&Path>) -> Res<PathBuf> {
     let archive = root.join(format!("node-v{NODE_VERSION}-{suffix}"));
     println!("downloading {url}");
     let st = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" })
+        .no_window()
         .args([
             "--fail",
             "--location",
@@ -161,6 +167,7 @@ fn resolve_node(data: &Path, asked: Option<&Path>) -> Res<PathBuf> {
         PathBuf::from("tar")
     };
     let st = Command::new(tar)
+        .no_window()
         .arg("-xf")
         .arg(&archive)
         .arg("-C")
@@ -209,6 +216,7 @@ fn npm(node: &Path, dir: &Path, args: &[&str]) -> Res<()> {
         path.push(old);
     }
     let st = Command::new(npm)
+        .no_window()
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -330,6 +338,7 @@ pub fn login(
     let mut last = None;
     for program in programs {
         match std::process::Command::new(&program)
+            .no_window()
             .env("CLAUDE_CONFIG_DIR", &dir)
             .status()
         {

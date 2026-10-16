@@ -22,6 +22,7 @@
 //!   `PATH`, `LIB` and the linker are set so rustc needs neither the registry nor COM to find them. Without
 //!   MSVC, the GNU toolchain is the fallback (it needs no grants beyond the toolchain's own directory).
 
+use han_proc::NoWindow as _;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -192,7 +193,8 @@ pub async fn prewarm(plan: &Plan, proxy: std::net::SocketAddr, token: &str) -> V
     for step in &plan.prewarm {
         let url = format!("http://{}:{token}@{proxy}", crate::proxy::PROXY_USER);
         let mut cmd = tokio::process::Command::new(&step.program);
-        cmd.args(&step.args)
+        cmd.no_window()
+            .args(&step.args)
             .current_dir(&step.cwd)
             .env_clear()
             .envs(step.env.iter().map(|(k, v)| (k, v)))

@@ -36,6 +36,7 @@ use agent_client_protocol::schema::v1::{
     SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, Lines};
+use han_proc::NoWindow as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -545,6 +546,7 @@ async fn mcp_call(
             .ok_or_else(|| format!("no MCP server named {server} in session/new"))?;
         let command = entry["command"].as_str().ok_or("not a stdio server")?;
         let mut cmd = tokio::process::Command::new(command);
+        cmd.no_window();
         for a in entry["args"].as_array().into_iter().flatten() {
             cmd.arg(a.as_str().unwrap_or(""));
         }

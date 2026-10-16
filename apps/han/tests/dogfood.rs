@@ -2,6 +2,7 @@
 //! (`han seq register`), `han agent start` naming the operator from the profile and asking for the harness
 //! setup, `han agent login --check`, `han node status` and `han task list`.
 
+use han_proc::NoWindow as _;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -21,6 +22,7 @@ struct Daemon {
 impl Daemon {
     fn spawn(args: &[&str]) -> Daemon {
         let mut child = Command::new(HAN)
+            .no_window()
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -63,6 +65,7 @@ impl Drop for Daemon {
 /// Runs `han <args>` to the end and returns (success, stdout, stderr).
 fn run(args: &[&str]) -> (bool, String, String) {
     let mut child = Command::new(HAN)
+        .no_window()
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

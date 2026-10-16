@@ -2,6 +2,7 @@
 //! the test: it squash-rebases the approved change onto the ref's tip and passes the result in the claim
 //! context's `LaneInstruction`.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ const REF: &str = "refs/heads/main";
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(["-c", "commit.gpgsign=false"])

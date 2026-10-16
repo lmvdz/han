@@ -12,6 +12,7 @@ default = []
 test-doubles = []
 
 [dependencies]
+han-proc.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]

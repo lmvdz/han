@@ -2,6 +2,7 @@
 //! policy per mode with the reject reason in the next prompt, hidden provider errors, crashes, timeouts and
 //! other edge cases. No Node, no network.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,6 +34,7 @@ impl Run {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("agent.log");
         let mut cmd = tokio::process::Command::new(FAKE);
+        cmd.no_window();
         cmd.args(args)
             .arg("--log")
             .arg(&log)

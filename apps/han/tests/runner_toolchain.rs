@@ -6,12 +6,14 @@
 
 #![cfg(target_os = "linux")]
 
+use han_proc::NoWindow as _;
 use std::process::Command;
 
 const HAN: &str = env!("CARGO_BIN_EXE_han");
 
 fn setup(data: &std::path::Path, repo: &std::path::Path, extra: &[&str]) -> (bool, String) {
     let out = Command::new(HAN)
+        .no_window()
         .args(["runner", "setup", "--toolchain", "rust", "--toolchain-only"])
         .arg("--repo")
         .arg(repo)

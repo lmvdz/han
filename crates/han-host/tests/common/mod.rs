@@ -3,6 +3,7 @@
 
 #![allow(dead_code, missing_docs)]
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command as Proc;
 use std::sync::Arc;
@@ -35,6 +36,7 @@ pub fn pubkey(n: u8) -> String {
 
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let out = Proc::new("git")
+        .no_window()
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])

@@ -39,6 +39,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use han_node::api::{Fidelity, SandboxBackend};
+use han_proc::NoWindow as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -576,7 +577,8 @@ async fn launch_none(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError> {
     let port = spec.proxy.as_ref().map(|p| p.addr.port());
     let env = build_env(spec, port, &spec.temp);
     let mut cmd = tokio::process::Command::new(&spec.program);
-    cmd.args(build_args(spec, port))
+    cmd.no_window()
+        .args(build_args(spec, port))
         .current_dir(&spec.cwd)
         .env_clear()
         .envs(env)

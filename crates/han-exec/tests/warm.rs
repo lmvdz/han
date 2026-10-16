@@ -1,5 +1,6 @@
 //! The warm-runner checks backend on a small temporary cargo workspace: `a`, `b` (depends on `a`) and `c`.
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -30,6 +31,7 @@ impl Fixture {
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .args([
             "-c",
             "user.name=t",
@@ -94,6 +96,7 @@ fn fixture() -> Fixture {
     write(r, "README.md", "fixture\n");
     git(r, &["init", "-q"]);
     let out = Command::new("cargo")
+        .no_window()
         .args(["generate-lockfile"])
         .current_dir(r)
         .output()
@@ -284,7 +287,14 @@ async fn a_step_that_overruns_is_killed_and_reported() {
 #[tokio::test]
 async fn the_run_timeout_bounds_the_whole_run() {
     let f = fixture();
-    let base = head(&f);
+    // a test that sleeps, so the run outlasts its timeout however fast the machine builds
+    let (_, body) = lib(
+        "c",
+        None,
+        "        std::thread::sleep(std::time::Duration::from_secs(300));
+",
+    );
+    let base = commit_file(&f, "crates/c/src/lib.rs", &body);
     let r = runner(&f, |c| {
         c.profile = Profile {
             fast: vec![cargo_step("one", None), cargo_step("two", None)],

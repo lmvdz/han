@@ -16,6 +16,7 @@ use clap::Args;
 use han_node::NodeApi;
 use han_node::api::{Query, Row, SpaceLink, ViewEvent, Window};
 use han_node::rpc::{RpcClient, default_endpoint};
+use han_proc::NoWindow as _;
 use han_registry::{AgentsFile, HarnessInstall, valid_os_user};
 use serde::Serialize;
 
@@ -681,6 +682,7 @@ fn github_facts(dir: Option<&Path>) -> Option<GithubFacts> {
     let key_mode = None;
     let active = if cfg!(target_os = "linux") {
         std::process::Command::new("systemctl")
+            .no_window()
             .args(["is-active", "han-github"])
             .output()
             .ok()
@@ -1217,6 +1219,7 @@ async fn node_facts(endpoint: &str) -> Result<NodeFacts, String> {
 
 fn user_exists(user: &str) -> bool {
     std::process::Command::new("id")
+        .no_window()
         .arg(user)
         .output()
         .is_ok_and(|o| o.status.success())

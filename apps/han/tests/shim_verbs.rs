@@ -3,6 +3,7 @@
 //! first real Claude session died in `initialize` because the verbs were wrong and the agent never started.
 //! These run the real binary the way the sandboxes do.
 
+use han_proc::NoWindow as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -25,6 +26,7 @@ fn free_port() -> u16 {
 fn han_shim_takes_the_listen_verb_and_runs_the_agent_with_its_stdio() {
     let port = free_port();
     let out = Command::new(HAN)
+        .no_window()
         .args([
             "shim",
             "listen",
@@ -59,6 +61,7 @@ fn han_shim_takes_the_listen_verb_and_runs_the_agent_with_its_stdio() {
 fn han_shim_takes_the_mcp_stub_verb() {
     // No proxy given: the shim's own usage, not clap's.
     let out = Command::new(HAN)
+        .no_window()
         .args(["shim", "mcp-stub"])
         .output()
         .unwrap();

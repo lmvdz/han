@@ -17,6 +17,7 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+han-proc.workspace = true
 proptest = "1"
 serde_json_canonicalizer = "0.3"
 

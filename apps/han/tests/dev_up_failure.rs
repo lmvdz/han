@@ -1,11 +1,13 @@
 //! `han dev up` failing must say why and exit non-zero, never kill itself (its own command line names the dir).
 
+use han_proc::NoWindow as _;
 use std::process::Command;
 
 const HAN: &str = env!("CARGO_BIN_EXE_han");
 
 fn up_with(dir: &std::path::Path, extra: &[&str]) -> std::process::Output {
     Command::new(HAN)
+        .no_window()
         .args(["dev", "up", "--dir"])
         .arg(dir)
         .args(extra)

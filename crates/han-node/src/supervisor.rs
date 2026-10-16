@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use han_proc::NoWindow as _;
 use han_registry::{
     HostAdmission, HostSpec, RunAs, spec_file, unit_admission_file, unit_spec_file,
 };
@@ -267,6 +268,7 @@ impl ProcessSpawner {
 
     fn systemctl(&self, args: &[&str]) -> std::io::Result<std::process::Output> {
         std::process::Command::new(&self.systemctl)
+            .no_window()
             .args(args)
             .stdin(std::process::Stdio::null())
             .output()
@@ -420,6 +422,7 @@ impl Supervisor for ProcessSpawner {
             .iter()
             .filter_map(|k| std::env::var_os(k).map(|v| (k.to_string(), v)));
         let child = Command::new(&self.program)
+            .no_window()
             .args(&self.prefix)
             .arg(&file)
             .env_clear()

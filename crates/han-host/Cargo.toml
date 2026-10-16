@@ -12,6 +12,7 @@ async-trait = "0.1"
 base64.workspace = true
 futures = "0.3"
 getrandom.workspace = true
+han-proc = { workspace = true, features = ["tokio"] }
 han-core.workspace = true
 han-mcp = { path = "../han-mcp", version = "0.1.0" }
 han-node = { path = "../han-node", version = "0.1.0", default-features = false }

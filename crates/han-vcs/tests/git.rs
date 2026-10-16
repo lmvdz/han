@@ -3,6 +3,7 @@
 
 #![allow(missing_docs)]
 
+use han_proc::NoWindow as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -17,6 +18,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
         std::fs::write(&empty, b"").unwrap();
     }
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &empty)
@@ -166,6 +168,7 @@ fn a_workspace_borrows_the_shared_store_and_has_its_own_refs_and_index() {
     assert_eq!(git(&b.dir, &["rev-parse", "HEAD"]), f.c1);
     assert!(
         Command::new("git")
+            .no_window()
             .current_dir(&b.dir)
             .args(["cat-file", "-e", &ca])
             .status()

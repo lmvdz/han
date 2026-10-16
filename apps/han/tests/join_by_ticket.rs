@@ -2,6 +2,7 @@
 //! joins it by the home ticket (`han node --home`), and an agent made and confirmed through that node
 //! (`han agent create`, `han agent confirm --home`). No `/.well-known/han` is fetched anywhere.
 
+use han_proc::NoWindow as _;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -22,6 +23,7 @@ struct Daemon {
 impl Daemon {
     fn spawn(args: &[&str]) -> Daemon {
         let mut child = Command::new(HAN)
+            .no_window()
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -65,6 +67,7 @@ impl Drop for Daemon {
 /// Runs `han <args>` to the end (within a minute) and returns its stdout.
 fn han(args: &[&str]) -> String {
     let mut child = Command::new(HAN)
+        .no_window()
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

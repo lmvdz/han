@@ -4,6 +4,7 @@
 
 mod common;
 
+use han_proc::NoWindow as _;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,6 +27,7 @@ const T0: i64 = 1_792_000_000;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .no_window()
         .current_dir(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(["-c", "commit.gpgsign=false"])
@@ -121,6 +123,7 @@ impl World {
     /// Whether the remote holds the commit.
     fn remote_has(&self, commit: &str) -> bool {
         Command::new("git")
+            .no_window()
             .current_dir(&self.remote)
             .args(["cat-file", "-e", commit])
             .status()
