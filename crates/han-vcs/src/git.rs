@@ -2179,6 +2179,20 @@ impl Vcs for GitVcs {
         Ok(out.status.code() == Some(0))
     }
 
+    fn merge_base(&self, dir: &Path, a: &str, b: &str) -> Result<Option<String>> {
+        if !(is_hex_id(a) || a == "HEAD") || !is_hex_id(b) {
+            return Err(VcsError::Invalid(
+                "merge bases are asked by full commit ids (or HEAD for the first)".into(),
+            ));
+        }
+        let out = self
+            .git(Some(dir))?
+            .args(["merge-base", a, b])
+            .run_codes(&[1])?;
+        let id = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        Ok((out.status.code() == Some(0) && is_hex_id(&id)).then_some(id))
+    }
+
     fn head(&self, dir: &Path) -> Result<String> {
         self.commit_of(dir, "HEAD")
     }
@@ -2209,6 +2223,10 @@ impl Vcs for GitVcs {
         if self.remote_ref(dir, remote, refname, auth)?.is_none() {
             return Ok(None);
         }
+        let mut specs = vec![format!("+{refname}:refs/han/target")];
+        if let Some(branch) = refname.strip_prefix("refs/heads/") {
+            specs.push(format!("+{refname}:refs/remotes/origin/{branch}"));
+        }
         self.git_auth(Some(dir), remote, auth)?
             .args([
                 "fetch",
@@ -2217,8 +2235,8 @@ impl Vcs for GitVcs {
                 "--no-write-fetch-head",
                 "--end-of-options",
                 remote,
-                &format!("+{refname}:refs/han/target"),
             ])
+            .args(&specs)
             .run()?;
         self.commit_of(dir, "refs/han/target").map(Some)
     }

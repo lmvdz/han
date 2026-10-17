@@ -779,6 +779,16 @@ pub trait Vcs: Send + Sync + 'static {
         )))
     }
 
+    /// The best common ancestor of `a` and `b` in the repository at `dir` (`None`: they share no history). Both
+    /// are commit ids (`a` may be `HEAD`). A host asks it for the commit a rebased workspace now sits on.
+    fn merge_base(&self, dir: &Path, a: &str, b: &str) -> Result<Option<String>> {
+        let _ = (dir, a, b);
+        Err(VcsError::Invalid(format!(
+            "{} finds no merge bases",
+            self.name()
+        )))
+    }
+
     /// The commit the workspace is on (`HEAD`), committed or not.
     fn head(&self, dir: &Path) -> Result<String> {
         let _ = dir;
@@ -797,7 +807,8 @@ pub trait Vcs: Send + Sync + 'static {
 
     /// Fetches the tip of `refname` from `remote` (with `auth`) into the workspace at `dir`, where it can be
     /// compared with the workspace's own commits ([`Vcs::unlanded`]), and returns its commit id (`None`: the
-    /// ref does not exist).
+    /// ref does not exist). A branch (`refs/heads/<name>`) also updates the workspace's `origin/<name>`, the
+    /// ref an agent rebases onto: its sandbox has no network to fetch it itself.
     fn fetch_target(
         &self,
         dir: &Path,
