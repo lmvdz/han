@@ -1114,12 +1114,8 @@ impl SpaceModel {
                 at: rec.receipt.time.clone(),
                 summary: t.summary,
                 redacted: rec.redacted,
-                redact_reason: rec
-                    .redacted_by
-                    .as_ref()
-                    .and_then(|r| r.entry.body.get("reason"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                // A `redact`'s reason is its content, which `redactedBy` does not carry.
+                redact_reason: None,
                 effect: t.effect,
             });
             if s.record.len() > MAX_RECORD {

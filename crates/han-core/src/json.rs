@@ -557,6 +557,118 @@ pub fn from_value<T: serde::de::DeserializeOwned>(v: &Value) -> Result<T, JsonEr
     serde_json::from_value(to_serde(v)).map_err(|e| JsonError::Convert(e.to_string()))
 }
 
+/// Converts a [`Value`] to a closed typed value with nothing implied: an object only from an
+/// object, a sequence only from an array, an enum only from its name, and `null` never for an
+/// optional field (absent is how a body leaves one out). This is how bodies and contents are
+/// decoded, so that a value decodes exactly when it would encode back to itself.
+pub fn from_value_strict<T: serde::de::DeserializeOwned>(v: &Value) -> Result<T, JsonError> {
+    T::deserialize(Strict(v)).map_err(|e| JsonError::Convert(e.to_string()))
+}
+
+/// The deserializer of [`from_value_strict`].
+#[derive(Clone, Copy)]
+struct Strict<'a>(&'a Value);
+
+type StrictError = de::value::Error;
+
+impl<'a> de::IntoDeserializer<'a, StrictError> for Strict<'a> {
+    type Deserializer = Self;
+
+    fn into_deserializer(self) -> Self {
+        self
+    }
+}
+
+impl Strict<'_> {
+    fn wrong<T>(self, want: &str) -> Result<T, StrictError> {
+        Err(de::Error::custom(format!("expected {want}")))
+    }
+}
+
+impl<'de> Deserializer<'de> for Strict<'de> {
+    type Error = StrictError;
+
+    fn deserialize_any<V: Visitor<'de>>(self, v: V) -> Result<V::Value, StrictError> {
+        match self.0 {
+            Value::Null => v.visit_unit(),
+            Value::Bool(b) => v.visit_bool(*b),
+            Value::Int(i) => v.visit_i64(*i),
+            Value::Float(f) => v.visit_f64(*f),
+            Value::Str(s) => v.visit_borrowed_str(s),
+            Value::Array(a) => {
+                let mut seq =
+                    de::value::SeqDeserializer::<_, StrictError>::new(a.iter().map(Strict));
+                let out = v.visit_seq(&mut seq)?;
+                seq.end()?;
+                Ok(out)
+            }
+            Value::Object(m) => {
+                let mut map = de::value::MapDeserializer::<_, StrictError>::new(
+                    m.iter().map(|(k, x)| (k.as_str(), Strict(x))),
+                );
+                let out = v.visit_map(&mut map)?;
+                map.end()?;
+                Ok(out)
+            }
+        }
+    }
+
+    fn deserialize_option<V: Visitor<'de>>(self, v: V) -> Result<V::Value, StrictError> {
+        match self.0 {
+            Value::Null => self.wrong("a value, not null"),
+            _ => v.visit_some(self),
+        }
+    }
+
+    fn deserialize_seq<V: Visitor<'de>>(self, v: V) -> Result<V::Value, StrictError> {
+        match self.0 {
+            Value::Array(_) => self.deserialize_any(v),
+            _ => self.wrong("an array"),
+        }
+    }
+
+    fn deserialize_map<V: Visitor<'de>>(self, v: V) -> Result<V::Value, StrictError> {
+        match self.0 {
+            Value::Object(_) => self.deserialize_any(v),
+            _ => self.wrong("an object"),
+        }
+    }
+
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        _fields: &'static [&'static str],
+        v: V,
+    ) -> Result<V::Value, StrictError> {
+        self.deserialize_map(v)
+    }
+
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        v: V,
+    ) -> Result<V::Value, StrictError> {
+        match self.0 {
+            Value::Str(s) => v.visit_enum(de::IntoDeserializer::into_deserializer(s.as_str())),
+            _ => self.wrong("a name"),
+        }
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        v: V,
+    ) -> Result<V::Value, StrictError> {
+        v.visit_newtype_struct(self)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+        unit unit_struct tuple tuple_struct identifier ignored_any
+    }
+}
+
 fn from_serde(v: &serde_json::Value) -> Result<Value, JsonError> {
     Ok(match v {
         serde_json::Value::Null => Value::Null,

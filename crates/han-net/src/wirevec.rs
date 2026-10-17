@@ -655,7 +655,7 @@ impl<T: Transport> WireRunner<T> {
         let e = &rec.entry;
         let r = &rec.receipt;
         let server_actor = format!("@:{}", self.config.server);
-        let body = &e.body;
+        let body = e.body.to_value().map_err(|e| format!("body: {e}"))?;
         let ok = e.kind == "space.create"
             && e.author == server_actor
             && e.key_id == self.config.server_key_id
@@ -811,13 +811,15 @@ impl<T: Transport> WireRunner<T> {
                 .replace("{k}", &k.to_string());
             let digest = Sha256::digest(format!("wire-vector-nonce-{nonce_in}").as_bytes());
             let nonce: String = base32(&digest).chars().take(26).collect();
+            let kind = g["kind"].as_str().ok_or("kind")?;
             let mut entry = han_core::Entry {
                 v: 1,
                 space: g["space"].as_str().ok_or("space")?.to_owned(),
-                kind: g["kind"].as_str().ok_or("kind")?.to_owned(),
+                kind: kind.to_owned(),
                 author: author.to_owned(),
                 key_id: a.key_id.clone(),
-                body: sub(&g["body"]),
+                body: han_core::Body::parse(kind, &sub(&g["body"]))
+                    .map_err(|e| format!("body: {e}"))?,
                 content_hash: ids::content_hash(content.as_ref()).map_err(|e| e.to_string())?,
                 refs: vec![],
                 seen: head + k,

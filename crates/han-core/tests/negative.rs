@@ -9,9 +9,10 @@ use han_core::grammar;
 use han_core::ids::{content_hash, json_digest, sha256_hex};
 use han_core::json::{self, JsonError, Value, check_canonical};
 use han_core::limits::{MAX_CONTENT_BYTES, MAX_HEADER_BYTES};
+use han_core::policy::{KeyAdd, Message};
 use han_core::sign::{accept_move_sig, hello_proof, verify_accept_move, verify_hello_proof};
 use han_core::types::{Durability, LogRecord, Receipt};
-use han_core::{Entry, PublicKey, SigningKey};
+use han_core::{Body, Entry, PublicKey, SigningKey};
 
 const ALICE: &str = "@alice:a.localhost";
 
@@ -32,6 +33,21 @@ fn s(x: &str) -> Value {
     Value::Str(x.to_owned())
 }
 
+/// A body that must parse.
+fn body(kind: &str, v: Value) -> Body {
+    Body::parse(kind, &v).unwrap()
+}
+
+/// `e` with this kind and body, read back from Json as a received entry is.
+fn rebody(e: &Entry, kind: &str, body: Value) -> Result<Entry, Error> {
+    let Value::Object(mut m) = json::to_value(e).unwrap() else {
+        unreachable!()
+    };
+    m.insert("kind".into(), s(kind));
+    m.insert("body".into(), body);
+    Entry::from_value(&Value::Object(m))
+}
+
 /// A signed `message` entry with content.
 fn message(text: &str) -> (Entry, Value, SigningKey) {
     let content = obj(&[("text", s(text))]);
@@ -41,7 +57,10 @@ fn message(text: &str) -> (Entry, Value, SigningKey) {
         kind: "message".into(),
         author: ALICE.into(),
         key_id: "k1".into(),
-        body: obj(&[("to", Value::Array(vec![s("@bob:a.localhost")]))]),
+        body: body(
+            "message",
+            obj(&[("to", Value::Array(vec![s("@bob:a.localhost")]))]),
+        ),
         content_hash: content_hash(Some(&content)).unwrap(),
         refs: vec![],
         seen: 3,
@@ -100,7 +119,10 @@ fn tampered_entries_do_not_verify() {
     t.seen += 1;
     assert_eq!(t.verify(&public), Err(Error::BadSignature));
     let mut t = e.clone();
-    t.body = obj(&[("to", Value::Array(vec![s("@mallory:a.localhost")]))]);
+    t.body = body(
+        "message",
+        obj(&[("to", Value::Array(vec![s("@mallory:a.localhost")]))]),
+    );
     assert_eq!(t.verify(&public), Err(Error::BadSignature));
     let mut t = e.clone();
     t.key_id = "k2".into();
@@ -310,10 +332,8 @@ fn header_grammar_violations_are_invalid() {
         Box::new(|e| e.seen = 1 << 53),
         Box::new(|e| e.kind = "task.foo".into()),
         Box::new(|e| e.kind = "nope".into()),
-        Box::new(|e| e.body = Value::Null),
-        Box::new(|e| e.body = obj(&[("to", Value::Array(vec![])), ("extra", Value::Int(1))])),
-        Box::new(|e| e.body = obj(&[("to", s("@bob:a.localhost"))])),
-        Box::new(|e| e.body = obj(&[("to", Value::Float(1.5))])),
+        Box::new(|e| e.kind = "task".into()),
+        Box::new(|e| e.kind = "acme.note".into()),
     ];
     for (i, mutate) in cases.iter().enumerate() {
         let mut e = good.clone();
@@ -324,6 +344,183 @@ fn header_grammar_violations_are_invalid() {
         );
     }
     good.validate().unwrap();
+}
+
+#[test]
+fn bodies_outside_their_kinds_schema_do_not_decode() {
+    let (good, _, _) = message("x");
+    let cases = [
+        ("message", Value::Null),
+        ("message", Value::Array(vec![])),
+        (
+            "message",
+            obj(&[("to", Value::Array(vec![])), ("extra", Value::Int(1))]),
+        ),
+        ("message", obj(&[("to", s("@bob:a.localhost"))])),
+        ("message", obj(&[("to", Value::Float(1.5))])),
+        ("message", obj(&[("to", Value::Array(vec![s("bob")]))])),
+        // `null` is not how a body leaves out an optional field.
+        ("message", obj(&[("to", Value::Null)])),
+        ("nope", obj(&[])),
+        ("task", obj(&[("to", Value::Array(vec![]))])),
+        ("key.revoke", obj(&[])),
+        // An enum is its name, not a one-member object.
+        (
+            "member.set",
+            obj(&[
+                ("actor", s(ALICE)),
+                ("role", obj(&[("owner", Value::Null)])),
+            ]),
+        ),
+        (
+            "member.set",
+            obj(&[("actor", s(ALICE)), ("role", s("king"))]),
+        ),
+        (
+            "task.update",
+            obj(&[("task", s(&"a".repeat(64))), ("state", s("pending"))]),
+        ),
+        // A struct is an object, not an array of its fields.
+        (
+            "space.move",
+            obj(&[
+                ("to", s("b.localhost")),
+                ("accept", Value::Array(vec![s("k1"), s("sig")])),
+            ]),
+        ),
+        (
+            "effect.claim",
+            obj(&[
+                ("proposal", s(&"a".repeat(64))),
+                ("attempt", Value::Int(0)),
+                ("instance", s("k1")),
+                ("window", Value::Int(60)),
+            ]),
+        ),
+        (
+            "effect.claim",
+            obj(&[
+                ("proposal", s(&"a".repeat(64))),
+                ("attempt", Value::Int(1)),
+                ("instance", s("k1")),
+                ("window", Value::Int(14)),
+            ]),
+        ),
+        ("checkpoint", obj(&[("through", Value::Int(-1))])),
+        ("checkpoint", obj(&[("through", Value::Float(1.0))])),
+    ];
+    for (kind, bad) in cases {
+        assert!(
+            matches!(rebody(&good, kind, bad.clone()), Err(Error::Invalid(_))),
+            "{kind} {bad:?}"
+        );
+        assert!(Body::parse(kind, &bad).is_err(), "{kind} {bad:?}");
+    }
+    // Through serde as well: a received entry with such a body does not deserialize.
+    let mut v = serde_json::to_value(&good).unwrap();
+    v["body"] = serde_json::json!({"to": null});
+    assert!(serde_json::from_value::<Entry>(v).is_err());
+}
+
+/// The policy of `space.create` and `policy.set`, as `ref/policy.py`'s default.
+fn policy_doc() -> serde_json::Value {
+    serde_json::json!({
+        "visibility": "members", "join": "invite", "membersMayInvite": false,
+        "allowAgents": "with-operator", "approvals": [{"action": "*", "approvers": ["owner"]}],
+        "separateApprover": false, "budget": null, "maxDelegationDepth": 4,
+        "minDurability": "local", "launchWindow": 60, "extensionsMinRole": "member",
+        "sessions": {"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "guarded"]},
+        "servers": {"deny": []}
+    })
+}
+
+fn policy_set(policy: &serde_json::Value) -> Result<Body, Error> {
+    let v = json::parse(&serde_json::to_vec(&serde_json::json!({ "policy": policy })).unwrap())?;
+    Body::parse("policy.set", &v)
+}
+
+#[test]
+fn a_policy_document_is_checked_whole() {
+    policy_set(&policy_doc()).unwrap();
+    let mut with_budget = policy_doc();
+    with_budget["budget"] = serde_json::json!({"unit": "usd", "amount": 5});
+    policy_set(&with_budget).unwrap();
+    let bad: [(&str, serde_json::Value); 9] = [
+        ("budget", serde_json::json!({"unit": "u s d", "amount": 5})),
+        ("maxDelegationDepth", serde_json::json!(17)),
+        ("launchWindow", serde_json::json!(3601)),
+        (
+            "approvals",
+            serde_json::json!([{"action": "*", "approvers": []}]),
+        ),
+        (
+            "approvals",
+            serde_json::json!([{"action": "*", "approvers": ["nobody"]}]),
+        ),
+        (
+            "sessions",
+            serde_json::json!({"watch": "owner", "read": "member", "steer": "owner", "modes": ["auto"]}),
+        ),
+        (
+            "sessions",
+            serde_json::json!({"watch": "member", "read": "member", "steer": "owner", "modes": []}),
+        ),
+        (
+            "sessions",
+            serde_json::json!({"watch": "member", "read": "member", "steer": "owner", "modes": ["auto", "auto"]}),
+        ),
+        ("servers", serde_json::json!({"deny": ["Not A Server"]})),
+    ];
+    for (k, v) in bad {
+        let mut p = policy_doc();
+        p[k] = v.clone();
+        assert!(policy_set(&p).is_err(), "{k} {v}");
+    }
+    // `budget` is required even when unlimited, and `forceGuarded` is left out, never `null`.
+    let mut p = policy_doc();
+    p.as_object_mut().unwrap().remove("budget");
+    assert!(policy_set(&p).is_err());
+    let mut p = policy_doc();
+    p["sessions"]["forceGuarded"] = serde_json::Value::Null;
+    assert!(policy_set(&p).is_err());
+}
+
+#[test]
+fn a_parsed_body_encodes_back_to_the_same_json() {
+    let mut p = policy_doc();
+    p["sessions"]["forceGuarded"] = serde_json::json!(true);
+    let bodies = [
+        ("policy.set", serde_json::json!({ "policy": policy_doc() })),
+        (
+            "space.create",
+            serde_json::json!({
+                "policy": p, "forkOf": {"space": "s0:a.localhost", "through": 4},
+                "profile": {"actorKind": "agent", "operator": ALICE,
+                    "key": {"keyId": "k1", "publicKey": key(3).public_key().to_base64url()}}
+            }),
+        ),
+        ("message", serde_json::json!({})),
+        (
+            "task",
+            serde_json::json!({"to": [ALICE], "budget": {"unit": "usd", "amount": 0},
+            "deadline": "2026-01-01T00:00:00Z", "external": "github:a/b#1"}),
+        ),
+        (
+            "effect.outcome",
+            serde_json::json!({"claim": "c".repeat(64), "result": "unknown",
+            "started": "yes", "cost": {"unit": "usd", "amount": 9007199254740991_u64}}),
+        ),
+        ("session.open", serde_json::json!({"steerMode": "guarded"})),
+        (
+            "acme.note",
+            serde_json::json!({"n": 1, "x": [null, true, "s"]}),
+        ),
+    ];
+    for (kind, b) in bodies {
+        let v = json::parse(&serde_json::to_vec(&b).unwrap()).unwrap();
+        let typed = Body::parse(kind, &v).unwrap_or_else(|e| panic!("{kind}: {e}"));
+        assert_eq!(json::to_value(&typed).unwrap(), v, "{kind}");
+    }
 }
 
 #[test]
@@ -344,11 +541,11 @@ fn unknown_and_missing_fields_are_invalid() {
 fn the_header_size_limit_is_measured_with_the_signature() {
     let (mut e, _, _) = message("x");
     // 64 recipients with long (but grammatical) server names: well over 16 KiB of JCS.
-    let long_server = vec!["a".repeat(63); 4].join(".");
+    let long_server = format!("{}.{}", vec!["a".repeat(63); 3].join("."), "a".repeat(61));
     let to: Vec<Value> = (0..64)
         .map(|i| s(&format!("@user{i}:{long_server}")))
         .collect();
-    e.body = obj(&[("to", Value::Array(to))]);
+    e.body = body("message", obj(&[("to", Value::Array(to))]));
     invalid(&e);
     assert!(
         json::canonicalize(&json::to_value(&e).unwrap())
@@ -356,9 +553,14 @@ fn the_header_size_limit_is_measured_with_the_signature() {
             .len()
             > MAX_HEADER_BYTES
     );
-    // And a list over its own cap.
-    let to: Vec<Value> = (0..65).map(|i| s(&format!("@u{i}:a.localhost"))).collect();
-    e.body = obj(&[("to", Value::Array(to))]);
+    // And a list over its own cap: it does not parse, and built in code it does not validate.
+    let to: Vec<String> = (0..65).map(|i| format!("@u{i}:a.localhost")).collect();
+    let as_json = obj(&[("to", Value::Array(to.iter().map(|a| s(a)).collect()))]);
+    assert!(matches!(
+        Body::parse("message", &as_json),
+        Err(Error::Invalid(_))
+    ));
+    e.body = Body::Message(Message { to: Some(to) });
     invalid(&e);
 }
 
@@ -403,7 +605,7 @@ fn content_must_match_its_hash_kind_and_limits() {
 fn content_over_64_kib_is_invalid() {
     let (mut e, _, _) = message("x");
     e.kind = "acme.note".into();
-    e.body = obj(&[]);
+    e.body = body("acme.note", obj(&[]));
     let big = obj(&[("blob", s(&"x".repeat(MAX_CONTENT_BYTES)))]);
     e.content_hash = content_hash(Some(&big)).unwrap();
     e.validate().unwrap();
@@ -417,7 +619,7 @@ fn content_over_64_kib_is_invalid() {
 fn a_kind_without_content_refuses_any() {
     let (mut e, _, _) = message("x");
     e.kind = "key.revoke".into();
-    e.body = obj(&[("keyId", s("k1"))]);
+    e.body = body("key.revoke", obj(&[("keyId", s("k1"))]));
     let c = obj(&[("text", s("x"))]);
     e.content_hash = content_hash(Some(&c)).unwrap();
     e.validate().unwrap();
@@ -431,22 +633,28 @@ fn extension_bodies_hold_only_non_negative_integers() {
     let (mut e, _, _) = message("x");
     e.kind = "acme.note".into();
     e.content_hash = String::new();
-    e.body = obj(&[
-        ("n", Value::Int(7)),
-        ("list", Value::Array(vec![Value::Bool(true), s("x")])),
-    ]);
+    e.body = body(
+        "acme.note",
+        obj(&[
+            ("n", Value::Int(7)),
+            ("list", Value::Array(vec![Value::Bool(true), s("x")])),
+        ]),
+    );
     e.validate().unwrap();
-    e.body = obj(&[("n", Value::Int(-1))]);
-    invalid(&e);
-    e.body = obj(&[("n", Value::Float(1.5))]);
-    invalid(&e);
     // Nested deeper than 32 levels.
     let mut deep = Value::Int(1);
     for _ in 0..40 {
         deep = Value::Array(vec![deep]);
     }
-    e.body = obj(&[("n", deep)]);
-    invalid(&e);
+    for bad in [
+        obj(&[("n", Value::Int(-1))]),
+        obj(&[("n", Value::Float(1.5))]),
+        obj(&[("n", deep)]),
+    ] {
+        assert!(Body::parse("acme.note", &bad).is_err(), "{bad:?}");
+        e.body = Body::Extension(bad);
+        invalid(&e);
+    }
 }
 
 #[test]
@@ -459,12 +667,15 @@ fn a_proposal_binds_its_plan() {
         kind: "effect.propose".into(),
         author: ALICE.into(),
         key_id: "k1".into(),
-        body: obj(&[
-            ("executor", s("@git:a.localhost")),
-            ("action", s("git.push")),
-            ("planDigest", s(&json_digest(&plan).unwrap())),
-            ("repeatable", Value::Bool(false)),
-        ]),
+        body: body(
+            "effect.propose",
+            obj(&[
+                ("executor", s("@git:a.localhost")),
+                ("action", s("git.push")),
+                ("planDigest", s(&json_digest(&plan).unwrap())),
+                ("repeatable", Value::Bool(false)),
+            ]),
+        ),
         content_hash: content_hash(Some(&content)).unwrap(),
         refs: vec![],
         seen: 1,
@@ -476,21 +687,68 @@ fn a_proposal_binds_its_plan() {
     e.validate_content(Some(&content)).unwrap();
     // Wrong digest.
     let mut t = e.clone();
-    t.body = obj(&[
-        ("executor", s("@git:a.localhost")),
-        ("action", s("git.push")),
-        ("planDigest", s(&sha256_hex(b"other"))),
-        ("repeatable", Value::Bool(false)),
-    ]);
+    t.body = body(
+        "effect.propose",
+        obj(&[
+            ("executor", s("@git:a.localhost")),
+            ("action", s("git.push")),
+            ("planDigest", s(&sha256_hex(b"other"))),
+            ("repeatable", Value::Bool(false)),
+        ]),
+    );
     assert!(t.validate_content(Some(&content)).is_err());
     // plan.action differs from action.
-    e.body = obj(&[
-        ("executor", s("@git:a.localhost")),
-        ("action", s("file.write")),
-        ("planDigest", s(&json_digest(&plan).unwrap())),
-        ("repeatable", Value::Bool(false)),
-    ]);
+    e.body = body(
+        "effect.propose",
+        obj(&[
+            ("executor", s("@git:a.localhost")),
+            ("action", s("file.write")),
+            ("planDigest", s(&json_digest(&plan).unwrap())),
+            ("repeatable", Value::Bool(false)),
+        ]),
+    );
     assert!(e.validate_content(Some(&content)).is_err());
+    // A plan's `args` may be `null`; its `argsBlob` may not.
+    for (plan, ok) in [
+        (
+            obj(&[
+                ("action", s("git.push")),
+                ("target", s("main")),
+                ("args", Value::Null),
+            ]),
+            true,
+        ),
+        (
+            obj(&[
+                ("action", s("git.push")),
+                ("target", s("main")),
+                ("argsBlob", Value::Null),
+            ]),
+            false,
+        ),
+        (
+            obj(&[
+                ("action", s("git.push")),
+                ("target", s("main")),
+                ("args", Value::Int(-1)),
+            ]),
+            false,
+        ),
+    ] {
+        let content = obj(&[("plan", plan.clone())]);
+        let mut t = e.clone();
+        t.body = body(
+            "effect.propose",
+            obj(&[
+                ("executor", s("@git:a.localhost")),
+                ("action", s("git.push")),
+                ("planDigest", s(&json_digest(&plan).unwrap())),
+                ("repeatable", Value::Bool(false)),
+            ]),
+        );
+        t.content_hash = content_hash(Some(&content)).unwrap();
+        assert_eq!(t.validate_content(Some(&content)).is_ok(), ok, "{plan:?}");
+    }
 }
 
 #[test]
@@ -499,14 +757,17 @@ fn a_public_key_in_a_key_add_must_be_32_canonical_bytes() {
     e.kind = "key.add".into();
     e.content_hash = String::new();
     let ok = key(5).public_key().to_base64url();
-    e.body = obj(&[("keyId", s("k2")), ("publicKey", s(&ok))]);
+    e.body = body("key.add", obj(&[("keyId", s("k2")), ("publicKey", s(&ok))]));
     e.validate().unwrap();
     for bad in [
         base64url::encode(&[1u8; 31]),
         format!("{}_", &ok[..42]),
         format!("{ok}="),
     ] {
-        e.body = obj(&[("keyId", s("k2")), ("publicKey", s(&bad))]);
+        e.body = Body::KeyAdd(KeyAdd {
+            key_id: "k2".into(),
+            public_key: bad.clone(),
+        });
         assert!(e.validate().is_err(), "{bad}");
     }
 }

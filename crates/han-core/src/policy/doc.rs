@@ -1,7 +1,13 @@
 //! The policy document and the small enums that bodies, profiles and state share.
 
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
+use serde::{Deserialize, Deserializer, Serialize};
+
+use super::gate::{MAX_GATE_RULES, PATH_OWNER, is_evidence_kind, is_glob, is_repo_name};
+use crate::grammar as g;
+use crate::json::{self, MAX_SAFE_INT, Value};
+use crate::limits::{MAX_DENIED_SERVERS, MAX_LIST};
 use crate::types::{ActorId, Budget, Durability};
 
 /// A role in a space. `member.set` with the role `none` removes the entry, so `none` is not a
@@ -51,7 +57,7 @@ impl Role {
 }
 
 /// The role a `member.set` assigns: a [`Role`] or `none` (the actor leaves the role table).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NewRole {
     /// See [`Role::Owner`].
@@ -127,8 +133,8 @@ pub enum AllowAgents {
     None,
 }
 
-/// A minimum role for a session right, least to most restrictive (P-15).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A minimum role for a session right, least to most restrictive (P-15); the order is that one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionLevel {
     /// Any role holder.
@@ -289,7 +295,9 @@ pub struct PolicyDoc {
     pub approvals: Vec<ApprovalRule>,
     /// Whether a proposal's author may not approve it.
     pub separate_approver: bool,
-    /// The space's budget (one unit), or `None` for costs unlimited.
+    /// The space's budget (one unit), or `None` for costs unlimited. Always present: `null`
+    /// when unlimited.
+    #[serde(deserialize_with = "nullable")]
     pub budget: Option<Budget>,
     /// Deepest task delegation, 0 to 16.
     pub max_delegation_depth: u64,
@@ -308,7 +316,99 @@ pub struct PolicyDoc {
     pub gates: Option<GatesDoc>,
 }
 
+/// A field that must be present and may be `null`.
+fn nullable<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    match Value::deserialize(d)? {
+        Value::Null => Ok(None),
+        v => json::from_value_strict(&v)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
+const READ_ROLES: [&str; 3] = ["owner", "member", "guest"];
+
+impl ApprovalRule {
+    fn is_valid(&self) -> bool {
+        let tier = |t: Option<u8>| t.is_none_or(|t| t <= 3);
+        (self.action == "*" || g::is_action(&self.action))
+            && (1..=MAX_LIST).contains(&self.approvers.len())
+            && self.approvers.iter().all(|a| {
+                READ_ROLES.contains(&a.as_str()) || a == PATH_OWNER || g::is_actor_id(a)
+            })
+            && tier(self.min_tier)
+            && tier(self.max_tier)
+            && self
+                .min_tier
+                .zip(self.max_tier)
+                .is_none_or(|(lo, hi)| lo <= hi)
+            && self.evidence.as_deref().is_none_or(is_evidence_kind)
+            && self.needs.is_none_or(|n| (1..=3).contains(&n))
+            && self.revert.is_none_or(|r| r)
+            // P-17: `proposer` is `true`, on the check-only action and a rule with nothing else on it
+            && self.proposer.is_none_or(|p| {
+                p && self.action == CHECK_ONLY
+                    && self.min_tier.is_none()
+                    && self.max_tier.is_none()
+                    && self.humans.is_none()
+                    && self.evidence.is_none()
+                    && self.needs.is_none()
+                    && self.revert.is_none()
+            })
+    }
+}
+
+impl GatesDoc {
+    fn is_valid(&self) -> bool {
+        let repo = |r: &Option<String>| r.as_deref().is_none_or(is_repo_name);
+        self.small <= MAX_SAFE_INT.unsigned_abs()
+            && self.large <= MAX_SAFE_INT.unsigned_abs()
+            && self.small <= self.large
+            && self.paths.len() <= MAX_GATE_RULES
+            && self.paths.iter().all(|r| is_glob(&r.glob) && repo(&r.repo))
+            && self.owners.len() <= MAX_GATE_RULES
+            && self.owners.iter().all(|r| {
+                is_glob(&r.glob)
+                    && (1..=8).contains(&r.owners.len())
+                    && r.owners.iter().all(|o| g::is_actor_id(o))
+                    && r.owners.iter().collect::<BTreeSet<_>>().len() == r.owners.len()
+                    && repo(&r.repo)
+            })
+    }
+}
+
+impl SessionsDoc {
+    fn is_valid(&self) -> bool {
+        // Read and steer need watch: watch may not be more restrictive than either.
+        self.watch <= self.read
+            && self.watch <= self.steer
+            && !self.modes.is_empty()
+            && self
+                .modes
+                .iter()
+                .map(|m| *m as u8)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.modes.len()
+    }
+}
+
 impl PolicyDoc {
+    /// The rules its types cannot say: grammars, list sizes and ranges.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.approvals.len() <= MAX_LIST
+            && self.approvals.iter().all(ApprovalRule::is_valid)
+            && self.budget.as_ref().is_none_or(Budget::is_valid)
+            && self.max_delegation_depth <= 16
+            && (15..=3600).contains(&self.launch_window)
+            && self.sessions.is_valid()
+            && self.servers.deny.len() <= MAX_DENIED_SERVERS
+            && self.servers.deny.iter().all(|s| g::is_server_name(s))
+            && self.gates.as_ref().is_none_or(GatesDoc::is_valid)
+    }
+
     pub(crate) fn forced(&self) -> bool {
         self.sessions.force_guarded == Some(true)
     }
@@ -329,6 +429,15 @@ pub struct ProfileDoc {
     pub operator: Option<ActorId>,
     /// The actor's first key.
     pub key: KeyDoc,
+}
+
+impl ProfileDoc {
+    /// The grammar of the operator and the key.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.operator.as_deref().is_none_or(g::is_actor_id)
+            && g::is_key_id(&self.key.key_id)
+            && g::is_public_key_text(&self.key.public_key)
+    }
 }
 
 /// A key as a profile or `key.add` names it.

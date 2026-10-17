@@ -1,14 +1,17 @@
 //! The shapes of architecture.md section 2, mirroring `han.ts`. Field names on the wire are camelCase.
 //!
-//! These types are closed (`deny_unknown_fields`) and derive serde, but deserializing alone is not
-//! validation: use [`Entry::from_json`], [`Entry::validate`] and [`LogRecord::validate`], which
-//! also check grammar and limits.
+//! These types are closed (`deny_unknown_fields`) and derive serde. An entry's body is typed per
+//! kind ([`Body`]) and checked as it is decoded; the rest of deserializing is not validation: use
+//! [`Entry::from_json`], [`Entry::validate`] and [`LogRecord::validate`], which also check grammar
+//! and limits.
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::json::Value;
+use crate::error::Error;
+use crate::json::{self, Value};
+use crate::policy::Body;
 
 /// `@name:server`; `@:server` is the server actor.
 pub type ActorId = String;
@@ -28,8 +31,11 @@ pub type Time = String;
 pub type Seq = u64;
 
 /// A signed log entry: the permanent header.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+///
+/// Deserializing decodes the body by `kind` with [`Body::parse`], so an entry whose body breaks its
+/// kind's schema does not deserialize.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Entry {
     /// Protocol version; always 1.
     pub v: u64,
@@ -41,8 +47,8 @@ pub struct Entry {
     pub author: ActorId,
     /// Which of the author's keys signed.
     pub key_id: KeyId,
-    /// The kind's permanent body, checked against its closed schema by [`Entry::validate`].
-    pub body: Value,
+    /// The kind's permanent body, typed by kind; [`Entry::validate`] checks it matches `kind`.
+    pub body: Body,
     /// `sha256(JCS(content))`, or `""` when no content is sent.
     pub content_hash: String,
     /// Entries of the same space this one refers to.
@@ -55,6 +61,60 @@ pub struct Entry {
     pub time: Time,
     /// `Ed25519(key, "han-sig-v1\n" || id)`.
     pub sig: Sig,
+}
+
+/// An entry as it arrives, its body not yet typed.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RawEntry {
+    v: u64,
+    space: SpaceId,
+    kind: String,
+    author: ActorId,
+    key_id: KeyId,
+    body: Value,
+    content_hash: String,
+    refs: Vec<EntryId>,
+    seen: Seq,
+    nonce: String,
+    time: Time,
+    sig: Sig,
+}
+
+impl RawEntry {
+    /// Types the body by `kind` ([`Body::parse`]).
+    pub(crate) fn typed(self) -> Result<Entry, Error> {
+        Ok(Entry {
+            body: Body::parse(&self.kind, &self.body)?,
+            v: self.v,
+            space: self.space,
+            kind: self.kind,
+            author: self.author,
+            key_id: self.key_id,
+            content_hash: self.content_hash,
+            refs: self.refs,
+            seen: self.seen,
+            nonce: self.nonce,
+            time: self.time,
+            sig: self.sig,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Entry {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        RawEntry::deserialize(d)?
+            .typed()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl Entry {
+    /// Reads an entry from a [`Value`]: the exact `Entry` fields, and the body typed by kind
+    /// ([`Body::parse`]). It does not [`Entry::validate`] the header.
+    pub fn from_value(v: &Value) -> Result<Entry, Error> {
+        json::from_value::<RawEntry>(v)?.typed()
+    }
 }
 
 /// Whether the sequencer's durable storage survives a process crash or a machine loss.

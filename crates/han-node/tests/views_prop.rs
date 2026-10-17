@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
-use han_core::Value;
 use han_core::ids::sha256_hex;
 use han_core::types::{Durability, Entry, LogRecord, Receipt};
+use han_core::{Body, Value};
 use han_node::api::{
     FileTouch, Filter, Group, Query, Row, Scope, SessionPart, SessionState, SpaceLink, StatusBody,
     Target, Tokens, ViewEvent, ViewMirror, ViewStream, Window,
@@ -294,6 +294,8 @@ impl Driver {
     ) -> String {
         self.seq += 1;
         let id = sha256_hex(format!("record {}", self.seq).as_bytes());
+        // A body outside its kind's schema stays raw Json, which the views ignore.
+        let body = Body::parse(kind, &body).unwrap_or(Body::Extension(body));
         let entry = Entry {
             v: 1,
             space: SPACE.into(),

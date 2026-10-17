@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use han_core::admit::{AdmitSpace, AdmitSpaces};
 use han_core::json::{self, Value};
 use han_core::policy::{
-    Body, Ctx, Effect, PolicyEntry, ProfileView, Record, SpaceState, Verdict, abandon_after,
-    can_read, decide, fold, relevant_actors,
+    Body, Ctx, Effect, NewRole, PolicyEntry, ProfileView, Record, SpaceState, Verdict,
+    abandon_after, can_read, decide, fold, relevant_actors,
 };
 use han_core::types::{ActorId, Durability};
 use han_core::{Entry, LogRecord, PublicKey, Receipt, SigningKey, grammar};
@@ -402,13 +402,11 @@ impl Home {
             );
             s.state = Arc::new(new);
             s.ids.insert(rec.receipt.id.clone(), rec.receipt.seq);
-            if rec.entry.kind == "space.move"
-                && let Some(to) = rec.entry.body.get("to").and_then(Value::as_str)
-            {
-                if to == self.server {
+            if let Body::SpaceMove(m) = &rec.entry.body {
+                if m.to == self.server {
                     g.moved.remove(space);
                 } else {
-                    g.moved.insert(space.to_owned(), to.to_owned());
+                    g.moved.insert(space.to_owned(), m.to.clone());
                 }
             }
             s.pins.push(st.pins);
@@ -981,16 +979,12 @@ impl Home {
             let steady = self.steady_ms();
             g.claim_steady.insert(record.receipt.id.clone(), steady);
         }
-        if entry.kind == "space.move"
-            && let Some(to) = entry.body.get("to").and_then(Value::as_str)
-        {
-            g.moved.insert(space_id.clone(), to.to_owned());
+        if let Body::SpaceMove(m) = &entry.body {
+            g.moved.insert(space_id.clone(), m.to.clone());
         }
         self.supply_from_record(g, &record);
-        if entry.kind == "redact"
-            && let Some(target) = entry.body.get("target").and_then(Value::as_str)
-        {
-            self.redact(g, &space_id, target, &record);
+        if let Body::Redact(r) = &entry.body {
+            self.redact(g, &space_id, &r.target, &record);
         }
         let item = json::to_value(&record)
             .map(|rec| jv::obj([("type", jv::s("record")), ("record", rec)]))
@@ -1045,22 +1039,19 @@ impl Home {
     fn notify(&self, g: &mut Inner, entry: &Entry, space: &str, seq: u64, state: &SpaceState) {
         let reads = |a: &str| state.roles.get(a).is_some_and(|r| r.reads());
         let mut named: Vec<String> = Vec::new();
-        if entry.kind == "member.set"
-            && let (Some(actor), Some(role)) = (
-                entry.body.get("actor").and_then(Value::as_str),
-                entry.body.get("role").and_then(Value::as_str),
-            )
-            && matches!(role, "owner" | "member" | "guest")
-        {
-            named.push(actor.to_owned());
-        }
-        if let Some(to) = entry.body.get("to").and_then(Value::as_array) {
-            named.extend(
-                to.iter()
-                    .filter_map(Value::as_str)
-                    .filter(|a| reads(a))
-                    .map(str::to_owned),
-            );
+        let to = match &entry.body {
+            Body::MemberSet(b) => {
+                if matches!(b.role, NewRole::Owner | NewRole::Member | NewRole::Guest) {
+                    named.push(b.actor.clone());
+                }
+                None
+            }
+            Body::Message(b) => b.to.as_deref(),
+            Body::Task(b) => Some(b.to.as_slice()),
+            _ => None,
+        };
+        if let Some(to) = to {
+            named.extend(to.iter().filter(|a| reads(a)).cloned());
         }
         let mut seen = HashSet::new();
         for actor in named {
@@ -1095,18 +1086,10 @@ impl Home {
     /// §7.3: a `space.move`'s acceptance must verify under the target's published keys.
     fn check_acceptance(&self, g: &Inner, entry: &Entry) -> Result<()> {
         let bad = || WireError::invalid("no valid acceptance from the target server");
-        let to = entry
-            .body
-            .get("to")
-            .and_then(Value::as_str)
-            .ok_or_else(bad)?;
-        let accept = entry.body.get("accept").ok_or_else(bad)?;
-        let (Some(key_id), Some(sig)) = (
-            accept.get("keyId").and_then(Value::as_str),
-            accept.get("sig").and_then(Value::as_str),
-        ) else {
+        let Body::SpaceMove(m) = &entry.body else {
             return Err(bad());
         };
+        let (to, key_id, sig) = (&m.to, &m.accept.key_id, &m.accept.sig);
         let head = g
             .spaces
             .get(&entry.space)
@@ -1117,7 +1100,7 @@ impl Home {
         let key = info
             .keys
             .iter()
-            .find(|k| k.key_id == key_id && k.covers(&now) && k.compromised != Some(true))
+            .find(|k| k.key_id == *key_id && k.covers(&now) && k.compromised != Some(true))
             .and_then(|k| PublicKey::from_base64url(&k.public_key).ok())
             .ok_or_else(bad)?;
         han_core::sign::verify_accept_move(&key, sig, &entry.space, &head.receipt)

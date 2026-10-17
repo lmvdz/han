@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{Signer, endpoint, entry, key, obj, s};
-use han_core::LogRecord;
 use han_core::json::Value;
+use han_core::policy::KeyAdd;
 use han_core::types::Durability;
+use han_core::{Body, LogRecord};
 use han_net::wellknown::{Fetcher, WellKnown, WellKnownDirectory};
 use han_net::{
     Client, Connection, IrohTransport, NetError, NodeAddr, ProfileDirectory, ServeOptions,
@@ -369,10 +370,10 @@ async fn a_forged_profile_chain_is_refused() {
 
     // an attacker's key swapped into the genuine key.add: the id no longer matches the receipt
     let mut swapped = records.clone();
-    swapped[1].entry.body = obj([
-        ("keyId", s("d2")),
-        ("publicKey", s(&key(99).public_key().to_base64url())),
-    ]);
+    swapped[1].entry.body = Body::KeyAdd(KeyAdd {
+        key_id: "d2".into(),
+        public_key: key(99).public_key().to_base64url(),
+    });
     assert!(verify_profile_chain(BOB, &keys, &swapped).is_err());
 
     // a rewritten receipt time

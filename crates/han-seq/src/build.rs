@@ -1,9 +1,10 @@
 //! Building signed entries: what a client does before `append` (and what the sequencer does for the
 //! profile spaces it creates).
 
+use han_core::SigningKey;
 use han_core::ids;
 use han_core::json::{self, Value};
-use han_core::{Entry, SigningKey};
+use han_core::sign::ENTRY_SIG_DOMAIN;
 
 use crate::error::{Result, WireError};
 use crate::time::format_time;
@@ -43,27 +44,34 @@ pub fn random_nonce() -> String {
         .collect()
 }
 
-/// Builds and signs an entry. Returns it as the `Value` an `append` carries, with its content.
+/// Builds and signs an entry. Returns it as the `Value` an `append` carries, with its content. The
+/// body is signed as given, whatever its shape: checking it is the sequencer's job.
 pub fn sign_entry(spec: EntrySpec, key: &SigningKey) -> Result<(Value, Option<Value>)> {
+    use crate::jv::{int, obj, s};
     let content_hash =
         han_core::ids::content_hash(spec.content.as_ref()).map_err(WireError::from)?;
-    let mut entry = Entry {
-        v: 1,
-        space: spec.space,
-        kind: spec.kind,
-        author: spec.author,
-        key_id: spec.key_id,
-        body: spec.body,
-        content_hash,
-        refs: spec.refs,
-        seen: spec.seen,
-        nonce: random_nonce(),
-        time: format_time(spec.time_secs),
-        sig: String::new(),
-    };
-    entry.sign(key).map_err(WireError::from)?;
-    let value = json::to_value(&entry).map_err(|e| WireError::invalid(e.to_string()))?;
-    Ok((value, spec.content))
+    let mut entry = obj([
+        ("v", int(1)),
+        ("space", s(&spec.space)),
+        ("kind", s(&spec.kind)),
+        ("author", s(&spec.author)),
+        ("keyId", s(&spec.key_id)),
+        ("body", spec.body),
+        ("contentHash", s(&content_hash)),
+        (
+            "refs",
+            Value::Array(spec.refs.iter().map(|r| s(r)).collect()),
+        ),
+        ("seen", int(spec.seen)),
+        ("nonce", s(&random_nonce())),
+        ("time", s(&format_time(spec.time_secs))),
+    ]);
+    let id = entry_id(&entry)?;
+    let sig = key.sign(format!("{ENTRY_SIG_DOMAIN}{id}").as_bytes());
+    if let Value::Object(members) = &mut entry {
+        members.insert("sig".into(), s(&sig));
+    }
+    Ok((entry, spec.content))
 }
 
 /// The id of an entry given as Json, whatever its shape: the hash of the domain prefix and the JCS of the entry minus `sig`.
