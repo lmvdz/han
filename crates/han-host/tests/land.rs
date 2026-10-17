@@ -633,6 +633,121 @@ fn a_rejected_proposal_is_proposed_again_only_with_rebase_of() {
     assert!(r.flow.draft("x", &bad).is_err());
 }
 
+/// The target moves on: a commit on `main` of the origin, as another landing makes it. Returns its id.
+fn move_main(r: &Rig, path: &str, text: &str) -> String {
+    let tmp = tempfile::tempdir().unwrap();
+    let other = tmp.path().join("other");
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            r.origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(other.join(path), text).unwrap();
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-q", "-m", "main moves on"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    git(&other, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn a_rebase_onto_a_later_target_is_based_on_it_and_lands() {
+    let r = rig(on());
+    r.write("src/lib.rs", "pub mod auth;\npub mod login;\n");
+    r.write("src/login.rs", "pub fn login() {}\n");
+    r.propose("P1", "the login");
+    // main changes the same file, so the lane rejects P1 for a conflict
+    let main = move_main(&r, "src/lib.rs", "pub mod auth;\npub mod session;\n");
+    r.feed.say("P1", "rejected", Some("conflict"), 3);
+    assert!(tokio_block(r.flow.poll()).unwrap());
+
+    // the steer fetches the target into the workspace, which the agent's sandbox can't
+    let s = turn_of(tokio_block(r.flow.steer()));
+    assert!(
+        s.blocks[1].starts_with(&format!(
+            "origin/main in your workspace is now the target's tip, {}:",
+            &main[..12]
+        )),
+        "{}",
+        s.blocks[1]
+    );
+    assert!(
+        s.blocks[1].ends_with(&the_instruction("P1")),
+        "{}",
+        s.blocks[1]
+    );
+    assert_eq!(
+        git(&r.dir(), &["rev-parse", "refs/remotes/origin/main"]),
+        main
+    );
+
+    // the agent rebases onto it and resolves
+    git(
+        &r.dir(),
+        &["reset", "-q", "--hard", "refs/remotes/origin/main"],
+    );
+    r.write(
+        "src/lib.rs",
+        "pub mod auth;\npub mod session;\npub mod login;\n",
+    );
+    r.write("src/login.rs", "pub fn login() {}\n");
+    let mut effect = Map::new();
+    effect.insert("rebaseOf".into(), json!("P1"));
+    let d = r.flow.draft("resolved", &effect).unwrap();
+    let a = args(&d.plan);
+    // the changeset is the agent's work on the new main, not main's own change since the old base
+    assert_eq!(a["base"], main);
+    assert_eq!(a["bundleBase"], r.base);
+    assert_eq!(a["rebaseOf"], "P1");
+    let to = a["to"].as_str().unwrap();
+    han_exec::actions::VcsLand
+        .plan_check(&d.plan, &exec_config(&r.origin))
+        .expect("the executor accepts the plan");
+    // the lane's squash onto the target's tip is path-disjoint, so it lands as approved
+    let out = r
+        .vcs
+        .squash_rebase(
+            &r.dir(),
+            &main,
+            to,
+            &main,
+            "land",
+            "@coder:han.example",
+            1_700_000_000,
+        )
+        .unwrap();
+    match out {
+        han_vcs::RebaseOutcome::Rebased(x) => assert!(x.path_disjoint),
+        other => panic!("the lane lands it: {other:?}"),
+    }
+    // measured from the old base, the same work is not path-disjoint from the target: what used to be proposed
+    let old = r
+        .vcs
+        .delta(&r.dir(), &r.base, to)
+        .and_then(|d| r.vcs.path_disjoint(&r.dir(), &d, &main))
+        .unwrap();
+    assert!(!old.ok && old.touched == ["src/lib.rs"], "{old:?}");
+}
+
+#[test]
+fn work_the_agent_did_not_rebase_keeps_the_old_base() {
+    let r = rig(on());
+    r.write("src/login.rs", "pub fn login() {}\n");
+    let plan1 = r.propose("P1", "the login");
+    move_main(&r, "README.md", "main moved\n");
+    r.feed.say("P1", "rejected", Some("conflict"), 3);
+    assert!(tokio_block(r.flow.poll()).unwrap());
+    r.write("src/login.rs", "pub fn login() { /* fixed */ }\n");
+    let mut effect = Map::new();
+    effect.insert("rebaseOf".into(), json!("P1"));
+    let d = r.flow.draft("fixed", &effect).unwrap();
+    assert_eq!(args(&d.plan)["base"], args(&plan1)["base"]);
+    assert!(args(&d.plan).get("bundleBase").is_none());
+}
+
 // ───────────────────────── following the lane ─────────────────────────
 
 fn tokio_block<F: std::future::Future>(f: F) -> F::Output {
@@ -1540,7 +1655,13 @@ fn a_conflict_rejection_steers_with_the_conflict_record() {
     reject(&r, "P1", "conflict", None, Some(blob));
     let s = turn_of(tokio_block(r.flow.steer()));
     assert!(s.text.contains("reason: conflict"), "{}", s.text);
-    assert_eq!(s.blocks[1], the_instruction("P1"));
+    // the target is fetched for the agent first, and the turn says so
+    assert!(
+        s.blocks[1].starts_with("origin/main in your workspace is now the target's tip, ")
+            && s.blocks[1].ends_with(&the_instruction("P1")),
+        "{}",
+        s.blocks[1]
+    );
     let d = data_of(&s.blocks[0]);
     assert_eq!(d["reason"], "conflict");
     assert_eq!(d["conflictRecord"], record);
