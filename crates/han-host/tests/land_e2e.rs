@@ -840,3 +840,92 @@ async fn a_rejection_after_the_session_ended_gets_no_turn() {
         "and the rejection was not marked as steered"
     );
 }
+
+/// A host that is stopped (a unit restart) while its land is rejected and waiting for a `rebaseOf` has not
+/// finished the work: the workspace stays, the ledger is paused, and the task gets no final update, so the next
+/// start goes on with the same task, workspace and ledger.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_stopped_host_with_a_rejected_land_keeps_the_workspace_and_the_task_open() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let remote = origin(root);
+    let world = World::new(root);
+    let alice = world.node(ALICE, 1);
+    let coder = world.node(CODER, 2);
+    let exec = world.node(EXEC, 4);
+    let space = setup_space(&world, &alice, &[(CODER, &coder), (EXEC, &exec)], &[]).await;
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/land-session.json");
+    let session_dir = root.join("coder").join("s1");
+    let agent_log = session_dir.join("agent").join("fake-agent.jsonl");
+    let cfg = steer_cfg(
+        root,
+        (&space, &remote, &script),
+        session_dir.clone(),
+        &agent_log,
+        0,
+    );
+    let deps = HostDeps {
+        api: Arc::new(coder.clone()),
+        vcs: Arc::new(GitVcs::new(root.join("coder").join("objects"))),
+        signer: Some((CODER.into(), "d1".into(), seed(2))),
+        proxy_hook: None,
+    };
+    let (stop, rx) = tokio::sync::watch::channel(false);
+    let host = tokio::spawn(run_session(cfg, deps, rx));
+    let ledger = session_dir.join("land.json");
+    until("the host froze the proposal", 60, || ledger.exists()).await;
+    until("the proposal is in the log", 30, || {
+        !effects_of(&exec, &space).is_empty()
+    })
+    .await;
+    let proposal = effects_of(&exec, &space)[0].proposal.clone();
+    let lane = lane_session(&exec, &space).await;
+    let at = (space.as_str(), lane.as_str(), proposal.as_str());
+    until("the first turn is over", 60, || {
+        prompts_of(&agent_log).len() == 1
+    })
+    .await;
+
+    // The lane rejects it for a reason that steers nobody; the agent could still propose with rebaseOf.
+    let rejected =
+        || std::fs::read_to_string(&ledger).is_ok_and(|t| t.contains("\"state\": \"rejected\""));
+    for _ in 0..80 {
+        lane_says(&exec, at, "rejected", Some("policy"), 5).await;
+        if rejected() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(rejected(), "the host heard the rejection");
+
+    // Then the host is stopped.
+    let _ = stop.send(true);
+    let end = tokio::time::timeout(Duration::from_secs(90), host)
+        .await
+        .expect("the host stops")
+        .unwrap()
+        .expect("the session ends");
+    assert_ne!(end.state, SessionState::Failed);
+    assert!(
+        session_dir.join("wt").join(".git").exists(),
+        "the workspace is kept"
+    );
+    let text = std::fs::read_to_string(&ledger).unwrap();
+    assert!(text.contains("\"paused\": true"), "{text}");
+    assert!(!text.contains("\"pruned\""), "{text}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let task_open = rows(
+        &alice,
+        Query::Tasks {
+            space: space.clone(),
+            assignee: Some(CODER.into()),
+            window: Window::default(),
+        },
+    )
+    .iter()
+    .any(|r| matches!(r, Row::Task(t) if t.external.as_deref() == Some(ISSUE) && t.open));
+    assert!(task_open, "a stop is no final update: the task stays open");
+}

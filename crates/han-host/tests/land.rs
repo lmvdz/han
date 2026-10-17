@@ -1793,6 +1793,100 @@ fn a_pruned_workspace_is_not_steered() {
     assert!(tokio_block(r.flow.steer()).is_none());
 }
 
+// ───────────────────────── a stop, and a later session in the same directory ─────────────────────────
+
+/// A fresh workspace in the rig's session directory, as a new session creates it.
+fn new_session_flow(r: &Rig, session: &str) -> Flow {
+    let ws = r
+        .vcs
+        .create_workspace(&WorkspaceSpec {
+            source: r.origin.to_string_lossy().into_owned(),
+            base: "main".into(),
+            branch: "han/12-coder".into(),
+            dir: r.dir(),
+            sparse: Vec::new(),
+        })
+        .unwrap();
+    Flow::new(
+        &config_of(r),
+        session,
+        None,
+        ws,
+        r.vcs.clone(),
+        r.feed.clone(),
+    )
+    .expect("the flow is on")
+}
+
+#[test]
+fn a_new_session_after_a_pruned_ledger_starts_a_fresh_one_and_can_land() {
+    let r = proposed_rig(on());
+    settle_as(&r, "confirmed");
+    assert_eq!(r.flow.prune(false, true), Pruned::Removed);
+    assert!(r.flow.pruned());
+
+    // A later session for the same work gets the same directory: the pruned ledger is not its own.
+    let next = new_session_flow(&r, "S2");
+    assert!(!next.pruned());
+    std::fs::write(
+        r.dir().join("src/auth.rs"),
+        "pub fn login() { /* again */ }
+",
+    )
+    .unwrap();
+    let d = next
+        .draft("the next change", &Map::new())
+        .expect("a fresh ledger proposes");
+    assert_eq!(args(&d.plan)["base"], json!(r.base));
+    // the old ledger is kept for the record
+    let kept = std::fs::read_to_string(r.session_dir.join("land.1.json")).unwrap();
+    assert!(kept.contains("\"pruned\": true"), "{kept}");
+}
+
+#[test]
+fn a_stop_with_a_rejected_land_pauses_and_the_next_start_goes_on_with_it() {
+    let r = proposed_rig(on());
+    reject(&r, "P1", "conflict", None, None);
+    // the host stops: the work is not over
+    assert!(r.flow.pause().is_some());
+    // a sweep (which takes every earlier session as over) keeps a paused ledger's rejected work
+    assert!(matches!(r.flow.prune(false, true), Pruned::Waiting(_)));
+    assert!(r.dir().join(".git").exists());
+
+    // the next start picks the ledger up, unpaused, and may propose again with rebaseOf
+    let ws = han_vcs::Workspace {
+        dir: r.dir(),
+        base: r.base.clone(),
+        branch: "han/12-coder".into(),
+        shared_store: None,
+    };
+    let next = Flow::new(
+        &config_of(&r),
+        "S2",
+        None,
+        ws,
+        r.vcs.clone(),
+        r.feed.clone(),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(r.session_dir.join("land.json")).unwrap();
+    assert!(!text.contains("\"paused\""), "{text}");
+    r.write(
+        "src/auth.rs",
+        "pub fn login() { /* resolved */ }
+",
+    );
+    let mut effect = Map::new();
+    effect.insert("rebaseOf".into(), json!("P1"));
+    next.draft("resolved", &effect)
+        .expect("rebaseOf after a restart");
+
+    // nothing left: a stop does not pause
+    let done = proposed_rig(on());
+    settle_as(&done, "confirmed");
+    assert!(done.flow.pause().is_none());
+}
+
 // ───────────────────────── check-only tries (land_try, vcs.try, P-17) ─────────────────────────
 
 /// The agent changed `path`; the host drafts a try of it and proposes it as `id`.

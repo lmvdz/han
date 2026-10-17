@@ -36,6 +36,13 @@
 //! (`origin/<branch>`), because the agent's sandbox has no network to fetch it. **Sweep:** a host that
 //! starts follows the proposals of earlier session directories the same way ([`Flow::orphan`]).
 //!
+//! **A stop is not the end of the work.** A host that is stopped (a unit restart, `han agent stop`) while its
+//! ledger still holds work (a proposal that is not final, a rejected one nobody replaced, commits that never
+//! landed) keeps the workspace, marks the ledger `paused` ([`Flow::pause`]) and makes no final update of the
+//! task, so the next start for the same work picks the ledger and the workspace up and goes on (a sweep keeps a
+//! paused ledger's rejected proposals too). A ledger that was pruned belongs to work that is over: a later
+//! session in the same directory starts a fresh one and keeps the old file as `land.<n>.json`.
+//!
 //! **Check-only tries** (`land_try`, `vcs.try`, architecture.md P-17). An agent that cannot build or test in its
 //! sandbox asks the lane to run the repository's fast checks on its work: the host commits the workspace as the
 //! agent, bundles it and proposes `vcs.try` ([`Flow::draft_try`]). A try freezes nothing and counts toward no cap:
@@ -497,6 +504,13 @@ struct Ledger {
     unlanded: Option<Unlanded>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pruned: bool,
+    /// The session that started the ledger (for the record).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
+    /// The host stopped with work left: the workspace waits for the next start, and nothing prunes a rejected
+    /// proposal of it as abandoned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    paused: bool,
 }
 
 /// What [`Flow::steer`] found.
@@ -630,7 +644,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl Flow {
     /// The flow of a session, or `None` when the spec does not turn it on. A ledger left in the session
-    /// directory by an earlier run of the same session is picked up.
+    /// directory by an earlier run is picked up (a paused one goes on); a pruned one is kept as
+    /// `land.<n>.json` and the session starts a fresh ledger.
     pub fn new(
         cfg: &HostConfig,
         session: &str,
@@ -640,12 +655,27 @@ impl Flow {
         feed: Arc<dyn LaneFeed>,
     ) -> Option<Flow> {
         let land = cfg.finish.land.clone()?;
-        let mut ledger: Ledger = std::fs::read_to_string(cfg.session_dir.join(LEDGER_FILE))
+        let path = cfg.session_dir.join(LEDGER_FILE);
+        let mut ledger: Ledger = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
+        if ledger.pruned {
+            // The work of that ledger is over and its workspace is gone: it refuses every proposal, so a new
+            // session must not inherit it.
+            let kept = (1..)
+                .map(|n| cfg.session_dir.join(format!("land.{n}.json")))
+                .find(|p| !p.exists())
+                .unwrap_or_default();
+            if let Err(e) = std::fs::rename(&path, &kept) {
+                tracing::warn!("land: the pruned ledger could not be kept aside: {e}");
+            }
+            ledger = Ledger::default();
+        }
+        let resumed = std::mem::take(&mut ledger.paused);
         ledger.space.get_or_insert_with(|| cfg.space.clone());
-        Some(Flow {
+        ledger.session.get_or_insert_with(|| session.to_owned());
+        let flow = Flow {
             land,
             repo_name: cfg.repo.name.clone(),
             source: cfg.repo.source.clone(),
@@ -663,7 +693,12 @@ impl Flow {
                 ledger,
                 ..Inner::default()
             }),
-        })
+        };
+        if resumed {
+            let inner = lock(&flow.inner);
+            flow.save(&inner.ledger);
+        }
+        Some(flow)
     }
 
     /// Sets what runs just before the workspace is removed (the host stops the worktree mirror: a watched
@@ -1150,6 +1185,33 @@ impl Flow {
     /// Whether the workspace was pruned.
     pub fn pruned(&self) -> bool {
         lock(&self.inner).ledger.pruned
+    }
+
+    /// The host stops: when the ledger still holds work (a proposal that is not final, a rejected one nobody
+    /// replaced, commits that never landed), it is marked `paused` and kept for the next start, and the reason
+    /// is returned. A stop is not the end of the work, so the task gets no final update then.
+    pub fn pause(&self) -> Option<String> {
+        let mut inner = lock(&self.inner);
+        let ledger = &inner.ledger;
+        if ledger.pruned {
+            return None;
+        }
+        let why = if ledger.unlanded.is_some() {
+            "commits after the proposal never landed"
+        } else if ledger.proposals.iter().any(|p| !self.is_final(p)) {
+            "a proposal is not final"
+        } else if ledger
+            .proposals
+            .iter()
+            .any(|p| p.failed() && !self.superseded(ledger, p))
+        {
+            "a rejected proposal may be proposed again with rebaseOf"
+        } else {
+            return None;
+        };
+        inner.ledger.paused = true;
+        self.save(&inner.ledger);
+        Some(why.into())
     }
 
     /// Whether a proposal is final. `landed` is final only where the repository has no full stage.
@@ -1673,13 +1735,16 @@ impl Flow {
     /// * `busy`: a turn is running, so the agent is in the workspace: wait.
     /// * `session_over`: the session has stopped. A proposal that ended `rejected`, `cancelled` or `reverted`
     ///   (and no later one replaces it with `rebaseOf`) keeps the workspace while the session lives, because
-    ///   the agent may re-propose; once the session is over it is pruned like the rest.
+    ///   the agent may re-propose; once the session is over it is pruned like the rest. A host that stops
+    ///   is not "over" ([`Flow::pause`]); a sweep's `session_over` is ignored for a paused ledger.
     ///
     /// The workspace is kept, and reported as `unlanded`, when it has uncommitted changes or commits after the
     /// last proposal's `to` that the target lacks by patch id. Otherwise the workspace, the session's build
     /// output (`CARGO_TARGET_DIR`, `prewarm`) and, with the workspace, its local refs are removed.
     pub fn prune(&self, busy: bool, session_over: bool) -> Pruned {
         let mut inner = lock(&self.inner);
+        // A paused ledger's work waits for the next start: its rejected proposals are not abandoned.
+        let session_over = session_over && !inner.ledger.paused;
         if inner.ledger.pruned {
             return Pruned::Waiting("already pruned");
         }
