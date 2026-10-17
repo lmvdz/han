@@ -1015,9 +1015,9 @@ pub async fn run_session(
     let result = run_opened(&cfg, &deps, &session, task.clone(), &mut stop).await;
 
     // The final update when work stops (R-24), whatever happened.
-    let (state, reason) = match &result {
-        Ok((s, why)) => (*s, why.clone()),
-        Err(e) => (SessionState::Failed, Some(e.to_string())),
+    let (state, reason, paused) = match &result {
+        Ok((s, why, paused)) => (*s, why.clone(), paused.is_some()),
+        Err(e) => (SessionState::Failed, Some(e.to_string()), false),
     };
     if state == SessionState::Failed {
         tracing::warn!(
@@ -1033,13 +1033,18 @@ pub async fn run_session(
             publish_failed(&cfg, &deps, &session, why).await;
         }
     }
-    if let Some(cmd) = duty.as_mut().and_then(|d| {
-        d.finish(if state == SessionState::Failed {
-            "failed"
-        } else {
-            "done"
+    // A host that stops with work left has not stopped working the task (R-24): the next start goes on with it.
+    if let Some(cmd) = duty
+        .as_mut()
+        .filter(|_| !paused || state == SessionState::Failed)
+        .and_then(|d| {
+            d.finish(if state == SessionState::Failed {
+                "failed"
+            } else {
+                "done"
+            })
         })
-    }) {
+    {
         let _ = api.call(cmd).await;
     }
     let _ = api
@@ -1171,7 +1176,7 @@ async fn run_opened(
     session: &str,
     task: Option<TaskInfo>,
     stop: &mut watch::Receiver<bool>,
-) -> Result<(SessionState, Option<String>), HostError> {
+) -> Result<(SessionState, Option<String>, Option<String>), HostError> {
     let api = deps.api.clone();
     let narrowed;
     let cfg = match narrowed_budget(cfg, api.as_ref(), task.as_ref().map(|t| t.0.as_str())).await {
@@ -1618,10 +1623,11 @@ async fn run_opened(
     if let Some(w) = land_sweeper {
         w.abort();
     }
+    let mut paused = None;
     if let Some(w) = land_watcher {
         w.abort();
         land_backstop(&shared).await;
-        land_settle(&shared).await;
+        paused = land_settle(&shared).await;
     }
     let final_state = if state == SessionState::Failed {
         SessionState::Failed
@@ -1660,7 +1666,7 @@ async fn run_opened(
             publisher.abort();
         }
     }
-    Ok((final_state, reason))
+    Ok((final_state, reason, paused))
 }
 
 /// How often the lane's items for the session's proposals are read.
@@ -1896,16 +1902,16 @@ async fn refuse_steer(shared: &Arc<Shared>, seq: u64, author: &str) -> bool {
     true
 }
 
-/// When work stops: looks at the lane once more (and keeps looking for up to the spec's `settleSecs` while a
-/// proposal is open), then prunes with the session over.
-async fn land_settle(shared: &Arc<Shared>) {
-    let Some(flow) = shared.land.clone() else {
-        return;
-    };
+/// When the host stops: looks at the lane once more (and keeps looking for up to the spec's `settleSecs` while
+/// a proposal is open), pruning what is final. A stop is not the end of the work: a rejected proposal keeps the
+/// workspace, and work left pauses the ledger ([`crate::land::Flow::pause`]). Returns why, when it did; the
+/// task then gets no final update.
+async fn land_settle(shared: &Arc<Shared>) -> Option<String> {
+    let flow = shared.land.clone()?;
     let deadline = tokio::time::Instant::now() + flow.settle();
     let mut shown = None;
     loop {
-        land_step(shared, &flow, &mut shown, true).await;
+        land_step(shared, &flow, &mut shown, false).await;
         if flow.pruned()
             || flow.unlanded().is_some()
             || flow.settled()
@@ -1915,6 +1921,11 @@ async fn land_settle(shared: &Arc<Shared>) {
         }
         tokio::time::sleep(LAND_POLL).await;
     }
+    let why = flow.pause()?;
+    shared.signal(Signal::Summary(format!(
+        "stopped with work left ({why}): the workspace is kept and the task stays open for the next start"
+    )));
+    Some(why)
 }
 
 fn shared_bridge(shared: &Arc<Shared>) -> Arc<dyn HostBridge> {
