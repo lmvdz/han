@@ -372,7 +372,15 @@ impl<T: Transport> Inner<T> {
         let Some((id, turn, body)) = parse_item(&item["body"]) else {
             return;
         };
-        self.engine().apply_item(space, session, id, turn, body);
+        self.engine()
+            .apply_item(space, session, id.clone(), turn, body.clone());
+        // Kept, so a restart of the node does not take the session's messages with it.
+        if let Err(e) = self
+            .db
+            .put_item(space, session, &id, turn, &body, crate::model::MAX_ITEMS)
+        {
+            tracing::warn!("node.db: {e}");
+        }
     }
 
     /// A live `han.status/1` item of `session`.
