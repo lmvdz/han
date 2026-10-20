@@ -175,9 +175,9 @@ async fn volatile_login_state_is_empty_on_each_start_but_credentials_refresh() {
     let spec = SandboxSpec {
         session: "volatile-login".into(), backend: Preference::Bwrap,
         program: "/bin/sh".into(),
-        args: vec!["-ec".into(), "test ! -e \"$LOGIN/skills/inherited\"; test ! -e \"$LOGIN/skills/generated\"; printf builtin > \"$LOGIN/skills/generated\"; printf refreshed > \"$LOGIN/auth.new\"; mv \"$LOGIN/auth.new\" \"$LOGIN/auth.json\"".into()],
+        args: vec!["-ec".into(), "test ! -e \"$LOGIN/skills/inherited\"; test ! -e \"$LOGIN/skills/generated\"; test ! -e \"$LOGIN/plugins/generated\"; printf builtin > \"$LOGIN/skills/generated\"; printf plugin > \"$LOGIN/plugins/generated\"; printf refreshed > \"$LOGIN/auth.new\"; mv \"$LOGIN/auth.new\" \"$LOGIN/auth.json\"".into()],
         cwd: login.clone(), env: vec![("LOGIN".into(), s(&login))],
-        rw: vec![login.clone()], ro: vec![], volatile_dirs: vec![skills.clone()],
+        rw: vec![login.clone()], ro: vec![], volatile_dirs: vec![skills.clone(), login.join("plugins")],
         temp: root.path().join("temp"), proxy: None, allow_advisory: false,
         limits: Limits { wall_time: Some(Duration::from_secs(20)), ..Limits::default() },
         shim: production_shim::shim(), inside_port: None,
@@ -194,5 +194,6 @@ async fn volatile_login_state_is_empty_on_each_start_but_credentials_refresh() {
             "operator skill"
         );
         assert!(!skills.join("generated").exists());
+        assert!(!login.join("plugins/generated").exists());
     }
 }

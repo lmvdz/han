@@ -343,8 +343,16 @@ impl ProcessSpawner {
                 Some(HostAdmission::Admitted) => break,
                 None => {}
             }
-            if !active || Instant::now() >= deadline {
-                break;
+            if Instant::now() >= deadline {
+                return Err(SupervisorError::Spawn(if active {
+                    format!(
+                        "startup of {unit} is not yet confirmed: no host admission before the deadline; inspect agent status and unit logs before retrying"
+                    )
+                } else {
+                    format!(
+                        "{unit} did not report host admission and is not active; inspect its unit logs"
+                    )
+                }));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
