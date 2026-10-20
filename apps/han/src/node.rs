@@ -388,7 +388,7 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     println!("actor {}", node.actor());
     println!("node {}", transport.node_id());
     println!("endpoint {}", server.endpoint());
-    tokio::signal::ctrl_c().await?;
+    crate::shutdown::requested().await?;
     node.shutdown();
     drop(server);
     transport.shutdown().await;

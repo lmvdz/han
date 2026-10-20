@@ -43,7 +43,19 @@ Build the binaries. The Rust toolchain is pinned by `rust-toolchain.toml`.
 cargo build --release -p han -p han-github     # target/release/han and target/release/han-github
 ```
 
-Run a home, then a node for yourself that trusts the home through its ticket. `--file-keys` keeps the keys in the data folder; leave it out to use the OS keychain. `HAN_DATA` names the node's data folder for every later command.
+Start a local home and your person node, then create or join a space in the terminal:
+
+```sh
+han setup --person me
+```
+
+Setup saves its identity and state in `han-team` and resumes when run again.
+`han setup stop` stops the managed home and node while keeping their state.
+Agent login, executor configuration and required checks follow in the
+[getting started guide](docs/getting-started.md). For the commands below, set
+`HAN_DATA=han-team/person`.
+
+Alternatively, run a home and node manually. `--file-keys` keeps the keys in the data folder; leave it out to use the OS keychain. `HAN_DATA` names the node's data folder for every later command.
 
 ```sh
 han key me/keys/device.key                                  # prints your device's public key

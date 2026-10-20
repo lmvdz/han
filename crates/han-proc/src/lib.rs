@@ -22,6 +22,44 @@ pub const DETACHED_PROCESS: u32 = 0x0000_0008;
 /// `CREATE_NEW_PROCESS_GROUP`: the child is the root of its own process group, so Ctrl-C does not reach it.
 pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
+/// Prevent a detached service from retaining the launcher's captured standard streams.
+///
+/// Windows can pass inheritable handles to children even when their standard streams
+/// are redirected. Clear inheritance on the originals before spawning the service;
+/// explicit `Command` standard streams still get their own inheritable duplicates.
+/// This process-wide setting is intentionally not restored. No-op on other platforms.
+pub fn isolate_standard_handles() -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle as _;
+        for handle in [
+            std::io::stdin().as_raw_handle(),
+            std::io::stdout().as_raw_handle(),
+            std::io::stderr().as_raw_handle(),
+        ] {
+            clear_inheritance(handle)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn clear_inheritance(handle: std::os::windows::io::RawHandle) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Ok(());
+    }
+    // SAFETY: these are borrowed process standard handles. The call only changes
+    // their inheritance flag; it neither closes them nor transfers ownership.
+    if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Spawn flags for a child that must not show a console window.
 pub trait NoWindow {
     /// Start the child without a visible console window (`CREATE_NO_WINDOW`).

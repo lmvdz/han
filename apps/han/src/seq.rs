@@ -307,7 +307,7 @@ pub async fn run(args: SeqArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("http {}", http.local_addr());
     // Not the ticket itself: stdout may end up in a journal. `han ticket --data` shows it.
     println!("ticket-file {}", args.data.join(TICKET_FILE).display());
-    tokio::signal::ctrl_c().await?;
+    crate::shutdown::requested().await?;
     transport.shutdown().await;
     Ok(())
 }
