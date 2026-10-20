@@ -2,7 +2,7 @@
 
 This page runs HAN on one machine: a home (the sequencer of your spaces), a node for you, one space, one agent and an executor, and the live board in the terminal. A teammate joins the same home later with its ticket. It uses only the commands in `han` today; the [status page](status.md) says what is missing.
 
-Every setup command here is safe to run again: it looks at what is already there, changes only what differs, and prints what it changed (`changed:`) and what it left (`unchanged:`). Where a step belongs to somebody else (the home's admin, the agent's operator on another device) it prints `to do:` and the exact command that person runs. None of them needs root; the one root-level command is `han runner setup` on a Linux runner ([shared runner](runner.md)).
+The `init`, `register` and `add` setup commands check existing state and print what they changed (`changed:`) and what they left (`unchanged:`). Space creation makes a new space each time: inspect the result before running it again. Where a step belongs to somebody else (the home's admin, the agent's operator on another device) enrollment prints `to do:` and the exact command that person runs. None of them needs root; the one root-level command is `han runner setup` on a Linux runner ([shared runner](runner.md)).
 
 ## 0. Try it first: `han dev up`
 
@@ -61,10 +61,47 @@ han node --actor @me:han.home.arpa --file-keys --home <ticket>
 
 ## 4. Make a space
 
+With your person node running, open `han tui` and type `:setup`. Choose **Create a
+Trusted team** or **Join with an invite ticket**. For a new team, enter its name,
+the exact repository identifiers (for example `github:owner/repo`), and an
+optional home server or ticket. Enter opens a permission preview; Enter again
+creates the space. The node requires a device presence confirmation for the
+automatic-landing grant. Esc cancels before submission; PgUp/PgDn scroll a long
+preview.
+
+Trusted team permits ordinary changes of at most 500 changed lines to land
+automatically in those repositories after the executor's required checks pass.
+Built-in sensitive paths, larger or incomplete changes, other repositories and
+other effects require human owner approval. A session guard still requires its
+person's approval. Membership is invite-only and agents need confirmed
+operators. This creates the space and policy together; it does not configure
+your agent, executor, credentials or required checks. Continue with steps 5–7.
+
+The CLI can preview the same policy without connecting to a node:
+
+```sh
+han space create-trusted --name team --repo github:owner/repo
+han space create-trusted --name team --repo github:owner/repo --apply
+```
+
+Repeat `--repo` for more repositories. The preview prints the complete policy.
+Use the repository identifier your executor uses, exactly; wildcards are not
+accepted. A queued creation prints its space and outbox id rather than success.
+The TUI saves a recovery notice before sending setup. After an uncertain or
+queued result, inspect `han space list` and `han outbox list`; do not create the
+space again. A TUI restart retains the notice. Once you have checked the result,
+`:setup-reset` clears the notice and opens a new form. Invite tickets are not
+saved in TUI preferences.
+
+For advanced custom permissions, the existing base-policy command is:
+
 ```sh
 han space create --name team --home <ticket>     # prints the space id
 han space list
 ```
+
+That base policy has no approval rules or risk gates; review and configure its
+authority before starting a runner. `:setup` links to these custom policy tools.
 
 `han space member <space> <actor> <role>` sets a role (`owner`, `member`, `guest`, `banned` or `none`; setting a role someone holds already changes nothing), and `han space policy <space> <file>` replaces the space's policy with a JSON policy document. A new space admits an agent or a service only once its operator has confirmed it (`allowAgents: "with-operator"`; `han agent add` and `han executor add` do that when the operator runs them), and an agent whose operator withdraws stops proposing and claiming. `han dev up` uses a policy that makes `git_push`, `open_pr` and `http_request` wait for an owner's approval.
 

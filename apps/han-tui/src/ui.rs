@@ -77,6 +77,93 @@ pub fn draw(f: &mut Frame, app: &App) {
     if app.task_draft.is_some() {
         draw_task(f, app, area);
     }
+    if app.setup.is_some() {
+        draw_setup(f, app, area);
+    }
+}
+
+fn draw_setup(f: &mut Frame, app: &App, area: Rect) {
+    use crate::setup::Step;
+    use han_node::api::Command;
+    let Some(setup) = &app.setup else { return };
+    let rect = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    f.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .title(" Team setup ")
+        .border_style(Style::new().fg(Color::Cyan));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let mut text: Vec<String> = match setup.step {
+        Step::Choose => vec![
+            "1  Create a Trusted team".into(),
+            "   Ordinary changes land automatically in chosen repositories after required checks pass.".into(),
+            "2  Join a team with an invite ticket".into(),
+            "3  Advanced / custom permissions".into(),
+            "".into(), "Press 1, 2 or 3. Esc closes.".into(),
+        ],
+        Step::Trusted | Step::Join => {
+            let labels: &[&str] = if setup.step == Step::Join { &["Invite ticket"] }
+                else { &["Team name", "Exact repositories (comma separated, e.g. github:team/project)", "Home server or ticket (blank uses your home)"] };
+            let mut lines = Vec::new();
+            for (i, label) in labels.iter().enumerate() {
+                lines.push(format!("{} {label}", if i == setup.field { ">" } else { " " }));
+                lines.push(setup.fields[i].text().to_owned());
+                lines.push(String::new());
+            }
+            lines.push("Tab changes field · Enter previews · Esc closes".into());
+            lines
+        }
+        Step::Preview => match &setup.command {
+            Some(Command::SpaceCreateTrusted { name, repos, home }) => {
+                let mut lines = vec![format!("Create Trusted team: {name}"),
+                    format!("Home: {}", if home.is_some() { "the home you entered" } else { "your actor's home" }),
+                    "Invite-only membership. Agents require confirmed operators.".into(),
+                    "Allow ordinary changes (up to 500 changed lines) to land automatically in:".into()];
+                lines.extend(repos.iter().map(|r| format!("  {r}")));
+                lines.extend([
+                    "Requires a configured runner and passing required checks.".into(),
+                    "Sensitive paths, larger or incomplete changes, other repositories and other effects need owner approval.".into(),
+                    "A session guard still requires its person's approval.".into(),
+                    "This creates the space. Configure your agent and runner before starting work.".into(),
+                    "".into(), "Enter creates with these permissions · Backspace edits · Esc cancels".into()
+                ]);
+                lines
+            }
+            Some(Command::SpaceJoin { .. }) => vec!["Join the team named by your invite ticket and follow it on this device.".into(),
+                "The team's existing policy applies. Your device may ask you to confirm its home.".into(),
+                "Enter joins · Backspace edits · Esc cancels".into()],
+            _ => vec!["No operation selected.".into()],
+        },
+        Step::Waiting => vec!["Waiting for the node. Complete any device confirmation prompt.".into(),
+            "The request will not be repeated automatically.".into()],
+        Step::Recovery => vec!["Inspect the previous operation before starting another.".into(),
+            "Esc closes. Use :space to inspect followed spaces, and han outbox list to inspect pending writes.".into(),
+            "Once you have checked the result, :setup-reset starts a fresh setup.".into()],
+        Step::Advanced => vec!["Custom permissions".into(),
+            "Use han space create for the base policy, then han space policy <space> <file> for custom rules.".into(),
+            "The base policy has no approval rules or risk gates. Review its authority before using it with a runner.".into(),
+            "Use han space create-trusted --help for the scoped automatic-landing preset.".into(),
+            "Esc closes.".into()],
+    };
+    if !setup.notice.is_empty() {
+        text.push(setup.notice.clone());
+    }
+    text.push("PgUp/PgDn scroll".into());
+    let lines: Vec<Line> = text
+        .iter()
+        .flat_map(|s| wrap(&clean(s), inner.width as usize))
+        .map(Line::raw)
+        .collect();
+    let max_scroll = lines.len().saturating_sub(inner.height as usize) as u16;
+    f.render_widget(
+        Paragraph::new(lines).scroll((setup.scroll.min(max_scroll), 0)),
+        inner,
+    );
 }
 
 fn draw_task(f: &mut Frame, app: &App, area: Rect) {
@@ -494,7 +581,7 @@ fn board_message(app: &App) -> Option<(String, Style)> {
     let b = &app.board;
     let Some(space) = &app.space else {
         return Some((
-            "No space selected.\n\nType :space <space id> to look at one.".to_owned(),
+            "No space selected.\n\nType :setup to create or join a team.\nType :space <space id> to open a followed space.".to_owned(),
             quiet(),
         ));
     };

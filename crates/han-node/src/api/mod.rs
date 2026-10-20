@@ -12,6 +12,7 @@ mod bindings;
 mod command;
 mod error;
 mod items;
+mod preset;
 mod query;
 mod rows;
 mod stream;
@@ -26,6 +27,7 @@ pub use items::{
     ItemRow, MessageRole, RecordRow, Span, ToolKind, ToolLocation, ToolStatus, ToolText,
     TurnDriver, masked_spans,
 };
+pub use preset::trusted_team_policy;
 pub use query::{
     Facets, Filter, Group, MAX_LIMIT, MAX_SESSION_LIMIT, MAX_TIMELINE_LIMIT, Query, Scope,
     SessionPart, Target, Window, glob_match,

@@ -1207,6 +1207,32 @@ impl<T: Transport> Node<T> {
                     Ok(_) => Ok(CallResult::Space { space }),
                 }
             }
+            Command::SpaceCreateTrusted { home, name, repos } => {
+                let preset = crate::api::trusted_team_policy(&repos)?;
+                let policy = json::parse(preset.to_string().as_bytes())
+                    .map_err(|e| NodeError::invalid(e.to_string()))?;
+                let own = grammar::server_of(&inner.cfg.actor).unwrap_or_default();
+                let (home, trusted) = self.resolve_home(home.as_ref(), own).await?;
+                let space = format!("{}:{}", random_id(10), home.server);
+                self.follow(&home, trusted, &space)?;
+                match self
+                    .append(
+                        &space,
+                        "space.create",
+                        obj([("policy", policy)]),
+                        Some(obj([("name", s(&name))])),
+                    )
+                    .await
+                {
+                    Ok(CallResult::Receipt { .. }) => Ok(CallResult::Space { space }),
+                    Ok(queued @ CallResult::Queued { .. }) => Ok(queued),
+                    Ok(_) => Err(NodeError::invalid("unexpected creation result")),
+                    Err(e) => {
+                        self.unfollow(&space);
+                        Err(e)
+                    }
+                }
+            }
             Command::SpaceJoin { ticket } => {
                 let t = InviteTicket::parse(&ticket)
                     .ok_or_else(|| NodeError::invalid("not an invite ticket"))?;

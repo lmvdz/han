@@ -17,6 +17,9 @@ pub struct Config {
     /// The space shown when none is named.
     #[serde(default)]
     pub last_space: Option<String>,
+    /// Recovery notice saved before a setup operation; contains no invite or home ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_recovery: Option<String>,
 }
 
 impl Config {

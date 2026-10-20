@@ -107,7 +107,19 @@ visibility: string,
 /**
  * `invite`, `open` or `closed`.
  */
-join: string, } | { "type": "space_join", 
+join: string, } | { "type": "space_create_trusted", 
+/**
+ * Home to sequence it (default: this actor's home).
+ */
+home?: HomeRef, 
+/**
+ * Space name.
+ */
+name: string, 
+/**
+ * Exact repository identifiers allowed ordinary automatic landing.
+ */
+repos: Array<string>, } | { "type": "space_join", 
 /**
  * The ticket text.
  */

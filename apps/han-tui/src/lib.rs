@@ -23,6 +23,7 @@ pub mod host;
 pub mod input;
 pub mod msg;
 pub mod session;
+pub mod setup;
 pub mod term;
 pub mod testing;
 pub mod text;
