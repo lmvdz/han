@@ -1,0 +1,26 @@
+ HAN  team · by issue · filter: -
+┏┌ Tasks · current space ───────────────────────────────────────────────────────────────────────────────────────────────────────┐┓
+┃│↑ ↓ select · Enter start · n new task · r refresh · Esc board                                                                 │┃
+┃│No open tasks in this window. Press n to create one.                                                                          │┃
+┃│                                                                                                                              │┃
+┃│0 open tasks shown (window: up to 1,000 entries)                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┃│                                                                                                                              │┃
+┗└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘┛
+ ● node @lars · space live head 42                                                                             ? help · : command

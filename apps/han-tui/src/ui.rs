@@ -71,6 +71,176 @@ pub fn draw(f: &mut Frame, app: &App) {
     if app.overlap_detail {
         draw_overlaps(f, app, area);
     }
+    if app.tasks_open {
+        draw_tasks(f, app, area);
+    }
+    if app.task_draft.is_some() {
+        draw_task(f, app, area);
+    }
+}
+
+fn draw_task(f: &mut Frame, app: &App, area: Rect) {
+    let Some(draft) = &app.task_draft else { return };
+    let width = area.width.saturating_sub(2).min(100);
+    let height = area.height.saturating_sub(2).min(20);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    f.render_widget(Clear, rect);
+    let title = if draft.task.is_some() {
+        " Existing task · start "
+    } else {
+        " New task · create and start "
+    };
+    let block = Block::bordered()
+        .title(title)
+        .border_style(Style::new().fg(Color::Cyan));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let w = inner.width as usize;
+    let mut lines = vec![
+        Line::raw(fit(&format!("Space: {}", clean(&draft.space)), w)),
+        Line::raw(""),
+    ];
+    for (i, (label, edit)) in ["Agent", "Repository", "Request"]
+        .iter()
+        .zip(&draft.fields)
+        .enumerate()
+    {
+        let active = i == draft.field
+            && !draft.pending
+            && (draft.task.is_none() || i < 2)
+            && !draft.uncertain;
+        let marker = if active { ">" } else { " " };
+        lines.push(Line::styled(
+            format!("{marker} {label}"),
+            if active {
+                Style::new().fg(Color::Cyan)
+            } else {
+                quiet()
+            },
+        ));
+        // Keep the cursor's neighborhood visible in a long request instead of clipping its tail.
+        let start = edit.cursor().saturating_sub(w.saturating_sub(2));
+        let shown: String = edit.text().chars().skip(start).take(w).collect();
+        let y = inner.y + lines.len() as u16;
+        lines.push(Line::raw(clean(&shown)));
+        if active && y < inner.bottom() {
+            f.set_cursor_position((
+                inner.x + edit.cursor().saturating_sub(start).min(w.saturating_sub(1)) as u16,
+                y,
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+    if let Some(id) = &draft.task {
+        lines.extend(wrap(&format!("Task: {id}"), w).into_iter().map(Line::raw));
+    }
+    let help = if draft.pending {
+        "Waiting for the node…"
+    } else if draft.uncertain {
+        "Esc closes · inspect tasks/board before retrying"
+    } else if draft.task.is_some() {
+        "Enter starts the existing task · Esc closes"
+    } else {
+        "Tab changes field · Enter creates and starts · Esc cancels"
+    };
+    lines.extend(wrap(help, w).into_iter().map(|s| Line::styled(s, quiet())));
+    if !draft.notice.is_empty() {
+        lines.extend(
+            wrap(&clean(&draft.notice), w)
+                .into_iter()
+                .map(|s| Line::styled(s, Style::new().fg(Color::Yellow))),
+        );
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_tasks(f: &mut Frame, app: &App, area: Rect) {
+    let rect = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    f.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .title(" Tasks · current space ")
+        .border_style(Style::new().fg(Color::Cyan));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let w = inner.width as usize;
+    let rows = app.task_rows();
+    let capacity = inner.height.saturating_sub(7).max(1) as usize;
+    let start = app
+        .task_selection
+        .saturating_sub(capacity.saturating_sub(1));
+    let mut lines = vec![Line::styled(
+        fit(
+            "↑ ↓ select · Enter start · n new task · r refresh · Esc board",
+            w,
+        ),
+        quiet(),
+    )];
+    if rows.is_empty() {
+        lines.push(Line::raw(
+            "No open tasks in this window. Press n to create one.",
+        ));
+    }
+    for (i, task) in rows.iter().enumerate().skip(start).take(capacity) {
+        let selected = i == app.task_selection;
+        let state = if task.accepted.is_empty() {
+            "open"
+        } else {
+            "accepted"
+        };
+        let ask = task.ask.as_deref().unwrap_or("(request not received yet)");
+        let text = format!(
+            "{} {state:8} {} · {}",
+            if selected { ">" } else { " " },
+            task.to.join(", "),
+            clean(ask)
+        );
+        lines.push(Line::styled(
+            fit(&text, w),
+            if selected {
+                Style::new().fg(Color::Cyan)
+            } else {
+                Style::new()
+            },
+        ));
+    }
+    lines.push(Line::raw(""));
+    if let Some(task) = rows.get(app.task_selection) {
+        lines.extend(
+            wrap(&format!("Task {}", task.task), w)
+                .into_iter()
+                .map(Line::raw),
+        );
+        lines.push(Line::raw(fit(
+            &format!(
+                "Request: {}",
+                clean(task.ask.as_deref().unwrap_or("pending"))
+            ),
+            w,
+        )));
+    }
+    lines.push(Line::styled(
+        format!(
+            "{} open tasks shown (window: up to 1,000 entries)",
+            rows.len()
+        ),
+        quiet(),
+    ));
+    lines.extend(
+        wrap(&app.tasks_notice, w)
+            .into_iter()
+            .map(|s| Line::styled(s, Style::new().fg(Color::Yellow))),
+    );
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
@@ -1393,6 +1563,8 @@ const HELP: &[(&str, &str)] = &[
     ),
     ("h l / ← →", "to the group header / collapse and open"),
     ("t", "group by issue, person, state (remembered per space)"),
+    ("n / :task", "create and start a task in the current space"),
+    ("T / :tasks", "browse open tasks and start an existing task"),
     (
         "/  x  c",
         "filter box (person: agent: harness: repo: path: label: state: overlap: mine: ...), clear, closed",
@@ -1419,7 +1591,7 @@ const HELP: &[(&str, &str)] = &[
     ("Everywhere", ""),
     (
         ": or Ctrl-p",
-        "command palette (:group :filter :space :closed :approvals :admit :quit)",
+        "command palette (:task :group :filter :space :closed :approvals :admit :quit)",
     ),
     ("Tab", "next pane"),
     ("?  q  Ctrl-c", "this help; quit (or close the pane); quit"),

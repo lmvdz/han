@@ -1,0 +1,26 @@
+ HAN  team · by issue · filter: -
+┏ Board ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  PERSON     AGENT        HARNESS    STATE · STEP                                          CHANGES  OVERLAP    TESTS  TOK   AGE ┃
+┃>▾ #41 Board f┌ New task · create and start ─────────────────────────────────────────────────────────────────────┐              ┃
+┃ ● @lars      │Space: team                                                                                       │/0✓  41k   0s ┃
+┃ ● @ada       │                                                                                                  │     41k   20s┃
+┃ ▾ #52 Login f│> Agent                                                                                           │              ┃
+┃▌◐ @lars      │                                                                                                  │/2✗  41k   1m ┃
+┃ ◌ @bo        │  Repository                                                                                      │     41k   14m┃
+┃ ▾ #60 Docs (2│                                                                                                  │              ┃
+┃ ✓ @ada       │  Request                                                                                         │     41k   3h ┃
+┃ ○ @lars      │                                                                                                  │     –     2m ┃
+┃ ▾ No issue (1│                                                                                                  │              ┃
+┃ ✗ @bo        │Tab changes field · Enter creates and starts · Esc cancels                                        │     –     40m┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              │                                                                                                  │              ┃
+┃              └──────────────────────────────────────────────────────────────────────────────────────────────────┘              ┃
+┃                                                                                                                                ┃
+┗ 1-7 of 7 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ ● node @lars · space live head 42                                                                             ? help · : command

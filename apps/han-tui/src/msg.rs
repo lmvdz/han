@@ -13,6 +13,8 @@ use ratatui::crossterm::event::KeyEvent;
 pub enum ViewKind {
     /// The board of the current space.
     Board,
+    /// Tasks in the current space.
+    Tasks,
     /// The node itself: the actor, the roles, the links. Doubles as the connection heartbeat.
     Node,
     /// How the current space is doing on this device.

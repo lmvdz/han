@@ -1,4 +1,4 @@
-//! `han task`: list and cancel tasks through the running node (a face over its pipe).
+//! `han task`: create, list and cancel tasks through the running node (a face over its pipe).
 //!
 //! * `han task list [space]` prints the open tasks of a space, or of every followed space; `--all` adds the
 //!   closed ones.
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use han_node::NodeApi;
-use han_node::api::{Command, Query, Row, TaskRow, ViewEvent, Window};
+use han_node::api::{CallResult, Command, Query, Row, TaskRow, ViewEvent, Window};
 use han_node::rpc::{RpcClient, default_endpoint};
 
 /// Options of `han task`.
@@ -28,6 +28,29 @@ pub struct TaskArgs {
 
 #[derive(Subcommand)]
 enum TaskCmd {
+    /// Creates a task, optionally starting its assigned agent immediately.
+    Create {
+        /// The space in which to create the task.
+        space: String,
+        /// What to do. Use --file for a longer or multiline request.
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        ask: Option<String>,
+        /// Read the request from this UTF-8 file.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Assignees, comma-separated or repeated. --start requires exactly one.
+        #[arg(long, required = true, value_delimiter = ',')]
+        to: Vec<String>,
+        /// Optional issue reference, for example github:owner/repo#123.
+        #[arg(long)]
+        external: Option<String>,
+        /// Start the assigned agent once the home accepts the task.
+        #[arg(long, requires = "repo")]
+        start: bool,
+        /// Repository for --start, for example github:owner/repo.
+        #[arg(long, requires = "start")]
+        repo: Option<String>,
+    },
     /// Lists tasks.
     List {
         /// The space; every followed space when absent.
@@ -134,6 +157,77 @@ pub async fn run(args: TaskArgs) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| default_endpoint(&args.data));
     let client = RpcClient::connect(&endpoint).await?;
     match args.cmd {
+        TaskCmd::Create {
+            space,
+            ask,
+            file,
+            to,
+            external,
+            start,
+            repo,
+        } => {
+            let ask = match file {
+                Some(path) => std::fs::read_to_string(path)?,
+                None => ask.unwrap_or_default(),
+            };
+            if ask.trim().is_empty() {
+                return Err("the task request must not be empty".into());
+            }
+            if start && to.len() != 1 {
+                return Err("--start needs exactly one --to agent; no task was created".into());
+            }
+            let result = client
+                .call(Command::TaskCreate {
+                    space: space.clone(),
+                    to: to.clone(),
+                    ask,
+                    external,
+                })
+                .await.map_err(|error| format!("task creation did not return a receipt: {error}. Inspect `han task list` and `han outbox` before creating it again"))?;
+            let (id, queued) = match result {
+                CallResult::Receipt { id, .. } => (id, false),
+                CallResult::Queued { id, .. } => (id, true),
+                _ => {
+                    return Err(
+                        "unexpected task response; inspect `han task list` before retrying".into(),
+                    );
+                }
+            };
+            println!(
+                "{} {id} in {space}",
+                if queued { "queued" } else { "created" }
+            );
+            if start {
+                let agent = &to[0];
+                let repo = repo.expect("clap requires repo with start");
+                let connection = if args.endpoint.is_some() {
+                    format!("--endpoint {endpoint}")
+                } else {
+                    format!("--data {}", args.data.display())
+                };
+                let retry = format!(
+                    "han agent start --space {space} --agent {agent} --repo {repo} --task {id} {connection}"
+                );
+                if queued {
+                    return Err(format!("task is queued, not started. Wait for the outbox to reach the home, then run: {retry}. Do not create it again").into());
+                }
+                if let Err(error) = client
+                    .call(Command::AgentStart {
+                        space,
+                        agent: agent.clone(),
+                        harness: None,
+                        repo: Some(repo),
+                        issue: None,
+                        task: Some(id.clone()),
+                        home: None,
+                    })
+                    .await
+                {
+                    return Err(format!("task {id} was created, but start did not return success: {error}. Inspect the board before retrying start: {retry}. Do not create it again").into());
+                }
+                println!("started {agent} on task {id}");
+            }
+        }
         TaskCmd::List {
             space,
             assignee,
@@ -145,10 +239,9 @@ pub async fn run(args: TaskArgs) -> Result<(), Box<dyn std::error::Error>> {
             };
             let mut n = 0;
             for s in spaces {
-                // A space with no tasks view (a profile space) just has none to show.
-                let Ok(rows) = tasks(&client, &s, assignee.as_deref()).await else {
-                    continue;
-                };
+                let rows = tasks(&client, &s, assignee.as_deref())
+                    .await
+                    .map_err(|error| format!("cannot list tasks in {s}: {error}"))?;
                 for t in rows.iter().filter(|t| all || t.open) {
                     println!("{s} {}", line(t));
                     n += 1;

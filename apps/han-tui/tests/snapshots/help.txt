@@ -1,26 +1,26 @@
- HAN  team · by issue · filter: -
-┏ Board ━━━━━━━━━┌ Keys (any key closes) ───────────────────────────────────────────────────────────────────────┐━━━━━━━━━━━━━━━━┓
-┃  PERSON     AGE│Board                                                                                         │ESTS  TOK   AGE ┃
-┃>▾ #41 Board fre│j k / ↓ ↑       move; g g first, G last, Ctrl-d / Ctrl-u half a page                          │                ┃
-┃ ● @lars      la│Enter           open the session pane (on a group header: collapse or open it)                │12/0✓  41k   0s ┃
-┃ ● @ada       ad│h l / ← →       to the group header / collapse and open                                       │–      41k   20s┃
-┃ ▾ #52 Login flo│t               group by issue, person, state (remembered per space)                          │                ┃
-┃▌◐ @lars      la│/  x  c         filter box (person: agent: harness: repo: path: label: state: overlap: mine: …│30/2✗  41k   1m ┃
-┃ ◌ @bo        bo│o  a            overlap detail (who, tier, files); approvals for this session                 │–      41k   14m┃
-┃ ▾ #60 Docs (2) │Session                                                                                       │                ┃
-┃ ✓ @ada       ad│1 2 3 / [ ]     stream, timeline, changes                                                     │–      41k   3h ┃
-┃ ○ @lars      la│j k  G          scroll; G follows the live end                                                │–      –     2m ┃
-┃ ▾ No issue (1) │i / Enter       steer (Enter sends, Esc cancels); allowed only with the steer right           │                ┃
-┃ ✗ @bo        bo│Esc             close the pane                                                                │–      –     40m┃
+ HAN  team · by i┌ Keys (any key closes) ───────────────────────────────────────────────────────────────────────┐
+┏ Board ━━━━━━━━━│Board                                                                                         │━━━━━━━━━━━━━━━━┓
+┃  PERSON     AGE│j k / ↓ ↑       move; g g first, G last, Ctrl-d / Ctrl-u half a page                          │ESTS  TOK   AGE ┃
+┃>▾ #41 Board fre│Enter           open the session pane (on a group header: collapse or open it)                │                ┃
+┃ ● @lars      la│h l / ← →       to the group header / collapse and open                                       │12/0✓  41k   0s ┃
+┃ ● @ada       ad│t               group by issue, person, state (remembered per space)                          │–      41k   20s┃
+┃ ▾ #52 Login flo│n / :task       create and start a task in the current space                                  │                ┃
+┃▌◐ @lars      la│T / :tasks      browse open tasks and start an existing task                                  │30/2✗  41k   1m ┃
+┃ ◌ @bo        bo│/  x  c         filter box (person: agent: harness: repo: path: label: state: overlap: mine: …│–      41k   14m┃
+┃ ▾ #60 Docs (2) │o  a            overlap detail (who, tier, files); approvals for this session                 │                ┃
+┃ ✓ @ada       ad│Session                                                                                       │–      41k   3h ┃
+┃ ○ @lars      la│1 2 3 / [ ]     stream, timeline, changes                                                     │–      –     2m ┃
+┃ ▾ No issue (1) │j k  G          scroll; G follows the live end                                                │                ┃
+┃ ✗ @bo        bo│i / Enter       steer (Enter sends, Esc cancels); allowed only with the steer right           │–      –     40m┃
+┃                │Esc             close the pane                                                                │                ┃
 ┃                │Approvals                                                                                     │                ┃
 ┃                │Enter / a       open the full card (never signs)                                              │                ┃
 ┃                │a, then Enter   on the card: a opens the sign panel; Enter there signs                        │                ┃
 ┃                │c  Esc          cancel the effect (asks first); close                                         │                ┃
 ┃                │Everywhere                                                                                    │                ┃
-┃                │: or Ctrl-p     command palette (:group :filter :space :closed :approvals :admit :quit)       │                ┃
+┃                │: or Ctrl-p     command palette (:task :group :filter :space :closed :approvals :admit :quit) │                ┃
 ┃                │Tab             next pane                                                                     │                ┃
 ┃                │?  q  Ctrl-c    this help; quit (or close the pane); quit                                     │                ┃
 ┃                │                                                                                              │                ┃
-┃                │                                                                                              │                ┃
-┗ 1-7 of 7 ━━━━━━└──────────────────────────────────────────────────────────────────────────────────────────────┘━━━━━━━━━━━━━━━━┛
- ● node @lars · space live head 42                                                                             ? help · : command
+┗ 1-7 of 7 ━━━━━━│                                                                                              │━━━━━━━━━━━━━━━━┛
+ ● node @lars · s└──────────────────────────────────────────────────────────────────────────────────────────────┘help · : command

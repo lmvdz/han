@@ -169,3 +169,21 @@ async fn the_help_overlay_lists_the_keys() {
     assert!(!h.screen().contains("Keys (any key closes)"));
     let _ = SessionState::Working;
 }
+
+#[tokio::test]
+async fn the_new_task_form_shows_its_inputs_and_submission_controls() {
+    let (mut h, api, _) = started(WIDE).await;
+    h.keys("n").await;
+    let screen = h.screen();
+    assert_screen("new_task", &screen);
+    assert!(
+        screen.contains("Agent") && screen.contains("Repository") && screen.contains("Request")
+    );
+    assert!(screen.contains("Enter creates and starts"));
+    assert!(api.calls().is_empty(), "opening the form has no effect");
+    h.keys("<esc>T").await;
+    let screen = h.screen();
+    assert_screen("tasks_empty", &screen);
+    assert!(screen.contains("No open tasks"));
+    assert!(api.calls().is_empty());
+}

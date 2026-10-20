@@ -54,7 +54,7 @@ enum Cmd {
     Tui(tui::TuiArgs),
     /// Create, follow and list spaces, set roles and policy, through the running node.
     Space(han_faces::space::SpaceArgs),
-    /// List and cancel tasks through the running node.
+    /// Create, start, list and cancel tasks through the running node.
     Task(han_faces::task::TaskArgs),
     /// Pair a new device into this person's profile, or revoke one, through the running node.
     Device(han_faces::device::DeviceArgs),

@@ -277,6 +277,39 @@ fn a_profile_is_registered_on_a_running_home_and_start_reads_its_operator() {
     let tasks = han(&["task", "list", &space, "--data", device_s]);
     assert!(tasks.contains("0 task(s)"), "{tasks}");
 
+    // Creating is durable even when the subsequent start cannot launch the missing harness. The user
+    // gets the id of the one task to recover; no private RPC script or second task is needed.
+    han(&[
+        "space", "member", &space, AGENT, "member", "--data", device_s,
+    ]);
+    let (ok, out, err) = run(&[
+        "task",
+        "create",
+        &space,
+        "Review README links",
+        "--to",
+        AGENT,
+        "--repo",
+        "github:team/project",
+        "--start",
+        "--data",
+        device_s,
+    ]);
+    assert!(!ok && out.starts_with("created "), "{out}\n{err}");
+    let task = out.split_whitespace().nth(1).unwrap();
+    assert!(
+        err.contains(task) && err.contains("Do not create it again"),
+        "{err}"
+    );
+    let tasks = han(&["task", "list", &space, "--data", device_s]);
+    assert!(
+        tasks.contains("1 task(s)") && tasks.contains("Review README links"),
+        "{tasks}"
+    );
+    han(&[
+        "task", "cancel", task, "--space", &space, "--data", device_s,
+    ]);
+
     drop(joined);
     let (ok, _, err) = run(&["node", "status", "--data", device_s]);
     assert!(!ok && err.contains("not running"), "{err}");
