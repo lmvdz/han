@@ -1,22 +1,25 @@
-//! Live, opt-in: the real Claude Code adapter, launched the way a session launches it (the session proxy, the
+//! Live, opt-in: a real ACP adapter, launched the way a session launches it (the session proxy, the
 //! OS sandbox, the agent's own login dir, HAN's MCP server through the in-sandbox stub), completes ACP
 //! `initialize`, opens a session and answers one tiny prompt. It spends a little of the login's quota, so it
 //! runs only when asked:
 //!
 //! ```text
-//! HAN_LIVE_CLAUDE_NODE=<node.exe> HAN_LIVE_CLAUDE_ADAPTER=<…/@agentclientprotocol/claude-agent-acp>
-//! HAN_LIVE_CLAUDE_LOGIN=<the agent's claude-config dir> cargo test -p han-host --test live_claude
+//! HAN_LIVE_DRIVER=<driver.json> HAN_LIVE_NODE=<node> HAN_LIVE_ADAPTER=<adapter package directory>
+//! HAN_LIVE_LOGIN=<agent login root> cargo test -p han-host --test live_harness -- --ignored
 //! ```
 //!
-//! `han agent setup-harness claude` installs the first two; `han agent login` makes the third. The test never
+//! `han agent setup-harness` installs the adapter; `han agent login` makes the login. The test never
 //! reads the login dir: it only binds it into the sandbox, as a session does.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use han_host::acp::{AcpDriver, AgentDriver, Mode, SandboxPolicy, SessionConfig, TurnInput};
-use han_host::driver::builtin;
+use futures::StreamExt;
+use han_host::acp::{
+    AcpDriver, AgentDriver, AgentEvent, Mode, SandboxPolicy, SessionConfig, TurnInput,
+};
+use han_host::driver::{DriverConfig, builtin};
 use han_host::glue::Egress;
 use han_host::host::{HostConfig, RepoConfig, SandboxChoice};
 use han_host::mask::Masker;
@@ -45,7 +48,7 @@ impl HostBridge for Bridge {
         "live".into()
     }
     fn session(&self) -> String {
-        "live-claude".into()
+        "live-harness".into()
     }
     fn tool_used(&self, _tool: &str, _summary: &str) {}
     fn summaries(&self, _session: &str) -> Vec<String> {
@@ -60,17 +63,20 @@ fn var(name: &str) -> Option<PathBuf> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_answers_a_prompt_inside_the_os_sandbox() {
-    let (Some(node), Some(adapter), Some(login)) = (
-        var("HAN_LIVE_CLAUDE_NODE"),
-        var("HAN_LIVE_CLAUDE_ADAPTER"),
-        var("HAN_LIVE_CLAUDE_LOGIN"),
-    ) else {
-        eprintln!(
-            "SKIP: set HAN_LIVE_CLAUDE_NODE, HAN_LIVE_CLAUDE_ADAPTER and HAN_LIVE_CLAUDE_LOGIN to run"
-        );
-        return;
-    };
+#[ignore = "uses a real harness login and subscription quota"]
+async fn adapter_answers_a_prompt_inside_the_os_sandbox() {
+    let node = var("HAN_LIVE_NODE")
+        .or_else(|| var("HAN_LIVE_CLAUDE_NODE"))
+        .expect("set HAN_LIVE_NODE");
+    let adapter = var("HAN_LIVE_ADAPTER")
+        .or_else(|| var("HAN_LIVE_CLAUDE_ADAPTER"))
+        .expect("set HAN_LIVE_ADAPTER");
+    let login = var("HAN_LIVE_LOGIN")
+        .or_else(|| var("HAN_LIVE_CLAUDE_LOGIN"))
+        .expect("set HAN_LIVE_LOGIN");
+    let driver = var("HAN_LIVE_DRIVER")
+        .map(|path| DriverConfig::load(&path).unwrap())
+        .unwrap_or_else(|| builtin("claude").unwrap());
     let tmp = tempfile::Builder::new()
         .prefix("han-live-")
         .tempdir()
@@ -98,7 +104,7 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
         space: "live".into(),
         agent: CODER.into(),
         operator: None,
-        driver: builtin("claude").unwrap(),
+        driver,
         repo: RepoConfig {
             name: "local:live".into(),
             source: wt.to_string_lossy().into_owned(),
@@ -113,7 +119,9 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
         guarded: false,
         strict_on_read: true,
         sandbox: SandboxChoice {
-            backend: std::env::var("HAN_LIVE_CLAUDE_SANDBOX").unwrap_or_else(|_| "auto".into()),
+            backend: std::env::var("HAN_LIVE_SANDBOX")
+                .or_else(|_| std::env::var("HAN_LIVE_CLAUDE_SANDBOX"))
+                .unwrap_or_else(|_| "auto".into()),
             allow_advisory: false,
             ro: Vec::new(),
             login_dir: Some(login),
@@ -169,6 +177,7 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
             })
             .await?;
         eprintln!("started: agent version {:?}", started.agent_version);
+        let mut events = agent.events();
         let end = agent
             .turn(
                 TurnInput {
@@ -178,6 +187,19 @@ async fn claude_answers_a_prompt_inside_the_os_sandbox() {
                 Mode::Auto,
             )
             .await?;
+        let mut text = String::new();
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(100), events.next()).await
+        {
+            if let AgentEvent::Output { text: chunk } = event {
+                text.push_str(&chunk);
+            }
+        }
+        assert_eq!(
+            text.trim().to_ascii_lowercase(),
+            "pong",
+            "the model must answer, not just end a turn"
+        );
         agent.shutdown().await;
         Ok::<_, han_host::acp::AcpError>(end)
     };

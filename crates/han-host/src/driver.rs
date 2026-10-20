@@ -105,6 +105,14 @@ pub struct Isolation {
     /// agent's sandbox and nothing else of the user's home (see [`login_binding`]).
     #[serde(default)]
     pub login_dir_env: Option<String>,
+    /// Login details supplied by the adapter. Older drivers without this field retain the Claude login
+    /// convention; new adapters should always declare it when `login_dir_env` is set.
+    #[serde(default)]
+    pub login: Option<Login>,
+    /// Refuse inherited configuration that this adapter cannot disable itself. Paths are relative to
+    /// the workspace or harness login directory. This is an admission check, not a runtime write filter.
+    #[serde(default)]
+    pub reject_config: ConfigAdmission,
     /// Extra arguments for the adapter.
     #[serde(default)]
     pub extra_args: Vec<String>,
@@ -117,6 +125,78 @@ pub struct Isolation {
     /// What isolation this driver cannot enforce, for the status item.
     #[serde(default)]
     pub gaps: Vec<String>,
+}
+
+/// Configuration sources an adapter must not inherit when a session starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigAdmission {
+    /// Paths under the workspace, for example an adapter's project configuration directory.
+    #[serde(default)]
+    pub project: Vec<String>,
+    /// Paths under this harness's login directory, never the enclosing agent directory.
+    #[serde(default)]
+    pub login: Vec<String>,
+}
+
+fn portable_relative(p: &str) -> bool {
+    !p.contains([':', '\\'])
+        && !p.starts_with('/')
+        && !p.split('/').any(|c| c == ".." || c == ".")
+        && !p.chars().any(char::is_control)
+}
+
+/// How to authenticate a harness, independently of its protocol and model provider.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Login {
+    /// A relative directory under the agent's login root. Separates different harnesses' credentials.
+    #[serde(default)]
+    pub subdir: String,
+    /// A nonempty file whose presence indicates a cached login (not proof that the token is still valid).
+    pub file: String,
+    /// Argument vector run outside the sandbox for interactive login. Supports `{node}`, `{adapter_dir}`
+    /// and `{login_dir}`; it is never interpreted by a shell.
+    pub command: Vec<String>,
+}
+
+impl Default for Login {
+    fn default() -> Self {
+        // Compatibility with the first shipped drivers, which only declared CLAUDE_CONFIG_DIR.
+        Self {
+            subdir: String::new(),
+            file: CLAUDE_LOGIN_FILE.into(),
+            command: vec!["claude".into()],
+        }
+    }
+}
+
+impl Login {
+    /// Rejects absolute or traversing credential paths before they are joined to the agent's root.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.file.is_empty()
+            || !portable_relative(&self.file)
+            || !portable_relative(&self.subdir)
+        {
+            return Err(
+                "login file and subdir must be portable paths within the agent's login root".into(),
+            );
+        }
+        if self.command.is_empty() || self.command[0].is_empty() {
+            return Err("login command must be a nonempty argument vector".into());
+        }
+        Ok(())
+    }
+
+    /// This harness's login directory under the agent's root.
+    pub fn directory(&self, root: &Path) -> PathBuf {
+        root.join(&self.subdir)
+    }
+
+    /// Only checks file metadata; never reads credentials or reports their contents.
+    pub fn present(&self, root: &Path) -> bool {
+        self.validate().is_ok()
+            && std::fs::metadata(self.directory(root).join(&self.file))
+                .is_ok_and(|m| m.is_file() && m.len() > 0)
+    }
 }
 
 /// One harness.
@@ -166,14 +246,81 @@ pub struct DriverConfig {
 }
 
 impl DriverConfig {
+    /// Refuses inherited adapter configuration before any harness process starts. Nothing is removed or
+    /// rewritten: an operator can inspect the named path and choose a suitable driver.
+    pub fn check_configuration(
+        &self,
+        workspace: &Path,
+        login: Option<&Path>,
+    ) -> Result<(), String> {
+        for (root, paths) in [
+            (Some(workspace), &self.isolation.reject_config.project),
+            (login, &self.isolation.reject_config.login),
+        ] {
+            if paths.is_empty() {
+                continue;
+            }
+            let root = root.ok_or("configuration admission needs a login directory")?;
+            for rel in paths {
+                if rel.is_empty() || !portable_relative(rel) {
+                    return Err(
+                        "configuration admission paths must be portable relative paths".into(),
+                    );
+                }
+                let path = root.join(rel);
+                match std::fs::symlink_metadata(&path) {
+                    Ok(_) => {
+                        return Err(format!(
+                            "{} refuses inherited configuration at {}; inspect it or use a driver that isolates this source",
+                            self.name,
+                            path.display()
+                        ));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(format!(
+                            "cannot check configuration at {}: {e}",
+                            path.display()
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Reads the same TOML/JSON driver used by setup, login, diagnostics and the host.
+    pub fn load(path: &Path) -> Result<DriverConfig, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if path.extension().is_some_and(|e| e == "toml") {
+            Self::from_toml(&text)
+        } else {
+            Self::from_json(&text)
+        }
+    }
+
+    /// The adapter's login contract, including compatibility with existing driver files.
+    pub fn login(&self) -> Option<Login> {
+        self.isolation
+            .login_dir_env
+            .as_ref()
+            .map(|_| self.isolation.login.clone().unwrap_or_default())
+    }
     /// Parses a config from TOML.
     pub fn from_toml(text: &str) -> Result<DriverConfig, String> {
-        toml::from_str(text).map_err(|e| e.to_string())
+        let cfg: Self = toml::from_str(text).map_err(|e| e.to_string())?;
+        if let Some(login) = cfg.login() {
+            login.validate()?;
+        }
+        Ok(cfg)
     }
 
     /// Parses a config from JSON.
     pub fn from_json(text: &str) -> Result<DriverConfig, String> {
-        serde_json::from_str(text).map_err(|e| e.to_string())
+        let cfg: Self = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if let Some(login) = cfg.login() {
+            login.validate()?;
+        }
+        Ok(cfg)
     }
 
     /// Every host the proxy must allow for this harness: the credential mode's plus `connect_hosts`.
@@ -263,6 +410,8 @@ fn pi() -> DriverConfig {
         isolation: Isolation {
             config_dir_env: Some("PI_CODING_AGENT_DIR".into()),
             login_dir_env: None,
+            login: None,
+            reject_config: ConfigAdmission::default(),
             extra_args: vec![],
             settings_sources_empty: false,
             strict_mcp: false,
@@ -313,6 +462,8 @@ fn claude() -> DriverConfig {
             // and strictMcpConfig keep user and project settings and MCP servers out.
             config_dir_env: None,
             login_dir_env: Some("CLAUDE_CONFIG_DIR".into()),
+            login: Some(Login::default()),
+            reject_config: ConfigAdmission::default(),
             extra_args: vec![],
             settings_sources_empty: true,
             strict_mcp: true,
@@ -350,15 +501,21 @@ pub fn login_binding(
     let Some(var) = &cfg.isolation.login_dir_env else {
         return Ok(None);
     };
+    let login = cfg
+        .login()
+        .expect("a login environment has a login contract");
+    login.validate()?;
     let dir = dir.ok_or_else(|| {
         format!(
             "{} needs a login directory for the agent (run `han agent login <agent>`)",
             cfg.name
         )
     })?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    if !login_present(&dir) {
+    let root = dir;
+    let dir = login.directory(root);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let dir = std::path::absolute(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if !login.present(root) {
         return Err(format!(
             "no {} login in {} (run `han agent login <agent>`)",
             cfg.name,
@@ -766,6 +923,98 @@ mod tests {
                 .any(|g| g.contains("per-agent login dir inside the agent's trust boundary"))
         );
         assert_eq!(login_binding(&builtin("pi").unwrap(), None).unwrap(), None);
+    }
+
+    #[test]
+    fn a_file_driver_selects_its_own_credentials_without_exposing_another_harness() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = DriverConfig::from_json(include_str!("../drivers/codex.json")).unwrap();
+        // A valid Claude credential file must not satisfy a different adapter's login check.
+        std::fs::write(root.path().join(CLAUDE_LOGIN_FILE), "{}").unwrap();
+        assert!(login_binding(&cfg, Some(root.path())).is_err());
+        let login = cfg.login().unwrap();
+        let codex = login.directory(root.path());
+        std::fs::write(codex.join("auth.json"), "").unwrap();
+        assert!(!login.present(root.path()));
+        std::fs::write(codex.join("auth.json"), "{}").unwrap();
+        let (env, bound) = login_binding(&cfg, Some(root.path())).unwrap().unwrap();
+        assert_eq!(env, "CODEX_HOME");
+        assert_eq!(bound, std::path::absolute(&codex).unwrap());
+        let mut env = Vec::new();
+        let mut rw = Vec::new();
+        bind_login(
+            Some(("CODEX_HOME".into(), bound.clone())),
+            &mut env,
+            &mut rw,
+        );
+        assert_eq!(rw, [bound]);
+        assert!(!rw.contains(&root.path().to_path_buf()));
+        let prepared = prepare_session_dir(&cfg, &ctx(root.path())).unwrap();
+        assert_eq!(prepared.mcp_servers.len(), 1);
+        assert_eq!(prepared.session_meta, None);
+        assert_eq!(cfg.gate_fidelity, GateFidelity::PromptOnly);
+    }
+
+    #[test]
+    fn login_paths_cannot_escape_the_agents_root_on_either_os() {
+        for path in [
+            "../token",
+            "/token",
+            "C:/token",
+            "C:token",
+            "a/../token",
+            "a\\token",
+            "a\ntoken",
+        ] {
+            let mut cfg = builtin("claude").unwrap();
+            cfg.isolation.login.as_mut().unwrap().file = path.into();
+            assert!(
+                DriverConfig::from_json(&serde_json::to_string(&cfg).unwrap()).is_err(),
+                "{path}"
+            );
+            cfg.isolation.login.as_mut().unwrap().file = "auth.json".into();
+            cfg.isolation.login.as_mut().unwrap().subdir = path.into();
+            assert!(
+                DriverConfig::from_json(&serde_json::to_string(&cfg).unwrap()).is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_driver_files_keep_their_login_contract() {
+        let mut old = serde_json::to_value(builtin("claude").unwrap()).unwrap();
+        old["isolation"].as_object_mut().unwrap().remove("login");
+        let cfg = DriverConfig::from_json(&old.to_string()).unwrap();
+        assert_eq!(cfg.login(), Some(Login::default()));
+    }
+
+    #[test]
+    fn adapter_admission_refuses_inherited_config_without_removing_it() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("work");
+        let login = root.path().join("login");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&login).unwrap();
+        let cfg = DriverConfig::from_json(include_str!("../drivers/codex.json")).unwrap();
+        cfg.check_configuration(&workspace, Some(&login)).unwrap();
+        std::fs::create_dir(workspace.join(".codex")).unwrap();
+        let err = cfg
+            .check_configuration(&workspace, Some(&login))
+            .unwrap_err();
+        assert!(err.contains(".codex"), "{err}");
+        assert!(workspace.join(".codex").exists());
+        std::fs::remove_dir(workspace.join(".codex")).unwrap();
+        std::fs::write(login.join("config.toml"), "[mcp_servers.foreign]").unwrap();
+        assert!(
+            cfg.check_configuration(&workspace, Some(&login))
+                .unwrap_err()
+                .contains("config.toml")
+        );
+        // A local login file alone is expected, not treated as configuration.
+        std::fs::remove_file(login.join("config.toml")).unwrap();
+        std::fs::write(login.join("auth.json"), "{}").unwrap();
+        cfg.check_configuration(&workspace, Some(&login)).unwrap();
     }
 
     #[test]

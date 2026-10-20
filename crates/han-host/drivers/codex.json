@@ -1,0 +1,42 @@
+{
+  "name": "codex",
+  "harness": "codex",
+  "command": ["{node}", "{adapter_dir}/dist/index.js"],
+  "env": [
+    ["INITIAL_AGENT_MODE", "agent-full-access"],
+    ["NO_BROWSER", "1"],
+    ["CODEX_CONFIG", "{\"cli_auth_credentials_store\":\"file\",\"web_search\":\"disabled\",\"features\":{\"hooks\":false,\"multi_agent\":false}}"]
+  ],
+  "mcp": {"kind": "acp_mcp_servers"},
+  "credentials": {
+    "mode": "subscription",
+    "connect_hosts": ["chatgpt.com", "auth.openai.com", "api.openai.com"]
+  },
+  "connect_hosts": ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"],
+  "tested_version": "2.2.2",
+  "adapter": {
+    "package": "@agentclientprotocol/codex-acp",
+    "version": "2.2.2",
+    "integrity": "sha512-vNdeNV3jxbqaH7MYvVWzyB6cMOz+YGIV9W1xyBDsQfoii92DulZLM+ahCL2T2G6uohlaB1Yma347p2kLfAab2w==",
+    "entry": "dist/index.js"
+  },
+  "gate_fidelity": "prompt_only",
+  "isolation": {
+    "login_dir_env": "CODEX_HOME",
+    "login": {
+      "subdir": "codex",
+      "file": "auth.json",
+      "command": ["{node}", "{adapter_dir}/../../@openai/codex/bin/codex.js", "login", "--device-auth"]
+    },
+    "reject_config": {
+      "project": [".codex"],
+      "login": ["config.toml", "hooks.json", "skills", "plugins"]
+    },
+    "gaps": [
+      "Codex runs without its inner sandbox because HAN supplies the enforced outer OS sandbox and egress proxy; this driver does not claim every-call permission gating.",
+      "The agent can read and refresh its own Codex subscription login; no other harness login or user-home configuration is bound.",
+      "Admission refuses inherited project .codex and login configuration; this is a startup check, not a filter on configuration the agent creates during its own session."
+    ]
+  },
+  "auto_mode": "agent-full-access"
+}

@@ -1,4 +1,4 @@
-//! `han agent setup-harness claude|pi`: the managed install of a harness's ACP adapter (PLAN section 6.4).
+//! `han agent setup-harness <name-or-driver>`: managed installation of an ACP adapter (PLAN section 6.4).
 //!
 //! It installs the adapter version the driver pins (M4, SR-76) with npm into the han data directory, using a
 //! Node 22 that is already there or a pinned Node build it downloads (and checks against an embedded
@@ -7,13 +7,33 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use han_host::driver::{builtin, login_present};
+use han_host::driver::{DriverConfig, builtin, fill};
 use han_proc::NoWindow as _;
 use han_registry::{AgentEdit, AgentsFile, HarnessInstall, Registry};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
+
+/// Resolves an installed adapter's driver, a bundled driver, or a driver file. All CLI consumers use the
+/// same definition as the host; adding an adapter needs no login or diagnostic branches.
+pub fn driver(data: &Path, harness: &str) -> Res<DriverConfig> {
+    let name = if harness == "claude-code" {
+        "claude"
+    } else {
+        harness
+    };
+    if han_registry::agents::valid_harness_name(name)
+        && let Some(install) = HarnessInstall::load(data, name)?
+        && let Some(path) = install.driver
+    {
+        return Ok(DriverConfig::load(&path)?);
+    }
+    if let Some(driver) = builtin(name) {
+        return Ok(driver);
+    }
+    Ok(DriverConfig::load(Path::new(harness))?)
+}
 
 /// The pinned Node build (an LTS 22 release) and the SHA-256 of each archive, from nodejs.org's
 /// `SHASUMS256.txt`.
@@ -236,17 +256,33 @@ pub fn setup(
     dir: Option<&Path>,
     node: Option<&Path>,
 ) -> Res<HarnessInstall> {
-    let name = match harness {
-        "claude-code" => "claude",
-        other => other,
-    };
-    let driver = builtin(name).ok_or("setup-harness: claude or pi")?;
+    let driver = driver(data, harness)?;
+    let name = driver.name.as_str();
+    if !han_registry::agents::valid_harness_name(name) {
+        return Err("driver name must be a portable harness name, not a path".into());
+    }
+    if let Some(login) = driver.login() {
+        login.validate()?;
+    }
     let adapter = driver.adapter.clone();
-    let node = resolve_node(data, node)?;
+    if adapter.package.is_empty() || adapter.version.is_empty() || adapter.entry.is_empty() {
+        return Err(
+            "managed setup needs the adapter's npm package, exact version and entry".into(),
+        );
+    }
     let install_dir = dir
         .map(Path::to_path_buf)
         .unwrap_or_else(|| data.join("harness").join(name));
+    let install_dir = std::path::absolute(install_dir)?;
     std::fs::create_dir_all(&install_dir)?;
+    // An explicit shared installation must also keep its managed runtime outside the private node
+    // data directory, so an OS-user host can execute it without access to the node's keys.
+    let runtime_root = if dir.is_some() {
+        install_dir.as_path()
+    } else {
+        data
+    };
+    let node = resolve_node(runtime_root, node)?;
     // A package.json of our own keeps npm from walking up to some other project.
     let manifest = install_dir.join("package.json");
     if !manifest.exists() {
@@ -287,6 +323,10 @@ pub fn setup(
     if !adapter_dir.join(&adapter.entry).is_file() {
         return Err(format!("{} has no {}", adapter_dir.display(), adapter.entry).into());
     }
+    // Store a complete snapshot beside the adapter, where an OS-user host can read it. The source file
+    // may be moved afterwards; installing by name reuses this definition instead of guessing a built-in.
+    let driver_path = install_dir.join("driver.json");
+    std::fs::write(&driver_path, serde_json::to_string_pretty(&driver)?)?;
     let record = HarnessInstall {
         harness: name.to_owned(),
         node,
@@ -294,28 +334,44 @@ pub fn setup(
         package: adapter.package,
         version: adapter.version,
         integrity,
-        driver: None,
+        driver: Some(driver_path),
     };
     record.save(data)?;
     Ok(record)
 }
 
-/// Runs `claude` with the agent's login directory as its config directory.
+/// Runs the adapter's login command with only this agent's harness login directory selected.
 pub fn login(
     data: &Path,
     agent: &str,
     check: bool,
     dir: Option<&Path>,
-    claude: Option<&Path>,
+    program: Option<&Path>,
+    harness: Option<&str>,
 ) -> Res<()> {
-    let dir = match dir {
+    let file = AgentsFile::load(data)?;
+    let recorded = file.agent(agent).harness;
+    let name = harness
+        .or(recorded.as_deref())
+        .ok_or("record a harness with `han agent set --harness`, or pass --harness")?;
+    let driver = driver(data, name)?;
+    let login = driver
+        .login()
+        .ok_or("this driver does not use a subscription login")?;
+    login.validate()?;
+    let root = match dir {
         Some(d) => d.to_path_buf(),
-        None => AgentsFile::load(data)?.login_dir(data, agent),
+        None => file.login_dir(data, agent),
     };
+    let dir = std::path::absolute(login.directory(&root))?;
     if check {
         // Only whether a login exists: nothing of it is read or shown.
-        return if login_present(&dir) {
-            println!("{agent}: logged in ({})", dir.display());
+        return if login.present(&root) {
+            println!(
+                "{agent}: cached {} login present ({})",
+                driver.harness,
+                dir.display()
+            );
             Ok(())
         } else {
             Err(format!(
@@ -327,35 +383,74 @@ pub fn login(
     }
     std::fs::create_dir_all(&dir)?;
     println!(
-        "logging {agent} in; the login goes to {} (not ~/.claude). Use /login in claude, then /exit.",
+        "logging {agent} in to {}; the login goes to {}. Follow the harness's sign-in instructions.",
+        driver.harness,
         dir.display()
     );
-    let programs: Vec<PathBuf> = match claude {
-        Some(c) => vec![c.to_path_buf()],
-        None if cfg!(windows) => vec!["claude".into(), "claude.cmd".into()],
-        None => vec!["claude".into()],
-    };
-    let mut last = None;
-    for program in programs {
-        match std::process::Command::new(&program)
-            .no_window()
-            .env("CLAUDE_CONFIG_DIR", &dir)
-            .status()
-        {
-            Ok(_) => {
-                last = None;
-                break;
-            }
-            Err(e) => last = Some(format!("{}: {e}", program.display())),
-        }
-    }
-    if let Some(e) = last {
-        return Err(
-            format!("cannot run claude ({e}); install Claude Code or pass --claude").into(),
+    let install = HarnessInstall::load(data, &driver.name)?;
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert("login_dir", dir.to_string_lossy().into_owned());
+    if let Some(install) = install {
+        vars.insert("node", install.node.to_string_lossy().into_owned());
+        vars.insert(
+            "adapter_dir",
+            install.adapter_dir.to_string_lossy().into_owned(),
         );
     }
-    if login_present(&dir) {
-        println!("{agent}: logged in");
+    let argv: Vec<String> = login.command.iter().map(|part| fill(part, &vars)).collect();
+    if argv
+        .iter()
+        .any(|part| part.contains("{node}") || part.contains("{adapter_dir}"))
+    {
+        return Err(format!(
+            "set up {} before login: han agent setup-harness {name}",
+            driver.name
+        )
+        .into());
+    }
+    let executable = program
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&argv[0]));
+    // Resolve Windows npm shims generically too; the old Claude login path supported .cmd installers.
+    let executable = if cfg!(windows) && executable.components().count() == 1 {
+        std::env::var_os("PATH")
+            .and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .flat_map(|dir| {
+                        ["", ".exe", ".cmd"]
+                            .into_iter()
+                            .map(|ext| dir.join(format!("{}{ext}", executable.display())))
+                            .collect::<Vec<_>>()
+                    })
+                    .find(|path| path.is_file())
+            })
+            .unwrap_or(executable)
+    } else {
+        executable
+    };
+    let status = std::process::Command::new(&executable)
+        .no_window()
+        .args(&argv[1..])
+        .env(
+            driver
+                .isolation
+                .login_dir_env
+                .as_ref()
+                .expect("login has an env"),
+            &dir,
+        )
+        .status()
+        .map_err(|e| {
+            format!(
+                "cannot run {} ({e}); install the harness or pass --program",
+                executable.display()
+            )
+        })?;
+    if !status.success() {
+        return Err(format!("{} login exited with {status}", driver.harness).into());
+    }
+    if login.present(&root) {
+        println!("{agent}: cached login present");
         Ok(())
     } else {
         Err(format!("{agent}: no login was made in {}", dir.display()).into())
@@ -381,6 +476,62 @@ pub fn record_settings(data: &Path, actor: &str, edit: &AgentEdit) -> Res<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_custom_drivers_control_login_checks_without_a_builtin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path();
+        let mut cfg = builtin("claude").unwrap();
+        cfg.name = "test-adapter".into();
+        cfg.harness = "test-adapter".into();
+        cfg.isolation.login_dir_env = Some("TEST_ADAPTER_HOME".into());
+        cfg.isolation.login = Some(han_host::driver::Login {
+            subdir: "test-adapter".into(),
+            file: "token.json".into(),
+            command: vec!["test-login".into()],
+        });
+        let source = data.join("custom.json");
+        std::fs::write(&source, serde_json::to_string(&cfg).unwrap()).unwrap();
+        HarnessInstall {
+            harness: cfg.name.clone(),
+            node: "node".into(),
+            adapter_dir: data.join("adapter"),
+            package: "test-adapter".into(),
+            version: "1.0.0".into(),
+            integrity: String::new(),
+            driver: Some(source),
+        }
+        .save(data)
+        .unwrap();
+        assert_eq!(driver(data, "test-adapter").unwrap(), cfg);
+        let root = data.join("login-root");
+        std::fs::create_dir_all(root.join("test-adapter")).unwrap();
+        std::fs::write(root.join(".credentials.json"), "{}").unwrap();
+        assert!(
+            login(
+                data,
+                "@coder:test",
+                true,
+                Some(&root),
+                None,
+                Some("test-adapter")
+            )
+            .is_err()
+        );
+        std::fs::write(root.join("test-adapter/token.json"), "{}").unwrap();
+        login(
+            data,
+            "@coder:test",
+            true,
+            Some(&root),
+            None,
+            Some("test-adapter"),
+        )
+        .unwrap();
+        // A missing installed definition must not silently fall back to a different adapter.
+        std::fs::remove_file(data.join("custom.json")).unwrap();
+        assert!(driver(data, "test-adapter").is_err());
+    }
 
     #[test]
     fn node_versions_and_lock_files_parse() {
