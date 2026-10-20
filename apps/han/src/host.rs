@@ -106,16 +106,13 @@ fn admit_sandbox(
                 message: message.clone(),
             },
         };
-        if let Err(e) = admission.write(
+        admission.write(
             &unit_file.with_file_name(
                 unit_admission_file(Path::new(""))
                     .file_name()
                     .unwrap_or_default(),
             ),
-        ) {
-            // The node then waits in vain and the host's exit still says no: never start on a guess.
-            eprintln!("han host: cannot leave its admission: {e}");
-        }
+        )?;
     }
     found.map_err(|(_, message)| message.into())
 }
