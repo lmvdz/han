@@ -153,6 +153,11 @@ const SPECS: &[Spec] = &[
         ids: &["registry.", "harness.", "agent."],
     },
     Spec {
+        id: "harness.launch",
+        side: Side::Node,
+        ids: &["harness.launch."],
+    },
+    Spec {
         id: "sandbox",
         side: Side::Node,
         ids: &["sandbox."],
@@ -401,6 +406,8 @@ pub struct Facts {
     pub harnesses: BTreeMap<String, HarnessFact>,
     /// By actor: whether the credential file declared by its adapter exists.
     pub logins: BTreeMap<String, bool>,
+    /// By actor: why its configured OS identity cannot run Node or read the adapter.
+    pub launch_refusals: BTreeMap<String, String>,
     /// By OS user: whether the user exists (Linux).
     pub os_users: BTreeMap<String, bool>,
     pub presence: Option<Result<PresenceFacts, String>>,
@@ -1417,6 +1424,12 @@ fn agent_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
             ));
         }
         if let Some(h) = &a.harness {
+            if let Some(why) = f.launch_refusals.get(actor) {
+                out.push(finding(
+                    "harness.launch.refused", actor.clone(), why.clone(),
+                    format!("han agent setup-harness {} --data {data} --dir <shared-adapter-directory> --node <shared-node22-executable>; ensure the agent's OS user can read the installation", q(h)),
+                ));
+            }
             if !used.contains(&h) {
                 used.push(h);
             }
@@ -1826,6 +1839,56 @@ fn stale_processes() -> Vec<StaleFact> {
     Vec::new()
 }
 
+/// Executes a bounded read-access probe in the same identity that will run the harness.
+async fn probe_harness_launch(
+    install: &HarnessInstall,
+    entry: &str,
+    as_user: Option<&str>,
+) -> Result<(), String> {
+    let mut cmd = match as_user {
+        Some(user) => {
+            let mut cmd = tokio::process::Command::new("runuser");
+            cmd.args(["-u", user, "--"]).arg(&install.node);
+            cmd
+        }
+        None => tokio::process::Command::new(&install.node),
+    };
+    // Only execute the configured Node runtime and check read access to code/configuration files.
+    // Do not start the adapter, read a login, contact a provider, or inherit Node preload settings.
+    const PROBE: &str = "const fs=require('node:fs'); for(const p of process.argv.slice(1)){fs.accessSync(p,fs.constants.R_OK);if(!fs.statSync(p).isFile())throw new Error('not a file: '+p);} process.stdout.write(process.versions.node);";
+    cmd.no_window()
+        .kill_on_drop(true)
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH")
+        .args(["-e", PROBE])
+        .arg(install.adapter_dir.join(entry))
+        .stdin(std::process::Stdio::null());
+    if let Some(driver) = &install.driver {
+        cmd.arg(driver);
+    }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output())
+        .await
+        .map_err(|_| "runtime/read-access probe timed out after 5 seconds".to_owned())?
+        .map_err(|error| format!("cannot execute {}: {error}", install.node.display()))?;
+    if !output.status.success() {
+        let detail: String = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(400)
+            .collect();
+        return Err(format!(
+            "{} probe failed ({}): {detail}",
+            install.node.display(),
+            output.status
+        ));
+    }
+    let version = String::from_utf8_lossy(&output.stdout);
+    if !version.trim().starts_with("22.") {
+        return Err(format!("{} is not Node 22", install.node.display()));
+    }
+    Ok(())
+}
+
 /// Reads the machine.
 #[allow(clippy::too_many_arguments)]
 pub async fn gather(
@@ -1879,6 +1942,7 @@ pub async fn gather(
     };
     let mut harnesses = BTreeMap::new();
     let mut logins = BTreeMap::new();
+    let mut launch_refusals = BTreeMap::new();
     let mut os_users = BTreeMap::new();
     let mut toolchain = ToolchainFacts::default();
     let mut mxc_loopback_blocked = None;
@@ -1950,6 +2014,32 @@ pub async fn gather(
                     },
                 }
             });
+            if let Ok(Some(install)) = HarnessInstall::load(data, record_name(h))
+                && let Ok(driver) = crate::harness::driver(data, h)
+            {
+                let as_user = a.os_user.as_deref().filter(|_| linux);
+                if let Some(target) = as_user.filter(|target| *target != user && user != "root") {
+                    skips.push(Skip {
+                        check: "harness.launch",
+                        reason: format!("cannot test {actor} as OS user {target} while running as {user}; run sudo han doctor --data {}", data.display()),
+                    });
+                } else if as_user.is_none_or(valid_os_user)
+                    && let Err(why) = probe_harness_launch(
+                        &install,
+                        &driver.adapter.entry,
+                        as_user.filter(|target| *target != user),
+                    )
+                    .await
+                {
+                    launch_refusals.insert(
+                        actor.clone(),
+                        format!(
+                            "{actor} cannot launch its harness as {}: {why}",
+                            as_user.unwrap_or(&user)
+                        ),
+                    );
+                }
+            }
         }
         toolchain = toolchain_facts(data, file, repos);
     }
@@ -1980,6 +2070,7 @@ pub async fn gather(
         agents,
         harnesses,
         logins,
+        launch_refusals,
         os_users,
         presence: presence_facts(data),
         toolchain,
@@ -2067,6 +2158,7 @@ async fn gather_exec_only(
         agents: Err("not read by --exec-only".to_owned()),
         harnesses: BTreeMap::new(),
         logins: BTreeMap::new(),
+        launch_refusals: BTreeMap::new(),
         os_users: BTreeMap::new(),
         presence: None,
         toolchain: ToolchainFacts::default(),
@@ -2269,6 +2361,7 @@ mod tests {
             agents: Ok(AgentsFile::default()),
             harnesses: BTreeMap::new(),
             logins: BTreeMap::new(),
+            launch_refusals: BTreeMap::new(),
             os_users: BTreeMap::new(),
             presence: None,
             toolchain: ToolchainFacts::default(),
@@ -2289,6 +2382,40 @@ mod tests {
 
     fn agents(json: &str) -> Result<AgentsFile, String> {
         serde_json::from_str(json).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn existing_files_do_not_hide_a_refused_agent_launch() {
+        let mut f = healthy();
+        f.agents = agents(
+            r#"{"agents":{"@coder:han.example":{"harness":"codex","osUser":"han-agent1"}}}"#,
+        );
+        f.os_users.insert("han-agent1".into(), true);
+        f.harnesses.insert(
+            "codex".into(),
+            HarnessFact::Recorded {
+                node: "/private/node".into(),
+                node_ok: true,
+                adapter: "/shared/adapter".into(),
+                adapter_ok: true,
+            },
+        );
+        f.launch_refusals.insert(
+            "@coder:han.example".into(),
+            "Permission denied as han-agent1".into(),
+        );
+        let findings = analyze(&f);
+        let launch = findings
+            .iter()
+            .find(|item| item.id == "harness.launch.refused")
+            .expect("identity-aware refusal");
+        assert!(launch.fix.contains("--dir <shared-adapter-directory>"));
+        let r = report(&f, findings);
+        assert!(
+            r.checks
+                .iter()
+                .any(|check| check.id == "harness.launch" && check.status == Status::Problem)
+        );
     }
 
     fn ids(f: &Facts) -> Vec<String> {

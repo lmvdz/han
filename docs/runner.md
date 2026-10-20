@@ -404,6 +404,7 @@ sudo -u han han doctor --data /var/lib/han/node --repo /srv/repos/han
 
 - the node: whether it answers, the links of its spaces (a link whose setup does not fit its home, `Misconfigured`, with the reason), the outbox entries that hold a space back (R-07), and what else the node lists as stuck (a profile that has not arrived);
 - `agents.json` and the harness records: an unreadable file, an OS user name or sandbox or toolchain no launch could use, an OS user that does not exist on this machine, a harness that is not set up or whose files are gone;
+- `harness.launch`: whether the configured agent identity can execute Node 22 and read the adapter entry and driver snapshot. It runs a bounded local runtime probe, without starting an adapter or reading credentials. Run `sudo han doctor` to check a different OS user's permissions; a non-root run marks that check skipped. A refusal is reported as `harness.launch.refused`, even when root can see every file;
 - logins: whether an agent that uses Claude Code has one (as `han agent login --check` does, without reading it);
 - the device's presence setting: approvals that need a person but a backend with no check (or `pkcheck` missing);
 - Windows: whether MXC can give a container a working loopback port (`sandbox.mxc.loopback`, see 7.3);
