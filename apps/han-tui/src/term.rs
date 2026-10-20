@@ -30,12 +30,24 @@ pub struct Options {
 
 /// Runs the TUI until the user quits.
 pub async fn run(opts: Options) -> io::Result<()> {
+    run_inner(opts, false).await
+}
+
+/// Opens the setup form on a fresh device, or the last selected space when resuming.
+pub async fn run_setup(opts: Options) -> io::Result<()> {
+    run_inner(opts, true).await
+}
+
+async fn run_inner(opts: Options, setup: bool) -> io::Result<()> {
     let endpoint = opts
         .endpoint
         .unwrap_or_else(|| default_endpoint(&opts.data));
     let config_path = opts.data.join("tui.json");
     let config = Config::load(&config_path);
-    let app = App::new(config, opts.space, Instant::now());
+    let mut app = App::new(config, opts.space, Instant::now());
+    if setup && app.space.is_none() {
+        app.run_command("setup");
+    }
     let connector = Arc::new(RpcConnector { endpoint });
     let mut rt = Runtime::new(app, None, Some(connector), Some(config_path));
 

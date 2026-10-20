@@ -27,6 +27,8 @@ mod rusttool;
 mod seq;
 mod seqadmin;
 mod service;
+mod setup;
+mod shutdown;
 mod tui;
 mod update;
 
@@ -45,6 +47,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Set up a local home and your person node, then open the terminal setup flow. Safe to resume.
+    Setup(setup::SetupArgs),
     /// Run the daemon of this device: keys, endpoint, sync, views, and the node API on a local pipe.
     #[command(args_conflicts_with_subcommands = true)]
     Node(Box<node::NodeArgs>),
@@ -123,7 +127,9 @@ fn main() {
             std::process::exit(1);
         }
     };
-    rt.block_on(run(cli));
+    // The CLI dispatch future contains the largest role. Keep it off the Windows main-thread
+    // stack so composing setup, transport and terminal futures does not multiply that frame.
+    rt.block_on(Box::pin(run(cli)));
 }
 
 async fn run(cli: Cli) {
@@ -132,6 +138,7 @@ async fn run(cli: Cli) {
         .with_writer(std::io::stderr)
         .init();
     let result = match cli.command {
+        Cmd::Setup(a) => Box::pin(setup::run(a)).await,
         Cmd::Node(a) => node::run(*a).await,
         Cmd::Board(a) => han_faces::board::run(a).await,
         Cmd::Tui(a) => tui::run(a).await,

@@ -31,7 +31,44 @@ export PATH=$PWD/target/release:$PATH
 
 Signed releases are built with cargo-dist. `han update --check` asks the signed release manifest whether a newer version exists; it never installs anything.
 
-## 2. Make and run a home
+## 2. Start your local team
+
+```sh
+han setup --person me
+```
+
+This creates a home, registers your human profile through its local admin
+endpoint, starts your person node, and opens the TUI's space setup form. Your
+device key uses the OS keychain. The home and node run in one managed background
+process and keep running when you leave the TUI. Normal device-presence checks
+remain enabled.
+
+The default state folder is `han-team` in the current directory. Repeating the
+command with the same folder resumes the saved identity. Use `--data <folder>`
+to choose another location, `--no-tui` for scripted startup, or `--file-keys` on
+a headless machine without an OS keychain. File keys are private credentials;
+keep the state folder private. A missing or changed saved key is an error, not
+an instruction to silently create a replacement.
+
+```sh
+han setup status --data han-team
+han setup stop --data han-team       # retains state
+han setup --data han-team            # resumes and opens the TUI
+han tui --data han-team/person       # opens just the TUI
+```
+
+Startup failures point to `han-team/setup.log`; correct the cause and repeat
+the same setup command. The default home uses a unique reserved local server
+name and the n0 relay. Its ticket is in `han-team/home/home.ticket`. This flow
+sets up a new local home; joining someone else's home still uses registration
+and a home ticket as described below. Agent login, executor configuration and
+required checks remain separate steps (5–7).
+
+After the TUI opens, continue at step 4. For later CLI commands, set `HAN_DATA`
+to your `han-team/person` folder or supply `--data` explicitly. The following
+manual home and node commands are an alternative to `han setup`.
+
+### Manual home setup
 
 A home serves the spaces whose ids name its ServerName. Until your ServerName has DNS and a TLS front for `/.well-known/han`, a reserved local name such as `han.home.arpa` works, because everyone reaches the home through its **home ticket**.
 
