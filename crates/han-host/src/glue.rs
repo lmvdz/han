@@ -318,6 +318,9 @@ impl Egress {
         };
         let port = inside_port.unwrap_or_else(|| self.proxy.addr().port());
         let login = login_binding(&cfg.driver, cfg.sandbox.login_dir.as_deref())?;
+        let volatile_dirs = cfg
+            .driver
+            .volatile_login_paths(login.as_ref().map(|(_, dir)| dir.as_path()))?;
         cfg.driver
             .check_configuration(&workspace.dir, login.as_ref().map(|(_, dir)| dir.as_path()))?;
         let prepared = prepare_session_dir(
@@ -372,6 +375,7 @@ impl Egress {
             env,
             rw,
             ro,
+            volatile_dirs,
             temp,
             proxy: Some(ProxyTarget {
                 addr: self.proxy.addr(),

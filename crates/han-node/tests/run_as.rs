@@ -15,8 +15,10 @@ fn fake_systemctl(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("systemctl");
     // `is-active` answers from a marker file the fake `start` creates and `stop` removes.
     let script = format!(
-        "#!/bin/sh\necho \"$@\" >> {log}\nfor u; do :; done\ncase \"$1\" in\n  start) touch {mark}-$u ;;\n  stop) rm -f {mark}-$u ;;\n  is-active) if [ -f {mark}-$u ]; then echo active; else echo inactive; exit 3; fi ;;\nesac\n",
+        "#!/bin/sh\necho \"$@\" >> {log}\nfor u; do :; done\ncase \"$1\" in\n  start) touch {mark}-$u; if [ ! -f {no_admission} ]; then printf '%s' '{{\"state\":\"Admitted\"}}' > {admission}; fi ;;\n  stop) rm -f {mark}-$u ;;\n  is-active) if [ -f {mark}-$u ]; then echo active; else echo inactive; exit 3; fi ;;\nesac\n",
         log = dir.join("calls.log").display(),
+        no_admission = dir.join("no-admission").display(),
+        admission = unit_admission_file(&dir.join("state")).display(),
         mark = dir.join("active").display()
     );
     std::fs::write(&path, script).unwrap();
@@ -98,6 +100,40 @@ fn a_host_as_another_user_goes_through_its_unit() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn missing_admission_never_reports_a_successful_start() {
+    for active in [true, false] {
+        let dir =
+            std::env::temp_dir().join(format!("han-no-admission-{}-{active}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("no-admission"), "").unwrap();
+        let script = fake_systemctl(&dir);
+        if !active {
+            let text = std::fs::read_to_string(&script).unwrap().replace(
+                &format!("touch {}-$u", dir.join("active").display()),
+                "true",
+            );
+            std::fs::write(&script, text).unwrap();
+        }
+        let spawner = ProcessSpawner::new("/nonexistent/han")
+            .with_systemctl(script)
+            .with_admission_wait(std::time::Duration::ZERO);
+        let error = spawner
+            .start(spec(&dir.join("state"), "han-agent1"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(if active {
+                "not yet confirmed"
+            } else {
+                "not active"
+            }),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// The unit's host checks its sandbox where it runs and leaves the answer; a refusal is the start's error, shows
 /// in the problems, and a later start does not inherit it.
 #[test]
@@ -105,6 +141,7 @@ fn a_host_that_refuses_its_sandbox_is_the_starts_error_and_a_problem() {
     let dir = std::env::temp_dir().join(format!("han-run-as-refuse-{}", std::process::id()));
     let state = dir.join("state");
     std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("no-admission"), "").unwrap();
     let spawner = ProcessSpawner::new("/nonexistent/han")
         .with_systemctl(fake_systemctl(&dir))
         .with_admission_wait(std::time::Duration::from_secs(5));

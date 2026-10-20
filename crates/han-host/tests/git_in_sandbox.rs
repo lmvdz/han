@@ -168,6 +168,7 @@ async fn run(
         ro,
         temp: f.temp.clone(),
         proxy: None,
+        volatile_dirs: Vec::new(),
         allow_advisory: false,
         limits: Limits {
             wall_time: Some(Duration::from_secs(120)),

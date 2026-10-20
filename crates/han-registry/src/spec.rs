@@ -346,6 +346,8 @@ pub fn unit_admission_file(state_dir: &Path) -> PathBuf {
 /// Why a host refused to start its agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RefusalKind {
+    /// The driver or persistent login configuration cannot be admitted.
+    Configuration,
     /// The sandbox the agent is set to use cannot work where the host runs (or advisory mode is not allowed).
     SandboxUnavailable,
     /// MXC is there but gives a container no loopback port.
@@ -379,7 +381,15 @@ impl HostAdmission {
         std::fs::write(
             path,
             serde_json::to_vec(self).map_err(std::io::Error::other)?,
-        )
+        )?;
+        // Agent units use UMask=0077. The node belongs to the agent's group, but is a different user;
+        // without an explicit mode it cannot read the admission and every start appears unconfirmed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640))?;
+        }
+        Ok(())
     }
 }
 
@@ -397,6 +407,17 @@ mod tests {
             message: "no".into(),
         };
         refused.write(&file).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Reproduce an existing receipt created under the production unit's restrictive umask.
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+            refused.write(&file).unwrap();
+            assert_eq!(
+                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+        }
         assert_eq!(HostAdmission::read(&file), Some(refused));
         assert_eq!(HostAdmission::read(&dir.join("none.json")), None);
         let _ = std::fs::remove_dir_all(&dir);

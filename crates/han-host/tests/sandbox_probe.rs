@@ -160,6 +160,7 @@ async fn run_probe(
             addr: proxy.addr(),
             token: TOKEN.into(),
         }),
+        volatile_dirs: Vec::new(),
         allow_advisory: true,
         limits: Limits {
             wall_time: Some(Duration::from_secs(120)),
@@ -406,6 +407,7 @@ async fn nothing_connects_into_an_mxc_container() {
             addr: proxy.addr(),
             token: TOKEN.into(),
         }),
+        volatile_dirs: Vec::new(),
         allow_advisory: false,
         limits: Limits {
             wall_time: Some(Duration::from_secs(60)),
@@ -522,6 +524,7 @@ async fn advisory_mode_needs_permission_and_says_so() {
             addr: proxy.addr(),
             token: TOKEN.into(),
         }),
+        volatile_dirs: Vec::new(),
         allow_advisory: false,
         limits: Limits::default(),
         shim: shim_exe(),
@@ -598,6 +601,7 @@ async fn wall_time_and_kill_end_the_tree() {
         ro: vec![shim.program.clone()],
         temp: f.temp.clone(),
         proxy: None,
+        volatile_dirs: Vec::new(),
         allow_advisory: true,
         limits: Limits {
             wall_time: wall,
@@ -669,6 +673,7 @@ async fn stdio_and_the_mcp_stub_cross_the_sandbox() {
             addr: proxy.addr(),
             token: TOKEN.into(),
         }),
+        volatile_dirs: Vec::new(),
         allow_advisory: true,
         limits: Limits::default(),
         shim: shim.clone(),

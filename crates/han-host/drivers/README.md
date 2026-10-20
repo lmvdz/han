@@ -43,6 +43,10 @@ The contract includes:
 - `isolation.reject_config`: workspace and login-relative paths whose presence
   refuses admission, for adapters that cannot disable inherited settings themselves.
   Nothing is deleted. This is a startup check, not a runtime write filter.
+- `isolation.volatile_login_dirs`: direct child directory names hidden beneath empty,
+  writable session-only mounts. Existing contents remain untouched; generated files
+  disappear when the session ends. Currently requires Linux bubblewrap; other
+  backends refuse rather than expose inherited contents. Symlink targets are refused.
 - `strict_mode`, `auto_mode`, `gate_fidelity` and `tested_version`: declared ACP
   capabilities and the version to compare with the adapter's handshake.
 
@@ -62,6 +66,13 @@ nesting incompatible sandboxes. HAN still confines files and network access and
 holds all repository-write credentials in its executor. The example declares
 `prompt_only`; it does not claim that Codex asks HAN about every local tool call.
 Never use this driver with an advisory sandbox for a guarded-work claim.
+
+This profile requires Linux bubblewrap. Codex generates bundled skills during a
+session, so `skills` and `plugins` use session-only mounts rather than a presence
+check that would reject the next start. Credential refreshes remain persistent,
+including atomic replacement of `auth.json`. Existing skills/plugins are hidden,
+not deleted. Login settings and hooks still refuse admission before the host
+reports success; project configuration is checked after checkout, before launch.
 
 The example refuses a pre-existing workspace `.codex` directory and login-level
 configuration, hooks, skills and plugins. This prevents silently inheriting those

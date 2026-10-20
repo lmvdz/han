@@ -69,6 +69,7 @@ struct Layout<'a> {
     seccomp: bool,
     ro: &'a [PathBuf],
     rw: &'a [PathBuf],
+    volatile_dirs: &'a [PathBuf],
     temp: &'a Path,
     shim: &'a Path,
     sock_dir: &'a Path,
@@ -113,6 +114,9 @@ fn bwrap_args(l: &Layout<'_>, command: &[String]) -> Vec<String> {
     for p in l.rw.iter().map(PathBuf::as_path).chain([l.temp]) {
         let s = p.to_string_lossy().into_owned();
         args.extend(["--bind".into(), s.clone(), s]);
+    }
+    for p in l.volatile_dirs {
+        args.extend(["--tmpfs".into(), p.to_string_lossy().into_owned()]);
     }
     args.extend([
         "--bind".into(),
@@ -175,6 +179,7 @@ fn trial(bwrap: &Path, shim: &super::ShimCommand, disable_userns: bool) -> Resul
         seccomp: filter.is_some(),
         ro: &[],
         rw: &[],
+        volatile_dirs: &[],
         temp: &temp,
         shim: &shim.program,
         sock_dir: &sock_dir,
@@ -278,6 +283,7 @@ pub(super) async fn launch(spec: &SandboxSpec) -> Result<Sandboxed, SandboxError
         seccomp: filter.is_some(),
         ro: &spec.ro,
         rw: &spec.rw,
+        volatile_dirs: &spec.volatile_dirs,
         temp: &spec.temp,
         shim: &spec.shim.program,
         sock_dir: &sock_dir,
@@ -376,6 +382,7 @@ mod tests {
             seccomp: true,
             ro,
             rw,
+            volatile_dirs: &[],
             temp: Path::new("/t"),
             shim: Path::new("/bin/han"),
             sock_dir: Path::new("/s"),

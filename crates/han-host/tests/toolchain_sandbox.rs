@@ -153,6 +153,7 @@ async fn run(
             addr: proxy.addr(),
             token: TOKEN.into(),
         }),
+        volatile_dirs: Vec::new(),
         allow_advisory: false,
         limits: Limits {
             wall_time: Some(Duration::from_secs(280)),
