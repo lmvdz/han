@@ -9,7 +9,8 @@ use crate::limits::MAX_FRAME_BYTES;
 pub const MAX_FRAME_DEPTH: usize = json::MAX_DEPTH;
 
 /// The calls of section 3 and the ten of section 8.2.
-const CALLS: [&str; 14] = [
+const CALLS: [&str; 15] = [
+    "effectReady",
     "hello",
     "append",
     "read",

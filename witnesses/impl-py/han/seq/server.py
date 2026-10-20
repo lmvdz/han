@@ -15,6 +15,7 @@ PATH = "/han"                  # D7: the generic binding's WebSocket path
 CHALLENGE_SECONDS = 60         # D12: a challenge is single use and good for this long
 # D2: a request frame is exactly {id, call, args}; each call's `args` is closed
 CALL_ARGS = {"hello": {"who", "keyId", "proof", "version", "knownHeads"}, "cancel": {"target"}, "append": {"entry", "content"},
+             "effectReady": {"space", "proposal", "instance"},
              "signal": {"space", "body", "from"}, "blobPut": {"ref", "offset", "data"}, "blobGet": {"ref", "space", "offset", "length"},
              "stream": {"item"}, "read": {"space", "after", "follow", "limit", "knownHeads"}, "state": {"space", "at", "cursor", "effect", "agent"},
              "subscribe": {"space", "after"}, "watch": {"space", "session"}, "host": {"space", "records", "head"}}
@@ -176,6 +177,8 @@ class SeqServer:
         if call == "state":
             if fed: await fed.prepare_read(args.get("space"))
             return await send({"id": rid, "ok": S.state(who, args.get("space"), {k: args[k] for k in ("at", "cursor", "effect", "agent") if k in args})})
+        if call == "effectReady":
+            return await send({"id": rid, "ok": S.effect_ready(who, args.get("space"), args.get("proposal"), args.get("instance"))})
         if call == "stream":
             S.stream(who, args.get("item"))
             return await send({"id": rid, "ok": None})

@@ -152,13 +152,14 @@ export interface ChangeFile {
 export interface ApprovalEvidence { kind: string /* [a-z0-9][a-z0-9./_-]{0,63} */; over: Hex /* the delta digest */ }
 export interface ApprovalRule {
   action: string;                                       // "*" = any action
+  repo?: string;                                        // exact repository, 1–128 printable ASCII bytes; matches only gate.repo
   approvers: ("owner" | "member" | "guest" | ActorId | "@path-owner")[];   // "@path-owner": an author in the effect's gate.owners
   minTier?: 0 | 1 | 2 | 3; maxTier?: 0 | 1 | 2 | 3;     // the rule applies only to an effect whose gate.tier is within them; never to an effect with no gate
   humans?: boolean;                                     // only human approvals count (always so at tier 2 and 3)
   evidence?: string;                                    // a non-human approval counts only with evidence of this kind over the effect's gate.deltaDigest
   needs?: 1 | 2 | 3;                                    // distinct approvals a claim consumes (2 at least at tier 3)
   revert?: true;                                        // A2: the rule covers only a revert (gate.revertOf); its evidence is over gate.revertedDigest; the lane approving its own revert is exempt from separateApprover
-  proposer?: true;                                      // P-17 (round 33): the proposal itself satisfies E3, no approval is asked; only on action "vcs.try" (check-only), with no member but action, approvers and proposer; guards (P-15) and budgets (P-06) still apply
+  proposer?: true;                                      // P-17: no approval under this rule. Either vcs.try with only action/approvers/proposer, or vcs.land with required repo and maxTier 0 or 1, optional minTier, and no other members. Guards, budgets and executor checks still apply.
 }
 export interface GatesDoc {
   small: number; large: number;                         // lines: tier 0 only up to `small`; more than `large` is at least tier 2
@@ -222,7 +223,7 @@ export interface SpaceState {
     [proposal: EntryId]: {
       proposer: ActorId; proposerKey: KeyId; executor: ActorId; action: string; planDigest: Hex; seq: Seq;
       cost?: Budget; repeatable: boolean; task?: EntryId; phase: EffectPhase; cancelRequested: boolean;
-      gate?: { tier: 0 | 1 | 2 | 3; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[]; revertOf?: EntryId; revertedDigest?: Hex };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates; deltaDigest, changeDigest (sha256(JCS(change))) absent without a change; owners at most MAX_PATH_OWNERS
+      gate?: { tier: 0 | 1 | 2 | 3; repo?: string; deltaDigest?: Hex; changeDigest?: Hex; owners?: ActorId[]; revertOf?: EntryId; revertedDigest?: Hex };   // P-17: derived from the proposal's change and the policy in force, fixed at the proposal; for a vcs.land in a policy with gates; repo, deltaDigest, changeDigest (sha256(JCS(change))) absent without a change; owners at most MAX_PATH_OWNERS
       guardedFor: ActorId[];                        // P-15: the named task's guardedFor, then guards(proposer), then guards(executor) at the proposal (Z1); fixed then, never shrinks; with the proposer and executor at most MAX_GUARDED_FOR agents
       expiresAt?: Time;                             // E5: no claim at or after this time
       approvals: { id: EntryId; author: ActorId; keyId: KeyId; actorKind: ActorKind /* the author's, from the profile pinned for the approval; it never changes (P-08) */; expiresAt?: Time; consumedBy?: EntryId; evidence?: ApprovalEvidence }[];   // superseded and expired approvals are removed whenever an entry touches the effect; unconsumed ones are dropped when their author loses its role or becomes guarded, and by an approval's fold when they don't count (P-08); a consumed one is removed once its claim settles; at most MAX_APPROVALS
@@ -302,6 +303,8 @@ export type ReadItem =
   | { type: "signal"; from: ActorId; body: Json };       // T-05, G-09: only on `subscribe` (never on `read`); ephemeral, unordered with records, never authority
 
 export interface Calls {
+  /** Read-only current Policy decision for the authenticated actor's next claim. No reservation or receipt. */
+  effectReady: { args: { space: SpaceId; proposal: EntryId; instance: KeyId }; ok: null };
   hello: { args: { who: ActorId; keyId: KeyId; proof: Sig; version: 1; knownHeads?: Receipt[] };
            ok: { limits: Limits; durability: Durability; time: Time; knownHeads: Receipt[] } };
   append: { args: { entry: Entry; content?: Json }; ok: Receipt };
@@ -313,7 +316,7 @@ export interface Calls {
                                         | { effect: EntryId /* that one effect, EffectStateView */ }
                                         | { agent: ActorId /* that actor's guard facts, AgentStateView; may combine with `at` */; at?: Seq } );   // cursor, effect and agent exclude each other, `at` combines with `agent` only: any other two present is `invalid`, whatever the values
            ok: StateReply };
-}   // the four sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
+}   // the five sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
 export type ReplyFrame =
@@ -364,6 +367,7 @@ export type AnyRequestFrame = RequestFrame | BindingRequestFrame;
 
 // ───────────────────────── modules ─────────────────────────
 export interface Log {                                   // M1
+  effectReady(space: SpaceId, proposal: EntryId, instance: KeyId, as: ActorId): Promise<null>;
   append(entry: Entry, content: Json | undefined): Promise<Receipt>;          // throws WireError
   read(space: SpaceId, after: Seq, opts: { follow?: boolean; limit?: number; knownHeads?: Receipt[] }, as: ActorId): AsyncIterable<ReadItem>;
   state(space: SpaceId, sel: { at?: Seq } | { cursor: string } | { effect: EntryId } | { agent: ActorId; at?: Seq }, as: ActorId): Promise<StateReply>;

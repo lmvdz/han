@@ -2055,6 +2055,24 @@ impl<T: Transport> Node<T> {
                 )
                 .await
             }
+            Command::EffectReady { space, proposal } => {
+                let (_, client) = self.client_of(&space).await?;
+                let response = client
+                    .call(
+                        "effectReady",
+                        args([
+                            ("space", s(&space)),
+                            ("proposal", s(&proposal)),
+                            ("instance", s(&inner.cfg.key_id)),
+                        ]),
+                    )
+                    .await
+                    .map_err(|e| map_net_error(&e))?;
+                if response != Value::Null {
+                    return Err(NodeError::unavailable("unexpected readiness response"));
+                }
+                Ok(CallResult::Done)
+            }
             Command::EffectClaim {
                 space,
                 proposal,

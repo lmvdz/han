@@ -153,6 +153,9 @@ pub struct Evidence {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Gate {
+    /// Repository bound by the proposal's change summary; absent without a summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// The risk tier, 0 to 3.
     pub tier: u8,
     /// The change's delta digest; absent when the proposal carried no change.
@@ -373,6 +376,7 @@ pub(super) fn gate_of(
     }
     owners.truncate(MAX_PATH_OWNERS);
     Some(Gate {
+        repo: change.map(|c| c.repo.clone()),
         tier,
         delta_digest: change.map(|c| c.delta_digest.clone()),
         change_digest: change.map(Change::digest),

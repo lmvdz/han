@@ -276,6 +276,7 @@ pub(crate) struct EffectInfo {
     pub change_digest: Option<String>,
     /// The body's change summary: the delta digest, and the `vcs.land` it reverts (A2).
     pub change_delta: Option<String>,
+    pub change_repo: Option<String>,
     pub change_revert_of: Option<String>,
     /// The risk tier of a `vcs.land`, derived at the proposal from the policy then in force, as Policy derives
     /// it (P-17): the change's tier, at least that of the change it reverts. `None` without `gates`.
@@ -346,8 +347,6 @@ pub(crate) struct SpaceModel {
     pub me: String,
     /// The policy's semantic gates (P-17), from which a landing's tier is derived.
     pub gates: Option<han_core::policy::GatesDoc>,
-    /// The approval rules of the policy: action (or `*`) and approvers.
-    pub rules: Vec<(String, Vec<String>)>,
     /// The approval rules in full, from which Policy reports whether a proposer suffices (P-17).
     pub approval_rules: Vec<han_core::policy::ApprovalRule>,
     /// Who may steer sessions, by the policy.
@@ -431,7 +430,6 @@ impl SpaceModel {
             fresh,
             me: me.to_owned(),
             gates: None,
-            rules: Vec::new(),
             approval_rules: Vec::new(),
             steer: None,
             watch: None,
@@ -459,11 +457,6 @@ impl SpaceModel {
     fn set_policy(&mut self, policy: PolicyDoc) {
         self.unit = policy.budget.as_ref().map(|b| b.unit.clone());
         self.budget = policy.budget.map(|b| (b.unit, b.amount));
-        self.rules = policy
-            .approvals
-            .iter()
-            .map(|r| (r.action.clone(), r.approvers.clone()))
-            .collect();
         self.approval_rules = policy.approvals;
         self.gates = policy.gates;
         self.steer = Some(policy.sessions.steer);
@@ -684,16 +677,29 @@ impl SpaceModel {
         out
     }
 
-    /// Whether the rule that applies to an effect of `action` lets the proposal itself satisfy E3 (P-17, round 33):
+    /// Whether the rule that applies to an effect lets the proposal itself satisfy E3 (P-17, round 33):
     /// what Policy reports, so that an executor asks for an approval where Policy does and not otherwise. It is
     /// judged under the policy in force now, as a claim is.
-    pub fn proposer_suffices(&self, action: &str) -> bool {
-        han_core::policy::proposer_suffices(&self.approval_rules, action)
+    fn rule_for(&self, effect: &EffectInfo) -> Option<&han_core::policy::ApprovalRule> {
+        let gate = effect.gate_tier.map(|tier| han_core::policy::Gate {
+            tier,
+            repo: effect.change_repo.clone(),
+            delta_digest: effect.change_delta.clone(),
+            change_digest: effect.change_digest.clone(),
+            owners: Vec::new(),
+            revert_of: effect.change_revert_of.clone(),
+            reverted_digest: None,
+        });
+        han_core::policy::matching_approval_rule(
+            &self.approval_rules,
+            &effect.action,
+            gate.as_ref(),
+        )
     }
 
-    /// The approval rule that applies to `action`, if the policy has one (the first match wins, P-08).
-    fn rule_for(&self, action: &str) -> Option<&(String, Vec<String>)> {
-        self.rules.iter().find(|(a, _)| a == "*" || a == action)
+    pub fn proposer_suffices(&self, effect: &EffectInfo) -> bool {
+        self.rule_for(effect)
+            .is_some_and(|r| r.proposer == Some(true))
     }
 
     // ───────────────────────── folding ─────────────────────────
@@ -906,6 +912,7 @@ impl SpaceModel {
                         plan,
                         change_digest: p.change.as_ref().map(han_core::policy::Change::digest),
                         change_delta: p.change.as_ref().map(|c| c.delta_digest.clone()),
+                        change_repo: p.change.as_ref().map(|c| c.repo.clone()),
                         change_revert_of: p.change.as_ref().and_then(|c| c.revert_of.clone()),
                         gate_tier,
                         plan_ok,
@@ -1884,16 +1891,17 @@ impl SpaceModel {
             .filter(|e| e.proposer != actor && !e.approvals.iter().any(|a| a == actor))
             // under a proposer rule (P-17) only the guards are asked
             .filter(|e| {
-                !self.proposer_suffices(&e.action)
+                !self.proposer_suffices(e)
                     || self
                         .effect_guards(&e.proposer, &e.executor)
                         .iter()
                         .any(|(_, g)| g.as_ref().is_none_or(|g| !e.approvals.contains(g)))
             })
             .map(|e| {
-                let rule = self.rule_for(&e.action);
+                let rule = self.rule_for(e);
                 let approvers = match rule {
-                    Some((_, who)) => who.clone(),
+                    Some(r) if r.proposer == Some(true) => Vec::new(),
+                    Some(r) => r.approvers.clone(),
                     None => self
                         .roles
                         .iter()
@@ -1902,14 +1910,17 @@ impl SpaceModel {
                         .collect(),
                 };
                 let why_gated = match rule {
-                    Some((a, who)) if a == "*" => format!(
+                    Some(r) if r.proposer == Some(true) => {
+                        "the repository grant covers the rule; waiting for a guard approval".into()
+                    }
+                    Some(r) if r.action == "*" => format!(
                         "the space requires approval of every action by {}",
-                        who.join(", ")
+                        r.approvers.join(", ")
                     ),
-                    Some((_, who)) => format!(
+                    Some(r) => format!(
                         "the space requires approval of {} by {}",
                         e.action,
-                        who.join(", ")
+                        r.approvers.join(", ")
                     ),
                     None => format!(
                         "no approval rule names {}: the default is the operator's approval",
@@ -1972,7 +1983,7 @@ impl SpaceModel {
                         approvers,
                         why_gated,
                         needed: Needed {
-                            rule: u32::from(!self.proposer_suffices(&e.action)),
+                            rule: u32::from(!self.proposer_suffices(e)),
                             guards,
                         },
                         agent_text,
@@ -2328,7 +2339,7 @@ impl SpaceModel {
                         plan: e.plan.clone(),
                         change_digest: e.change_digest.clone(),
                         gate_tier: e.gate_tier,
-                        proposer_suffices: self.proposer_suffices(&e.action),
+                        proposer_suffices: self.proposer_suffices(e),
                         delta_digest: e.change_delta.clone(),
                         task: e.task.clone(),
                         phase: phase.into(),

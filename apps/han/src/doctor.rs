@@ -1934,6 +1934,7 @@ fn account_uid(user: &str) -> Option<u32> {
         return None;
     }
     let output = std::process::Command::new("/usr/bin/id")
+        .no_window()
         .args(["-u", "--", user])
         .env_clear()
         .output()

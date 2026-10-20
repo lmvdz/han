@@ -153,7 +153,7 @@ impl Home {
         Ok(out)
     }
 
-    fn held<'a>(&self, g: &'a Inner, space: &str) -> Result<&'a Space> {
+    pub(crate) fn held<'a>(&self, g: &'a Inner, space: &str) -> Result<&'a Space> {
         self.route(g, space)?;
         g.spaces
             .get(space)

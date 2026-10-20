@@ -20,7 +20,7 @@ import wire as W
 
 READ_ROLES = P.READ_ROLES
 MAX_FRAME_BYTES = W.MAX_FRAME_BYTES
-READ_CALLS = ("read", "subscribe", "state", "blobGet")       # the calls a stranger may make on a public or profile space (X9)
+READ_CALLS = ("read", "subscribe", "state", "blobGet", "effectReady")       # read-only calls; effectReady also checks executor authority
 
 # ───────────────────────── N-02: admit (X9) ─────────────────────────
 def admit(conn: dict, spaces: dict) -> dict:

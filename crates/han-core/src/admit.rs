@@ -109,7 +109,7 @@ pub enum AdmitVerdict {
 }
 
 /// The calls a stranger may make on a public or profile space.
-const READ_CALLS: [&str; 4] = ["read", "subscribe", "state", "blobGet"];
+const READ_CALLS: [&str; 5] = ["read", "subscribe", "state", "blobGet", "effectReady"];
 
 /// N-02: judges one call. Any node may say `hello`; nothing else is admitted before it (`join`
 /// too). A node that vouches for its hello's actor is admitted as `Server` when the actor is a

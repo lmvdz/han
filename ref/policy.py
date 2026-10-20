@@ -127,8 +127,8 @@ POLICY_FIELDS = {"visibility", "join", "membersMayInvite", "allowAgents", "appro
 
 # ── P-17 semantic gates (round 33): the grammar of paths, globs and the summary of a change ──
 PATH_OWNER = "@path-owner"                       # an approvers entry: an author of the effect's `gate.owners` (P-17)
-RULE_FIELDS = {"action", "approvers", "minTier", "maxTier", "humans", "evidence", "needs", "revert", "proposer"}
-CHECK_ONLY = "vcs.try"                                        # P-17 (round 33): the one action a `proposer` rule may name
+RULE_FIELDS = {"action", "approvers", "repo", "minTier", "maxTier", "humans", "evidence", "needs", "revert", "proposer"}
+CHECK_ONLY = "vcs.try"                                        # P-17: the check-only proposer rule
 EVIDENCE_KIND = _rx(r"^[a-z0-9][a-z0-9./_-]{0,63}$")
 REPO_NAME = _rx(r"^[!-~]{1,128}$")
 GLOB_TEXT = _rx(r"^[A-Za-z0-9._/*?@+=,~:-]{1,256}$")
@@ -224,7 +224,12 @@ def _rule(a) -> bool:
     if "humans" in a and not isinstance(a["humans"], bool): return False
     if "evidence" in a and not (isinstance(a["evidence"], str) and EVIDENCE_KIND.fullmatch(a["evidence"])): return False
     if "revert" in a and a["revert"] is not True: return False
-    if "proposer" in a and not (a["proposer"] is True and a["action"] == CHECK_ONLY and set(a) <= {"action", "approvers", "proposer"}): return False   # P-17: only on a check-only action, and nothing else on the rule
+    if "repo" in a and not (isinstance(a["repo"], str) and REPO_NAME.fullmatch(a["repo"])): return False
+    if "proposer" in a:
+        check = a["action"] == CHECK_ONLY and set(a) <= {"action", "approvers", "proposer"}
+        land = (a["action"] == "vcs.land" and "repo" in a and "maxTier" in a and a["maxTier"] <= 1
+                and set(a) <= {"action", "approvers", "proposer", "repo", "minTier", "maxTier"})
+        if a["proposer"] is not True or not (check or land): return False
     return "needs" not in a or (_int(a["needs"]) and 1 <= a["needs"] <= 3)
 
 def _gates(g) -> bool:
@@ -367,14 +372,15 @@ def rule_for(state, eff):
     g = eff.get("gate")
     for r in state["policy"]["approvals"]:
         if r["action"] != eff["action"] and r["action"] != "*": continue
+        if "repo" in r and (g is None or r["repo"] != g.get("repo")): continue
         if r.get("revert") and (g is None or "revertOf" not in g): continue          # A2: the revert predicate covers only a revert
         if ("minTier" in r or "maxTier" in r) and (g is None or g["tier"] < r.get("minTier", 0) or g["tier"] > r.get("maxTier", 3)): continue
         return r
     return DEFAULT_GATED_RULE if g is not None and g["tier"] >= 1 else None
 
 def proposer_suffices(rule) -> bool:
-    """P-17 (round 33): whether the proposal itself satisfies E3 under `rule`: a `proposer: true` rule, which validation allows only on the
-    check-only `vcs.try`. No approval is asked, made or consumed; the guards of P-15 are asked as ever."""
+    """P-17: a valid check-only or repository-scoped ordinary-landing grant satisfies the rule approval.
+    No rule approval is asked, made or consumed; the guards of P-15 are asked as ever."""
     return bool(rule) and rule.get("proposer") is True
 
 def asks_approval(state, eff) -> bool:
@@ -430,6 +436,7 @@ def gate_of(policy, body, effects, ctx, author):
         if lines > gates["large"]: tier = max(tier, 2)
         elif tier == 0 and lines > gates["small"]: tier = 1
     if ch is not None:
+        out["repo"] = ch["repo"]
         out["deltaDigest"] = ch["deltaDigest"]
         out["changeDigest"] = hashlib.sha256(jcs(ch)).hexdigest()
         for f in ch["files"]:
