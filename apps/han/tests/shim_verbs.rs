@@ -113,6 +113,7 @@ async fn han_as_the_shim_starts_an_agent_inside_the_os_sandbox() {
         ro,
         temp,
         proxy: None,
+        volatile_dirs: Vec::new(),
         allow_advisory: false,
         limits: Limits {
             wall_time: Some(Duration::from_secs(120)),

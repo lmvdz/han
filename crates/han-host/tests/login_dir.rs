@@ -82,6 +82,7 @@ async fn probe_with_login(backend: Preference) {
         ro,
         temp,
         proxy: None,
+        volatile_dirs: Vec::new(),
         allow_advisory: false,
         limits: Limits {
             wall_time: Some(Duration::from_secs(120)),
@@ -156,5 +157,42 @@ async fn mxc_sees_the_agents_login_dir_and_nothing_else() {
 async fn bwrap_sees_the_agents_login_dir_and_nothing_else() {
     if available(SandboxBackend::Bwrap) {
         probe_with_login(Preference::Bwrap).await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn volatile_login_state_is_empty_on_each_start_but_credentials_refresh() {
+    if !available(SandboxBackend::Bwrap) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let skills = login.join("skills");
+    std::fs::create_dir_all(&skills).unwrap();
+    std::fs::write(skills.join("inherited"), "operator skill").unwrap();
+    std::fs::write(login.join("auth.json"), "fake").unwrap();
+    let spec = SandboxSpec {
+        session: "volatile-login".into(), backend: Preference::Bwrap,
+        program: "/bin/sh".into(),
+        args: vec!["-ec".into(), "test ! -e \"$LOGIN/skills/inherited\"; test ! -e \"$LOGIN/skills/generated\"; printf builtin > \"$LOGIN/skills/generated\"; printf refreshed > \"$LOGIN/auth.new\"; mv \"$LOGIN/auth.new\" \"$LOGIN/auth.json\"".into()],
+        cwd: login.clone(), env: vec![("LOGIN".into(), s(&login))],
+        rw: vec![login.clone()], ro: vec![], volatile_dirs: vec![skills.clone()],
+        temp: root.path().join("temp"), proxy: None, allow_advisory: false,
+        limits: Limits { wall_time: Some(Duration::from_secs(20)), ..Limits::default() },
+        shim: production_shim::shim(), inside_port: None,
+    };
+    for _ in 0..2 {
+        let mut child = sandbox::launch(spec.clone()).await.unwrap();
+        assert_eq!(child.wait().await, Some(0));
+        assert_eq!(
+            std::fs::read_to_string(login.join("auth.json")).unwrap(),
+            "refreshed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(skills.join("inherited")).unwrap(),
+            "operator skill"
+        );
+        assert!(!skills.join("generated").exists());
     }
 }

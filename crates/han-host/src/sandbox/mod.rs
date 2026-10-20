@@ -145,6 +145,9 @@ pub struct SandboxSpec {
     pub rw: Vec<PathBuf>,
     /// Paths it may read (runtimes, the harness, the shim is added).
     pub ro: Vec<PathBuf>,
+    /// Empty writable directories that disappear with the sandbox, mounted after ordinary binds.
+    /// Currently enforced by bubblewrap only; other backends refuse this requirement.
+    pub volatile_dirs: Vec<PathBuf>,
     /// The per-session temp directory (created if missing; writable).
     pub temp: PathBuf,
     /// The session's proxy; `None` gives no egress at all.
@@ -403,6 +406,11 @@ pub async fn launch(spec: SandboxSpec) -> Result<Sandboxed, SandboxError> {
         .await
         .map_err(|e| SandboxError::Spawn(e.to_string()))?;
     let backend = admit(spec.backend, spec.allow_advisory, &available)?;
+    if !spec.volatile_dirs.is_empty() && backend != SandboxBackend::Bwrap {
+        return Err(SandboxError::Unavailable(
+            "this driver requires session-only directory mounts (bubblewrap)".into(),
+        ));
+    }
     let mut s = match backend {
         #[cfg(windows)]
         SandboxBackend::Mxc => mxc::launch(&spec).await?,

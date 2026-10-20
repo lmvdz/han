@@ -30,12 +30,14 @@
     },
     "reject_config": {
       "project": [".codex"],
-      "login": ["config.toml", "hooks.json", "skills", "plugins"]
+      "login": ["config.toml", "hooks.json"]
     },
+    "volatile_login_dirs": ["skills", "plugins"],
     "gaps": [
       "Codex runs without its inner sandbox because HAN supplies the enforced outer OS sandbox and egress proxy; this driver does not claim every-call permission gating.",
       "The agent can read and refresh its own Codex subscription login; no other harness login or user-home configuration is bound.",
-      "Admission refuses inherited project .codex and login configuration; this is a startup check, not a filter on configuration the agent creates during its own session."
+      "Admission refuses inherited project .codex and login settings/hooks; this is a startup check, not a filter on configuration the agent creates during its own session.",
+      "Skills and plugins use empty session-only mounts; existing login-directory contents are hidden and preserved. This driver requires Linux bubblewrap."
     ]
   },
   "auto_mode": "agent-full-access"

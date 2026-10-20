@@ -57,21 +57,53 @@ fn repo(spec: Option<&str>, base: &str, default_branch: &str) -> RepoConfig {
 /// the only one the node could not check for it (the node's unit forbids namespaces), so it says what it found
 /// in its admission file, which the node reads for its start, its status and its problems. Whatever the answer,
 /// no agent has started yet; on a refusal none does.
-fn admit_sandbox(args: &HostArgs, spec: &HostSpec) -> Result<(), Box<dyn std::error::Error>> {
+fn admit_sandbox(
+    args: &HostArgs,
+    spec: &HostSpec,
+) -> Result<DriverConfig, Box<dyn std::error::Error>> {
     // The unit reads `<state>/spawn/host.json`; the node looks for the answer beside it.
     let unit_file = Path::new(&args.spec);
     let in_unit = unit_file.file_name() == unit_spec_file(Path::new("")).file_name();
     let shim = ShimCommand::of_current_exe()?;
-    let found = sandbox::gate(&spec.sandbox.backend, spec.sandbox.allow_advisory, &shim);
-    if in_unit {
-        let admission = match &found {
-            Ok(()) => HostAdmission::Admitted,
-            Err(e) => HostAdmission::Refused {
-                kind: match e {
+    let found = sandbox::gate(&spec.sandbox.backend, spec.sandbox.allow_advisory, &shim)
+        .map_err(|e| {
+            (
+                match e {
                     SandboxError::LoopbackBlocked(_) => RefusalKind::LoopbackBlocked,
                     _ => RefusalKind::SandboxUnavailable,
                 },
-                message: e.to_string(),
+                e.to_string(),
+            )
+        })
+        .and_then(|()| {
+            let check = || -> Result<DriverConfig, Box<dyn std::error::Error>> {
+                let driver = driver(&spec.harness)?;
+                let login = han_host::driver::login_binding(&driver, Some(&spec.dirs.login))?;
+                driver.check_login_configuration(login.as_ref().map(|(_, dir)| dir.as_path()))?;
+                if !driver.isolation.volatile_login_dirs.is_empty() {
+                    let backend = sandbox::admit(
+                        sandbox::Preference::parse(&spec.sandbox.backend)?,
+                        spec.sandbox.allow_advisory,
+                        &sandbox::probe(&shim),
+                    )?;
+                    if backend != han_node::api::SandboxBackend::Bwrap {
+                        return Err(
+                            "this driver requires session-only directory mounts (bubblewrap)"
+                                .into(),
+                        );
+                    }
+                }
+                toolchain::validate(&spec.toolchains.enabled)?;
+                Ok(driver)
+            };
+            check().map_err(|e| (RefusalKind::Configuration, e.to_string()))
+        });
+    if in_unit {
+        let admission = match &found {
+            Ok(_) => HostAdmission::Admitted,
+            Err((kind, message)) => HostAdmission::Refused {
+                kind: *kind,
+                message: message.clone(),
             },
         };
         if let Err(e) = admission.write(
@@ -85,13 +117,12 @@ fn admit_sandbox(args: &HostArgs, spec: &HostSpec) -> Result<(), Box<dyn std::er
             eprintln!("han host: cannot leave its admission: {e}");
         }
     }
-    Ok(found?)
+    found.map_err(|(_, message)| message.into())
 }
 
 pub async fn run(args: HostArgs) -> Result<(), Box<dyn std::error::Error>> {
     let spec = HostSpec::read(&args.spec)?;
-    admit_sandbox(&args, &spec)?;
-    let driver = driver(&spec.harness)?;
+    let driver = admit_sandbox(&args, &spec)?;
     let mut tools = spec.toolchains.clone();
     toolchain::validate(&tools.enabled)?;
     // Per agent: a cache in its own state directory, shared by its sessions.
@@ -227,4 +258,49 @@ async fn stop_signal() {
         }
     }
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_configuration_refusal_is_written_before_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let login = root.path().join("login");
+        std::fs::create_dir_all(login.join("codex")).unwrap();
+        std::fs::write(login.join("codex/auth.json"), "fake login").unwrap();
+        std::fs::write(login.join("codex/config.toml"), "[mcp_servers.foreign]").unwrap();
+        let driver_path = root.path().join("driver.json");
+        std::fs::write(
+            &driver_path,
+            include_str!("../../../crates/han-host/drivers/codex.json"),
+        )
+        .unwrap();
+        let spec: HostSpec = serde_json::from_value(serde_json::json!({
+            "space": "s:example.test", "agent": "@agent:example.test",
+            "harness": {"name": "codex", "driver": driver_path},
+            "home": {"server": "example.test"},
+            "sandbox": {"backend": "none", "allowAdvisory": true},
+            "dirs": {"state": root.path(), "keys": root.path(), "login": login}
+        }))
+        .unwrap();
+        let file = unit_spec_file(root.path());
+        spec.write(&file).unwrap();
+        let args = HostArgs {
+            spec: file.to_string_lossy().into_owned(),
+        };
+        let error = admit_sandbox(&args, &spec).unwrap_err().to_string();
+        assert!(error.contains("config.toml"), "{error}");
+        assert!(
+            matches!(HostAdmission::read(&unit_admission_file(root.path())),
+            Some(HostAdmission::Refused {kind: RefusalKind::Configuration, message}) if message.contains("config.toml"))
+        );
+        std::fs::remove_file(login.join("codex/config.toml")).unwrap();
+        let error = admit_sandbox(&args, &spec).unwrap_err().to_string();
+        assert!(
+            error.contains("bubblewrap"),
+            "advisory must not ignore volatile directories: {error}"
+        );
+    }
 }

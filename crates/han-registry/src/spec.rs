@@ -346,6 +346,8 @@ pub fn unit_admission_file(state_dir: &Path) -> PathBuf {
 /// Why a host refused to start its agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RefusalKind {
+    /// The driver or persistent login configuration cannot be admitted.
+    Configuration,
     /// The sandbox the agent is set to use cannot work where the host runs (or advisory mode is not allowed).
     SandboxUnavailable,
     /// MXC is there but gives a container no loopback port.

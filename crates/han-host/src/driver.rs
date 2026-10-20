@@ -113,6 +113,10 @@ pub struct Isolation {
     /// the workspace or harness login directory. This is an admission check, not a runtime write filter.
     #[serde(default)]
     pub reject_config: ConfigAdmission,
+    /// Login-relative directories replaced by empty, writable session-only mounts. Requires a backend
+    /// that enforces volatile directories; inherited contents are never loaded or modified.
+    #[serde(default)]
+    pub volatile_login_dirs: Vec<String>,
     /// Extra arguments for the adapter.
     #[serde(default)]
     pub extra_args: Vec<String>,
@@ -246,6 +250,31 @@ pub struct DriverConfig {
 }
 
 impl DriverConfig {
+    /// Validates session-only directory mounts within the selected harness login directory. Only direct
+    /// children are accepted; symlinks and non-directories fail closed rather than redirecting a mount.
+    pub fn volatile_login_paths(&self, login: Option<&Path>) -> Result<Vec<PathBuf>, String> {
+        let mut paths = Vec::new();
+        for rel in &self.isolation.volatile_login_dirs {
+            if rel.is_empty() || !portable_relative(rel) || rel.contains('/') {
+                return Err("volatile login directories must be direct child names".into());
+            }
+            let root = login.ok_or("volatile login directories need a login directory")?;
+            let path = root.join(rel);
+            match std::fs::symlink_metadata(&path) {
+                Ok(m) if m.is_dir() && !m.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(format!(
+                        "volatile login path is not a plain directory: {}",
+                        path.display()
+                    ));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("cannot inspect volatile login directory: {e}")),
+            }
+            paths.push(path);
+        }
+        Ok(paths)
+    }
     /// Refuses inherited adapter configuration before any harness process starts. Nothing is removed or
     /// rewritten: an operator can inspect the named path and choose a suitable driver.
     pub fn check_configuration(
@@ -253,10 +282,26 @@ impl DriverConfig {
         workspace: &Path,
         login: Option<&Path>,
     ) -> Result<(), String> {
-        for (root, paths) in [
-            (Some(workspace), &self.isolation.reject_config.project),
-            (login, &self.isolation.reject_config.login),
-        ] {
+        self.check_configuration_roots(Some(workspace), login)
+    }
+
+    /// Checks persistent login state before the host reports admission. Project configuration is checked
+    /// separately after the workspace is materialized, before the harness launches.
+    pub fn check_login_configuration(&self, login: Option<&Path>) -> Result<(), String> {
+        self.volatile_login_paths(login)?;
+        self.check_configuration_roots(None, login)
+    }
+
+    fn check_configuration_roots(
+        &self,
+        workspace: Option<&Path>,
+        login: Option<&Path>,
+    ) -> Result<(), String> {
+        let project = workspace.map(|root| (Some(root), &self.isolation.reject_config.project));
+        for (root, paths) in project
+            .into_iter()
+            .chain([(login, &self.isolation.reject_config.login)])
+        {
             if paths.is_empty() {
                 continue;
             }
@@ -412,6 +457,7 @@ fn pi() -> DriverConfig {
             login_dir_env: None,
             login: None,
             reject_config: ConfigAdmission::default(),
+            volatile_login_dirs: Vec::new(),
             extra_args: vec![],
             settings_sources_empty: false,
             strict_mcp: false,
@@ -464,6 +510,7 @@ fn claude() -> DriverConfig {
             login_dir_env: Some("CLAUDE_CONFIG_DIR".into()),
             login: Some(Login::default()),
             reject_config: ConfigAdmission::default(),
+            volatile_login_dirs: Vec::new(),
             extra_args: vec![],
             settings_sources_empty: true,
             strict_mcp: true,
@@ -987,6 +1034,43 @@ mod tests {
         old["isolation"].as_object_mut().unwrap().remove("login");
         let cfg = DriverConfig::from_json(&old.to_string()).unwrap();
         assert_eq!(cfg.login(), Some(Login::default()));
+    }
+
+    #[test]
+    fn volatile_login_state_survives_admission_without_being_trusted() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cfg = DriverConfig::from_json(include_str!("../drivers/codex.json")).unwrap();
+        std::fs::create_dir_all(root.path().join("skills/.system")).unwrap();
+        std::fs::write(
+            root.path().join("skills/.system/SKILL.md"),
+            "untrusted inherited text",
+        )
+        .unwrap();
+        cfg.check_login_configuration(Some(root.path())).unwrap();
+        assert_eq!(
+            cfg.volatile_login_paths(Some(root.path())).unwrap(),
+            vec![root.path().join("skills"), root.path().join("plugins")]
+        );
+        assert!(root.path().join("skills/.system/SKILL.md").exists());
+        for name in ["", "..", "nested/path", "C:escape", "../escape"] {
+            cfg.isolation.volatile_login_dirs = vec![name.into()];
+            assert!(
+                cfg.volatile_login_paths(Some(root.path())).is_err(),
+                "{name}"
+            );
+        }
+        cfg.isolation.volatile_login_dirs = vec!["file".into()];
+        std::fs::write(root.path().join("file"), "x").unwrap();
+        assert!(cfg.volatile_login_paths(Some(root.path())).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn volatile_login_mounts_refuse_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(root.path(), root.path().join("skills")).unwrap();
+        let cfg = DriverConfig::from_json(include_str!("../drivers/codex.json")).unwrap();
+        assert!(cfg.check_login_configuration(Some(root.path())).is_err());
     }
 
     #[test]
