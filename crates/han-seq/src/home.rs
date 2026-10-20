@@ -747,6 +747,54 @@ impl Home {
         Ok(Ok(pinned))
     }
 
+    /// Read-only preflight for lane preparation. Uses the exact claim decision, including current
+    /// profiles, inherited guards, approval expiry and budget; it reserves and consumes nothing.
+    pub fn effect_ready(
+        &self,
+        who: &str,
+        space: &str,
+        proposal: &str,
+        instance: &str,
+    ) -> Result<Value> {
+        if !grammar::is_hex(proposal) || !grammar::is_key_id(instance) {
+            return Err(WireError::invalid("effectReady args"));
+        }
+        let g = self.lock();
+        let sp = self.held(&g, space)?;
+        let state = &*sp.state;
+        if !can_read(state, who, state.head) {
+            return Err(WireError::not_found("no such space"));
+        }
+        let eff = state
+            .effects
+            .get(proposal)
+            .ok_or_else(|| WireError::not_found("no such effect"))?;
+        let pe = PolicyEntry {
+            space: space.to_owned(),
+            kind: "effect.claim".into(),
+            author: who.to_owned(),
+            key_id: instance.to_owned(),
+            refs: vec![],
+            seen: state.head,
+            body: Body::Claim(han_core::policy::Claim {
+                proposal: proposal.to_owned(),
+                instance: instance.to_owned(),
+                attempt: eff.claims.len() as u64 + 1,
+                window: state.policy.launch_window,
+            }),
+        };
+        let now = self.now_str();
+        let pinned = self
+            .pin(&g, Some(state), &pe, &now)?
+            .map_err(|_| WireError::unavailable("profile").retry_after(PROFILE_RETRY_MS))?;
+        let ctx = Ctx::new(&now, policy_profiles(&pinned))?;
+        match decide(Some(state), &pe, &ctx) {
+            Verdict::Allow => Ok(Value::Null),
+            Verdict::Denied(reason) => Err(WireError::denied(reason)),
+            Verdict::Invalid(reason) => Err(WireError::invalid(reason)),
+        }
+    }
+
     // ───────────────────────── routing ─────────────────────────
 
     /// Section 4.1 step 2: `moved` for a space this server does not host.

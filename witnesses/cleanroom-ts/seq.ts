@@ -1,4 +1,5 @@
 // Clean-room HAN v1 sequencer over the generic binding (§3, §4.1, §8.3). One process = one ServerName.
+// Maintained witness: the 2026-10-20 readiness extension is not independent clean-room evidence.
 // Storage: append-only JSON lines with fsync (log.jsonl, content.jsonl, supply.jsonl) plus blobs/<hash>.
 import http from "node:http";
 import { createHash, randomBytes } from "node:crypto";
@@ -25,7 +26,7 @@ export const LIMITS: Limits = {
   maxFrameBytes: 1310720, maxHeaderBytes: 16384, maxContentBytes: 65536, maxBlobBytes: 4294967296, maxBlobPartBytes: 786432,
   maxBlobRangeBytes: 786432, maxStreamItemBytes: 65536, maxFollows: 256, maxClockSkewSeconds: 60, maxStateItems: 1000,
 };
-const CALLS = ["hello", "append", "read", "state", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
+const CALLS = ["hello", "append", "read", "state", "effectReady", "subscribe", "signal", "host", "blobPut", "blobGet", "stream", "watch", "cancel"];
 const READABLE = ["owner", "member", "guest"];
 const HEADER_FIELDS = ["v", "space", "kind", "author", "keyId", "body", "contentHash", "refs", "seen", "nonce", "time", "sig"];
 
@@ -516,6 +517,7 @@ export class Sequencer {
       case "host": return this.reply(conn, id, () => this.doHost(conn, args));
       case "read": return this.doRead(conn, id, args);
       case "state": return this.reply(conn, id, () => this.doState(conn.who!, args));
+      case "effectReady": return this.reply(conn, id, () => this.effectReady(conn.who!, args));
       case "subscribe": return this.doSubscribe(conn, id, args);
       case "signal": return this.reply(conn, id, () => this.doSignal(conn, args));
       case "blobPut": return this.reply(conn, id, () => this.blobs.put(conn.who!, args));
@@ -599,6 +601,29 @@ export class Sequencer {
     throw err("not_found", "no such space");
   }
   /** `state {space, at? | cursor? | effect?}` (§3, G-09): one page of the StateView, or one effect. */
+  private effectReady(who: string, a: A): null {
+    if (!Object.keys(a).every(k => ["space", "proposal", "instance"].includes(k)) || !isHex(a.proposal) || !isKeyId(a.instance)) throw err("invalid", "effectReady args");
+    const st = this.route(a.space).state!;
+    if (!canRead(st, who, st.head)) throw err("not_found", "no such space");
+    const effect = st.effects[a.proposal];
+    if (!effect) throw err("not_found", "no such effect");
+    const entry: A = {v: 1, space: a.space, kind: "effect.claim", author: who, keyId: a.instance, seen: st.head, refs: [],
+      body: {proposal: a.proposal, instance: a.instance, attempt: effect.claims.length + 1, window: st.policy.launchWindow}};
+    const time = this.now(), profiles: A = {}, tried = new Set<string>();
+    let need: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      need = relevantActors(st, entry, {time, profiles});
+      const fresh = need.filter(a => !tried.has(a));
+      if (!fresh.length) break;
+      for (const actor of fresh) { tried.add(actor); try { profiles[actor] = this.profile(actor); } catch {} }
+    }
+    const pinned: A = {};
+    for (const actor of need) { if (!profiles[actor]) throw err("unavailable", "profile"); pinned[actor] = profiles[actor]; }
+    const decision = decide(st, entry, {time, profiles: pinned});
+    if (!decision.allow) throw err(decision.code, decision.reason);
+    return null;
+  }
+
   private doState(who: string, a: A): A {
     const keys = Object.keys(a);
     if (!("space" in a) || !keys.every((k) => ["space", "at", "cursor", "effect", "agent"].includes(k))) throw err("invalid", "state args");

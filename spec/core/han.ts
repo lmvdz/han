@@ -303,6 +303,8 @@ export type ReadItem =
   | { type: "signal"; from: ActorId; body: Json };       // T-05, G-09: only on `subscribe` (never on `read`); ephemeral, unordered with records, never authority
 
 export interface Calls {
+  /** Read-only current Policy decision for the authenticated actor's next claim. No reservation or receipt. */
+  effectReady: { args: { space: SpaceId; proposal: EntryId; instance: KeyId }; ok: null };
   hello: { args: { who: ActorId; keyId: KeyId; proof: Sig; version: 1; knownHeads?: Receipt[] };
            ok: { limits: Limits; durability: Durability; time: Time; knownHeads: Receipt[] } };
   append: { args: { entry: Entry; content?: Json }; ok: Receipt };
@@ -314,7 +316,7 @@ export interface Calls {
                                         | { effect: EntryId /* that one effect, EffectStateView */ }
                                         | { agent: ActorId /* that actor's guard facts, AgentStateView; may combine with `at` */; at?: Seq } );   // cursor, effect and agent exclude each other, `at` combines with `agent` only: any other two present is `invalid`, whatever the values
            ok: StateReply };
-}   // the four sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
+}   // the five sequencer calls (§3); signals, files, invites and session streams are the transport's (§8, T-01…T-07)
 export type CallName = keyof Calls;
 export type RequestFrame<C extends CallName = CallName> = { id: number; call: C; args: Calls[C]["args"] };
 export type ReplyFrame =
@@ -365,6 +367,7 @@ export type AnyRequestFrame = RequestFrame | BindingRequestFrame;
 
 // ───────────────────────── modules ─────────────────────────
 export interface Log {                                   // M1
+  effectReady(space: SpaceId, proposal: EntryId, instance: KeyId, as: ActorId): Promise<null>;
   append(entry: Entry, content: Json | undefined): Promise<Receipt>;          // throws WireError
   read(space: SpaceId, after: Seq, opts: { follow?: boolean; limit?: number; knownHeads?: Receipt[] }, as: ActorId): AsyncIterable<ReadItem>;
   state(space: SpaceId, sel: { at?: Seq } | { cursor: string } | { effect: EntryId } | { agent: ActorId; at?: Seq }, as: ActorId): Promise<StateReply>;

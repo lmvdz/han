@@ -36,6 +36,13 @@ pub struct ApprovalEvidence {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Read-only home Policy check before remote lane preparation; consumes no approval or claim.
+    EffectReady {
+        /// The space.
+        space: String,
+        /// The proposal.
+        proposal: String,
+    },
     /// Creates a space at `home` with this device's person as its owner, and follows it.
     SpaceCreate {
         /// The home that will sequence it (default: the home of this device's actor).
@@ -530,7 +537,8 @@ impl Command {
             | Command::StreamPublish { .. }
             | Command::LeaseSet { .. }
             | Command::EffectPropose { .. } => CommandClass::Agent,
-            Command::EffectClaim { .. }
+            Command::EffectReady { .. }
+            | Command::EffectClaim { .. }
             | Command::EffectOutcome { .. }
             | Command::RevertApprove { .. }
             | Command::ReviewApprove { .. } => CommandClass::Executor,
@@ -578,6 +586,7 @@ impl Command {
             | Command::EffectApprove { .. }
             | Command::EffectCancel { .. }
             | Command::EffectPropose { .. }
+            | Command::EffectReady { .. }
             | Command::EffectClaim { .. }
             | Command::EffectOutcome { .. }
             | Command::RevertApprove { .. }

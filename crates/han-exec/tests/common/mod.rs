@@ -81,6 +81,8 @@ pub enum Fault {
 
 #[derive(Default)]
 pub struct NodeState {
+    /// Home readiness refusal, independently of the projected approval list.
+    pub preparation_denied: bool,
     pub rows: Vec<EffectRow>,
     pub saved_approvals: Vec<(String, Vec<String>)>,
     pub head: u64,
@@ -270,6 +272,20 @@ impl FakeNode {
         let mut st = self.state();
         st.commands.push(cmd.clone());
         match cmd {
+            Command::EffectReady { proposal, .. } => {
+                let r = st
+                    .rows
+                    .iter()
+                    .find(|r| &r.proposal == proposal)
+                    .ok_or_else(|| NodeError::not_found("proposal"))?;
+                if st.preparation_denied || r.phase != "open" {
+                    return Err(NodeError::denied("guard has not approved"));
+                }
+                if r.approvals.is_empty() && !r.proposer_suffices {
+                    return Err(NodeError::denied("waiting for an approval"));
+                }
+                Ok(CallResult::Done)
+            }
             Command::EffectClaim {
                 proposal,
                 attempt,

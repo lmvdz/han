@@ -31,6 +31,7 @@
   "probes-r24.json",
   "probes-r25.json",
   "probes-r27.json",
-  "probes-r33.json"
+  "probes-r33.json",
+  "probes-effect-ready.json"
  ]
 }

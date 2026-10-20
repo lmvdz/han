@@ -206,6 +206,21 @@ impl Executor {
         self.snapshot().await
     }
 
+    /// Fail closed if the home cannot currently authorize preparation under the claim's rules.
+    pub(crate) async fn effect_ready(&self, row: &EffectRow) -> Result<(), NodeError> {
+        match self
+            .api
+            .call(Command::EffectReady {
+                space: row.space.clone(),
+                proposal: row.proposal.clone(),
+            })
+            .await?
+        {
+            CallResult::Done => Ok(()),
+            _ => Err(NodeError::unavailable("unexpected readiness response")),
+        }
+    }
+
     /// The context for an attempt read back from the journal: the lane's instruction is re-attached, so
     /// `lookup` can answer for it after a restart.
     fn ctx_for(&self, a: &Attempt) -> ActionCtx {

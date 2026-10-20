@@ -20,7 +20,7 @@ HAN is being built in Rust, in this repository, and its first users are building
 | Part | What it does |
 |---|---|
 | `han-core` | Policy as pure functions: all 168 Policy vectors pass, with 0 divergences from the reference under differential fuzzing (M1) |
-| `han-seq`, `han-net` | the sequencer and the `han/1` binding over QUIC (iroh), dialled by key: all <!--s:wv_n-->118<!--/s--> wire vectors pass over QUIC. Also home tickets, the peer filter, federation with pinned remote profiles, and a hosting rule: only known actors create spaces on a home (M2) |
+| `han-seq`, `han-net` | the sequencer and the `han/1` binding over QUIC (iroh), dialled by key: all <!--s:wv_n-->119<!--/s--> wire vectors pass over QUIC. Also home tickets, the peer filter, federation with pinned remote profiles, and a hosting rule: only known actors create spaces on a home (M2) |
 | `han-node` | the per-device daemon: keys, sync, outbox, live views (board, sessions, approvals, overlaps), and the node API over JSON-RPC on a named pipe or Unix socket. A three-node simulation runs in CI (M3) |
 | `han-timeline` | live work timelines, built by a two-team clean room from a behaviour-only spec (T0, T1) |
 | `han-host`, `han-exec`, `han-mcp`, `han-vcs` | agent sessions over ACP in a sandbox (MXC on Windows, bubblewrap on Linux) whose only way out is an egress proxy; agent tools (`propose`, `team_*`); an executor that runs approved effects at most once; git workspaces, changesets and mirroring (M4) |
@@ -98,7 +98,7 @@ The spec's [§8](spec/core/architecture.md) binding (`han/1`) runs over QUIC wit
 - an executor;
 - an agent host (a scripted agent and a Claude Code driver);
 - a verifier, federation between servers, and a CLI;
-- <!--s:impl_n-->245<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
+- <!--s:impl_n-->246<!--/s--> tests, <!--s:impl_live-->1<!--/s--> of them a live Claude Code run that is skipped by default.
 
 **The honest gaps:**
 - **Interop:** the TypeScript and Python witnesses have been run against each other on the legacy WebSocket carrier ([conformance/interop/](conformance/interop/): <!--s:interop_matrix-->ts->py 25/25, py->ts 25/25 (25 without a workaround)<!--/s--> client operations). Over QUIC, only the Rust implementation runs the wire vectors so far; there is no second QUIC implementation to interoperate with.
@@ -112,7 +112,7 @@ The spec's [§8](spec/core/architecture.md) binding (`han/1`) runs over QUIC wit
 | Path | What it is |
 |---|---|
 | [spec/goal.md](spec/goal.md) | why HAN exists, what "v1 done" means, and what HAN deliberately is not |
-| [spec/core/architecture.md](spec/core/architecture.md) | the specification: entries and receipts, the <!--s:calls_core_w-->four<!--/s--> sequencer calls, modules, rules (`R-`, `P-`, `X-`, `T-`, `G-`, `N-`), the trust model, the QUIC binding, and a rule-by-rule verification table (§10) |
+| [spec/core/architecture.md](spec/core/architecture.md) | the specification: entries and receipts, the <!--s:calls_core_w-->five<!--/s--> sequencer calls, modules, rules (`R-`, `P-`, `X-`, `T-`, `G-`, `N-`), the trust model, the QUIC binding, and a rule-by-rule verification table (§10) |
 | [spec/core/han.ts](spec/core/han.ts) | exact types (normative for shapes) |
 | [spec/core/coverage.md](spec/core/coverage.md) | how every guarantee of the earlier v0.4 design was kept, moved, weakened or dropped |
 | [spec/profiles/](spec/profiles/) | app-level profiles such as `han.status/1` (from round 30) |

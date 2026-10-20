@@ -83,7 +83,15 @@ over: string,
  */
 record: EvidenceRef, };
 
-export type Command = { "type": "space_create", 
+export type Command = { "type": "effect_ready", 
+/**
+ * The space.
+ */
+space: string, 
+/**
+ * The proposal.
+ */
+proposal: string, } | { "type": "space_create", 
 /**
  * The home that will sequence it (default: the home of this device's actor).
  */

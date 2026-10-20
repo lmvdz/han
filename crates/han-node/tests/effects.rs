@@ -992,6 +992,14 @@ async fn trusted_landing_rows_recheck_exact_repository_grants() {
         window: 30,
     };
     for p in &proposals[1..] {
+        assert!(
+            exec.call(Command::EffectReady {
+                space: space.clone(),
+                proposal: p.clone()
+            })
+            .await
+            .is_err()
+        );
         assert!(matches!(
             exec.call(claim(p)).await,
             Err(NodeError::Denied { .. })
@@ -1015,6 +1023,14 @@ async fn trusted_landing_rows_recheck_exact_repository_grants() {
         exec.call(claim(&proposals[0])).await,
         Err(NodeError::Denied { .. })
     ));
+    assert!(
+        exec.call(Command::EffectReady {
+            space: space.clone(),
+            proposal: proposals[0].clone()
+        })
+        .await
+        .is_err()
+    );
     call(
         &alice,
         Command::PolicySet {
@@ -1029,5 +1045,16 @@ async fn trusted_landing_rows_recheck_exact_repository_grants() {
             .any(|e| e.proposal == proposals[0] && e.proposer_suffices)
     })
     .await;
+    assert_eq!(
+        call(
+            &exec,
+            Command::EffectReady {
+                space: space.clone(),
+                proposal: proposals[0].clone()
+            }
+        )
+        .await,
+        CallResult::Done
+    );
     call(&exec, claim(&proposals[0])).await;
 }

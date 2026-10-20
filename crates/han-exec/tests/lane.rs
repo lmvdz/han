@@ -144,6 +144,7 @@ impl World {
 
 #[derive(Default)]
 struct ChecksState {
+    on_fast_poll: Option<Arc<dyn Fn() + Send + Sync>>,
     fast: Vec<CheckRun>,
     full: Vec<CheckRun>,
     /// What `full` says about one commit, where it differs from the default.
@@ -224,6 +225,11 @@ impl Checks for FakeChecks {
     }
     async fn poll(&self, req: &CheckRequest) -> Result<Vec<CheckRun>, CheckError> {
         let mut st = self.0.lock().unwrap();
+        if req.stage == Stage::Fast
+            && let Some(hook) = st.on_fast_poll.take()
+        {
+            hook();
+        }
         st.requests.push((req.stage, req.commit.clone()));
         if st.broken {
             return Err(CheckError("the backend is down".into()));
@@ -1610,6 +1616,68 @@ async fn trusted_landing_still_requires_green_checks_on_the_landed_commit() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn remote_preparation_waits_for_home_authority_even_with_an_approval() {
+    for check_only in [false, true] {
+        let rig = Rig::with(|r| r.checks.rerun = 1);
+        rig.checks.fast(vec![run("quick", "queued")]);
+        let p = if check_only {
+            rig.try_it("guarded", "a.txt", "guarded change\n")
+        } else {
+            rig.land("guarded", "a.txt", "guarded change\n")
+        };
+        rig.node.set_proposer_suffices(&p, true);
+        // An unrelated human's approval is not the operator's guard approval.
+        rig.node.approve(&p);
+        rig.node.state().preparation_denied = true;
+        let (exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        assert_eq!(rig.last(&p)["state"], "queued");
+        assert!(git(&rig.w.remote, &["branch", "--list", "han/*"]).is_empty());
+        assert!(rig.checks.started().is_empty());
+        drop(lane);
+        drop(exec);
+        let (exec, lane) = rig.boot();
+        rig.wall.advance(31);
+        lane.pass().await.unwrap();
+        assert!(git(&rig.w.remote, &["branch", "--list", "han/*"]).is_empty());
+        assert!(rig.checks.started().is_empty());
+        rig.node.state().preparation_denied = false;
+        rig.wall.advance(31);
+        lane.pass().await.unwrap();
+        assert_eq!(rig.last(&p)["state"], "testing");
+        assert_eq!(rig.checks.started().len(), 1);
+        drop(lane);
+        drop(exec);
+        // A restored testing record may not request a rerun after authority is withdrawn.
+        rig.node.state().preparation_denied = true;
+        rig.checks.fast(vec![run("quick", "failure")]);
+        let (_exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        assert!(rig.checks.0.lock().unwrap().reruns.is_empty());
+        assert_eq!(rig.node.claims(), 0);
+    }
+}
+
+#[tokio::test]
+async fn preparation_revocation_during_check_poll_does_not_start_a_rerun() {
+    let rig = Rig::with(|r| r.checks.rerun = 1);
+    rig.checks.fast(vec![run("quick", "queued")]);
+    let p = rig.try_it("revoked", "a.txt", "revoked change\n");
+    let (_exec, lane) = rig.boot();
+    lane.pass().await.unwrap();
+    assert_eq!(rig.last(&p)["state"], "testing");
+    rig.checks.fast(vec![run("quick", "failure")]);
+    let node = rig.node.clone();
+    rig.checks.0.lock().unwrap().on_fast_poll = Some(Arc::new(move || {
+        node.state().preparation_denied = true;
+    }));
+    lane.pass().await.unwrap();
+    assert!(rig.checks.0.lock().unwrap().reruns.is_empty());
+    assert_eq!(rig.node.claims(), 0);
+    assert_eq!(rig.last(&p)["state"], "testing");
 }
 
 #[tokio::test]

@@ -315,6 +315,28 @@ class Sequencer:
             fetched.update({a: v for a in new if (v := fetch(a))})
         return need
 
+    def effect_ready(self, who, space, proposal, instance):
+        """Current claim Policy decision, without folding, consuming approvals or reserving budget."""
+        if not (P._space(space) and P._id(proposal) and P._keyid(instance)):
+            raise _invalid("effectReady args")
+        self.route(space)
+        S = self.home.spaces.get(space)
+        if not S or not P.can_read(S["state"], who, S["state"]["head"]):
+            raise WireError("not_found", "no such space")
+        st = S["state"]
+        eff = st["effects"].get(proposal)
+        if not eff: raise WireError("not_found", "no such effect")
+        entry = {"v": 1, "space": space, "kind": "effect.claim", "author": who, "keyId": instance,
+                 "seen": st["head"], "refs": [], "body": {"proposal": proposal, "instance": instance,
+                 "attempt": len(eff["claims"]) + 1, "window": st["policy"]["launchWindow"]}}
+        now = self.now_str()
+        actors = self.pin_actors(st, entry, now=now)
+        profiles = {a: self.profile(a) for a in actors}
+        if not all(profiles.values()): raise WireError("unavailable", "profile")
+        decision = P.decide(st, entry, {"time": now, "profiles": profiles})
+        if not decision["allow"]: raise WireError(decision["code"], decision["reason"])
+        return None
+
     # ── read (§3) ──
     def _state_at(self, S, at):
         """The SpaceState after record `at`: the chain folded through `at` with the profile views its receipts pinned."""

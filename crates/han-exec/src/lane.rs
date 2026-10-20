@@ -1483,6 +1483,11 @@ impl Lane {
         repo: &RepoTarget,
         now: i64,
     ) -> Result<Prep, ExecError> {
+        if let Err(e) = self.exec.effect_ready(row).await {
+            return Ok(Prep::Retry(format!(
+                "waiting for preparation authority: {e}"
+            )));
+        }
         let kind = if c.check_only { "vcs.try" } else { "vcs.land" };
         let Some(action) = self.exec.action_of(kind) else {
             return Ok(Prep::Retry(format!(
@@ -1648,6 +1653,11 @@ impl Lane {
         };
         let mut pushed = false;
         for _ in 0..2 {
+            if let Err(e) = self.exec.effect_ready(row).await {
+                return Ok(Prep::Retry(format!(
+                    "waiting for preparation authority: {e}"
+                )));
+            }
             let spec = han_vcs::LandSpec {
                 remote: repo.remote.clone(),
                 refname: full.clone(),
@@ -1673,6 +1683,11 @@ impl Lane {
             repository: dir.to_string_lossy().into_owned(),
             pr: None,
         };
+        if let Err(e) = self.exec.effect_ready(row).await {
+            return Ok(Prep::Retry(format!(
+                "waiting for preparation authority: {e}"
+            )));
+        }
         prepared.pr = self
             .open_pr(repo, &prepared, &plan, &row.proposal, c.check_only)
             .await;
@@ -1680,6 +1695,11 @@ impl Lane {
         c.detail = None;
         c.reruns = 0;
         let req = self.request(repo, &prepared, Stage::Fast);
+        if let Err(e) = self.exec.effect_ready(row).await {
+            return Ok(Prep::Retry(format!(
+                "waiting for preparation authority: {e}"
+            )));
+        }
         if let Err(e) = self.checks.start(&req).await {
             tracing::warn!(proposal = %c.proposal, "lane: starting the checks: {e}");
         }
@@ -1799,6 +1819,10 @@ impl Lane {
                 )
                 .await;
         }
+        if let Err(e) = self.exec.effect_ready(row).await {
+            c.problem = Some(format!("waiting for preparation authority: {e}"));
+            return Ok(());
+        }
         let Some(p) = c.prepared.clone() else {
             return self.requeue(c, "nothing was prepared", now).await;
         };
@@ -1810,6 +1834,10 @@ impl Lane {
             && repo.github.is_some()
             && let Ok(plan) = serde_json::from_str::<Value>(row.plan.as_deref().unwrap_or(""))
         {
+            if let Err(e) = self.exec.effect_ready(row).await {
+                c.problem = Some(format!("waiting for preparation authority: {e}"));
+                return Ok(());
+            }
             let pr = self
                 .open_pr(repo, &p, &plan, &c.proposal, c.check_only)
                 .await;
@@ -1845,6 +1873,10 @@ impl Lane {
             .and_then(|b| String::from_utf8(b).ok());
         let red = names(Verdict::Red);
         if !red.is_empty() {
+            if let Err(e) = self.exec.effect_ready(row).await {
+                c.problem = Some(format!("waiting for preparation authority: {e}"));
+                return Ok(());
+            }
             if c.reruns < repo.checks.rerun && self.checks.rerun(&req, &red).await.unwrap_or(false)
             {
                 c.reruns += 1;

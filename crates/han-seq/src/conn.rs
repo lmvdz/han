@@ -36,6 +36,7 @@ fn allowed_args(call: &str) -> &'static [&'static str] {
         "hello" => &["who", "keyId", "proof", "version", "knownHeads"],
         "cancel" => &["target"],
         "append" => &["entry", "content"],
+        "effectReady" => &["space", "proposal", "instance"],
         "signal" => &["space", "body", "from"],
         "blobPut" => &["ref", "offset", "data"],
         "blobGet" => &["ref", "space", "offset", "length"],
@@ -344,6 +345,20 @@ impl Conn {
                     agent: args.get("agent"),
                 };
                 home.state(&who, space, &sel).map(Done::Ok).map_err(plain)
+            }
+            "effectReady" => {
+                let space = space_arg(args).map_err(plain)?;
+                let proposal = args["proposal"]
+                    .as_str()
+                    .filter(|s| grammar::is_hex(s))
+                    .ok_or_else(|| plain(WireError::invalid("proposal")))?;
+                let instance = args["instance"]
+                    .as_str()
+                    .filter(|s| grammar::is_key_id(s))
+                    .ok_or_else(|| plain(WireError::invalid("instance")))?;
+                home.effect_ready(&who, space, proposal, instance)
+                    .map(Done::Ok)
+                    .map_err(plain)
             }
             "subscribe" => {
                 let space = space_arg(args).map_err(plain)?;

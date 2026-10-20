@@ -17,6 +17,7 @@ const ALICE: &str = "@alice:a.localhost";
 const BOT: &str = "@bot:a.localhost";
 const BOT2: &str = "@bot2:a.localhost";
 const EXEC: &str = "@exec:a.localhost";
+const BOB: &str = "@bob:a.localhost";
 
 fn key(n: u8) -> SigningKey {
     SigningKey::from_seed([n; 32])
@@ -37,6 +38,7 @@ fn key_of(actor: &str) -> SigningKey {
         BOT => key(2),
         BOT2 => key(3),
         EXEC => key(4),
+        BOB => key(5),
         _ => unreachable!("{actor}"),
     }
 }
@@ -234,4 +236,117 @@ fn an_unconfirmed_agent_already_in_the_space_cannot_propose_or_claim() {
     // and a withdrawal stops it again
     operator(&home, BOT, "none");
     denied(propose(&home, BOT, EXEC, "p4"), "after the withdrawal");
+}
+
+#[test]
+fn preparation_readiness_uses_current_guards_and_never_consumes_authority() {
+    for (action, automatic) in [
+        ("vcs.try", true),
+        ("vcs.land", true),
+        ("vcs.try", false),
+        ("vcs.land", false),
+    ] {
+        let home = home();
+        create(&home, "with-operator");
+        home.register(
+            BOB,
+            "human",
+            "k1",
+            &key_of(BOB).public_key().to_base64url(),
+            None,
+        )
+        .unwrap();
+        member(&home, BOB, "owner").unwrap();
+        operator(&home, BOT, "owner");
+        member(&home, BOT, "member").unwrap();
+        let mut policy = space_policy("members", "invite");
+        let Value::Object(ref mut fields) = policy else {
+            unreachable!()
+        };
+        let rule = if action == "vcs.try" {
+            r#"{"action":"vcs.try","approvers":["owner"],"proposer":true}"#
+        } else {
+            r#"{"action":"vcs.land","repo":"github:o/r","maxTier":1,"approvers":["owner"],"proposer":true}"#
+        };
+        let mut rule = han_core::json::parse(rule.as_bytes()).unwrap();
+        if !automatic && let Value::Object(m) = &mut rule {
+            m.remove("proposer");
+        }
+        fields.insert("approvals".into(), Value::Array(vec![rule]));
+        fields.insert(
+            "gates".into(),
+            han_core::json::parse(br#"{"small":20,"large":500,"paths":[],"owners":[]}"#).unwrap(),
+        );
+        let Value::Object(sessions) = fields.get_mut("sessions").unwrap() else {
+            unreachable!()
+        };
+        sessions.insert("forceGuarded".into(), Value::Bool(true));
+        append(&home, SPACE, "policy.set", ALICE, obj([("policy", policy)])).unwrap();
+        let change = han_core::json::parse(format!(r#"{{"repo":"github:o/r","deltaDigest":"{}","total":1,"files":[{{"path":"src/lib.rs","kind":"modify","lines":1}}]}}"#, "a".repeat(64)).as_bytes()).unwrap();
+        let plan = obj([
+            ("action", s(action)),
+            ("target", s("github:o/r")),
+            ("args", obj([("change", change.clone())])),
+        ]);
+        let digest = han_core::ids::json_digest(&plan).unwrap();
+        let mut body = obj([
+            ("executor", s(EXEC)),
+            ("action", s(action)),
+            ("planDigest", s(&digest)),
+            ("repeatable", Value::Bool(false)),
+        ]);
+        if action == "vcs.land"
+            && let Value::Object(m) = &mut body
+        {
+            m.insert("change".into(), change);
+        }
+        let proposal = append_with(
+            &home,
+            SPACE,
+            "effect.propose",
+            BOT,
+            body,
+            Some(obj([("plan", plan)])),
+        )
+        .unwrap();
+        let ready = || home.effect_ready(EXEC, SPACE, &proposal, "k1");
+        let err = ready().unwrap_err();
+        assert_eq!(err.code, Code::Denied);
+        let ordinary_approval = append(
+            &home,
+            SPACE,
+            "effect.approve",
+            BOB,
+            obj([("proposal", s(&proposal)), ("planDigest", s(&digest))]),
+        );
+        assert_eq!(ordinary_approval.is_ok(), !automatic);
+        assert!(ready().unwrap_err().message.contains("guard"));
+        append(
+            &home,
+            SPACE,
+            "effect.approve",
+            ALICE,
+            obj([("proposal", s(&proposal)), ("planDigest", s(&digest))]),
+        )
+        .unwrap();
+        let before = home.state_of(SPACE).unwrap();
+        ready().unwrap();
+        ready().unwrap();
+        assert_eq!(home.state_of(SPACE).unwrap().head, before.head);
+        assert_eq!(
+            home.state_of(SPACE).unwrap().effects[&proposal],
+            before.effects[&proposal]
+        );
+        assert!(home.effect_ready(BOT, SPACE, &proposal, "k1").is_err());
+        assert!(
+            home.effect_ready(EXEC, SPACE, &proposal, "revoked")
+                .is_err()
+        );
+        operator(&home, BOT, "none");
+        assert!(ready().is_err());
+        operator(&home, BOT, "owner");
+        ready().unwrap();
+        claim(&home, EXEC, &proposal).unwrap();
+        assert!(ready().is_err());
+    }
 }
