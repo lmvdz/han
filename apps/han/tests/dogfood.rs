@@ -289,6 +289,9 @@ fn login_check_says_only_whether_a_login_exists() {
     let dir = temp("login");
     let d = dir.to_str().unwrap();
     let (ok, _, err) = run(&["agent", "login", AGENT, "--check", "--data", d]);
+    assert!(!ok && err.contains("record a harness"), "{err}");
+    han(&["agent", "set", AGENT, "--harness", "claude", "--data", d]);
+    let (ok, _, err) = run(&["agent", "login", AGENT, "--check", "--data", d]);
     assert!(
         !ok && err.contains("no login") && err.contains("han agent login"),
         "{err}"
@@ -305,7 +308,7 @@ fn login_check_says_only_whether_a_login_exists() {
     .unwrap();
     let (ok, out, err) = run(&["agent", "login", AGENT, "--check", "--data", d]);
     assert!(ok, "{err}");
-    assert!(out.contains("logged in"));
+    assert!(out.contains("cached claude-code login present"), "{out}");
     assert!(
         !out.contains("han-fake-token") && !err.contains("han-fake-token"),
         "the contents are never shown"
