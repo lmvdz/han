@@ -153,6 +153,11 @@ const SPECS: &[Spec] = &[
         ids: &["registry.", "harness.", "agent."],
     },
     Spec {
+        id: "harness.launch",
+        side: Side::Node,
+        ids: &["harness.launch."],
+    },
+    Spec {
         id: "sandbox",
         side: Side::Node,
         ids: &["sandbox."],
@@ -401,6 +406,8 @@ pub struct Facts {
     pub harnesses: BTreeMap<String, HarnessFact>,
     /// By actor: whether the credential file declared by its adapter exists.
     pub logins: BTreeMap<String, bool>,
+    /// By actor: why its configured OS identity cannot run Node or read the adapter.
+    pub launch_refusals: BTreeMap<String, String>,
     /// By OS user: whether the user exists (Linux).
     pub os_users: BTreeMap<String, bool>,
     pub presence: Option<Result<PresenceFacts, String>>,
@@ -1417,6 +1424,12 @@ fn agent_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
             ));
         }
         if let Some(h) = &a.harness {
+            if let Some(why) = f.launch_refusals.get(actor) {
+                out.push(finding(
+                    "harness.launch.refused", actor.clone(), why.clone(),
+                    format!("han agent setup-harness {} --data {data} --dir <shared-adapter-directory> --node <shared-node22-executable>; ensure the agent's OS user can read the installation", q(h)),
+                ));
+            }
             if !used.contains(&h) {
                 used.push(h);
             }
@@ -1826,6 +1839,109 @@ fn stale_processes() -> Vec<StaleFact> {
     Vec::new()
 }
 
+/// Checks file access as the harness identity using only a fixed OS utility. Never execute a
+/// registry-controlled runtime: doctor can be elevated while the node owns its harness records.
+async fn probe_harness_launch(
+    install: &HarnessInstall,
+    entry: &str,
+    as_user: Option<&str>,
+) -> Result<(), String> {
+    let mut paths = vec![
+        (install.node.clone(), true),
+        (install.adapter_dir.join(entry), false),
+    ];
+    if let Some(driver) = &install.driver {
+        paths.push((driver.clone(), false));
+    }
+    for (path, executable) in paths {
+        for mode in if executable {
+            &['f', 'r', 'x'][..]
+        } else {
+            &['f', 'r'][..]
+        } {
+            let mut cmd = match as_user {
+                Some(user) => {
+                    let mut cmd = tokio::process::Command::new("/usr/sbin/runuser");
+                    cmd.args(["-u", user, "--", "/usr/bin/test"]);
+                    cmd
+                }
+                None => tokio::process::Command::new("/usr/bin/test"),
+            };
+            cmd.no_window()
+                .kill_on_drop(true)
+                .env_clear()
+                .arg(format!("-{mode}"))
+                .arg(&path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            let status = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.status())
+                .await
+                .map_err(|_| "file-access probe timed out after 5 seconds".to_owned())?
+                .map_err(|e| format!("cannot run the OS file-access check: {e}"))?;
+            if !status.success() {
+                return Err(format!(
+                    "{} failed the OS file-access check (-{mode}); check traversal, read and execute permissions for the agent",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decides which identity may run the fixed OS permission check. Root may only drop to a
+/// dedicated, non-root runner account; neither shell identity variables nor the registry can opt out.
+fn launch_probe_identity(
+    uid: Option<u32>,
+    target: Option<&str>,
+    target_uid: Option<u32>,
+) -> Result<Option<&str>, &'static str> {
+    let uid = uid.ok_or("cannot determine effective OS identity; harness launch probe skipped")?;
+    if uid == 0 {
+        let target = target.ok_or(
+            "root cannot probe an agent without a dedicated OS user; run doctor as the node user",
+        )?;
+        let dedicated = target
+            .strip_prefix("han-agent")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !dedicated || target_uid.is_none_or(|id| id == 0) {
+            return Err(
+                "root only probes dedicated non-root han-agent<N> accounts; run doctor as the configured user",
+            );
+        }
+        Ok(Some(target))
+    } else if target.is_none() || target_uid == Some(uid) {
+        Ok(None)
+    } else {
+        Err("cannot probe a different OS identity; run doctor as the configured agent user")
+    }
+}
+
+fn effective_uid() -> Option<u32> {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()?
+        .lines()
+        .find(|line| line.starts_with("Uid:"))?
+        .split_whitespace()
+        .nth(2)?
+        .parse()
+        .ok()
+}
+
+fn account_uid(user: &str) -> Option<u32> {
+    if !valid_os_user(user) {
+        return None;
+    }
+    let output = std::process::Command::new("/usr/bin/id")
+        .args(["-u", "--", user])
+        .env_clear()
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
+}
+
 /// Reads the machine.
 #[allow(clippy::too_many_arguments)]
 pub async fn gather(
@@ -1879,6 +1995,7 @@ pub async fn gather(
     };
     let mut harnesses = BTreeMap::new();
     let mut logins = BTreeMap::new();
+    let mut launch_refusals = BTreeMap::new();
     let mut os_users = BTreeMap::new();
     let mut toolchain = ToolchainFacts::default();
     let mut mxc_loopback_blocked = None;
@@ -1950,6 +2067,37 @@ pub async fn gather(
                     },
                 }
             });
+            if let Ok(Some(install)) = HarnessInstall::load(data, record_name(h))
+                && let Ok(driver) = crate::harness::driver(data, h)
+            {
+                let as_user = a.os_user.as_deref().filter(|_| linux);
+                let identity = if linux {
+                    launch_probe_identity(effective_uid(), as_user, as_user.and_then(account_uid))
+                } else {
+                    Err(
+                        "agent-identity file-access checks are currently Linux-only; runtime compatibility is checked at setup and actual start",
+                    )
+                };
+                match identity {
+                    Err(reason) => skips.push(Skip {
+                        check: "harness.launch",
+                        reason: format!("{actor}: {reason}"),
+                    }),
+                    Ok(run_as) => {
+                        if let Err(why) =
+                            probe_harness_launch(&install, &driver.adapter.entry, run_as).await
+                        {
+                            launch_refusals.insert(
+                                actor.clone(),
+                                format!(
+                                    "{actor} cannot launch its harness as {}: {why}",
+                                    as_user.unwrap_or(&user)
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
         }
         toolchain = toolchain_facts(data, file, repos);
     }
@@ -1980,6 +2128,7 @@ pub async fn gather(
         agents,
         harnesses,
         logins,
+        launch_refusals,
         os_users,
         presence: presence_facts(data),
         toolchain,
@@ -2067,6 +2216,7 @@ async fn gather_exec_only(
         agents: Err("not read by --exec-only".to_owned()),
         harnesses: BTreeMap::new(),
         logins: BTreeMap::new(),
+        launch_refusals: BTreeMap::new(),
         os_users: BTreeMap::new(),
         presence: None,
         toolchain: ToolchainFacts::default(),
@@ -2269,6 +2419,7 @@ mod tests {
             agents: Ok(AgentsFile::default()),
             harnesses: BTreeMap::new(),
             logins: BTreeMap::new(),
+            launch_refusals: BTreeMap::new(),
             os_users: BTreeMap::new(),
             presence: None,
             toolchain: ToolchainFacts::default(),
@@ -2289,6 +2440,99 @@ mod tests {
 
     fn agents(json: &str) -> Result<AgentsFile, String> {
         serde_json::from_str(json).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn privileged_probe_never_executes_registry_programs_as_root_or_arbitrary_users() {
+        for (uid, target, target_uid) in [
+            (None, None, None),
+            (Some(0), None, None),
+            (Some(0), Some("root"), Some(0)),
+            (Some(0), Some("han-agent1"), Some(0)),
+            (Some(0), Some("operator"), Some(1000)),
+            (Some(0), Some("han-agent"), Some(1001)),
+            (Some(0), Some("han-agent1"), None),
+            (Some(1000), Some("han-agent1"), Some(1001)),
+        ] {
+            assert!(
+                launch_probe_identity(uid, target, target_uid).is_err(),
+                "{uid:?} {target:?}"
+            );
+        }
+        assert_eq!(
+            launch_probe_identity(Some(0), Some("han-agent1"), Some(1001)),
+            Ok(Some("han-agent1"))
+        );
+        assert_eq!(
+            launch_probe_identity(Some(1001), Some("han-agent1"), Some(1001)),
+            Ok(None)
+        );
+        assert_eq!(launch_probe_identity(Some(1001), None, None), Ok(None));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn permission_probe_never_executes_the_recorded_runtime() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let node = root.path().join("node");
+        std::fs::write(&node, "#!/bin/sh\ntouch \"$0.executed\"\nexit 0\n").unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.path().join("adapter.js"), "test adapter").unwrap();
+        let install = HarnessInstall {
+            harness: "test".into(),
+            node: node.clone(),
+            adapter_dir: root.path().into(),
+            package: "test".into(),
+            version: "1".into(),
+            integrity: String::new(),
+            driver: None,
+        };
+        probe_harness_launch(&install, "adapter.js", None)
+            .await
+            .unwrap();
+        assert!(!root.path().join("node.executed").exists());
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            probe_harness_launch(&install, "adapter.js", None)
+                .await
+                .unwrap_err()
+                .contains("-x")
+        );
+    }
+
+    #[test]
+    fn existing_files_do_not_hide_a_refused_agent_launch() {
+        let mut f = healthy();
+        f.agents = agents(
+            r#"{"agents":{"@coder:han.example":{"harness":"codex","osUser":"han-agent1"}}}"#,
+        );
+        f.os_users.insert("han-agent1".into(), true);
+        f.harnesses.insert(
+            "codex".into(),
+            HarnessFact::Recorded {
+                node: "/private/node".into(),
+                node_ok: true,
+                adapter: "/shared/adapter".into(),
+                adapter_ok: true,
+            },
+        );
+        f.launch_refusals.insert(
+            "@coder:han.example".into(),
+            "Permission denied as han-agent1".into(),
+        );
+        let findings = analyze(&f);
+        let launch = findings
+            .iter()
+            .find(|item| item.id == "harness.launch.refused")
+            .expect("identity-aware refusal");
+        assert!(launch.fix.contains("--dir <shared-adapter-directory>"));
+        let r = report(&f, findings);
+        assert!(
+            r.checks
+                .iter()
+                .any(|check| check.id == "harness.launch" && check.status == Status::Problem)
+        );
     }
 
     fn ids(f: &Facts) -> Vec<String> {
