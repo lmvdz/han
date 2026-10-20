@@ -67,6 +67,7 @@ pub struct Toast {
 
 #[derive(Clone, Debug)]
 enum CallKind {
+    Setup,
     Approve,
     Cancel,
     Steer,
@@ -97,6 +98,8 @@ pub struct TaskDraft {
 
 /// The whole state of the TUI.
 pub struct App {
+    /// Guided create/join flow.
+    pub setup: Option<crate::setup::Setup>,
     /// What is remembered between runs.
     pub config: Config,
     /// The space on the board.
@@ -166,6 +169,10 @@ impl App {
             .as_deref()
             .map_or(Group::Issue, |s| config.group_of(s));
         App {
+            setup: config
+                .setup_recovery
+                .as_deref()
+                .map(|s| crate::setup::Setup::new(Some(s))),
             config,
             space,
             me: None,
@@ -355,6 +362,10 @@ impl App {
         match msg {
             Msg::Key(k) => self.on_key(k),
             Msg::Paste(text) => {
+                if let Some(setup) = &mut self.setup {
+                    setup.paste(&text);
+                    return Vec::new();
+                }
                 if let Some(draft) = &mut self.task_draft {
                     if !draft.pending
                         && (draft.task.is_none() || draft.field < 2)
@@ -437,6 +448,12 @@ impl App {
         self.conn = Conn::Connecting { attempt: 0 };
         self.epochs.clear();
         self.calls.clear();
+        if let Some(setup) = &mut self.setup
+            && setup.step == crate::setup::Step::Waiting
+        {
+            setup.step = crate::setup::Step::Recovery;
+            setup.notice = self.config.setup_recovery.clone().unwrap_or_default();
+        }
         if let Some(draft) = &mut self.task_draft
             && draft.pending
         {
@@ -652,6 +669,34 @@ impl App {
             return Vec::new();
         };
         match kind {
+            CallKind::Setup => {
+                let Some(setup) = &mut self.setup else { return Vec::new() };
+                match result {
+                    Ok(CallResult::Space { space }) => {
+                        self.config.setup_recovery = None;
+                        self.setup = None;
+                        self.say(Tone::Good, "Space ready. Use :task to start work after configuring your agent and runner.");
+                        return self.set_space(space);
+                    }
+                    Ok(CallResult::Queued { space, outbox_id, .. }) => {
+                        setup.step = crate::setup::Step::Recovery;
+                        setup.notice = format!("Creation queued for {space} (outbox {outbox_id}). Do not create again. Close setup and inspect :space and the outbox until it reaches the home.");
+                    }
+                    Err(error) if !matches!(error, NodeError::Unavailable { .. }) => {
+                        self.config.setup_recovery = None;
+                        setup.step = crate::setup::Step::Preview;
+                        setup.notice = format!("Setup was refused: {error}. Backspace edits; Enter retries.");
+                    }
+                    other => {
+                        setup.step = crate::setup::Step::Recovery;
+                        setup.notice = format!("Setup result is unknown ({other:?}). Inspect followed spaces and the outbox before creating again. No automatic retry.");
+                    }
+                }
+                if setup.step == crate::setup::Step::Recovery {
+                    self.config.setup_recovery = Some(setup.notice.clone());
+                }
+                return vec![Action::SaveConfig(self.config.clone())];
+            }
             CallKind::CreateTask => {
                 let Some(draft) = &mut self.task_draft else { return Vec::new() };
                 draft.pending = false;
@@ -976,6 +1021,30 @@ impl App {
         if ctrl(&k, 'c') {
             self.quit = true;
             return vec![Action::Quit];
+        }
+        if let Some(setup) = &mut self.setup {
+            if k.code == KeyCode::Esc && setup.step != crate::setup::Step::Waiting {
+                self.setup = None;
+                return Vec::new();
+            }
+            if let Some(command) = setup.key(k) {
+                if self.conn != Conn::Up {
+                    setup.step = crate::setup::Step::Preview;
+                    setup.notice =
+                        "Waiting for the node connection. Enter retries when connected.".into();
+                    return Vec::new();
+                }
+                self.config.setup_recovery = Some("A previous setup operation may have reached the home. Inspect :space and the outbox before starting another. After inspection, :setup-reset clears this notice.".into());
+                let Action::Call { id, command } = self.call(CallKind::Setup, command) else {
+                    unreachable!()
+                };
+                return vec![Action::SetupCall {
+                    id,
+                    command,
+                    config: self.config.clone(),
+                }];
+            }
+            return Vec::new();
         }
         if self.task_draft.is_some() {
             return self.task_key(k);
@@ -1645,6 +1714,17 @@ impl App {
         let (cmd, arg) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
         let arg = arg.trim();
         match cmd {
+            "setup" => {
+                self.setup = Some(crate::setup::Setup::new(
+                    self.config.setup_recovery.as_deref(),
+                ));
+                Vec::new()
+            }
+            "setup-reset" => {
+                self.config.setup_recovery = None;
+                self.setup = Some(crate::setup::Setup::new(None));
+                vec![Action::SaveConfig(self.config.clone())]
+            }
             "task" | "new" => self.new_task(),
             "tasks" => self.open_tasks(),
             "" => Vec::new(),

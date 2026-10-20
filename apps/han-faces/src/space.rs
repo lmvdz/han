@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use han_node::NodeApi;
-use han_node::api::{CallResult, Command, Query, Row, ViewEvent, Window};
+use han_node::api::{CallResult, Command, NodeError, Query, Row, ViewEvent, Window};
 use han_node::rpc::{RpcClient, default_endpoint};
 use han_registry::HomeRef;
 
@@ -29,6 +29,21 @@ pub struct SpaceArgs {
 
 #[derive(Subcommand)]
 enum SpaceCmd {
+    /// Preview a Trusted team space; --apply creates it with the displayed authority.
+    CreateTrusted {
+        /// Space name.
+        #[arg(long)]
+        name: String,
+        /// Exact repository identifier, repeated for each repository.
+        #[arg(long = "repo", required = true)]
+        repos: Vec<String>,
+        /// Home ticket or server name (default: this actor's home).
+        #[arg(long)]
+        home: Option<HomeRef>,
+        /// Create the space after reviewing the preview.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Follows a space this person already belongs to.
     Follow {
         /// The space id.
@@ -76,12 +91,59 @@ enum SpaceCmd {
 
 /// Runs `han space` against the running node.
 pub async fn run(args: SpaceArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if let SpaceCmd::CreateTrusted {
+        name, repos, apply, ..
+    } = &args.cmd
+    {
+        let policy = han_node::api::trusted_team_policy(repos)?;
+        println!("Trusted team: {name}");
+        println!("Ordinary changes (at most 500 changed lines) may land automatically in:");
+        for repo in repos {
+            println!("  {repo}");
+        }
+        println!("Requires confirmed operators, a configured runner and passing required checks.");
+        println!(
+            "Sensitive paths, larger changes, other repositories and other effects require owner approval."
+        );
+        println!(
+            "A session guard still requires its person's approval. Membership is invite-only."
+        );
+        println!("{}", serde_json::to_string_pretty(&policy)?);
+        if !apply {
+            println!("Preview only. Add --apply to create this space.");
+            return Ok(());
+        }
+    }
     let endpoint = args
         .endpoint
         .clone()
         .unwrap_or_else(|| default_endpoint(&args.data));
     let client = RpcClient::connect(&endpoint).await?;
     match args.cmd {
+        SpaceCmd::CreateTrusted {
+            name, repos, home, ..
+        } => {
+            let result = client
+                .call(Command::SpaceCreateTrusted { name, repos, home })
+                .await;
+            let result = match result {
+                Err(error @ NodeError::Unavailable { .. }) => {
+                    return Err(format!("Creation result is unknown: {error}. Inspect `han space list` and `han outbox list` on this same node before retrying; another --apply creates a new space.").into());
+                }
+                other => other?,
+            };
+            match result {
+                CallResult::Space { space } => println!("{space}"),
+                CallResult::Queued {
+                    space, outbox_id, ..
+                } => {
+                    println!(
+                        "Creation queued for {space} (outbox {outbox_id}); do not create it again."
+                    );
+                }
+                other => return Err(format!("unexpected answer: {other:?}").into()),
+            }
+        }
         SpaceCmd::Follow { space, home } => {
             client
                 .call(Command::SpaceFollow {

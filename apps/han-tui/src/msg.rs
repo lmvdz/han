@@ -102,6 +102,15 @@ pub enum Action {
     },
     /// Writes the config file.
     SaveConfig(crate::config::Config),
+    /// Persist setup recovery information before sending a command; fail without sending if saving fails.
+    SetupCall {
+        /// Call id.
+        id: u64,
+        /// Reviewed operation.
+        command: Command,
+        /// Preferences with the recovery marker.
+        config: crate::config::Config,
+    },
     /// Drops the connection and dials the node again until it answers.
     Reconnect,
     /// Leaves the program.

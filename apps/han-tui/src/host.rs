@@ -121,6 +121,35 @@ impl Host {
                         let _ = config.save(path);
                     }
                 }
+                Action::SetupCall {
+                    id,
+                    command,
+                    config,
+                } => {
+                    let saved = self
+                        .config_path
+                        .as_ref()
+                        .ok_or_else(|| std::io::Error::other("setup needs a preferences file"))
+                        .and_then(|path| config.save(path));
+                    if let Err(error) = saved {
+                        let _ = self.tx.send(Msg::Called {
+                            id,
+                            result: Err(NodeError::invalid(format!(
+                                "Setup was not sent: cannot save recovery information: {error}"
+                            ))),
+                        });
+                        continue;
+                    }
+                    let tx = self.tx.clone();
+                    let api = lock(&self.api).clone();
+                    tokio::spawn(async move {
+                        let result = match api {
+                            Some(api) => api.call(command).await,
+                            None => Err(NodeError::unavailable("not connected to the node")),
+                        };
+                        let _ = tx.send(Msg::Called { id, result });
+                    });
+                }
                 Action::Reconnect => self.reconnect(),
                 Action::Quit => quit = true,
             }

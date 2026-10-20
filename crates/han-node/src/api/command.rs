@@ -56,6 +56,17 @@ pub enum Command {
         /// `invite`, `open` or `closed`.
         join: String,
     },
+    /// Creates and follows a space with automatic ordinary landing on selected repositories.
+    SpaceCreateTrusted {
+        /// Home to sequence it (default: this actor's home).
+        #[serde(default)]
+        #[ts(optional)]
+        home: Option<HomeRef>,
+        /// Space name.
+        name: String,
+        /// Exact repository identifiers allowed ordinary automatic landing.
+        repos: Vec<String>,
+    },
     /// Uses an invite ticket (`han1...`): dials its node, joins, and follows the space.
     SpaceJoin {
         /// The ticket text.
@@ -504,6 +515,7 @@ impl Command {
     pub fn class(&self) -> CommandClass {
         match self {
             Command::SpaceCreate { .. }
+            | Command::SpaceCreateTrusted { .. }
             | Command::SpaceJoin { .. }
             | Command::SpaceFollow { .. }
             | Command::SpaceAwait { .. }
@@ -553,6 +565,7 @@ impl Command {
     pub fn needs_presence(&self) -> bool {
         match self {
             Command::SpaceJoin { .. }
+            | Command::SpaceCreateTrusted { .. }
             | Command::HomePin { .. }
             | Command::Invite { .. }
             | Command::MemberSet { .. }
