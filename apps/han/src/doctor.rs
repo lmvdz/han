@@ -1847,7 +1847,7 @@ async fn probe_harness_launch(
 ) -> Result<(), String> {
     let mut cmd = match as_user {
         Some(user) => {
-            let mut cmd = tokio::process::Command::new("runuser");
+            let mut cmd = tokio::process::Command::new("/usr/sbin/runuser");
             cmd.args(["-u", user, "--"]).arg(&install.node);
             cmd
         }
@@ -1858,6 +1858,7 @@ async fn probe_harness_launch(
     const PROBE: &str = "const fs=require('node:fs'); for(const p of process.argv.slice(1)){fs.accessSync(p,fs.constants.R_OK);if(!fs.statSync(p).isFile())throw new Error('not a file: '+p);} process.stdout.write(process.versions.node);";
     cmd.no_window()
         .kill_on_drop(true)
+        .env_clear()
         .env_remove("NODE_OPTIONS")
         .env_remove("NODE_PATH")
         .args(["-e", PROBE])
@@ -1887,6 +1888,58 @@ async fn probe_harness_launch(
         return Err(format!("{} is not Node 22", install.node.display()));
     }
     Ok(())
+}
+
+/// Decides whether a diagnostic may execute a registry-controlled program. Root may only drop to a
+/// dedicated, non-root runner account; neither shell identity variables nor the registry can opt out.
+fn launch_probe_identity<'a>(
+    uid: Option<u32>,
+    target: Option<&'a str>,
+    target_uid: Option<u32>,
+) -> Result<Option<&'a str>, &'static str> {
+    let uid = uid.ok_or("cannot determine effective OS identity; harness launch probe skipped")?;
+    if uid == 0 {
+        let target = target.ok_or(
+            "root cannot probe an agent without a dedicated OS user; run doctor as the node user",
+        )?;
+        let dedicated = target
+            .strip_prefix("han-agent")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !dedicated || target_uid.is_none_or(|id| id == 0) {
+            return Err(
+                "root only probes dedicated non-root han-agent<N> accounts; run doctor as the configured user",
+            );
+        }
+        Ok(Some(target))
+    } else if target.is_none() || target_uid == Some(uid) {
+        Ok(None)
+    } else {
+        Err("cannot probe a different OS identity; run doctor as the configured agent user")
+    }
+}
+
+fn effective_uid() -> Option<u32> {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()?
+        .lines()
+        .find(|line| line.starts_with("Uid:"))?
+        .split_whitespace()
+        .nth(2)?
+        .parse()
+        .ok()
+}
+
+fn account_uid(user: &str) -> Option<u32> {
+    if !valid_os_user(user) {
+        return None;
+    }
+    let output = std::process::Command::new("/usr/bin/id")
+        .args(["-u", "--", user])
+        .env_clear()
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
 }
 
 /// Reads the machine.
@@ -2018,26 +2071,29 @@ pub async fn gather(
                 && let Ok(driver) = crate::harness::driver(data, h)
             {
                 let as_user = a.os_user.as_deref().filter(|_| linux);
-                if let Some(target) = as_user.filter(|target| *target != user && user != "root") {
-                    skips.push(Skip {
+                let identity = if linux {
+                    launch_probe_identity(effective_uid(), as_user, as_user.and_then(account_uid))
+                } else {
+                    Ok(None)
+                };
+                match identity {
+                    Err(reason) => skips.push(Skip {
                         check: "harness.launch",
-                        reason: format!("cannot test {actor} as OS user {target} while running as {user}; run sudo han doctor --data {}", data.display()),
-                    });
-                } else if as_user.is_none_or(valid_os_user)
-                    && let Err(why) = probe_harness_launch(
-                        &install,
-                        &driver.adapter.entry,
-                        as_user.filter(|target| *target != user),
-                    )
-                    .await
-                {
-                    launch_refusals.insert(
-                        actor.clone(),
-                        format!(
-                            "{actor} cannot launch its harness as {}: {why}",
-                            as_user.unwrap_or(&user)
-                        ),
-                    );
+                        reason: format!("{actor}: {reason}"),
+                    }),
+                    Ok(run_as) => {
+                        if let Err(why) =
+                            probe_harness_launch(&install, &driver.adapter.entry, run_as).await
+                        {
+                            launch_refusals.insert(
+                                actor.clone(),
+                                format!(
+                                    "{actor} cannot launch its harness as {}: {why}",
+                                    as_user.unwrap_or(&user)
+                                ),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -2382,6 +2438,34 @@ mod tests {
 
     fn agents(json: &str) -> Result<AgentsFile, String> {
         serde_json::from_str(json).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn privileged_probe_never_executes_registry_programs_as_root_or_arbitrary_users() {
+        for (uid, target, target_uid) in [
+            (None, None, None),
+            (Some(0), None, None),
+            (Some(0), Some("root"), Some(0)),
+            (Some(0), Some("han-agent1"), Some(0)),
+            (Some(0), Some("operator"), Some(1000)),
+            (Some(0), Some("han-agent"), Some(1001)),
+            (Some(0), Some("han-agent1"), None),
+            (Some(1000), Some("han-agent1"), Some(1001)),
+        ] {
+            assert!(
+                launch_probe_identity(uid, target, target_uid).is_err(),
+                "{uid:?} {target:?}"
+            );
+        }
+        assert_eq!(
+            launch_probe_identity(Some(0), Some("han-agent1"), Some(1001)),
+            Ok(Some("han-agent1"))
+        );
+        assert_eq!(
+            launch_probe_identity(Some(1001), Some("han-agent1"), Some(1001)),
+            Ok(None)
+        );
+        assert_eq!(launch_probe_identity(Some(1001), None, None), Ok(None));
     }
 
     #[test]
