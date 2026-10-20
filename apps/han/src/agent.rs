@@ -137,7 +137,7 @@ enum AgentCmd {
     },
     /// Installs a harness's pinned ACP adapter (npm, with Node 22) into the data directory and records where.
     SetupHarness {
-        /// `claude` or `pi`.
+        /// A bundled driver (`claude`, `pi`), an installed name, or a TOML/JSON driver file.
         harness: String,
         /// Install here instead of `<data>/harness/<harness>` (for example a directory an OS-user agent can
         /// read).
@@ -147,9 +147,8 @@ enum AgentCmd {
         #[arg(long)]
         node: Option<PathBuf>,
     },
-    /// Logs an agent in to Claude Code, once, in the agent's own login directory (`CLAUDE_CONFIG_DIR`). Runs
-    /// `claude` interactively outside the sandbox; the login is the only thing of yours the agent's sandbox
-    /// will see. With `--check` it only says whether a login exists, and never shows its contents.
+    /// Runs the harness's login command in the agent's own login directory, outside the sandbox.
+    /// With `--check`, only checks whether its credential file exists; never shows its contents.
     Login {
         /// The agent actor.
         agent: String,
@@ -159,9 +158,12 @@ enum AgentCmd {
         /// The login directory, if it is not the agent's default.
         #[arg(long)]
         dir: Option<PathBuf>,
-        /// The `claude` program, if it is not on the PATH.
+        /// Override the first executable in the adapter's login command. `--claude` is a legacy alias.
+        #[arg(long, alias = "claude")]
+        program: Option<PathBuf>,
+        /// Use this harness instead of the agent's recorded one.
         #[arg(long)]
-        claude: Option<PathBuf>,
+        harness: Option<String>,
     },
     /// Changes how an agent is launched, in `<data>/agents.json`; only what is given changes. Needs no running
     /// node. Prints `changed:` or `unchanged:`.
@@ -246,14 +248,16 @@ pub async fn run(args: AgentArgs) -> Result<(), Box<dyn std::error::Error>> {
             agent,
             check,
             dir,
-            claude,
+            program,
+            harness,
         } => {
             return crate::harness::login(
                 &args.data,
                 agent,
                 *check,
                 dir.as_deref(),
-                claude.as_deref(),
+                program.as_deref(),
+                harness.as_deref(),
             );
         }
         AgentCmd::Set {

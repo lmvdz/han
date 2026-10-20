@@ -36,12 +36,7 @@ fn driver(h: &HarnessSpec) -> Result<DriverConfig, Box<dyn std::error::Error>> {
         return Ok(d);
     }
     let path = h.driver.as_deref().unwrap_or(Path::new(&h.name));
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(if path.extension().is_some_and(|e| e == "toml") {
-        DriverConfig::from_toml(&text)?
-    } else {
-        DriverConfig::from_json(&text)?
-    })
+    Ok(DriverConfig::load(path)?)
 }
 
 fn repo(spec: Option<&str>, base: &str, default_branch: &str) -> RepoConfig {

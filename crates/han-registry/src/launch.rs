@@ -156,9 +156,7 @@ impl Registry {
             })?;
         let key = record_name(&harness_name);
         // A driver file given as the harness is a path, not a record's name.
-        let named = key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        let named = crate::agents::valid_harness_name(key);
         let install = if named {
             HarnessInstall::load(dir, key).map_err(LaunchError::Invalid)?
         } else {
@@ -171,9 +169,9 @@ impl Registry {
                 node: Some(h.node),
                 adapter_dir: Some(h.adapter_dir),
             },
-            None if matches!(key, "claude" | "pi") => {
+            None if named && !key.ends_with(".json") && !key.ends_with(".toml") => {
                 return Err(LaunchError::Unavailable(format!(
-                    "the {key} harness is not set up on this node: run `han agent setup-harness {key}`"
+                    "the {key} harness is not set up on this node: run `han agent setup-harness {key}` (pass its driver file if it is not bundled)"
                 )));
             }
             None => HarnessSpec {
@@ -318,6 +316,10 @@ mod tests {
             panic!("expected unavailable")
         };
         assert!(m.contains("han agent setup-harness pi"), "{m}");
+        let Err(LaunchError::Unavailable(m)) = r.resolve(&launch("custom-adapter")) else {
+            panic!("an uninstalled named adapter is unavailable")
+        };
+        assert!(m.contains("han agent setup-harness custom-adapter"));
         // a driver file named as the harness needs no record
         let ok = r.resolve(&launch("/etc/han/driver.toml")).unwrap();
         assert_eq!(ok.spec.harness.name, "/etc/han/driver.toml");

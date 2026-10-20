@@ -20,6 +20,16 @@ pub const LOGIN_DIR: &str = "claude-config";
 /// Where the OS-user agents of a runner keep their state when `agents.json` does not say.
 pub const DEFAULT_STATE_ROOT: &str = "/var/lib/han-agents";
 
+/// A registry name, never a directory traversal or a driver-file path.
+pub fn valid_harness_name(name: &str) -> bool {
+    name.as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphanumeric)
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+}
+
 /// Whether `user` is an OS user name `han` will use: the one rule for the supervisor, `han runner setup` and
 /// `han agent add` (a plain portable name; the polkit rule narrows it further to `han-agent<N>`).
 pub fn valid_os_user(user: &str) -> bool {
@@ -69,6 +79,10 @@ impl HarnessInstall {
 
     /// Reads the record, if the harness is set up.
     pub fn load(data_dir: &Path, harness: &str) -> Result<Option<HarnessInstall>, String> {
+        // A direct driver-file path is not a registry name. Never let it escape the registry directory.
+        if !valid_harness_name(harness) {
+            return Ok(None);
+        }
         let path = Self::path(data_dir, harness);
         match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text)
@@ -81,6 +95,12 @@ impl HarnessInstall {
 
     /// Writes the record.
     pub fn save(&self, data_dir: &Path) -> std::io::Result<()> {
+        if !valid_harness_name(&self.harness) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid harness registry name",
+            ));
+        }
         let path = Self::path(data_dir, &self.harness);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;

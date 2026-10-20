@@ -399,7 +399,7 @@ pub struct Facts {
     pub agents: Result<AgentsFile, String>,
     /// By harness name, for the harnesses the agents use.
     pub harnesses: BTreeMap<String, HarnessFact>,
-    /// By actor: whether the agent's login exists, for the agents that use Claude Code.
+    /// By actor: whether the credential file declared by its adapter exists.
     pub logins: BTreeMap<String, bool>,
     /// By OS user: whether the user exists (Linux).
     pub os_users: BTreeMap<String, bool>,
@@ -1420,12 +1420,11 @@ fn agent_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
             if !used.contains(&h) {
                 used.push(h);
             }
-            if is_claude(h) && f.logins.get(actor) == Some(&false) {
-                let dir = file.login_dir(&f.data, actor);
+            if f.logins.get(actor) == Some(&false) {
                 out.push(finding(
                     "agent.login.missing",
                     actor.clone(),
-                    format!("{actor} has no Claude Code login in {}", dir.display()),
+                    format!("{actor} has no cached login for harness {h}"),
                     format!("han agent login {} --data {data}", q(actor)),
                 ));
             }
@@ -1433,10 +1432,10 @@ fn agent_findings(f: &Facts, data: &str, out: &mut Vec<Finding>) {
     }
     for h in used {
         let name = record_name(h);
-        let builtin = matches!(name, "claude" | "pi");
+        let named = han_registry::agents::valid_harness_name(name);
         let fix = format!("han agent setup-harness {name} --data {data}");
         match f.harnesses.get(h) {
-            Some(HarnessFact::Missing) if builtin => out.push(finding(
+            Some(HarnessFact::Missing) if named => out.push(finding(
                 "harness.missing",
                 h.clone(),
                 format!("the {name} harness is not set up on this node"),
@@ -1925,16 +1924,24 @@ pub async fn gather(
                 os_users.insert(u.clone(), user_exists(u));
             }
             let Some(h) = &a.harness else { continue };
-            if is_claude(h) {
-                logins.insert(
-                    actor.clone(),
-                    han_host::driver::login_present(&file.login_dir(data, actor)),
-                );
+            if let Ok(driver) = crate::harness::driver(data, h)
+                && let Some(login) = driver.login()
+            {
+                logins.insert(actor.clone(), login.present(&file.login_dir(data, actor)));
             }
             harnesses.entry(h.clone()).or_insert_with(|| {
                 match HarnessInstall::load(data, record_name(h)) {
                     Ok(None) => HarnessFact::Missing,
                     Err(e) => HarnessFact::Broken(e),
+                    Ok(Some(r))
+                        if r.driver
+                            .as_ref()
+                            .is_some_and(|p| han_host::driver::DriverConfig::load(p).is_err()) =>
+                    {
+                        HarnessFact::Broken(
+                            "the installed driver file is missing or invalid".into(),
+                        )
+                    }
                     Ok(Some(r)) => HarnessFact::Recorded {
                         node_ok: r.node.exists(),
                         adapter_ok: r.adapter_dir.exists(),
