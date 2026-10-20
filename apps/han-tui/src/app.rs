@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use han_node::api::{
     BoardRow, CallResult, Command, Group, NodeError, NodeStatusRow, Query, Row, SessionPart,
-    SessionState, SpaceStatusRow, ViewEvent, Window,
+    SessionState, SpaceStatusRow, TaskRow, ViewEvent, Window,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -71,6 +71,28 @@ enum CallKind {
     Cancel,
     Steer,
     Admit,
+    CreateTask,
+    StartTask,
+}
+
+/// A task being composed. A known task id is retained when its start fails, so retrying never creates
+/// another task. An uncertain create is never silently repeated after a disconnect.
+#[derive(Clone, Debug)]
+pub struct TaskDraft {
+    /// The space selected when the form opened.
+    pub space: String,
+    /// Agent, repository and request fields.
+    pub fields: [LineEdit; 3],
+    /// Active field.
+    pub field: usize,
+    /// A call is awaiting its response.
+    pub pending: bool,
+    /// The accepted or queued task, if creation returned its id.
+    pub task: Option<String>,
+    /// A lost reply means the user must inspect tasks before creating again.
+    pub uncertain: bool,
+    /// Persistent result or recovery guidance.
+    pub notice: String,
 }
 
 /// The whole state of the TUI.
@@ -107,6 +129,14 @@ pub struct App {
     pub overlap_detail: bool,
     /// The transient message.
     pub toast: Option<Toast>,
+    /// The task creation form, if open.
+    pub task_draft: Option<TaskDraft>,
+    /// Whether the task list is open.
+    pub tasks_open: bool,
+    /// Selected row in the task list.
+    pub task_selection: usize,
+    /// The task list's persistent status.
+    pub tasks_notice: String,
     /// Terminal size, columns and rows.
     pub size: (u16, u16),
     /// The clock, as of the last tick.
@@ -114,6 +144,7 @@ pub struct App {
     /// Whether the program should end.
     pub quit: bool,
     spaces_mirror: han_node::api::ViewMirror,
+    tasks_mirror: han_node::api::ViewMirror,
     pending_g: bool,
     epochs: HashMap<ViewKind, u64>,
     /// The `seq` of the last event of each open view: a gap means a missed event.
@@ -148,6 +179,11 @@ impl App {
             approvals_open: false,
             focus: Focus::Board,
             mode: Mode::Normal,
+            task_draft: None,
+            tasks_open: false,
+            task_selection: 0,
+            tasks_notice: String::new(),
+            tasks_mirror: han_node::api::ViewMirror::new(),
             help: false,
             overlap_detail: false,
             toast: None,
@@ -291,6 +327,9 @@ impl App {
             ));
         }
         out.extend(self.session_subs());
+        if self.tasks_open {
+            out.extend(self.open_tasks());
+        }
         out
     }
 
@@ -316,6 +355,15 @@ impl App {
         match msg {
             Msg::Key(k) => self.on_key(k),
             Msg::Paste(text) => {
+                if let Some(draft) = &mut self.task_draft {
+                    if !draft.pending
+                        && (draft.task.is_none() || draft.field < 2)
+                        && !draft.uncertain
+                    {
+                        draft.fields[draft.field].insert(&text.replace(['\n', '\r'], " "));
+                    }
+                    return Vec::new();
+                }
                 match &mut self.mode {
                     Mode::Palette(e) | Mode::Filter(e) => e.insert(&text),
                     Mode::Normal => {
@@ -368,10 +416,7 @@ impl App {
                 }
                 self.lost()
             }
-            Msg::Called { id, result } => {
-                self.on_called(id, result);
-                Vec::new()
-            }
+            Msg::Called { id, result } => self.on_called(id, result),
             Msg::Connecting { attempt } => {
                 self.conn = Conn::Connecting { attempt };
                 Vec::new()
@@ -392,6 +437,13 @@ impl App {
         self.conn = Conn::Connecting { attempt: 0 };
         self.epochs.clear();
         self.calls.clear();
+        if let Some(draft) = &mut self.task_draft
+            && draft.pending
+        {
+            draft.pending = false;
+            draft.uncertain = true;
+            draft.notice = "Connection lost; the result is unknown. Inspect tasks and the board before retrying. Nothing will be repeated automatically.".into();
+        }
         if let Card::Signing {
             key,
             digest,
@@ -416,6 +468,23 @@ impl App {
 
     fn on_view(&mut self, view: ViewKind, event: ViewEvent) -> Vec<Action> {
         match view {
+            ViewKind::Tasks => {
+                let selected = self
+                    .task_rows()
+                    .get(self.task_selection)
+                    .map(|r| r.task.clone());
+                self.tasks_notice = match &event {
+                    ViewEvent::Failed { error, .. } => format!("Tasks unavailable: {error}"),
+                    ViewEvent::End { .. } => "Task view disconnected; refresh to reconnect".into(),
+                    _ => String::new(),
+                };
+                self.tasks_mirror.apply(event);
+                let rows = self.task_rows();
+                self.task_selection = selected
+                    .and_then(|id| rows.iter().position(|r| r.task == id))
+                    .unwrap_or(self.task_selection.min(rows.len().saturating_sub(1)));
+                Vec::new()
+            }
             ViewKind::Node => {
                 if let ViewEvent::Failed { error, .. } = &event {
                     return if matches!(error, NodeError::Unavailable { .. }) {
@@ -578,11 +647,59 @@ impl App {
         }
     }
 
-    fn on_called(&mut self, id: u64, result: Result<CallResult, NodeError>) {
+    fn on_called(&mut self, id: u64, result: Result<CallResult, NodeError>) -> Vec<Action> {
         let Some(kind) = self.calls.remove(&id) else {
-            return;
+            return Vec::new();
         };
         match kind {
+            CallKind::CreateTask => {
+                let Some(draft) = &mut self.task_draft else { return Vec::new() };
+                draft.pending = false;
+                match result {
+                    Ok(CallResult::Receipt { id, .. }) => {
+                        draft.task = Some(id);
+                        return self.submit_task();
+                    }
+                    Ok(CallResult::Queued { id, .. }) => {
+                        draft.task = Some(id);
+                        draft.notice = "Task is queued in the outbox. Once it reaches the home, Enter starts this same task.".into();
+                    }
+                    Err(error) => {
+                        draft.uncertain = matches!(error, NodeError::Unavailable { .. });
+                        draft.notice = if draft.uncertain {
+                            format!("Creation result unknown: {error}. Inspect tasks before creating again.")
+                        } else { format!("Task was not created: {error}") };
+                    }
+                    Ok(_) => {
+                        draft.uncertain = true;
+                        draft.notice = "Unexpected response. Inspect tasks before creating again.".into();
+                    }
+                }
+            }
+            CallKind::StartTask => {
+                let Some(draft) = &mut self.task_draft else { return Vec::new() };
+                draft.pending = false;
+                match result {
+                    Ok(_) => {
+                        let id = draft.task.clone().unwrap_or_default();
+                        self.task_draft = None;
+                        self.tasks_open = false;
+                        self.focus = Focus::Board;
+                        self.say(Tone::Good, format!("Started task {id}"));
+                        let mut actions = self.board_sub();
+                        actions.push(self.unsub(ViewKind::Tasks));
+                        return actions;
+                    }
+                    Err(error) => {
+                        draft.uncertain = matches!(error, NodeError::Unavailable { .. });
+                        draft.notice = if draft.uncertain {
+                            format!("Task exists; start result unknown: {error}. Inspect the board before starting this task again. No automatic retry.")
+                        } else {
+                            format!("Task exists; start was refused: {error}. Enter retries only start, without creating another task.")
+                        };
+                    }
+                }
+            }
             CallKind::Approve => match result {
                 Ok(CallResult::Queued { .. }) => {
                     self.approvals.card = Card::Closed;
@@ -627,6 +744,174 @@ impl App {
                 }
             }
         }
+        Vec::new()
+    }
+
+    fn new_task(&mut self) -> Vec<Action> {
+        let Some(space) = self.space.clone() else {
+            self.say(
+                Tone::Info,
+                "Select a space with :space before creating a task",
+            );
+            return Vec::new();
+        };
+        if self.task_draft.is_none() {
+            let row = self.board.selected_row();
+            self.task_draft = Some(TaskDraft {
+                space,
+                fields: [
+                    LineEdit::with(row.map_or("", |r| r.agent.as_str())),
+                    LineEdit::with(row.and_then(|r| r.repo.as_deref()).unwrap_or("")),
+                    LineEdit::default(),
+                ],
+                field: 0,
+                pending: false,
+                task: None,
+                uncertain: false,
+                notice: String::new(),
+            });
+        }
+        Vec::new()
+    }
+
+    /// Open tasks known to this space. The query window is bounded to 1,000 entries.
+    pub fn task_rows(&self) -> Vec<TaskRow> {
+        self.tasks_mirror
+            .rows()
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Task(t) if t.open => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn open_tasks(&mut self) -> Vec<Action> {
+        let Some(space) = self.space.clone() else {
+            self.say(Tone::Info, "Select a space with :space first");
+            return Vec::new();
+        };
+        self.tasks_open = true;
+        self.tasks_notice = "Loading tasks…".into();
+        vec![self.sub(
+            ViewKind::Tasks,
+            Query::Tasks {
+                space,
+                assignee: None,
+                window: Window {
+                    limit: 1000,
+                    ..Window::default()
+                },
+            },
+        )]
+    }
+
+    fn tasks_key(&mut self, k: KeyEvent) -> Vec<Action> {
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.tasks_open = false;
+                return vec![self.unsub(ViewKind::Tasks)];
+            }
+            KeyCode::Char('n') => return self.new_task(),
+            KeyCode::Char('r') => return self.open_tasks(),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.task_selection =
+                    (self.task_selection + 1).min(self.task_rows().len().saturating_sub(1));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.task_selection = self.task_selection.saturating_sub(1)
+            }
+            KeyCode::Enter => {
+                if let Some(task) = self.task_rows().get(self.task_selection) {
+                    let repo = task
+                        .external
+                        .as_deref()
+                        .and_then(|s| s.split_once('#'))
+                        .map_or("", |(r, _)| r);
+                    self.task_draft = Some(TaskDraft {
+                        space: task.space.clone(),
+                        fields: [LineEdit::with(task.to.first().map_or("", String::as_str)),
+                            LineEdit::with(repo), LineEdit::with(task.ask.as_deref().unwrap_or("Existing task"))],
+                        field: 1, pending: false, task: Some(task.task.clone()), uncertain: false,
+                        notice: "Choose an assigned agent and repository, then Enter starts this existing task.".into(),
+                    });
+                }
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn submit_task(&mut self) -> Vec<Action> {
+        let Some(draft) = &mut self.task_draft else {
+            return Vec::new();
+        };
+        if draft.pending || draft.uncertain {
+            return Vec::new();
+        }
+        if self.conn != Conn::Up {
+            draft.notice =
+                "Reconnect to the node before submitting; your request is kept here.".into();
+            return Vec::new();
+        }
+        if draft.fields.iter().any(|f| f.text().trim().is_empty()) {
+            draft.notice = "Fill in the agent, repository and request.".into();
+            return Vec::new();
+        }
+        let agent = draft.fields[0].text().trim().to_owned();
+        let repo = draft.fields[1].text().trim().to_owned();
+        let ask = draft.fields[2].text().to_owned();
+        let space = draft.space.clone();
+        let task = draft.task.clone();
+        draft.pending = true;
+        draft.notice = if task.is_some() {
+            "Starting agent; confirm any system authentication prompt…"
+        } else {
+            "Creating task…"
+        }
+        .into();
+        let (kind, command) = match task {
+            Some(task) => (
+                CallKind::StartTask,
+                Command::AgentStart {
+                    space,
+                    agent,
+                    harness: None,
+                    repo: Some(repo),
+                    issue: None,
+                    task: Some(task),
+                    home: None,
+                },
+            ),
+            None => (
+                CallKind::CreateTask,
+                Command::TaskCreate {
+                    space,
+                    to: vec![agent],
+                    ask,
+                    external: None,
+                },
+            ),
+        };
+        vec![self.call(kind, command)]
+    }
+
+    fn task_key(&mut self, k: KeyEvent) -> Vec<Action> {
+        let draft = self.task_draft.as_mut().expect("open task form");
+        if draft.pending {
+            return Vec::new();
+        }
+        match k.code {
+            KeyCode::Esc => self.task_draft = None,
+            KeyCode::Enter => return self.submit_task(),
+            KeyCode::Tab => draft.field = (draft.field + 1) % 3,
+            KeyCode::BackTab => draft.field = (draft.field + 2) % 3,
+            _ if (draft.task.is_none() || draft.field < 2) && !draft.uncertain => {
+                draft.fields[draft.field].key(k);
+            }
+            _ => {}
+        }
+        Vec::new()
     }
 
     /// `:admit <actor>`: makes an actor that waits to join a member. Only a listed admission is admitted, and an
@@ -691,6 +976,12 @@ impl App {
         if ctrl(&k, 'c') {
             self.quit = true;
             return vec![Action::Quit];
+        }
+        if self.task_draft.is_some() {
+            return self.task_key(k);
+        }
+        if self.tasks_open {
+            return self.tasks_key(k);
         }
         if self.help || self.overlap_detail {
             self.help = false;
@@ -797,6 +1088,8 @@ impl App {
                 moved(self, Nav::Delta(-p))
             }
             KeyCode::Enter => self.board_enter(),
+            KeyCode::Char('n') => self.new_task(),
+            KeyCode::Char('T') => self.open_tasks(),
             KeyCode::Char(' ') => {
                 if self.board.toggle_group() {
                     self.board_sub()
@@ -1352,6 +1645,8 @@ impl App {
         let (cmd, arg) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
         let arg = arg.trim();
         match cmd {
+            "task" | "new" => self.new_task(),
+            "tasks" => self.open_tasks(),
             "" => Vec::new(),
             "q" | "quit" | "exit" => {
                 self.quit = true;
@@ -1437,6 +1732,10 @@ impl App {
 
     fn set_space(&mut self, space: String) -> Vec<Action> {
         let mut out = Vec::new();
+        self.tasks_open = false;
+        self.tasks_mirror = han_node::api::ViewMirror::new();
+        self.task_selection = 0;
+        out.push(self.unsub(ViewKind::Tasks));
         if self.session.is_some() {
             out.extend(self.close_session_actions());
             self.focus = Focus::Board;

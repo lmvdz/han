@@ -110,7 +110,17 @@ han tui <space>
 
 `han agent set` changes how an agent is launched and nothing else; never edit `agents.json` by hand. It takes `--os-user`, `--sandbox`, `--allow-advisory`, `--toolchains` and `--harness`, needs no running node, and prints `changed:` or `unchanged:`.
 
-`han tui` shows the live board, the session pane (Enter) and the approvals inbox, where you read a proposal and approve it. `han tui <space> --print 120x30` prints one screen as text and exits, which is handy over SSH and in scripts. `han board` prints the board as plain text. `han agent stop <agent>` stops its sessions.
+`han tui` shows the live board, the session pane (Enter) and the approvals inbox, where you read a proposal and approve it. Press **n** (or `:task`) to create and start work: fill in the agent, repository and request, then Enter. **T** (or `:tasks`) lists open tasks; Enter opens an existing task for starting. A failed start keeps the task id, so retrying start does not create another task. A lost reply requires inspecting the board/tasks before retrying; the TUI does not repeat it automatically.
+
+The CLI equivalent, once the node and agent are set up, is:
+
+```sh
+han task create <space> "Fix the README links" --to @me-coder:han.home.arpa --repo github:owner/repo --start
+```
+
+Use `--file request.txt` instead of the quoted request for multiline work, or omit `--start` and `--repo` to create a task for later. `--to` accepts comma-separated or repeated assignees; immediate start requires one agent. A queued task is not started until the home accepts it. The CLI prints the retained task id and a recovery command if start does not succeed.
+
+`han tui <space> --print 120x30` prints one screen as text and exits, which is handy over SSH and in scripts. `han board` prints the board as plain text. `han agent stop <agent>` stops its sessions.
 
 ## 8. Add a teammate, a device, GitHub
 
