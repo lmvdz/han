@@ -1,6 +1,6 @@
 # Status
 
-As of 2026-10-20, checked against repository history through `d16eadc` (#168). The milestone acceptance criteria are in [PLAN.md §10](https://github.com/lmvdz/han/blob/main/PLAN.md#10-milestones). “Implemented” below describes merged code, not completion of the beta acceptance targets or a fresh live deployment check.
+As of 2026-10-20, checked against repository history through `aea9d40` (#174). The milestone acceptance criteria are in [PLAN.md §10](https://github.com/lmvdz/han/blob/main/PLAN.md#10-milestones). “Implemented” below describes merged code, not completion of the beta acceptance targets or a fresh live deployment check.
 
 ## Milestones
 
@@ -26,7 +26,7 @@ As of 2026-10-20, checked against repository history through `d16eadc` (#168). T
 - **GitHub intake.** `han-github` polls issues into pool tasks; task recreation and service installation are implemented (#126). This does not establish two-way GitHub synchronization or chat notifications.
 - **Security and operations.** The build includes hello-to-node binding, known-actor hosting, pinned remote profiles and operator confirmation (#47, #48, #52, #59). Role-specific RPC endpoints prevent hosts and executors from approving (#90); human-presence checks protect face governing and steering (#114). Release tooling and cross-OS CI exist (#51), with later CI and platform fixes through #165.
 
-The built-in ACP harnesses are **pi** (API-key mode) and **Claude Code** through `claude-agent-acp` (subscription login). The host confines agents with MXC on Windows or bubblewrap on Linux. There is no built-in Codex harness in this checkout; this page does not claim Codex integration or Codex-authored work has landed.
+The ACP harnesses include **pi** (API-key mode) and **Claude Code** through `claude-agent-acp` (subscription login), with [declarative ACP drivers](../crates/han-host/drivers/README.md) supporting shared setup, login, diagnostics and launch (#174), including a pinned **Codex** adapter with isolated subscription login. The host confines agents with MXC on Windows or bubblewrap on Linux. The verified Codex run completed a real documentation task through manual approval, executor checks and [landing PR #173](https://github.com/lmvdz/han/pull/173) (commit `96da3fa`), using Linux bubblewrap and a ChatGPT subscription. That trial does not establish Windows Codex, fresh onboarding, steering, quota exhaustion or interrupted-turn recovery, nor the planned Trusted team preset. Beta acceptance and the two-week multi-person acceptance target remain unverified.
 
 ## The specification
 
