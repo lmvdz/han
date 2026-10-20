@@ -142,6 +142,7 @@ pub(super) fn is_human(ctx: &Ctx, actor: &str) -> bool {
 /// A gated effect of tier 1 or more that no rule covers still needs an owner (P-17).
 static DEFAULT_GATED_RULE: LazyLock<ApprovalRule> = LazyLock::new(|| ApprovalRule {
     action: "*".to_owned(),
+    repo: None,
     approvers: vec!["owner".to_owned()],
     min_tier: None,
     max_tier: None,
@@ -156,24 +157,29 @@ static DEFAULT_GATED_RULE: LazyLock<ApprovalRule> = LazyLock::new(|| ApprovalRul
 /// (`minTier`, `maxTier`) holds. A rule with a tier predicate never applies to an effect without a gate. A
 /// gated effect of tier 1 or more that no rule covers needs an owner.
 pub(super) fn rule_for<'a>(state: &'a SpaceState, eff: &Effect) -> Option<&'a ApprovalRule> {
-    rule_in(&state.policy.approvals, &eff.action, eff.gate.as_ref())
+    matching_approval_rule(&state.policy.approvals, &eff.action, eff.gate.as_ref())
 }
 
-/// P-17 (round 33): whether the proposal itself satisfies E3 under the rule that applies to an effect of `action`
-/// that has no gate (a `vcs.try` has none): the first rule that matches carries `proposer`. This is what Policy
-/// reports to an executor, so that its local gate asks for an approval only where E3 does.
-pub fn proposer_suffices(approvals: &[ApprovalRule], action: &str) -> bool {
-    rule_in(approvals, action, None).is_some_and(|r| r.proposer == Some(true))
+/// Whether the first matching current approval rule lets this proposal satisfy the rule approval.
+/// Faces and executors must supply the derived gate, including its exact repository.
+pub fn proposer_suffices(approvals: &[ApprovalRule], action: &str, gate: Option<&Gate>) -> bool {
+    matching_approval_rule(approvals, action, gate).is_some_and(|r| r.proposer == Some(true))
 }
 
-/// The rule of `approvals` that applies to an effect of `action` with `gate` (see [`rule_for`]).
-fn rule_in<'a>(
+/// The rule of `approvals` that applies to an effect of `action` with `gate`: action, repository, tier and revert predicates all apply.
+pub fn matching_approval_rule<'a>(
     approvals: &'a [ApprovalRule],
     action: &str,
     g: Option<&Gate>,
 ) -> Option<&'a ApprovalRule> {
     for r in approvals {
         if r.action != action && r.action != "*" {
+            continue;
+        }
+        if r.repo
+            .as_ref()
+            .is_some_and(|repo| g.and_then(|g| g.repo.as_ref()) != Some(repo))
+        {
             continue;
         }
         if r.revert == Some(true) && g.is_none_or(|g| g.revert_of.is_none()) {

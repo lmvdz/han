@@ -1573,6 +1573,46 @@ async fn green_checks_without_an_approval_stall_instead_of_flapping() {
 }
 
 #[tokio::test]
+async fn trusted_landing_still_requires_green_checks_on_the_landed_commit() {
+    for (required, conclusion, lands) in [
+        (true, "success", true),
+        (true, "failure", false),
+        (false, "success", false),
+    ] {
+        let rig = Rig::with(|r| {
+            if !required {
+                r.checks.required.clear();
+            }
+        });
+        rig.checks.fast(vec![run("quick", conclusion)]);
+        let p = rig.land("trusted", "a.txt", "trusted change\n");
+        rig.node.state().rows[0].approvals.clear();
+        rig.node.set_proposer_suffices(&p, true);
+        let before = rig.w.tip();
+        let (_exec, lane) = rig.boot();
+        lane.pass().await.unwrap();
+        if lands {
+            assert_eq!(rig.last(&p)["state"], "confirmed");
+            assert_ne!(rig.w.tip(), before);
+            let evidence = rig.blob(&rig.items(&p)[2]["evidence"]);
+            assert_eq!(evidence["commit"], rig.w.tip());
+            assert_eq!(evidence["checks"][0]["conclusion"], "success");
+        } else {
+            assert_eq!(rig.w.tip(), before);
+            assert_eq!(rig.node.claims(), 0);
+            assert_eq!(rig.last(&p)["state"], "rejected");
+            if !required {
+                assert!(
+                    rig.cancels()[0]
+                        .1
+                        .contains("at least one configured required check")
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_cancelled_proposal_leaves_the_lane() {
     let rig = Rig::new();
     rig.checks.fast(vec![run("quick", "queued")]);

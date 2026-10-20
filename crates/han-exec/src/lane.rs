@@ -1787,6 +1787,18 @@ impl Lane {
         now: i64,
         rep: &mut PassReport,
     ) -> Result<(), ExecError> {
+        if !c.check_only && row.proposer_suffices && repo.checks.required.is_empty() {
+            return self
+                .reject(
+                    c,
+                    "policy",
+                    "automatic landing requires at least one configured required check",
+                    None,
+                    None,
+                    now,
+                )
+                .await;
+        }
         let Some(p) = c.prepared.clone() else {
             return self.requeue(c, "nothing was prepared", now).await;
         };

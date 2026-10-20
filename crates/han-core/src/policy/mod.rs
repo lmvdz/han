@@ -48,7 +48,9 @@ pub use gate::{
     Change, ChangeFile, Evidence, FileKind, Gate, MAX_CHANGE_BYTES, MAX_CHANGE_FILES,
     MAX_GATE_RULES, MAX_PATH_OWNERS, NEVER_AUTO, PATH_OWNER, change_tier, glob_match,
 };
-pub use guard::{GuardInput, GuardStatus, abandon_after, guard_status, proposer_suffices};
+pub use guard::{
+    GuardInput, GuardStatus, abandon_after, guard_status, matching_approval_rule, proposer_suffices,
+};
 pub use state::{
     ActorSet, Approval, ClaimState, Effect, EntryRef, Interval, KeyState, Phase, ProfileState,
     Remaining, Session, Source, SpaceState, Task,

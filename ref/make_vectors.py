@@ -2761,6 +2761,51 @@ JCS16 = {"name": "jcs-utf16-key-order", "rules": ["§2"], "description": "keys a
                    "contentHash": "", "refs": [], "seen": 0, "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaa", "time": "2026-10-10T12:00:00Z"},
          "preimage": "han-entry-v1\n" + '{"author":"@m:a.example","body":{"\U0001F600":2,"�":1},"contentHash":"","keyId":"k1","kind":"x.note","nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaa","refs":[],"seen":0,"space":"s1:a.example","time":"2026-10-10T12:00:00Z","v":1}'}
 
+# Repository-scoped Trusted team grants. Expected verdicts are written from P-17, not computed.
+TRUSTED_RULE = {"action": "vcs.land", "repo": REPO, "maxTier": 1, "approvers": ["owner"], "proposer": True}
+def trusted_policy(*rules, **kw):
+    return policy(gates=GATES, approvals=list(rules) + [{"action": "*", "approvers": ["owner"]}], **kw)
+
+v = V("trusted-repository-landing", ["P-17", "P-08", "P-07 E3", "P-15", "P-03"],
+      "An owner grants approval-free ordinary landing for an exact repository. Claims recheck the current grant; other repositories, sensitive changes, unknown summaries, guarded work and shadowed grants still require approval. Agents cannot widen the grant.")
+v.prof(BOT, AG).prof(X, XS)
+team(v, trusted_policy(TRUSTED_RULE))
+v.step(ms("bot", O, BOT, "member"), "allow").step(ms("operator", O, OP, "member"), "allow")
+v.step(lprop("ordinary", chg([("src/a.rs", "modify", 4)]), author=BOT), "allow", check={"effects.ordinary.gate.repo": REPO})
+v.step(claim("ordinary-claim", "ordinary"), "allow", check={"effects.ordinary.claims.0.approval": MISSING})
+for label, change in [
+    ("other-repo", chg([("src/a.rs", "modify", 4)], repo=REPO_B)),
+    ("prefix-repo", chg([("src/a.rs", "modify", 4)], repo=REPO + "-suffix")),
+    ("never-auto", chg([("Cargo.toml", "modify", 1)])),
+    ("rename-sensitive", chg([("src/a.rs", "rename", 0, "Cargo.toml")])),
+    ("truncated", chg([("src/a.rs", "modify", 1)], total=2, truncated=True)),
+    ("missing-summary", None),
+]:
+    v.step(lprop(label, change), "allow").step(claim(label + "-claim", label), "denied")
+v.step(lprop("revoke", chg([("src/a.rs", "modify", 4)])), "allow")
+v.step(E("remove-grant", "policy.set", O, {"policy": trusted_policy()}), "allow")
+v.step(claim("revoke-claim", "revoke"), "denied", note="a prior proposal loses authority when its repository grant is removed")
+v.step(E("bot-widen", "policy.set", BOT, {"policy": trusted_policy(TRUSTED_RULE)}), "denied")
+v.step(E("restore", "policy.set", O, {"policy": trusted_policy(TRUSTED_RULE)}), "allow")
+v.step(claim("restored-claim", "revoke"), "allow")
+v.step(E("guarded-session", "session.open", BOT, {"steerMode": "guarded"}), "allow")
+v.step(lprop("guarded-land", chg([("src/a.rs", "modify", 4)]), author=BOT), "allow")
+v.step(claim("guarded-claim", "guarded-land"), "denied")
+v.step(appr("guard-approval", "guarded-land", author=OP), "allow")
+v.step(claim("guarded-claim", "guarded-land"), "allow", check={"effects.guarded-land.claims.0.guardApprovals": ["guard-approval"], "effects.guarded-land.claims.0.approval": MISSING})
+v.step(E("shadow", "policy.set", O, {"policy": trusted_policy({"action": "*", "approvers": ["owner"]}, TRUSTED_RULE)}), "allow")
+v.step(lprop("shadowed-land", chg([("src/a.rs", "modify", 4)])), "allow").step(claim("shadowed-claim", "shadowed-land"), "denied")
+for label, bad in [
+    ("unscoped", {k: val for k, val in TRUSTED_RULE.items() if k != "repo"}),
+    ("no-cap", {k: val for k, val in TRUSTED_RULE.items() if k != "maxTier"}),
+    ("tier-two", dict(TRUSTED_RULE, maxTier=2)),
+    ("wildcard-action", dict(TRUSTED_RULE, action="*")),
+    ("empty-repo", dict(TRUSTED_RULE, repo="")),
+    ("human-contradiction", dict(TRUSTED_RULE, humans=True)),
+]:
+    v.step(E(label, "policy.set", O, {"policy": trusted_policy(bad)}), "invalid")
+add(v.done())
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     for f in os.listdir(OUT):

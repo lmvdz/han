@@ -42,7 +42,8 @@ export function badPolicyDoc(p: A): string | null {
   if (!["any", "with-operator", "none"].includes(p.allowAgents)) return "policy.allowAgents";
   if (!Array.isArray(p.approvals) || p.approvals.length > 64) return "policy.approvals";
   for (const r of p.approvals) {
-    const e2 = closed(r, ["action", "approvers"], ["minTier", "maxTier", "humans", "evidence", "needs", "revert", "proposer"]); if (e2) return "approval rule: " + e2;
+    const e2 = closed(r, ["action", "approvers"], ["repo", "minTier", "maxTier", "humans", "evidence", "needs", "revert", "proposer"]); if (e2) return "approval rule: " + e2;
+    if ("repo" in r && !(typeof r.repo === "string" && /^[!-~]{1,128}$/.test(r.repo))) return "approval rule repo";
     if (!isAction(r.action, true)) return "approval rule action";
     if (!Array.isArray(r.approvers) || r.approvers.length === 0) return "approvers";
     for (const a of r.approvers) if (!(["owner", "member", "guest", PATH_OWNER].includes(a) || isActorId(a))) return "approver";
@@ -54,8 +55,10 @@ export function badPolicyDoc(p: A): string | null {
     if ("revert" in r && r.revert !== true) return "approval rule revert";   // A2: `true` only
     if ("proposer" in r) {   // P-17 (round 33): `true` only, on exactly "vcs.try", with no member but action, approvers and proposer
       if (r.proposer !== true) return "approval rule proposer";
-      if (r.action !== "vcs.try") return "approval rule proposer on an action other than vcs.try";
-      if (Object.keys(r).some((k) => !["action", "approvers", "proposer"].includes(k))) return "approval rule proposer beside other members";
+      const check = r.action === "vcs.try" && Object.keys(r).every((k) => ["action", "approvers", "proposer"].includes(k));
+      const land = r.action === "vcs.land" && r.repo !== undefined && r.maxTier !== undefined && r.maxTier <= 1
+        && Object.keys(r).every((k) => ["action", "approvers", "proposer", "repo", "minTier", "maxTier"].includes(k));
+      if (!check && !land) return "approval rule proposer scope";
     }
   }
   if (typeof p.separateApprover !== "boolean") return "policy.separateApprover";
@@ -208,7 +211,7 @@ function deriveGate(s: SpaceState, ctx: PolicyCtx, proposer: string, b: A): A | 
   if (!gates || b.action !== "vcs.land") return undefined;
   const change: A | undefined = b.change;
   const gate: A = { tier: deriveTier(gates, change) };
-  if (change) { gate.deltaDigest = change.deltaDigest; gate.changeDigest = sha256(jcs(change)); }
+  if (change) { gate.repo = change.repo; gate.deltaDigest = change.deltaDigest; gate.changeDigest = sha256(jcs(change)); }
   if (change?.revertOf !== undefined) {   // A2: never a lower tier than the change it undoes; 3 when that effect had no gate
     const reverted: A | undefined = (s.effects as A)[change.revertOf];
     gate.tier = Math.max(gate.tier, reverted?.gate ? reverted.gate.tier : 3);
@@ -404,7 +407,7 @@ const OWNER_RULE = { action: "*", approvers: ["owner"] };
 const revertWithin = (r: A, gate: A | undefined): boolean => r.revert !== true || gate?.revertOf !== undefined;
 /** P-08, P-17: the first rule whose action matches and whose tier and revert predicates hold; a gated effect of tier 1 or more that none covers needs an owner. */
 const ruleFor = (p: PolicyDoc, ef: A): A | undefined =>
-  p.approvals.find((r: A) => (r.action === ef.action || r.action === "*") && tierWithin(r, ef.gate) && revertWithin(r, ef.gate)) ?? (ef.gate && ef.gate.tier >= 1 ? OWNER_RULE : undefined);
+  p.approvals.find((r: A) => (r.action === ef.action || r.action === "*") && (r.repo === undefined || r.repo === ef.gate?.repo) && tierWithin(r, ef.gate) && revertWithin(r, ef.gate)) ?? (ef.gate && ef.gate.tier >= 1 ? OWNER_RULE : undefined);
 /** P-17, who counts: a role now that the rule names (a role, an ID, or @path-owner: an author in the effect's gate.owners) and, for a non-human author (by the kind
  *  the approval recorded), a tier below 2, no `humans`, and the evidence the rule asks for, of that kind and over the effect's gate.deltaDigest. */
 function approvalCounts(s: SpaceState, ef: A, rule: A, author: string, kind: string, evidence: A | undefined): boolean {

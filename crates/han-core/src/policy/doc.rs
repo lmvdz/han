@@ -164,6 +164,9 @@ pub enum SteerMode {
 pub struct ApprovalRule {
     /// An action name, or `*`.
     pub action: String,
+    /// Exact repository of the derived gate. Never matches an effect without a known repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Role names (`owner`, `member`, `guest`), actor ids and `@path-owner`.
     pub approvers: Vec<String>,
     /// The rule applies only to an effect whose gate has at least this tier.
@@ -186,13 +189,13 @@ pub struct ApprovalRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revert: Option<bool>,
     /// The proposal itself satisfies E3: no approval is asked, made or consumed (P-17, round 33). Always `true`
-    /// when present, and valid only on a rule for the check-only action [`CHECK_ONLY`] with no other member than
-    /// `action` and `approvers`.
+    /// when present. Check-only rules name [`CHECK_ONLY`]; landing grants must name an exact repository and
+    /// cap the tier at 0 or 1. Neither form bypasses guards, budgets or executor checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposer: Option<bool>,
 }
 
-/// The one action a rule with `proposer` may name: `vcs.try` runs a landing lane's checks on a change and lands
+/// The check-only action: `vcs.try` runs a landing lane's checks on a change and lands
 /// nothing (P-17, round 33).
 pub const CHECK_ONLY: &str = "vcs.try";
 
@@ -335,9 +338,10 @@ impl ApprovalRule {
         let tier = |t: Option<u8>| t.is_none_or(|t| t <= 3);
         (self.action == "*" || g::is_action(&self.action))
             && (1..=MAX_LIST).contains(&self.approvers.len())
-            && self.approvers.iter().all(|a| {
-                READ_ROLES.contains(&a.as_str()) || a == PATH_OWNER || g::is_actor_id(a)
-            })
+            && self
+                .approvers
+                .iter()
+                .all(|a| READ_ROLES.contains(&a.as_str()) || a == PATH_OWNER || g::is_actor_id(a))
             && tier(self.min_tier)
             && tier(self.max_tier)
             && self
@@ -347,11 +351,15 @@ impl ApprovalRule {
             && self.evidence.as_deref().is_none_or(is_evidence_kind)
             && self.needs.is_none_or(|n| (1..=3).contains(&n))
             && self.revert.is_none_or(|r| r)
-            // P-17: `proposer` is `true`, on the check-only action and a rule with nothing else on it
+            && self.repo.as_deref().is_none_or(is_repo_name)
             && self.proposer.is_none_or(|p| {
-                p && self.action == CHECK_ONLY
+                p && ((self.action == CHECK_ONLY
+                    && self.repo.is_none()
                     && self.min_tier.is_none()
-                    && self.max_tier.is_none()
+                    && self.max_tier.is_none())
+                    || (self.action == "vcs.land"
+                        && self.repo.is_some()
+                        && self.max_tier.is_some_and(|t| t <= 1)))
                     && self.humans.is_none()
                     && self.evidence.is_none()
                     && self.needs.is_none()

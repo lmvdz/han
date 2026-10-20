@@ -856,3 +856,178 @@ async fn a_rule_that_lets_the_proposer_suffice_is_reported_in_the_row_and_needs_
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trusted_landing_rows_recheck_exact_repository_grants() {
+    let world = World::new(&[(ALICE, 71)]);
+    world
+        .home
+        .register(CODER, "agent", "d1", &common::pubkey(72), Some(ALICE))
+        .unwrap();
+    world
+        .home
+        .register(EXEC, "service", "d1", &common::pubkey(73), Some(ALICE))
+        .unwrap();
+    let alice = world.node(ALICE, 71);
+    let coder = world.node(CODER, 72);
+    let exec = world.node(EXEC, 73);
+    let space = space_of(
+        &call(
+            &alice,
+            Command::SpaceCreate {
+                home: world.home_ref.clone(),
+                name: "team".into(),
+                visibility: "members".into(),
+                join: "invite".into(),
+            },
+        )
+        .await,
+    );
+    confirm_operator(&world, &alice, ALICE, CODER).await;
+    confirm_operator(&world, &alice, ALICE, EXEC).await;
+    for who in [CODER, EXEC] {
+        call(
+            &alice,
+            Command::MemberSet {
+                space: space.clone(),
+                actor: who.into(),
+                role: "member".into(),
+            },
+        )
+        .await;
+    }
+    for node in [&coder, &exec] {
+        call(
+            node,
+            Command::SpaceFollow {
+                home: world.home_ref.clone(),
+                space: space.clone(),
+            },
+        )
+        .await;
+    }
+
+    let policy = |enabled: bool| {
+        let base = han_seq::build::space_policy("members", "invite");
+        let mut p: serde_json::Value =
+            serde_json::from_slice(&han_core::json::canonicalize(&base).unwrap()).unwrap();
+        p["gates"] = serde_json::json!({"small": 20, "large": 500, "paths": [], "owners": []});
+        let mut rules = vec![];
+        if enabled {
+            rules.push(serde_json::json!({"action":"vcs.land","repo":"github:o/r","maxTier":1,"approvers":["owner"],"proposer":true}));
+        }
+        rules.push(serde_json::json!({"action":"vcs.land","repo":"github:o/other","approvers":["member"],"humans":true}));
+        rules.push(serde_json::json!({"action":"*","approvers":["owner"]}));
+        p["approvals"] = rules.into();
+        p.to_string()
+    };
+    call(
+        &alice,
+        Command::PolicySet {
+            space: space.clone(),
+            policy: policy(true),
+        },
+    )
+    .await;
+    let mut proposals = vec![];
+    for (repo, path) in [
+        ("github:o/r", "src/main.rs"),
+        ("github:o/other", "src/main.rs"),
+        ("github:o/r", "Cargo.toml"),
+    ] {
+        let plan = serde_json::json!({"action":"vcs.land","target":repo,"args":{"to":"abc","change":{
+            "repo":repo,"deltaDigest":"a".repeat(64),"total":1,"files":[{"path":path,"kind":"modify","lines":1}]
+        }}}).to_string();
+        proposals.push(id_of(
+            &call(
+                &coder,
+                Command::EffectPropose {
+                    space: space.clone(),
+                    executor: EXEC.into(),
+                    plan,
+                    task: None,
+                    cost: None,
+                    repeatable: false,
+                    expires_at: None,
+                },
+            )
+            .await,
+        ));
+    }
+    until("all scoped proposals arrive", || {
+        effects(&exec, EXEC, false).len() == 3
+    })
+    .await;
+    let rows = effects(&exec, EXEC, false);
+    for (index, proposal) in proposals.iter().enumerate() {
+        assert_eq!(
+            rows.iter()
+                .find(|r| &r.proposal == proposal)
+                .unwrap()
+                .proposer_suffices,
+            index == 0
+        );
+    }
+    effect_known(&alice, &space, &proposals[1]).await;
+    let mut inbox = alice.view(Query::Approvals {
+        actor: ALICE.into(),
+        window: Window::default(),
+    });
+    let Some(han_node::api::ViewEvent::Snapshot { rows, .. }) = inbox.try_next() else {
+        panic!("missing approval inbox");
+    };
+    let other_repo = rows
+        .iter()
+        .find_map(|r| match r {
+            Row::Approval(a) if a.proposal == proposals[1] => Some(a),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(other_repo.approvers, ["member"]);
+    assert!(other_repo.why_gated.contains("by member"));
+    let claim = |proposal: &str| Command::EffectClaim {
+        space: space.clone(),
+        proposal: proposal.into(),
+        attempt: 1,
+        window: 30,
+    };
+    for p in &proposals[1..] {
+        assert!(matches!(
+            exec.call(claim(p)).await,
+            Err(NodeError::Denied { .. })
+        ));
+    }
+    call(
+        &alice,
+        Command::PolicySet {
+            space: space.clone(),
+            policy: policy(false),
+        },
+    )
+    .await;
+    until("revocation reaches the executor", || {
+        effects(&exec, EXEC, false)
+            .iter()
+            .all(|e| !e.proposer_suffices)
+    })
+    .await;
+    assert!(matches!(
+        exec.call(claim(&proposals[0])).await,
+        Err(NodeError::Denied { .. })
+    ));
+    call(
+        &alice,
+        Command::PolicySet {
+            space: space.clone(),
+            policy: policy(true),
+        },
+    )
+    .await;
+    until("grant restored", || {
+        effects(&exec, EXEC, false)
+            .iter()
+            .any(|e| e.proposal == proposals[0] && e.proposer_suffices)
+    })
+    .await;
+    call(&exec, claim(&proposals[0])).await;
+}

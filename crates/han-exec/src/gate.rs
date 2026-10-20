@@ -1,6 +1,4 @@
-//! The local gate seam (PLAN §10 "Risk tiers", "Semantic gates"). Spec round 33 will define risk tiers and
-//! change-kind rules in the PolicyDoc; until then every action outside the sandbox needs an approval, and the
-//! executor does not claim an effect without one, whatever the space's policy says.
+//! The executor gate follows Policy's current approval decision; required landing checks run separately.
 
 use han_vcs::ChangeSummary;
 use serde::{Deserialize, Serialize};
@@ -41,8 +39,7 @@ pub trait Gate: Send + Sync + 'static {
     fn decide(&self, input: &GateInput) -> GateDecision;
 }
 
-/// The pre-round-33 gate: everything needs at least one approval, except where Policy says the proposal itself
-/// suffices (a `proposer: true` rule, which it allows only for a check-only action).
+/// Waits for an approval unless the current Policy rule authorizes this proposal without one.
 pub struct NeedsApproval;
 
 impl Gate for NeedsApproval {
@@ -50,8 +47,7 @@ impl Gate for NeedsApproval {
         if input.approvals.is_empty() && !input.proposer_suffices {
             GateDecision::NeedsApproval {
                 why: format!(
-                    "{} reaches outside the sandbox: every such action needs an approval until risk tiers \
-                     are specified",
+                    "{} needs an approval under the current policy",
                     input.action
                 ),
             }
