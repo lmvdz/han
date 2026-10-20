@@ -1839,64 +1839,64 @@ fn stale_processes() -> Vec<StaleFact> {
     Vec::new()
 }
 
-/// Executes a bounded read-access probe in the same identity that will run the harness.
+/// Checks file access as the harness identity using only a fixed OS utility. Never execute a
+/// registry-controlled runtime: doctor can be elevated while the node owns its harness records.
 async fn probe_harness_launch(
     install: &HarnessInstall,
     entry: &str,
     as_user: Option<&str>,
 ) -> Result<(), String> {
-    let mut cmd = match as_user {
-        Some(user) => {
-            let mut cmd = tokio::process::Command::new("/usr/sbin/runuser");
-            cmd.args(["-u", user, "--"]).arg(&install.node);
-            cmd
-        }
-        None => tokio::process::Command::new(&install.node),
-    };
-    // Only execute the configured Node runtime and check read access to code/configuration files.
-    // Do not start the adapter, read a login, contact a provider, or inherit Node preload settings.
-    const PROBE: &str = "const fs=require('node:fs'); for(const p of process.argv.slice(1)){fs.accessSync(p,fs.constants.R_OK);if(!fs.statSync(p).isFile())throw new Error('not a file: '+p);} process.stdout.write(process.versions.node);";
-    cmd.no_window()
-        .kill_on_drop(true)
-        .env_clear()
-        .env_remove("NODE_OPTIONS")
-        .env_remove("NODE_PATH")
-        .args(["-e", PROBE])
-        .arg(install.adapter_dir.join(entry))
-        .stdin(std::process::Stdio::null());
+    let mut paths = vec![
+        (install.node.clone(), true),
+        (install.adapter_dir.join(entry), false),
+    ];
     if let Some(driver) = &install.driver {
-        cmd.arg(driver);
+        paths.push((driver.clone(), false));
     }
-    let output = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output())
-        .await
-        .map_err(|_| "runtime/read-access probe timed out after 5 seconds".to_owned())?
-        .map_err(|error| format!("cannot execute {}: {error}", install.node.display()))?;
-    if !output.status.success() {
-        let detail: String = String::from_utf8_lossy(&output.stderr)
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .take(400)
-            .collect();
-        return Err(format!(
-            "{} probe failed ({}): {detail}",
-            install.node.display(),
-            output.status
-        ));
-    }
-    let version = String::from_utf8_lossy(&output.stdout);
-    if !version.trim().starts_with("22.") {
-        return Err(format!("{} is not Node 22", install.node.display()));
+    for (path, executable) in paths {
+        for mode in if executable {
+            &['f', 'r', 'x'][..]
+        } else {
+            &['f', 'r'][..]
+        } {
+            let mut cmd = match as_user {
+                Some(user) => {
+                    let mut cmd = tokio::process::Command::new("/usr/sbin/runuser");
+                    cmd.args(["-u", user, "--", "/usr/bin/test"]);
+                    cmd
+                }
+                None => tokio::process::Command::new("/usr/bin/test"),
+            };
+            cmd.no_window()
+                .kill_on_drop(true)
+                .env_clear()
+                .arg(format!("-{mode}"))
+                .arg(&path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            let status = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.status())
+                .await
+                .map_err(|_| "file-access probe timed out after 5 seconds".to_owned())?
+                .map_err(|e| format!("cannot run the OS file-access check: {e}"))?;
+            if !status.success() {
+                return Err(format!(
+                    "{} failed the OS file-access check (-{mode}); check traversal, read and execute permissions for the agent",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
 
-/// Decides whether a diagnostic may execute a registry-controlled program. Root may only drop to a
+/// Decides which identity may run the fixed OS permission check. Root may only drop to a
 /// dedicated, non-root runner account; neither shell identity variables nor the registry can opt out.
-fn launch_probe_identity<'a>(
+fn launch_probe_identity(
     uid: Option<u32>,
-    target: Option<&'a str>,
+    target: Option<&str>,
     target_uid: Option<u32>,
-) -> Result<Option<&'a str>, &'static str> {
+) -> Result<Option<&str>, &'static str> {
     let uid = uid.ok_or("cannot determine effective OS identity; harness launch probe skipped")?;
     if uid == 0 {
         let target = target.ok_or(
@@ -2074,7 +2074,9 @@ pub async fn gather(
                 let identity = if linux {
                     launch_probe_identity(effective_uid(), as_user, as_user.and_then(account_uid))
                 } else {
-                    Ok(None)
+                    Err(
+                        "agent-identity file-access checks are currently Linux-only; runtime compatibility is checked at setup and actual start",
+                    )
                 };
                 match identity {
                     Err(reason) => skips.push(Skip {
@@ -2466,6 +2468,37 @@ mod tests {
             Ok(None)
         );
         assert_eq!(launch_probe_identity(Some(1001), None, None), Ok(None));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn permission_probe_never_executes_the_recorded_runtime() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let node = root.path().join("node");
+        std::fs::write(&node, "#!/bin/sh\ntouch \"$0.executed\"\nexit 0\n").unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.path().join("adapter.js"), "test adapter").unwrap();
+        let install = HarnessInstall {
+            harness: "test".into(),
+            node: node.clone(),
+            adapter_dir: root.path().into(),
+            package: "test".into(),
+            version: "1".into(),
+            integrity: String::new(),
+            driver: None,
+        };
+        probe_harness_launch(&install, "adapter.js", None)
+            .await
+            .unwrap();
+        assert!(!root.path().join("node.executed").exists());
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            probe_harness_launch(&install, "adapter.js", None)
+                .await
+                .unwrap_err()
+                .contains("-x")
+        );
     }
 
     #[test]
