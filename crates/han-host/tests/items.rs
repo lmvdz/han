@@ -271,6 +271,8 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
     );
     assert!(!delta.1[0].masked.is_empty());
 
+    // The real Codex adapter removes unchanged rawInput from completion updates.
+    // Identity is sent only at start; the result envelope must stand on its own.
     for (id, expected_status, expected_text) in [
         (
             "mcp_receipt",

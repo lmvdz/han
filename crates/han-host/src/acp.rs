@@ -566,9 +566,13 @@ fn tool_output(v: &Value) -> (Option<String>, bool, bool) {
     {
         out.push_str(t);
     }
-    if out.is_empty() && v["rawInput"]["server"].is_string() && v["rawInput"]["tool"].is_string() {
-        // Codex sends MCP completion as an opaque envelope, without the start event's MCP
-        // marker. Only display its declared text blocks and error message, never arbitrary
+    if out.is_empty()
+        && v["rawOutput"].get("result").is_some()
+        && v["rawOutput"].get("error").is_some()
+    {
+        // Codex sends MCP completion as an opaque envelope. Its reporting layer removes
+        // unchanged rawInput, so completion need not repeat the start event's identity.
+        // Only display declared text blocks and error messages, never arbitrary
         // provider fields, structured content, embedded resources or binary payloads.
         if let Some(content) = v["rawOutput"]["result"]["content"].as_array() {
             for block in content {
@@ -1232,7 +1236,7 @@ mod tests {
     #[test]
     fn mcp_completion_text_is_a_snapshot_and_preserves_failed_status() {
         let mut update = json!({"sessionUpdate":"tool_call_update", "toolCallId":"mcp1",
-            "status":"failed", "rawInput":{"server":"han", "tool":"propose"},
+            "status":"failed",
             "rawOutput":{"result":{"content":[
                 {"type":"text", "text":"partial result"},
                 {"type":"image", "data":"private binary", "text":"not text"},
@@ -1266,14 +1270,13 @@ mod tests {
             tool_output(&update),
             (Some("error only".into()), false, false)
         );
-        update["rawInput"] = json!({});
+        update["rawOutput"] = json!({"error":{"message":"not the result/error envelope"}});
         assert_eq!(tool_output(&update), (None, false, false));
     }
 
     #[test]
     fn mcp_completion_text_uses_the_output_bound() {
-        let update = json!({"rawInput":{"server":"han", "tool":"team_read"},
-            "rawOutput":{"result":{"content":[{"type":"text", "text":"x".repeat(MAX_TOOL_OUTPUT + 1)}]}, "error":null}});
+        let update = json!({"rawOutput":{"result":{"content":[{"type":"text", "text":"x".repeat(MAX_TOOL_OUTPUT + 1)}]}, "error":null}});
         let (text, append, truncated) = tool_output(&update);
         assert!(text.is_some());
         assert!(!append);
