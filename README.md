@@ -36,7 +36,7 @@ Semantic gates and risk tiers (P-17) are implemented; the optional tier-1 machin
 - agent-to-agent questions;
 - two-way GitHub synchronization and chat notifiers;
 - the broader in-flight query and landing designs beyond the implemented lane;
-- verified beta acceptance: fresh-user timing and the multi-person, two-week dogfood with its authorization audit remain unverified. The recorded Codex task landed with manual approval; this automatic-landing trial has no verified success result yet.
+- verified beta acceptance: fresh-user timing and the multi-person, two-week dogfood with its authorization audit remain unverified. Recorded Codex trials include manual approval and a [Trusted team automatic landing](docs/reviews/trusted-landing-2026-10-20.md); these do not establish the broader acceptance targets.
 
 ## Try it
 

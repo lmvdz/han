@@ -181,21 +181,25 @@ struct FakeBridge {
     calls: Mutex<Calls>,
     summaries: Vec<String>,
     refuse: bool,
+    queued: bool,
 }
 
 impl HostBridge for FakeBridge {
     fn propose(&self, req: ProposeRequest) -> BoxFuture<'_, ProposeAnswer> {
         let refuse = self.refuse;
+        let queued = self.queued;
         self.calls.lock().unwrap().proposals.push(req);
         Box::pin(async move {
             if refuse {
                 ProposeAnswer::Refused {
                     reason: "no executor for http_request".into(),
                 }
+            } else if queued {
+                ProposeAnswer::Queued { id: "E-1".into() }
             } else {
                 ProposeAnswer::Proposed {
                     id: "E-1".into(),
-                    waiting_for: "@lars:a.localhost".into(),
+                    waiting_for: "executor policy checks, including any required approvals".into(),
                 }
             }
         })
@@ -236,6 +240,10 @@ struct Rig {
 }
 
 async fn rig_with(summaries: Vec<String>, refuse: bool) -> Rig {
+    rig_with_delivery(summaries, refuse, false).await
+}
+
+async fn rig_with_delivery(summaries: Vec<String>, refuse: bool, queued: bool) -> Rig {
     let bridge = Arc::new(FakeBridge {
         node: Arc::new(FakeNode {
             queries: Mutex::new(vec![]),
@@ -243,6 +251,7 @@ async fn rig_with(summaries: Vec<String>, refuse: bool) -> Rig {
         calls: Mutex::new(Calls::default()),
         summaries,
         refuse,
+        queued,
     });
     let (a, b) = tokio::io::duplex(1 << 16);
     let served: Arc<dyn HostBridge> = bridge.clone();
@@ -349,7 +358,7 @@ async fn summary_is_required_on_every_tool() {
 }
 
 #[tokio::test]
-async fn propose_goes_to_the_host_and_says_it_has_not_run() {
+async fn propose_reports_acceptance_without_claiming_approval_or_execution() {
     let rig = rig().await;
     let effect = json!({"method": "POST", "url": "https://hooks.example.com/build", "body": "{}"});
     let r = call(
@@ -360,7 +369,10 @@ async fn propose_goes_to_the_host_and_says_it_has_not_run() {
     .await;
     assert_ne!(r.is_error, Some(true));
     let text = serde_json::to_string(&r.content).unwrap();
-    assert!(text.contains("Proposed as E-1, waiting for @lars:a.localhost. It has not run"));
+    assert!(text.contains("Proposed as E-1, waiting for executor policy checks"));
+    assert!(text.contains("Acceptance does not confirm execution"));
+    assert!(text.contains("without a per-change approval"));
+    assert!(!text.contains("runs only after approval"));
     {
         let calls = rig.bridge.calls.lock().unwrap();
         assert_eq!(calls.used, vec![("propose".into(), "notify CI".into())]);
@@ -387,11 +399,11 @@ async fn land_try_proposes_a_check_only_try_and_points_at_land_status() {
     assert_ne!(r.is_error, Some(true));
     let text = serde_json::to_string(&r.content).unwrap();
     assert!(
-        text.contains("Try E-1 started")
+        text.contains("Try E-1 accepted")
             && text.contains("lands nothing")
             && text.contains("land_status")
     );
-    assert_eq!(structured(&r)["status"], "tried");
+    assert_eq!(structured(&r)["status"], "proposed");
     {
         let calls = rig.bridge.calls.lock().unwrap();
         assert_eq!(
@@ -412,6 +424,17 @@ async fn land_try_proposes_a_check_only_try_and_points_at_land_status() {
     let r = call(&rig, "land_try", json!({"summary": "again"})).await;
     assert_eq!(r.is_error, Some(true));
     assert_eq!(structured(&r)["status"], "refused");
+}
+
+#[tokio::test]
+async fn queued_try_does_not_claim_checks_started_or_passed() {
+    let rig = rig_with_delivery(vec![], false, true).await;
+    let r = call(&rig, "land_try", json!({"summary": "run checks"})).await;
+    assert_eq!(structured(&r)["status"], "queued");
+    let text = serde_json::to_string(&r.content).unwrap();
+    assert!(text.contains("waiting for the home to accept"));
+    assert!(text.contains("land_status"));
+    assert!(!text.contains("Try E-1 started"));
 }
 
 #[tokio::test]

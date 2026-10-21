@@ -771,7 +771,7 @@ fn the_lanes_states_reach_the_status_and_the_agent() {
     for (state, seq) in [("queued", 1), ("testing", 2), ("landing", 3), ("landed", 4)] {
         r.feed.say("P1", state, None, seq);
         assert!(tokio_block(r.flow.poll()).unwrap(), "{state}");
-        let (line, blocked) = r.flow.status_line().unwrap();
+        let (line, blocked, _) = r.flow.status_line().unwrap();
         assert!(line.contains(state) && !blocked, "{line}");
         // asking again with nothing new changes nothing
         assert!(!tokio_block(r.flow.poll()).unwrap());
@@ -809,7 +809,7 @@ fn a_stalled_change_is_blocked_and_says_why() {
         seq: 2,
     });
     tokio_block(r.flow.poll()).unwrap();
-    let (line, blocked) = r.flow.status_line().unwrap();
+    let (line, blocked, _) = r.flow.status_line().unwrap();
     assert!(
         blocked && line.contains("stalled: no required check appeared"),
         "{line}"
@@ -847,7 +847,7 @@ fn a_conflict_rejection_gives_the_agent_the_conflict_record() {
     });
     tokio_block(r.flow.poll()).unwrap();
 
-    let (line, blocked) = r.flow.status_line().unwrap();
+    let (line, blocked, _) = r.flow.status_line().unwrap();
     assert!(
         blocked && line.contains("rejected") && line.contains("conflict"),
         "{line}"
@@ -1781,7 +1781,7 @@ fn the_attempts_cap_stops_the_steering_and_reports_instead() {
     );
     assert!(tokio_block(r.flow.steer()).is_none(), "reported once");
     // the rejection stays in the status, for whoever reads it
-    let (line, blocked) = r.flow.status_line().unwrap();
+    let (line, blocked, _) = r.flow.status_line().unwrap();
     assert!(blocked && line.contains("rejected"), "{line}");
 }
 

@@ -1351,10 +1351,10 @@ impl Flow {
 
     /// The line the session's status shows for the proposals, and whether it needs the agent or its operator
     /// (rejected, stalled): the first proposal still open, else the latest. `None` until the lane has said
-    /// something about one.
-    pub fn status_line(&self) -> Option<(String, bool)> {
+    /// something about one. The final tuple member identifies that proposal.
+    pub fn status_line(&self) -> Option<(String, bool, String)> {
         let inner = lock(&self.inner);
-        // A proposal the lane has not mentioned is still waiting for its approval: that is the status's to say.
+        // Until the lane has mentioned a proposal, its execution state is unknown.
         let mut heard = inner
             .ledger
             .proposals
@@ -1387,6 +1387,7 @@ impl Flow {
         Some((
             bound(&t, 200),
             p.failed() && !self.superseded(&inner.ledger, p) || p.stalled.is_some(),
+            p.proposal.clone(),
         ))
     }
 
