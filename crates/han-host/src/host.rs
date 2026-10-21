@@ -291,8 +291,11 @@ fn measured_cost(
     budget: Option<&crate::glue::SessionBudget>,
     charged: u64,
 ) -> Option<((String, u64), u64)> {
-    let b = budget.filter(|b| b.ledger.is_some())?;
-    let spent = b.spent();
+    let b = budget?;
+    let (spent, complete, _) = b.accounting();
+    if !complete {
+        return None;
+    }
     Some(((b.unit.clone(), spent.saturating_sub(charged)), spent))
 }
 
@@ -1178,14 +1181,15 @@ fn watch_usage(
                 break;
             }
             let usage = observer.usage();
-            let spent = budget.as_ref().map_or(0, |b| b.spent());
+            let (spent, cost_measured, not_enforced) =
+                budget.as_ref().map_or((0, false, None), |b| b.accounting());
             let refused = observer
                 .decisions()
                 .iter()
                 .rev()
                 .find(|d| d.reason.starts_with("budget-"))
                 .map(|d| d.reason);
-            let now = (usage, spent, refused);
+            let now = (usage, spent, cost_measured, not_enforced, refused);
             if last == Some(now) {
                 continue;
             }
@@ -1195,6 +1199,7 @@ fn watch_usage(
                     input: usage.input + usage.cache_read + usage.cache_creation,
                     out: usage.output,
                     cost: spent,
+                    cost_measured,
                 }));
             }
             if let Some(b) = &budget {
@@ -1202,7 +1207,7 @@ fn watch_usage(
                     unit: b.unit.clone(),
                     limit: b.limit,
                     spent,
-                    not_enforced: b.not_enforced.map(str::to_owned),
+                    not_enforced: not_enforced.map(str::to_owned),
                     refused: refused.map(str::to_owned),
                 }));
             }
@@ -2028,7 +2033,10 @@ async fn turn(
     shared.busy.store(false, Ordering::SeqCst);
     match end {
         Ok(end) => {
-            if let Some(meta) = &end.meta
+            if matches!(
+                shared.cfg.driver.credentials,
+                crate::driver::CredentialMode::Subscription { .. }
+            ) && let Some(meta) = &end.meta
                 && let Some(t) = crate::status::tokens_from_meta(meta)
             {
                 shared.signal(Signal::Tokens(t));
@@ -2425,6 +2433,7 @@ mod tests {
                 &Usage {
                     input: tokens,
                     requests: 1,
+                    measured_requests: 1,
                     ..Usage::default()
                 },
             );
@@ -2453,6 +2462,19 @@ mod tests {
         spec.prices.clear();
         let unpriced = crate::glue::SessionBudget::new(&spec, true);
         assert!(measured_cost(Some(&unpriced), 0).is_none());
+        // A price table does not cover every possible model. Its partial spend
+        // must not become a falsely complete cost on an effect proposal.
+        use crate::proxy::{Budget, CallBound};
+        let partial = spent_budget(40, true);
+        let ledger = partial.ledger.as_ref().unwrap();
+        let hold = ledger
+            .reserve(&CallBound {
+                model: Some("unpriced".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        ledger.release(hold);
+        assert!(measured_cost(Some(&partial), 0).is_none());
     }
 
     #[tokio::test]

@@ -956,7 +956,12 @@ out: number,
 /**
  * Cost, in integer minor units.
  */
-cost: number, };
+cost: number, 
+/**
+ * Whether cost is complete, including measured zero. Absent/false means unmeasured.
+ * Its unit is retained in this session's budget, never inferred from today's space policy.
+ */
+cost_measured: boolean, };
 
 export type BudgetStatus = { 
 /**
@@ -1804,11 +1809,28 @@ tokens_in: number,
  */
 tokens_out: number, 
 /**
- * Cost, in the unit of the space's budget.
+ * Observed cost in the session unit, or the sole unit of an aggregate.
  */
 cost: number, 
 /**
- * That unit, if the space has a budget.
+ * Whether `cost` is a complete total in `unit`; otherwise show unmeasured, not zero.
+ */
+cost_measured: boolean, 
+/**
+ * Sessions whose cost is missing or incomplete, including agents without token reports.
+ */
+unmeasured_sessions: number, 
+/**
+ * At least one subtotal exceeded the numeric range. Subtotals are then lower bounds.
+ */
+cost_overflowed: boolean, 
+/**
+ * Observed amounts by their original units. Never add unlike units together.
+ * These are subtotals when `unmeasured_sessions` is nonzero.
+ */
+subtotals: Array<[string, number]>, 
+/**
+ * Original accounting unit; absent when unknown or when an aggregate mixes units.
  */
 unit?: string, };
 

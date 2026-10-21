@@ -90,9 +90,11 @@ and a ChatGPT subscription; it did not use an API key or Claude quota.
 
 This is evidence for that Linux completion path. Fresh onboarding, Windows Codex
 sandboxing, steering, quota exhaustion and interrupted-turn recovery have not been
-established by this trial. Its approval was manual; it does not demonstrate the
-planned Trusted team preset. Subscription cost is unmeasured even if the existing
-status counter displays zero.
+established by this trial. Its approval was manual. The later
+[Trusted team trial](../../../docs/reviews/trusted-landing-2026-10-20.md) separately
+demonstrates automatic landing. Subscription cost is
+[unmeasured](../../../docs/usage-accounting.md); current faces say so explicitly,
+while older clients can still display the legacy numeric zero.
 
 Upstream references:
 [Codex ACP](https://github.com/agentclientprotocol/codex-acp),

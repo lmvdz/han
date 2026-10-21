@@ -2023,20 +2023,49 @@ impl SpaceModel {
         )
     }
 
-    /// One row per session that reported tokens, and a total (key `0`).
+    /// Cost coverage per session and a total. Missing agent usage is unknown, not free.
     pub fn cost_rows(&self, only: Option<&str>) -> Vec<(Facets, crate::api::Row)> {
         let mut rows = Vec::new();
-        let (mut tin, mut tout, mut cost) = (0u64, 0u64, 0u64);
+        let (mut tin, mut tout) = (0u64, 0u64);
+        let mut unmeasured = 0u32;
+        let mut overflowed = false;
+        let mut subtotals = BTreeMap::<String, u64>::new();
         for s in self.sessions.values() {
             if only.is_some_and(|o| o != s.id) {
                 continue;
             }
-            let Some(t) = s.status.as_ref().and_then(|st| st.tokens) else {
+            let status = s.status.as_ref();
+            let tokens = status.and_then(|st| st.tokens);
+            // A known service with no token report is not a model session. Unknown
+            // profiles and agents without reports remain visible as unmeasured.
+            if tokens.is_none()
+                && self
+                    .profiles
+                    .get(&s.actor)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|p| p.kind == ProfileKind::Service)
+            {
                 continue;
-            };
-            tin += t.input;
-            tout += t.out;
-            cost += t.cost;
+            }
+            let t = tokens.unwrap_or_default();
+            let unit = status
+                .and_then(|st| st.budget.as_ref())
+                .map(|b| b.unit.clone());
+            let measured = t.cost_measured && unit.is_some();
+            tin = tin.saturating_add(t.input);
+            tout = tout.saturating_add(t.out);
+            unmeasured = unmeasured.saturating_add(u32::from(!measured));
+            let observed: Vec<_> = unit
+                .as_ref()
+                .filter(|_| tokens.is_some())
+                .map(|u| (u.clone(), t.cost))
+                .into_iter()
+                .collect();
+            for (u, amount) in &observed {
+                let sum = subtotals.entry(u.clone()).or_default();
+                overflowed |= sum.checked_add(*amount).is_none();
+                *sum = sum.saturating_add(*amount);
+            }
             rows.push((
                 Facets {
                     actors: vec![s.actor.clone()],
@@ -2051,11 +2080,16 @@ impl SpaceModel {
                     tokens_in: t.input,
                     tokens_out: t.out,
                     cost: t.cost,
-                    unit: self.unit.clone(),
+                    cost_measured: measured,
+                    unmeasured_sessions: u32::from(!measured),
+                    cost_overflowed: false,
+                    subtotals: observed,
+                    unit,
                 }),
             ));
         }
         if only.is_none() {
+            let uniform = (subtotals.len() == 1).then(|| subtotals.first_key_value().unwrap());
             rows.push((
                 Facets {
                     text: "total".into(),
@@ -2068,8 +2102,12 @@ impl SpaceModel {
                     agent: None,
                     tokens_in: tin,
                     tokens_out: tout,
-                    cost,
-                    unit: self.unit.clone(),
+                    cost: uniform.map_or(0, |(_, amount)| *amount),
+                    cost_measured: unmeasured == 0 && uniform.is_some() && !overflowed,
+                    unmeasured_sessions: unmeasured,
+                    cost_overflowed: overflowed,
+                    unit: uniform.map(|(unit, _)| unit.clone()),
+                    subtotals: subtotals.into_iter().collect(),
                 }),
             ));
         }
@@ -2513,4 +2551,124 @@ fn plan_facts(plan: Option<&str>) -> (Option<String>, Vec<(String, String)>) {
         })
         .unwrap_or_default();
     (target, summary)
+}
+
+#[cfg(test)]
+mod cost_coverage_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn session(id: &str, tokens: Option<serde_json::Value>, unit: Option<&str>) -> SessionInfo {
+        let status = tokens.map(|tokens| {
+            serde_json::from_value(json!({
+                "session": id, "agent": id, "harness":"test", "state":"idle", "step":"done",
+                "files":[], "seq":1, "at":"2026-01-01T00:00:00Z", "tokens":tokens,
+                "budget":unit.map(|u| json!({"unit":u,"limit":100,"spent":0}))
+            }))
+            .unwrap()
+        });
+        SessionInfo {
+            id: id.into(),
+            actor: id.into(),
+            opened: String::new(),
+            task: None,
+            closed: false,
+            ended: None,
+            status,
+            inputs: vec![],
+            last_item_ms: 0,
+            items: ItemLog::default(),
+            record: vec![],
+        }
+    }
+
+    fn rows(model: &SpaceModel) -> BTreeMap<String, CostRow> {
+        model
+            .cost_rows(None)
+            .into_iter()
+            .filter_map(|(_, r)| match r {
+                Row::Cost(c) => Some((c.key.clone(), c)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn legacy_missing_mixed_and_changed_units_never_appear_as_a_complete_zero() {
+        let mut model = SpaceModel::new("s", "h", Freshness::default(), "me");
+        model.unit = Some("NEW-unit".into());
+        let measured = session(
+            "priced",
+            Some(json!({"in":4,"out":6,"cost":0,"cost_measured":true})),
+            Some("USD-cent"),
+        );
+        model.sessions.insert(measured.id.clone(), measured);
+        let first = rows(&model);
+        assert!(first["0"].cost_measured);
+        assert_eq!(first["0"].cost, 0);
+        assert_eq!(first["0"].unit.as_deref(), Some("USD-cent"));
+
+        for s in [
+            session("legacy", Some(json!({"in":2,"out":3,"cost":0})), None),
+            session("missing", None, None),
+        ] {
+            model.sessions.insert(s.id.clone(), s);
+        }
+        let mixed = rows(&model);
+        assert!(!mixed["0"].cost_measured);
+        assert_eq!(mixed["0"].unmeasured_sessions, 2);
+        assert_eq!((mixed["0"].tokens_in, mixed["0"].tokens_out), (6, 9));
+        assert!(!mixed["1/legacy"].cost_measured);
+        assert!(!mixed["1/missing"].cost_measured);
+
+        model.sessions.retain(|id, _| id == "priced");
+        let euro = session(
+            "euro",
+            Some(json!({"in":1,"out":1,"cost":7,"cost_measured":true})),
+            Some("EUR-cent"),
+        );
+        model.sessions.insert(euro.id.clone(), euro);
+        let units = rows(&model);
+        assert!(!units["0"].cost_measured);
+        assert_eq!(units["0"].unit, None);
+        assert_eq!(
+            units["0"].subtotals,
+            vec![("EUR-cent".into(), 7), ("USD-cent".into(), 0)]
+        );
+        assert_eq!(units["0"].unmeasured_sessions, 0);
+
+        let service = session("service", None, None);
+        model.sessions.insert(service.id.clone(), service);
+        model.profiles.insert(
+            "service".into(),
+            Some(ProfileFacts {
+                kind: ProfileKind::Service,
+                operator: None,
+                confirmed: true,
+            }),
+        );
+        assert!(!rows(&model).contains_key("1/service"));
+
+        model.sessions.clear();
+        for (id, amount) in [("large", u64::MAX), ("one", 1)] {
+            let s = session(
+                id,
+                Some(json!({"in":0,"out":0,"cost":amount,"cost_measured":true})),
+                Some("USD-cent"),
+            );
+            model.sessions.insert(id.into(), s);
+        }
+        assert!(!rows(&model)["0"].cost_measured);
+        assert!(rows(&model)["0"].cost_overflowed);
+        let other = session(
+            "other",
+            Some(json!({"in":0,"out":0,"cost":1,"cost_measured":true})),
+            Some("EUR-cent"),
+        );
+        model.sessions.insert("other".into(), other);
+        let mixed_overflow = rows(&model);
+        assert!(mixed_overflow["0"].cost_overflowed);
+        assert_eq!(mixed_overflow["0"].unmeasured_sessions, 0);
+        assert_eq!(mixed_overflow["0"].subtotals.len(), 2);
+    }
 }

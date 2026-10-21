@@ -535,7 +535,7 @@ const MODEL_PROPOSE_SCRIPT: &str = r#"{
       {"type": "mcp_call", "id": "p1", "server": "han", "tool": "propose", "args": {"summary": "Push the login check, claiming a cost of 1", "kind": "git_push", "effect": {}, "cost": {"unit": "USD-cent", "amount": 1}}},
       {"type": "mcp_call", "id": "p2", "server": "han", "tool": "propose", "args": {"summary": "Push the login check", "kind": "git_push", "effect": {"cost": {"unit": "USD-cent", "amount": 1}}}},
       {"type": "message", "text": "Both proposals are made."},
-      {"type": "end", "stopReason": "end_turn"}
+      {"type": "end", "stopReason": "end_turn", "meta": {"quota":{"token_count":{"inputTokens":999,"outputTokens":999}}}}
     ]},
     {"steps": [{"type": "message", "text": "Noted."}, {"type": "end", "stopReason": "end_turn"}]}
   ]

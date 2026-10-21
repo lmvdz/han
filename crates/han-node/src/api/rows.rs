@@ -86,6 +86,10 @@ pub struct Tokens {
     /// Cost, in integer minor units.
     #[serde(default)]
     pub cost: u64,
+    /// Whether cost is complete, including measured zero. Absent/false means unmeasured.
+    /// Its unit is retained in this session's budget, never inferred from today's space policy.
+    #[serde(default)]
+    pub cost_measured: bool,
 }
 
 /// A session's budget as its host reports it. A node-side extension like `sandbox` (unknown members of
@@ -900,9 +904,22 @@ pub struct CostRow {
     pub tokens_in: u64,
     /// Tokens out.
     pub tokens_out: u64,
-    /// Cost, in the unit of the space's budget.
+    /// Observed cost in the session unit, or the sole unit of an aggregate.
     pub cost: u64,
-    /// That unit, if the space has a budget.
+    /// Whether `cost` is a complete total in `unit`; otherwise show unmeasured, not zero.
+    #[serde(default)]
+    pub cost_measured: bool,
+    /// Sessions whose cost is missing or incomplete, including agents without token reports.
+    #[serde(default)]
+    pub unmeasured_sessions: u32,
+    /// At least one subtotal exceeded the numeric range. Subtotals are then lower bounds.
+    #[serde(default)]
+    pub cost_overflowed: bool,
+    /// Observed amounts by their original units. Never add unlike units together.
+    /// These are subtotals when `unmeasured_sessions` is nonzero.
+    #[serde(default)]
+    pub subtotals: Vec<(String, u64)>,
+    /// Original accounting unit; absent when unknown or when an aggregate mixes units.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub unit: Option<String>,

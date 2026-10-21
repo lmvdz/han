@@ -148,6 +148,8 @@ impl Drop for Held {
 struct State {
     spent: u64,
     reserved: u64,
+    in_flight: u64,
+    unmeasured: bool,
 }
 
 /// A budget with a limit and per-model prices. Reservations apply only to models that have a price: a call
@@ -181,6 +183,13 @@ impl Ledger {
     /// What has been spent.
     pub fn spent(&self) -> u64 {
         self.lock().spent
+    }
+
+    /// Observed spend, whether it is complete, and whether a call has unmeasured cost.
+    /// Read together so a new reservation cannot make an older amount appear complete.
+    pub fn accounting(&self) -> (u64, bool, bool) {
+        let s = self.lock();
+        (s.spent, !s.unmeasured && s.in_flight == 0, s.unmeasured)
     }
 
     /// What in-flight calls hold.
@@ -219,6 +228,8 @@ impl Budget for Ledger {
             return Err(Refusal::Spent);
         }
         let Some(price) = price else {
+            s.in_flight += 1;
+            s.unmeasured = true;
             return Ok(Hold::none());
         };
         let max_output = call.max_output.unwrap_or(self.default_max_output);
@@ -227,6 +238,7 @@ impl Budget for Ledger {
             return Err(Refusal::WouldExceed);
         }
         s.reserved += worst;
+        s.in_flight += 1;
         Ok(Hold {
             amount: worst,
             price: Some(price),
@@ -236,6 +248,8 @@ impl Budget for Ledger {
     fn settle(&self, hold: Hold, usage: &Usage) {
         let mut s = self.lock();
         s.reserved = s.reserved.saturating_sub(hold.amount);
+        s.in_flight = s.in_flight.saturating_sub(1);
+        s.unmeasured |= hold.price.is_none() || usage.requests != 1 || usage.measured_requests != 1;
         if let Some(p) = hold.price {
             s.spent = s.spent.saturating_add(p.cost(usage));
         }
@@ -244,12 +258,57 @@ impl Budget for Ledger {
     fn release(&self, hold: Hold) {
         let mut s = self.lock();
         s.reserved = s.reserved.saturating_sub(hold.amount);
+        s.in_flight = s.in_flight.saturating_sub(1);
+        s.unmeasured = true;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn priced_ledger_can_still_have_unmeasured_cost() {
+        let complete = Usage {
+            input: 2,
+            output: 1,
+            requests: 1,
+            measured_requests: 1,
+            ..Usage::default()
+        };
+        let l = ledger(1000);
+        assert_eq!(l.accounting(), (0, true, false)); // a measured zero
+        let hold = l.reserve(&call(Some(1))).unwrap();
+        assert!(!l.accounting().1); // a call is still in flight
+        l.settle(hold, &complete);
+        assert_eq!(l.accounting(), (7, true, false));
+        let unpriced = l
+            .reserve(&CallBound {
+                model: Some("other".into()),
+                ..call(Some(1))
+            })
+            .unwrap();
+        l.settle(unpriced, &complete);
+        assert_eq!(l.accounting(), (7, false, true));
+        let later = l.reserve(&call(Some(1))).unwrap();
+        l.settle(later, &complete);
+        assert_eq!(l.accounting(), (14, false, true)); // a later priced call cannot repair the gap
+
+        let l = ledger(1000);
+        let hold = l.reserve(&call(Some(1))).unwrap();
+        l.settle(
+            hold,
+            &Usage {
+                measured_requests: 0,
+                ..complete
+            },
+        );
+        assert!(!l.accounting().1);
+        let l = ledger(1000);
+        let hold = l.reserve(&call(Some(1))).unwrap();
+        l.release(hold);
+        assert_eq!(l.accounting(), (0, false, true));
+    }
 
     const P: Price = Price {
         input: 1,

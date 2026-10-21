@@ -824,7 +824,8 @@ branch should I
             Some(Tokens {
                 input: 94,
                 out: 582,
-                cost: 0
+                cost: 0,
+                cost_measured: false,
             })
         );
         let per = serde_json::json!({"quota": {"token_count": {"opus": {"inputTokens": 2, "outputTokens": 39}, "haiku": {"inputTokens": 1434, "outputTokens": 99}}}});
@@ -833,7 +834,8 @@ branch should I
             Some(Tokens {
                 input: 1436,
                 out: 138,
-                cost: 0
+                cost: 0,
+                cost_measured: false,
             })
         );
     }

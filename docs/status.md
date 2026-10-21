@@ -17,6 +17,8 @@ As of 2026-10-20, checked against repository history through `aea9d40` (#174). T
 
 ## Implemented since the initial dogfood
 
+- **Usage disclosure.** The session pane distinguishes unmeasured cost from measured zero. API-key accounting tracks missing prices and incomplete responses; subscription metadata cannot replace proxy cost. Cost views retain original units and disclose incomplete totals. See [usage accounting](usage-accounting.md) for compatibility and budget limits. This is implementation coverage, not a provider billing reconciliation.
+
 - **Runner setup and lifecycle.** Per-agent Claude login directories, managed pi/Claude ACP adapter setup, Linux hosts under separate OS users, executor service installation, node logon service installation and a task CLI landed in #70. Setup commands for homes, agents, executors and runners followed in #79, with a full dogfood-loop e2e test in #80. `han agent set` and `han doctor` are implemented (#91, #152). These are implementation and test evidence, not proof that every deployment or platform meets beta acceptance.
 - **Recovery.** OS-user agent units are re-adopted and killed hosts end their sessions (#126). A stopped session does not imply its work has landed; the host reports remaining work, and pruned session ledgers are not inherited (#168).
 - **Agent tools.** `team_sessions`, `team_who_is_on`, `team_read` and `team_overlaps` expose bounded team context as data. `propose` requests external effects through the executor. Landing proposals, `land_status` and check-only `land_try` are implemented (#128, #161).

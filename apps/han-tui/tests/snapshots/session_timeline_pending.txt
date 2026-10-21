@@ -3,11 +3,11 @@
 │  AGENT        STATE · STEP                   AGE │┃● working  #41  pi                                                          ┃
 │ ▾ #41 Board freshness (2)  ⚑ hunk                │┃step: running tests  tool: cargo test                                       ┃
 │>● lars-coder   working: running tests [cargo… 0s │┃plan 1/2 · 4 file(s) · tests 12/0 · 41k tokens                              ┃
-│ ● ada-bot      working: editing src/board.rs  20s│┃ 1 Stream  2 Timeline  3 Changes                                            ┃
-│ ▾ #52 Login flow (2)  1 await you                │┃pending M4: work timelines are not available on this node yet.              ┃
-│▌◐ lars-review… waiting-approval (awaits you)… 1m │┃                                                                            ┃
-│ ◌ bo-runner    stale · last heard 14m ago · … 14m│┃(work timelines are not available on this node yet)                         ┃
-│ ▾ #60 Docs (2)                                   │┃                                                                            ┃
+│ ● ada-bot      working: editing src/board.rs  20s│┃cost: unmeasured                                                            ┃
+│ ▾ #52 Login flow (2)  1 await you                │┃ 1 Stream  2 Timeline  3 Changes                                            ┃
+│▌◐ lars-review… waiting-approval (awaits you)… 1m │┃pending M4: work timelines are not available on this node yet.              ┃
+│ ◌ bo-runner    stale · last heard 14m ago · … 14m│┃                                                                            ┃
+│ ▾ #60 Docs (2)                                   │┃(work timelines are not available on this node yet)                         ┃
 │ ✓ ada-docs     done: wrote the guide          3h │┃                                                                            ┃
 │ ○ lars-notes   idle: nothing to do            2m │┃                                                                            ┃
 │ ▾ No issue (1)                                   │┃                                                                            ┃

@@ -900,6 +900,11 @@ fn draw_session(f: &mut Frame, app: &App, area: Rect) {
             facts.push(format!("{} publish error(s)", s.publish_errors));
         }
         head.push(Line::styled(fit(&facts.join(" · "), w), quiet()));
+        let cost = match (s.tokens.filter(|t| t.cost_measured), s.budget.as_ref()) {
+            (Some(t), Some(b)) => format!("cost: {} {}", t.cost, b.unit),
+            _ => "cost: unmeasured".to_owned(),
+        };
+        head.push(Line::styled(fit(&cost, w), quiet()));
     }
     if let Some(row) = &p.row
         && !row.rights.read
