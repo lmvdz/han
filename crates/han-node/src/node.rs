@@ -41,6 +41,9 @@ pub struct NodeConfig {
     pub key_id: String,
     /// Where `node.db` lives; in memory when absent.
     pub data_dir: Option<PathBuf>,
+    /// Explicit home ticket to persist before starting links. Overrides an older saved pin
+    /// without first dialing its stale addresses; used by the CLI's `--home` at startup.
+    pub initial_home: Option<String>,
     /// When silence turns sessions stale and failed, unless a space says otherwise.
     pub freshness: Freshness,
     /// Per-space thresholds (PLAN 6.4: configurable per space).
@@ -85,6 +88,7 @@ impl NodeConfig {
             actor: actor.to_owned(),
             key_id: "d1".into(),
             data_dir: None,
+            initial_home: None,
             freshness: Freshness::default(),
             space_freshness: HashMap::new(),
             connect_wait: Duration::from_secs(3),
@@ -183,6 +187,15 @@ pub(crate) enum Outcome {
     Sent(han_core::Receipt),
     Rejected(NodeError),
     Offline,
+}
+
+fn parse_home_ticket(ticket: &str) -> Result<HomeTicket, NodeError> {
+    let ticket =
+        HomeTicket::parse(ticket.trim()).ok_or_else(|| NodeError::invalid("not a home ticket"))?;
+    if ticket.node.addrs.is_empty() && ticket.node.relays.is_empty() {
+        return Err(NodeError::invalid("the ticket's node has no address"));
+    }
+    Ok(ticket)
 }
 
 /// The `config` key under which a home ticket is kept in `node.db`.
@@ -547,6 +560,11 @@ impl<T: Transport> Node<T> {
         if !grammar::is_actor_id(&config.actor) {
             return Err(NodeError::invalid("the node's actor is not an ActorId"));
         }
+        let initial_home = config
+            .initial_home
+            .as_deref()
+            .map(parse_home_ticket)
+            .transpose()?;
         let seed = keys
             .load_or_create(DEVICE_KEY)
             .map_err(|e| NodeError::unavailable(e.to_string()))?;
@@ -609,6 +627,10 @@ impl<T: Transport> Node<T> {
             for st in db.statuses(&f.space).map_err(unavailable)? {
                 engine.apply_status(&f.space, st);
             }
+        }
+        if let Some(ticket) = initial_home {
+            db.set_config(&format!("{PIN_PREFIX}{}", ticket.server), &ticket.to_text())
+                .map_err(unavailable)?;
         }
         let pins = db.home_pins().map_err(unavailable)?;
         let timelines = Arc::new(crate::timeline::StreamTimelines::new());
@@ -818,11 +840,7 @@ impl<T: Transport> Node<T> {
     /// trusted as they stand), starts the link to it, and says where it is.
     fn pin_home(&self, ticket: &str) -> Result<(HomeAddr, Vec<String>), NodeError> {
         let inner = &self.inner;
-        let t = HomeTicket::parse(ticket.trim())
-            .ok_or_else(|| NodeError::invalid("not a home ticket"))?;
-        if t.node.addrs.is_empty() && t.node.relays.is_empty() {
-            return Err(NodeError::invalid("the ticket's node has no address"));
-        }
+        let t = parse_home_ticket(ticket)?;
         inner
             .db
             .set_config(&format!("{PIN_PREFIX}{}", t.server), &t.to_text())
