@@ -289,6 +289,8 @@ pub struct PresenceFacts {
     pub effective: String,
     /// Linux: `pkcheck` is installed.
     pub pkcheck: bool,
+    /// Linux: the HAN action policy is installed. This does not prove an authentication agent is available.
+    pub polkit_policy: bool,
 }
 
 /// The Rust toolchain the sandboxes get.
@@ -1643,6 +1645,13 @@ fn presence_findings(
             "approvals need a person present, through polkit, but `pkcheck` is not installed",
             "sudo apt-get install polkitd   # or your distribution's polkit package",
         ));
+    } else if linux && p.effective == "polkit" && !p.polkit_policy {
+        out.push(finding(
+            "presence.polkit-policy",
+            "presence",
+            "polkit is installed but HAN's confirmation action is missing",
+            "sudo han setup install-presence   # installs auth_self; confirmation remains required",
+        ));
     }
 }
 
@@ -1747,6 +1756,7 @@ fn presence_facts(data: &Path) -> Option<Result<PresenceFacts, String>> {
             choice: backend.to_string(),
             effective: backend.build().name().to_owned(),
             pkcheck: on_path("pkcheck"),
+            polkit_policy: Path::new(crate::setup::presence::POLICY_PATH).is_file(),
         })
     };
     Some(read())
@@ -2838,6 +2848,7 @@ mod tests {
                 choice: "auto".into(),
                 effective: effective.into(),
                 pkcheck,
+                polkit_policy: true,
             }))
         };
         let mut f = healthy();
@@ -2852,6 +2863,10 @@ mod tests {
         assert!(analyze(&f).is_empty());
         f.presence = facts(true, "polkit", true);
         assert!(analyze(&f).is_empty());
+        if let Some(Ok(p)) = &mut f.presence {
+            p.polkit_policy = false;
+        }
+        assert_eq!(only(&f).id, "presence.polkit-policy");
         f.presence = Some(Err("node.db: bad".into()));
         assert_eq!(only(&f).id, "presence.settings");
         // an explicit list without face.unlock leaves the pipe open to any program of the user
@@ -2863,6 +2878,7 @@ mod tests {
             choice: "auto".into(),
             effective: "polkit".into(),
             pkcheck: true,
+            polkit_policy: true,
         }));
         let x = only(&f);
         assert_eq!(x.id, "presence.unlock");

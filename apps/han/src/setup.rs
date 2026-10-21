@@ -17,6 +17,7 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, Buf
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
+pub(crate) mod presence;
 mod workflow;
 
 /// Options for the guided local bootstrap.
@@ -48,6 +49,8 @@ pub struct SetupArgs {
 enum SetupCmd {
     /// Show whether this setup's home and person node are ready.
     Status,
+    /// Install the normal Linux polkit confirmation action (requires administrator rights).
+    InstallPresence,
     /// Stop this setup's home and node, keeping all state for the next start.
     Stop,
     /// Run both roles in one managed process (used by the launcher).
@@ -443,6 +446,7 @@ fn role_result(result: Result<Result<(), String>, tokio::task::JoinError>) -> Re
 pub async fn run(args: SetupArgs) -> Res<()> {
     let data = std::path::absolute(&args.data)?;
     match args.cmd {
+        Some(SetupCmd::InstallPresence) => return presence::install(),
         Some(SetupCmd::Serve) => return Box::pin(serve(&data)).await,
         Some(SetupCmd::ServeExecutor) => return Box::pin(workflow::run_executor(&data)).await,
         Some(SetupCmd::Status) => {
@@ -555,6 +559,7 @@ pub async fn run(args: SetupArgs) -> Res<()> {
     println!("Stop: han setup stop --data {}", data.display());
     println!("Next: create or join a space, then continue to agent and runner setup.");
     if !args.no_tui {
+        presence::prepare()?;
         Box::pin(workflow::continue_setup(&data, &state)).await?;
     }
     Ok(())
