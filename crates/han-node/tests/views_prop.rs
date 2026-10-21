@@ -473,6 +473,7 @@ impl Driver {
                             input: *seq,
                             out: 1,
                             cost: 1,
+                            cost_measured: false,
                         }),
                         summary: None,
                         sandbox: None,

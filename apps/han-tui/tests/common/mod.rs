@@ -231,6 +231,7 @@ pub fn node(data: &Shared) -> Arc<FakeApi> {
                 st.files = b.files.clone();
                 st.tests = b.tests;
                 st.tokens = b.tokens;
+                st.budget = b.budget.clone();
                 st.plan = vec![
                     han_node::api::PlanItem {
                         text: "read the code".into(),

@@ -17,6 +17,9 @@ pub struct Usage {
     pub cache_creation: u64,
     /// Model requests forwarded.
     pub requests: u64,
+    /// Responses with complete input/output usage and a clean end of the response.
+    #[serde(default)]
+    pub measured_requests: u64,
 }
 
 impl Usage {
@@ -27,6 +30,7 @@ impl Usage {
         self.cache_read += o.cache_read;
         self.cache_creation += o.cache_creation;
         self.requests += o.requests;
+        self.measured_requests += o.measured_requests;
     }
 
     fn max_with(&mut self, o: &Usage) {
@@ -45,6 +49,7 @@ fn from_usage_obj(u: &Value) -> Usage {
         cache_read: n("cache_read_input_tokens"),
         cache_creation: n("cache_creation_input_tokens"),
         requests: 0,
+        measured_requests: 0,
     }
 }
 
@@ -69,6 +74,12 @@ pub struct Scanner {
     body: Vec<u8>,
     overflow: bool,
     usage: Usage,
+    input_seen: bool,
+    output_seen: bool,
+    ended: bool,
+    malformed: bool,
+    anthropic: bool,
+    final_output_seen: bool,
 }
 
 const MAX_JSON_BODY: usize = 8 * 1024 * 1024;
@@ -91,6 +102,8 @@ impl Scanner {
                     self.line_done();
                 } else if self.line.len() < MAX_LINE {
                     self.line.push(b);
+                } else {
+                    self.overflow = true;
                 }
             }
         } else if self.body.len() + chunk.len() <= MAX_JSON_BODY {
@@ -103,16 +116,54 @@ impl Scanner {
     fn line_done(&mut self) {
         let line = std::mem::take(&mut self.line);
         let text = String::from_utf8_lossy(&line);
-        if let Some(data) = text.trim_end_matches('\r').strip_prefix("data:")
-            && let Ok(v) = serde_json::from_str::<Value>(data.trim())
-        {
-            let u = from_event(&v);
-            self.usage.max_with(&u);
+        if let Some(data) = text.trim_end_matches('\r').strip_prefix("data:") {
+            if data.trim() == "[DONE]" {
+                self.ended = true;
+            } else if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
+                self.event(&v);
+            } else {
+                self.malformed = true;
+            }
         }
     }
 
+    fn event(&mut self, v: &Value) {
+        match v.get("type").and_then(Value::as_str) {
+            Some("message_start") => self.anthropic = true,
+            Some("message_delta") => {
+                self.final_output_seen = v
+                    .get("usage")
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(Value::as_u64)
+                    .is_some();
+            }
+            _ => {}
+        }
+        self.usage.max_with(&from_event(v));
+        for u in [
+            v.get("usage"),
+            v.get("message").and_then(|m| m.get("usage")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.input_seen |= ["input_tokens", "prompt_tokens"]
+                .iter()
+                .any(|k| u.get(k).and_then(Value::as_u64).is_some());
+            self.output_seen |= ["output_tokens", "completion_tokens"]
+                .iter()
+                .any(|k| u.get(k).and_then(Value::as_u64).is_some());
+        }
+        self.ended |= v.get("type").and_then(Value::as_str) == Some("message_stop");
+    }
+
     /// The counts of the whole response.
-    pub fn finish(mut self) -> Usage {
+    pub fn finish(self) -> Usage {
+        self.finish_with_completion(true)
+    }
+
+    /// Counts remain useful on a truncated response, but its cost is not fully measured.
+    pub fn finish_with_completion(mut self, complete: bool) -> Usage {
         if self.sse {
             if !self.line.is_empty() {
                 self.line_done();
@@ -120,9 +171,17 @@ impl Scanner {
         } else if !self.overflow
             && let Ok(v) = serde_json::from_slice::<Value>(&self.body)
         {
-            self.usage.max_with(&from_event(&v));
+            self.event(&v);
         }
         self.usage.requests = 1;
+        self.usage.measured_requests = u64::from(
+            complete
+                && !self.overflow
+                && !self.malformed
+                && self.input_seen
+                && self.output_seen
+                && (!self.sse || (self.ended && (!self.anthropic || self.final_output_seen))),
+        );
         self.usage
     }
 }
@@ -130,6 +189,56 @@ impl Scanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_partial_or_truncated_usage_is_not_measured_zero() {
+        for body in [br#"{}"#.as_slice(), br#"{"usage":{"input_tokens":0}}"#] {
+            let mut s = Scanner::new("application/json");
+            s.feed(body);
+            assert_eq!(s.finish().measured_requests, 0);
+        }
+        let mut s = Scanner::new("application/json");
+        s.feed(br#"{"usage":{"input_tokens":0,"output_tokens":0}}"#);
+        assert_eq!(s.finish().measured_requests, 1);
+        let mut s = Scanner::new("application/json");
+        s.feed(br#"{"usage":{"input_tokens":3,"output_tokens":5}}"#);
+        let partial = s.finish_with_completion(false);
+        assert_eq!(
+            (partial.input, partial.output, partial.measured_requests),
+            (3, 5, 0)
+        );
+
+        let event = b"data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n";
+        let mut s = Scanner::new("text/event-stream");
+        s.feed(event);
+        assert_eq!(s.finish().measured_requests, 0);
+        let mut s = Scanner::new("text/event-stream");
+        s.feed(event);
+        s.feed(b"data: [DONE]\n");
+        assert_eq!(s.finish().measured_requests, 1);
+    }
+
+    #[test]
+    fn a_terminal_marker_does_not_repair_missing_or_malformed_final_usage() {
+        let start = b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n";
+        let stop = b"data: {\"type\":\"message_stop\"}\n";
+        for delta in [
+            b"data: {broken message_delta}\n".as_slice(),
+            b"",
+            b"data: {\"type\":\"message_delta\"}\n",
+        ] {
+            let mut s = Scanner::new("text/event-stream");
+            s.feed(start);
+            s.feed(delta);
+            s.feed(stop);
+            assert_eq!(s.finish().measured_requests, 0);
+        }
+        let mut s = Scanner::new("text/event-stream");
+        s.feed(start);
+        s.feed(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":0}}\n");
+        s.feed(stop);
+        assert_eq!(s.finish().measured_requests, 1);
+    }
 
     #[test]
     fn sse_and_json() {

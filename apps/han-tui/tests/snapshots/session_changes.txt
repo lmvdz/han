@@ -3,13 +3,13 @@
 │  AGENT        STATE · STEP                   AGE │┃● working  #41  pi                                                          ┃
 │ ▾ #41 Board freshness (2)  ⚑ hunk                │┃step: running tests  tool: cargo test                                       ┃
 │>● lars-coder   working: running tests [cargo… 0s │┃plan 1/2 · 4 file(s) · tests 12/0 · 41k tokens                              ┃
-│ ● ada-bot      working: editing src/board.rs  20s│┃ 1 Stream  2 Timeline  3 Changes                                            ┃
-│ ▾ #52 Login flow (2)  1 await you                │┃>M src/lib.rs +1 -1                                                         ┃
-│▌◐ lars-review… waiting-approval (awaits you)… 1m │┃@@ -1,2 +1,3 @@                                                             ┃
-│ ◌ bo-runner    stale · last heard 14m ago · … 14m│┃ fn a() {}                                                                  ┃
-│ ▾ #60 Docs (2)                                   │┃-let old = 1;                                                               ┃
-│ ✓ ada-docs     done: wrote the guide          3h │┃+let fresh = 2;                                                             ┃
-│ ○ lars-notes   idle: nothing to do            2m │┃                                                                            ┃
+│ ● ada-bot      working: editing src/board.rs  20s│┃cost: unmeasured                                                            ┃
+│ ▾ #52 Login flow (2)  1 await you                │┃ 1 Stream  2 Timeline  3 Changes                                            ┃
+│▌◐ lars-review… waiting-approval (awaits you)… 1m │┃>M src/lib.rs +1 -1                                                         ┃
+│ ◌ bo-runner    stale · last heard 14m ago · … 14m│┃@@ -1,2 +1,3 @@                                                             ┃
+│ ▾ #60 Docs (2)                                   │┃ fn a() {}                                                                  ┃
+│ ✓ ada-docs     done: wrote the guide          3h │┃-let old = 1;                                                               ┃
+│ ○ lars-notes   idle: nothing to do            2m │┃+let fresh = 2;                                                             ┃
 │ ▾ No issue (1)                                   │┃                                                                            ┃
 │ ✗ bo-scratch   failed: host unreachable       40m│┃                                                                            ┃
 │                                                  │┃                                                                            ┃

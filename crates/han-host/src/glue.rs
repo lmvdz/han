@@ -84,6 +84,21 @@ impl SessionBudget {
             .as_ref()
             .map_or(0, |l| l.spent().div_ceil(LEDGER_SCALE))
     }
+
+    /// Observed amount, whether all calls are accounted for, and any enforcement gap.
+    pub fn accounting(&self) -> (u64, bool, Option<&'static str>) {
+        match &self.ledger {
+            Some(ledger) => {
+                let (spent, complete, unmeasured) = ledger.accounting();
+                (
+                    spent.div_ceil(LEDGER_SCALE),
+                    complete,
+                    unmeasured.then_some("some model calls have unmeasured cost"),
+                )
+            }
+            None => (0, false, self.not_enforced),
+        }
+    }
 }
 
 /// A launched agent.
@@ -606,6 +621,7 @@ mod tests {
                 input: 100,
                 output: 100,
                 requests: 1,
+                measured_requests: 1,
                 ..Usage::default()
             },
         );

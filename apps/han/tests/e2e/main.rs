@@ -763,6 +763,7 @@ async fn a_spent_budget_refuses_the_next_model_call_and_the_board_says_why() {
     // the cost and the counts come from the proxy
     let tokens = row.tokens.expect("tokens in the status");
     assert_eq!((tokens.input, tokens.out, tokens.cost), (40, 60, 100));
+    assert!(tokens.cost_measured);
     // the agent was paid once and refused once, in that order
     let log = s.agent_log();
     assert_eq!(
@@ -816,6 +817,7 @@ async fn a_proposal_after_a_priced_model_call_carries_the_measured_cost() {
         })
         .await;
     assert_eq!(row.budget.expect("the budget").spent, 10);
+    assert!(row.tokens.unwrap().cost_measured);
     let results = || {
         s.agent_log()
             .lines()
@@ -840,6 +842,46 @@ async fn a_proposal_after_a_priced_model_call_carries_the_measured_cost() {
         answers[1].contains("agents spend only from a budgeted task"),
         "{answers:?}"
     );
+    // This fixture ends with conflicting ACP quota metadata (999/999).
+    // Inspect a status published after TurnEnd so an earlier proxy update cannot
+    // accidentally satisfy the regression before that metadata is processed.
+    let after_end = || async {
+        let items = rows(
+            &c,
+            Query::Session {
+                id: row.session.clone(),
+                part: SessionPart::Items,
+                window: Window::default(),
+            },
+        )
+        .await;
+        let ended = items
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item(i) if matches!(i.item, ItemBody::TurnEnd { .. }) => {
+                    Some(i.seq_in_session)
+                }
+                _ => None,
+            })
+            .max()?;
+        items
+            .into_iter()
+            .filter_map(|r| match r {
+                Row::Item(i) if i.seq_in_session > ended => match i.item {
+                    ItemBody::Status { body } => Some(body),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .max_by_key(|body| body.seq)
+    };
+    until("a status after adapter metadata", 60, || async {
+        after_end().await.is_some()
+    })
+    .await;
+    let tokens = after_end().await.unwrap().tokens.unwrap();
+    assert_eq!((tokens.input, tokens.out, tokens.cost), (4, 6, 10));
+    assert!(tokens.cost_measured);
 }
 
 /// Bug: a budget that cannot be enforced was invisible. With no price table for the space's unit nothing is

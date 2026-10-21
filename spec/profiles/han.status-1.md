@@ -43,3 +43,9 @@ Rules:
 - **No summaries here** (SR-66). A summary derived from the session's context is context: it travels as a `context` stream item with `what: "summary"`, under the read right (T-07), never in this item, which reaches watchers. The `summary` member of round 30 is withdrawn: a face ignores it, as an unknown member.
 - **Sandbox and gate** (SR-34, SR-99). A host MUST send `sandbox` and `gate` in every item. A face MUST show both, and MUST mark the session as **advisory** when `sandbox` is `none`, `gate` is `prompt_only`, or either is missing: its `guarded` mode is then only as good as the host's gate.
 - Unknown members are ignored, so the profile can grow without a new version; a change of meaning is `han.status/2`.
+
+Implementation extension: HAN's host and faces use `tokens.cost_measured`
+(absent means false) together with the session's `budget.unit` to distinguish a
+complete reported amount from unmeasured cost. This adds measurement provenance,
+not execution authority. See [usage accounting](../../docs/usage-accounting.md)
+for coverage and compatibility limits.

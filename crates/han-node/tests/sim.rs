@@ -46,6 +46,7 @@ fn status(
             input: 100 * seq,
             out: 10 * seq,
             cost: seq,
+            cost_measured: false,
         }),
         summary: None,
         sandbox: None,

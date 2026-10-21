@@ -107,6 +107,7 @@ async fn the_session_pane() {
     let screen = h.screen();
     assert_screen("session_pane", &screen);
     assert!(screen.contains("Session ·"), "{screen}");
+    assert!(screen.contains("cost: unmeasured"), "{screen}");
     // The timeline and the changes are pending until the node serves them.
     h.keys("2").await;
     let timeline = h.screen();
@@ -123,6 +124,26 @@ async fn the_session_pane_of_someone_elses_agent_is_watch_only() {
     h.keys("jj<enter>").await;
     let s = h.screen();
     assert!(s.contains("ada-bot") && s.contains("watch only"), "{s}");
+}
+
+#[tokio::test]
+async fn measured_zero_is_distinct_from_missing_cost() {
+    let (mut h, _api, data) = started(WIDE).await;
+    {
+        let mut data = data.lock().unwrap();
+        data.board[0].tokens.as_mut().unwrap().cost_measured = true;
+        data.board[0].budget = Some(han_node::api::BudgetStatus {
+            unit: "USD-cent".into(),
+            limit: 100,
+            spent: 0,
+            not_enforced: None,
+            refused: None,
+        });
+    }
+    h.keys("j<enter>").await;
+    let screen = h.screen();
+    assert!(screen.contains("cost: 0 USD-cent"), "{screen}");
+    assert!(!screen.contains("cost: unmeasured"), "{screen}");
 }
 
 #[tokio::test]

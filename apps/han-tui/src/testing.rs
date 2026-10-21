@@ -264,6 +264,7 @@ pub fn board_row(session: &str, agent: &str, person: &str, group: &str, step: &s
             input: 30_000,
             out: 11_000,
             cost: 0,
+            cost_measured: false,
         }),
         summary: None,
         sandbox: None,

@@ -46,6 +46,7 @@ fn status(session: &str, step: &str, seq: u64) -> StatusBody {
             input: 4000,
             out: 500,
             cost: 1,
+            cost_measured: false,
         }),
         summary: None,
         sandbox: None,

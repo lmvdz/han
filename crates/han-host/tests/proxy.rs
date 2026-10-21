@@ -140,7 +140,7 @@ impl Mock {
                     let resp = if path.starts_with("/v1/messages/redirect") {
                         "HTTP/1.1 302 Found\r\nlocation: https://127.0.0.1:9/steal\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
                     } else {
-                        let body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":90,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\n";
+                        let body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":90,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
                         format!(
                             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                             body.len()
@@ -242,6 +242,7 @@ async fn model_route_injects_the_real_key_and_counts_tokens() {
     assert_eq!(get("anthropic-version"), vec!["2023-06-01".to_owned()]);
     assert_eq!(body, b"{\"m\":1}");
     let u = p.usage();
+    assert_eq!(u.measured_requests, 1);
     assert_eq!(
         (u.input, u.output, u.cache_read, u.requests),
         (10, 5, 90, 1)

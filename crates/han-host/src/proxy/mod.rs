@@ -944,14 +944,19 @@ async fn model(mut s: TcpStream, sh: Arc<Shared>, head: Head) -> io::Result<()> 
     s.write_all(out.as_bytes()).await?;
     let mut scan = usage::Scanner::new(&ctype);
     let mut down = 0u64;
-    while let Ok(Some(c)) = resp.chunk().await {
+    let complete = loop {
+        let c = match resp.chunk().await {
+            Ok(Some(c)) => c,
+            Ok(None) => break true,
+            Err(_) => break false,
+        };
         scan.feed(&c);
         down += c.len() as u64;
         if s.write_all(&c).await.is_err() {
-            break;
+            break false;
         }
-    }
-    let used = scan.finish();
+    };
+    let used = scan.finish_with_completion(complete);
     // Spend is recorded before the client sees the end of the response. Closing first lets
     // a client that reads to EOF and immediately calls again pass the budget check before
     // this call is counted (SR-41).
