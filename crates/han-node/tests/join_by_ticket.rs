@@ -38,6 +38,10 @@ async fn endpoint(seed: u8) -> IrohTransport {
 /// A node whose only source of server keys is the (empty) static set and whose fetcher cannot reach any
 /// well-known: whatever it learns about the home comes from the ticket.
 async fn start(dir: &std::path::Path) -> Node<IrohTransport> {
+    start_with_home(dir, None).await
+}
+
+async fn start_with_home(dir: &std::path::Path, ticket: Option<String>) -> Node<IrohTransport> {
     let store = FileKeyStore::new(dir.join("keys"));
     store.store(DEVICE_KEY, [31; 32]).unwrap();
     let mut config = NodeConfig::new(ALICE);
@@ -46,6 +50,7 @@ async fn start(dir: &std::path::Path) -> Node<IrohTransport> {
     config.flush_every = Duration::from_millis(100);
     config.connect_wait = Duration::from_secs(5);
     config.fetcher = Fetcher::new();
+    config.initial_home = ticket;
     Node::start(NodeParts {
         config,
         transport: endpoint(31).await,
@@ -94,7 +99,11 @@ async fn scenario() {
     let transport = endpoint(30).await;
     let addr = transport.loopback_addr();
     home.set_nodes(vec![transport.node_id()]);
-    let _server = serve(transport, Arc::clone(&home), ServeOptions::default());
+    let _server = serve(
+        transport.clone(),
+        Arc::clone(&home),
+        ServeOptions::default(),
+    );
     // no HTTP server: the home has no well-known anywhere
     let ticket = HomeTicket {
         server: SERVER.into(),
@@ -178,5 +187,81 @@ async fn scenario() {
     }
     assert!(linked, "the restarted node reached the home without a flag");
     node.shutdown();
+    drop(node);
+    transport.shutdown().await;
+
+    // A managed local home binds a new port after restart. The launcher must supply its current
+    // ticket before the person node starts links from an older persisted pin.
+    let restarted_transport = endpoint(30).await;
+    let restarted_ticket = HomeTicket {
+        server: SERVER.into(),
+        node: restarted_transport.loopback_addr(),
+        keys: home.server_keys(),
+    };
+    assert_ne!(restarted_ticket.node.addrs, ticket.node.addrs);
+    let _restarted_server = serve(
+        restarted_transport.clone(),
+        Arc::clone(&home),
+        ServeOptions::default(),
+    );
+    let node = start(&dir).await;
+    let pending = node
+        .call(Command::SpaceCreateTrusted {
+            home: None,
+            name: "Queued before restart".into(),
+            repos: vec!["github:team/project".into()],
+        })
+        .await
+        .unwrap();
+    let CallResult::Queued {
+        space: pending_space,
+        ..
+    } = pending
+    else {
+        panic!("the stale address must retain the request in the outbox: {pending:?}");
+    };
+    node.shutdown();
+    drop(node);
+    let node = start_with_home(&dir, Some(restarted_ticket.to_text())).await;
+    node.call(Command::SpaceAwait {
+        space: pending_space.clone(),
+        timeout_ms: Some(10_000),
+    })
+    .await
+    .unwrap();
+    assert!(
+        home.state_of(&pending_space).is_some(),
+        "startup delivered the original queued creation"
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let mut outbox = node.view(Query::Outbox {
+                space: Some(pending_space.clone()),
+                window: Window::default(),
+            });
+            if matches!(outbox.try_next(), Some(ViewEvent::Snapshot { rows, .. })
+                if rows.len() == 1 && matches!(&rows[0], Row::Outbox(row) if row.state == "sent"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the original request must settle without a second submission");
+    let result = node
+        .call(Command::SpaceCreateTrusted {
+            home: None,
+            name: "After home restart".into(),
+            repos: vec!["github:team/project".into()],
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, CallResult::Space { .. }),
+        "a startup ticket must reach the restarted home, not queue on its old port: {result:?}"
+    );
+    node.shutdown();
+    restarted_transport.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
