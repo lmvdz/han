@@ -627,6 +627,9 @@ impl<T: Transport> Node<T> {
             for st in db.statuses(&f.space).map_err(unavailable)? {
                 engine.apply_status(&f.space, st);
             }
+            for it in db.items(&f.space).map_err(unavailable)? {
+                engine.restore_item(&f.space, &it.session, it.id, it.turn, it.body);
+            }
         }
         if let Some(ticket) = initial_home {
             db.set_config(&format!("{PIN_PREFIX}{}", ticket.server), &ticket.to_text())
