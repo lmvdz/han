@@ -154,9 +154,9 @@ han agent add coder --operator @me:han.home.arpa --space <space> --home <ticket>
     --home-data home --harness claude --sandbox auto
 ```
 
-It writes the agent's launch settings (`agents.json` in the node's data folder), installs the selected adapter if needed (bundled `claude` or `pi`, or an installed declarative driver), makes the agent's key, registers its profile (here, because `--home-data` names the home that runs on this machine), has you confirm it as its operator, and makes it a member of the space. Without `--home-data` it prints, for the home's admin, `han home register @coder:… --public-key=… --operator …`; run on a device that is not the operator's, it prints `han actor confirm @coder:… --operator … --home <ticket>` for the operator. Run `han agent add` again afterwards: it resumes where it stopped and ends with `ready:`.
+It writes the agent's launch settings (`agents.json` in the node's data folder), installs `claude` or `pi` if selected and not already set up (other drivers need `setup-harness` first), makes the agent's key, registers its profile (here, because `--home-data` names the home that runs on this machine), has you confirm it as its operator, and makes it a member of the space. Without `--home-data` it prints, for the home's admin, `han home register @coder:… --public-key=… --operator …`; run on a device that is not the operator's, it prints `han actor confirm @coder:… --operator … --home <ticket>` for the operator. Run `han agent add` again afterwards: it resumes where it stopped and ends with `ready:`.
 
-Setup, login, diagnostics and launch share the same [declarative driver](../crates/han-host/drivers/README.md). `han agent setup-harness` accepts a bundled name (`claude` or `pi`), an installed name, or a JSON/TOML driver file. For Codex, install the repository's pinned adapter definition, then select it for the agent:
+Setup, login, diagnostics and launch share the same [declarative driver](../crates/han-host/drivers/README.md). `han agent setup-harness` accepts a bundled name (`claude`, `pi` or `codex`), an installed name, or a JSON/TOML driver file. For Codex, install the repository's pinned adapter definition, then select it for the agent:
 
 ```sh
 han agent setup-harness crates/han-host/drivers/codex.json
