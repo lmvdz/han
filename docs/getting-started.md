@@ -61,8 +61,9 @@ Startup failures point to `han-team/setup.log`; correct the cause and repeat
 the same setup command. The default home uses a unique reserved local server
 name and the n0 relay. Its ticket is in `han-team/home/home.ticket`. This flow
 sets up a new local home; joining someone else's home still uses registration
-and a home ticket as described below. Agent login, executor configuration and
-required checks remain separate steps (5–7).
+and a home ticket as described below. Agent/executor onboarding, login and
+required checks remain separate steps (5–7). Fresh-user timings and two-person
+acceptance remain unverified; see the [status page](status.md).
 
 After the TUI opens, continue at step 4. For later CLI commands, set `HAN_DATA`
 to your `han-team/person` folder or supply `--data` explicitly. The following
@@ -153,13 +154,24 @@ han agent add coder --operator @me:han.home.arpa --space <space> --home <ticket>
     --home-data home --harness claude --sandbox auto
 ```
 
-It writes the agent's launch settings (`agents.json` in the node's data folder), installs the harness adapter if it is not there (`claude` or `pi`), makes the agent's key, registers its profile (here, because `--home-data` names the home that runs on this machine), has you confirm it as its operator, and makes it a member of the space. Without `--home-data` it prints, for the home's admin, `han home register @coder:… --public-key=… --operator …`; run on a device that is not the operator's, it prints `han actor confirm @coder:… --operator … --home <ticket>` for the operator. Run `han agent add` again afterwards: it resumes where it stopped and ends with `ready:`.
+It writes the agent's launch settings (`agents.json` in the node's data folder), installs the selected adapter if needed (bundled `claude` or `pi`, or an installed declarative driver), makes the agent's key, registers its profile (here, because `--home-data` names the home that runs on this machine), has you confirm it as its operator, and makes it a member of the space. Without `--home-data` it prints, for the home's admin, `han home register @coder:… --public-key=… --operator …`; run on a device that is not the operator's, it prints `han actor confirm @coder:… --operator … --home <ticket>` for the operator. Run `han agent add` again afterwards: it resumes where it stopped and ends with `ready:`.
+
+Setup, login, diagnostics and launch share the same [declarative driver](../crates/han-host/drivers/README.md). `han agent setup-harness` accepts a bundled name (`claude` or `pi`), an installed name, or a JSON/TOML driver file. For Codex, install the repository's pinned adapter definition, then select it for the agent:
+
+```sh
+han agent setup-harness crates/han-host/drivers/codex.json
+han agent set @coder:han.home.arpa --harness codex
+han agent login @coder:han.home.arpa
+han agent login @coder:han.home.arpa --check
+```
+
+Run these from the repository root with the same node data folder (`HAN_DATA` or `--data`) used above. Claude uses the same `han agent login <actor>` command. Login runs outside the sandbox in an isolated per-agent directory; `--check` checks only the cached credential file, not account access or quota. On an OS-user runner, run login as the agent's OS user with `--dir <login-root>` and `--harness <name>`; see the driver guide for shared installation access. Driver files are trusted operator configuration. The Codex profile requires Linux bubblewrap. pi instead uses `--model-key-file <private-key-file>` on `han agent add` or `set`; the proxy holds the API key.
 
 `han actor confirm` is what the operator runs; it works for agents and for the executor (`han agent confirm` still works). `--os-user`, `--allow-advisory` and `--sandbox` record how the agent runs; see the [shared runner guide](runner.md) for OS-user agents.
 
 ## 6. Add an executor
 
-Agents hold no credentials. They propose an effect (`git_push`, `open_pr`, `http_request`), an owner approves it, and the **executor** runs it.
+Agents hold no repository-write credentials. They propose effects and the **executor** runs authorized work with its configured checks. The Trusted team preset permits ordinary repository-scoped landing without per-change approval, within the limits in step 4. Sensitive, larger or incomplete changes, other repositories and other effects require human owner approval; a session guard also requires its person's approval. The `han dev up` policy requires owner approval for `git_push`, `open_pr` and `http_request`.
 
 ```sh
 han executor add exec --operator @me:han.home.arpa --dir exec --space <space> --home <ticket> \
@@ -178,13 +190,13 @@ han tui <space>
 
 `--issue` starts the session on the open task for that issue that is addressed to the agent (`han-github` creates one for every agent-ready issue). The issue's title and body reach the agent in that task, as a data block marked untrusted; the agent has no network to fetch them. With no such task the start is refused ("no open task for github:owner/repo#12 ... carries the issue text"); `--task <id>` names a task directly, and its own issue is used.
 
-`--harness` defaults to the one `han agent add` recorded; it is `pi` (with an API key the egress proxy injects; the agent only holds a dummy) or `claude` (the official Claude Code client through `claude-agent-acp`, on a Claude subscription). The session runs in a sandbox whose only way out is the egress proxy, and its only way to act on the outside world is `propose`.
+`--harness` defaults to the driver recorded for the agent: bundled `pi` (proxy-held API key), `claude` (Claude Code through `claude-agent-acp`, on a Claude subscription), or an installed driver such as `codex` (Codex ACP, on a ChatGPT subscription). Subscription token counts may be reported while cost remains **unmeasured**; see [usage accounting](usage-accounting.md). The session runs in a sandbox whose only way out is the egress proxy, and its only way to act on the outside world is `propose`.
 
 **Build and test inside the sandbox.** An agent has no Rust toolchain unless the node gives it one. `han agent set @coder:<server> --toolchains rust` turns it on for that agent (the file-wide default is the `"toolchains"` list of `agents.json`, in the node's data directory, `%LOCALAPPDATA%\han` on Windows). The agent then gets your `%USERPROFILE%\.rustup` and `.cargo\bin` read-only (on Windows also the MSVC linker and Windows SDK it finds), a cache of its own for downloaded crates, and `crates.io` on its proxy allow-list; `"toolchainPaths": {"rust": {"rustupHome": "...", "cargoBin": "..."}}` points elsewhere. Install the toolchains your repository pins (`rust-toolchain.toml`) first; the sandbox never downloads one. On a Linux runner `sudo han runner setup --toolchain rust --repo <path>` does the installing and writes `toolchainPaths` ([runner.md](runner.md) section 7.2).
 
 `han agent set` changes how an agent is launched and nothing else; never edit `agents.json` by hand. It takes `--os-user`, `--sandbox`, `--allow-advisory`, `--toolchains` and `--harness`, needs no running node, and prints `changed:` or `unchanged:`.
 
-`han tui` shows the live board, the session pane (Enter) and the approvals inbox, where you read a proposal and approve it. Press **n** (or `:task`) to create and start work: fill in the agent, repository and request, then Enter. **T** (or `:tasks`) lists open tasks; Enter opens an existing task for starting. A failed start keeps the task id, so retrying start does not create another task. A lost reply requires inspecting the board/tasks before retrying; the TUI does not repeat it automatically.
+`han tui` shows the live board, the session pane (Enter) and the approvals inbox, where you read and approve proposals that require human approval. Press **n** (or `:task`) to create and start work: fill in the agent, repository and request, then Enter. **T** (or `:tasks`) lists open tasks; Enter opens an existing task for starting. A failed start keeps the task id, so retrying start does not create another task. A lost reply requires inspecting the board/tasks before retrying; the TUI does not repeat it automatically.
 
 The CLI equivalent, once the node and agent are set up, is:
 
@@ -204,7 +216,7 @@ Use `--file request.txt` instead of the quoted request for multiline work, or om
 
 ## 9. A shared runner
 
-A runner is a team-owned Linux VM that hosts the home and runs agent sessions for members. The [shared runner guide](runner.md) sets one up: `sudo han runner setup` for the OS users, units and polkit rule, then the same `han home`, `han agent add` and `han executor add` commands as above.
+A runner is a team-owned Linux VM that hosts the home and runs agent sessions for members. The [shared runner guide](runner.md) sets one up: `sudo han runner setup` for the OS users, units and polkit rule, then the same `han home`, `han agent add` and `han executor add` commands as above. Remote runner pairing is not implemented; this remains a separate manual setup.
 
 ## 10. When something is stuck
 
