@@ -271,6 +271,40 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
     );
     assert!(!delta.1[0].masked.is_empty());
 
+    for (id, expected_status, expected_text) in [
+        (
+            "mcp_receipt",
+            ToolStatus::Completed,
+            "Proposal received: fixture-id; key=[masked:aws-access-key]",
+        ),
+        (
+            "mcp_error",
+            ToolStatus::Failed,
+            "Read refused; key=[masked:aws-access-key]",
+        ),
+    ] {
+        let (status, content) = items
+            .iter()
+            .find_map(|i| match &i.item {
+                ItemBody::ToolCall {
+                    tool_call_id,
+                    status,
+                    content,
+                    ..
+                } if tool_call_id == id => Some((*status, content)),
+                _ => None,
+            })
+            .expect("MCP result reaches the node");
+        assert_eq!(status, expected_status);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].text, expected_text);
+        assert!(!content[0].masked.is_empty());
+    }
+    assert!(
+        !dump.contains("do not publish"),
+        "opaque MCP fields reached the node"
+    );
+
     // The first prompt: the framing in the text, the ask in a data block after it.
     let first = log_lines(&log)
         .into_iter()

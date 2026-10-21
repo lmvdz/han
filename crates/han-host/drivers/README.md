@@ -79,6 +79,20 @@ configuration, hooks, skills and plugins. This prevents silently inheriting thos
 configuration sources at admission. Repository instructions remain untrusted
 input; this does not make agent-generated commands trustworthy.
 
+### Shared tool results
+
+Completed Codex terminal output and MCP result text are available in the shared
+session. MCP completion updates expose text content and error messages, with the
+same masking and size limits as other tool output. A proposal receipt records a
+request; it does not mean the effect executed or landed. The adapter's reported
+tool status is preserved.
+
+Terminal deltas are assembled and masked before publication when the tool ends.
+MCP progress messages are not result fragments and are not appended. Structured
+MCP data, embedded resources and binary payloads are not rendered. This handling
+covers completion updates; completed calls replayed only as initial `tool_call`
+events still do not expose their output.
+
 ### Live evidence
 
 On 2026-10-20, this driver completed a real task on the Linux OS-user runner:

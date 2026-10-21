@@ -13,6 +13,10 @@
       {"type": "tool_update", "id": "toolu_delta", "status": "in_progress", "meta": {"terminal_output_delta": {"data": "metadata=no\nkey = AKIAIOSFOD"}}},
       {"type": "tool_update", "id": "toolu_delta", "status": "in_progress", "meta": {"terminal_output_delta": {"data": "NN7EXAMPLE\ntest result: ok. 3 "}}},
       {"type": "tool_update", "id": "toolu_delta", "status": "completed", "meta": {"terminal_output_delta": {"data": "passed; 0 failed;\n"}}},
+      {"type": "tool_call", "id": "mcp_receipt", "title": "mcp.han.propose", "kind": "execute", "status": "in_progress"},
+      {"type": "tool_update", "id": "mcp_receipt", "status": "completed", "rawInput": {"server": "han", "tool": "propose"}, "rawOutput": {"result": {"content": [{"type": "text", "text": "Proposal received: fixture-id; key=AKIAIOSFOD"}, {"type": "text", "text": "NN7EXAMPLE"}], "structuredContent": {"private": "do not publish"}}, "error": null}},
+      {"type": "tool_call", "id": "mcp_error", "title": "mcp.han.team_read", "kind": "read", "status": "in_progress"},
+      {"type": "tool_update", "id": "mcp_error", "status": "failed", "rawInput": {"server": "han", "tool": "team_read"}, "rawOutput": {"result": null, "error": {"message": "Read refused; key=AKIAIOSFODNN7EXAMPLE", "data": "do not publish"}}},
       {"type": "message", "text": "Which branch should I target?\nI can use main or the release branch."},
       {"type": "end", "stopReason": "end_turn"}
     ]},
