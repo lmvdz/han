@@ -30,6 +30,15 @@ The ACP harnesses include **pi** (API-key mode) and **Claude Code** through `cla
 
 The TUI's `:setup` creates a Trusted team space or joins by invite, with a permission preview and persisted recovery notice for uncertain submissions. `han space create-trusted` previews the same repository-scoped policy offline; `--apply` creates it atomically. Ordinary changes can land automatically after the configured executor checks; sensitive paths, larger changes and other effects require human owner approval. Tests cover the actual home policy, repository/risk boundaries, offline creation and setup recovery. `han setup` creates a local home, registers a human profile, starts a managed person node and opens this form. It resumes the saved identity and stops both roles without removing state. A production-role integration test covers fresh startup, resume, normal presence requirements, stop and restart. Installation, joining a remote home, agent login and runner configuration still require the steps in [getting started](getting-started.md). No timed fresh-user acceptance result is claimed.
 
+A subsequent [Trusted team trial](reviews/trusted-landing-2026-10-20.md) landed a
+real Codex README correction as [PR 182](https://github.com/lmvdz/han/pull/182)
+under the repository-scoped grant, with one claim and no per-change approvals.
+The recorded outcome binds the configured `quick` check to the exact landed
+commit; Rust jobs were skipped by CI's documentation-only scope. The independent
+[round-5 review](reviews/beta-2026-10-20-round-5.md) scores the beta at 74/100.
+This was author-operated setup using existing accounts and services, not timed
+fresh-user or two-person acceptance.
+
 ## The specification
 
 Round 32 remains the last graded round: **76.5** ([review history](https://github.com/lmvdz/han/blob/main/spec/decisions/HISTORY.md)). Changes labelled “round 33, ahead of the round” have nevertheless merged, including executor cancellation (P-07a), semantic gates/risk tiers (P-17), post-merge revert (A2) and check-only tries. Merged changes do not constitute a completed independent round-33 review.

@@ -275,12 +275,20 @@ impl HanTools {
             })
             .await;
         match answer {
-            ProposeAnswer::Proposed { id, .. } | ProposeAnswer::Queued { id } => {
+            ProposeAnswer::Proposed { id, .. } => {
                 let text = format!(
-                    "Try {id} started: the landing lane tests your committed work and lands nothing. Call land_status for the result."
+                    "Try {id} accepted: it awaits executor authorization and checks, and lands nothing. Acceptance does not confirm that checks have started or passed. Call land_status for the result."
                 );
                 let mut r = CallToolResult::success(vec![ContentBlock::text(text)]);
-                r.structured_content = Some(json!({"status": "tried", "id": id}));
+                r.structured_content = Some(json!({"status": "proposed", "id": id}));
+                r
+            }
+            ProposeAnswer::Queued { id } => {
+                let text = format!(
+                    "Try {id} queued: waiting for the home to accept it. Checks have not been confirmed as started. Call land_status for progress and the result."
+                );
+                let mut r = CallToolResult::success(vec![ContentBlock::text(text)]);
+                r.structured_content = Some(json!({"status": "queued", "id": id}));
                 r
             }
             ProposeAnswer::Refused { reason } => {

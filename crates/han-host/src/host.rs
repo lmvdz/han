@@ -270,6 +270,7 @@ struct Shared {
     publish_errors: AtomicU64,
     read_others: Mutex<bool>,
     proposals: Mutex<Vec<String>>,
+    next_proposal: AtomicU64,
     /// The session's budget with the proxy's ledger, set once the egress is up. Proposal cost is read from it.
     budget: OnceLock<crate::glue::SessionBudget>,
     /// How much of the measured spend earlier proposals already carried, in the budget's unit.
@@ -357,7 +358,12 @@ impl Shared {
             Signal::Summary(t) => Signal::Summary(m(t)),
             Signal::Failed(t) => Signal::Failed(m(t)),
             Signal::TurnStarted { step } => Signal::TurnStarted { step: m(step) },
-            Signal::Land { text, blocked } => Signal::Land {
+            Signal::Land {
+                proposal,
+                text,
+                blocked,
+            } => Signal::Land {
+                proposal,
                 text: m(text),
                 blocked,
             },
@@ -639,6 +645,8 @@ async fn propose_plan(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
         *sh.charged.lock().unwrap_or_else(|p| p.into_inner()),
     )
     .unzip();
+    let generation = sh.next_proposal.fetch_add(1, Ordering::Relaxed) + 1;
+    sh.signal(Signal::ProposalStarted(generation));
     // R-24: a proposal of a task-driven turn names the task.
     let r = sh
         .api
@@ -665,17 +673,17 @@ async fn propose_plan(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
             sh.signal(Signal::Summary(req.summary.clone()));
             // Not waiting for approval yet: the home has not accepted the proposal. Follow its
             // outbox entry for a little, so a quick answer is the tool's answer.
-            sh.signal(Signal::ProposalQueued);
+            sh.signal(Signal::ProposalQueued(generation));
             match follow_outbox(sh, outbox_id, PROPOSE_WAIT).await {
                 Fate::Sent => {
-                    sh.signal(Signal::WaitingApproval);
+                    accepted_proposal(sh, generation, &id).await;
                     ProposeAnswer::Proposed {
                         id,
                         waiting_for: sh.waiting_for(),
                     }
                 }
                 Fate::Refused(why) => {
-                    sh.signal(Signal::ProposalRefused(why.clone()));
+                    sh.signal(Signal::ProposalRefused(generation, why.clone()));
                     ProposeAnswer::Refused {
                         reason: format!("the home did not accept the proposal: {why}"),
                     }
@@ -685,13 +693,13 @@ async fn propose_plan(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
                     let queued_id = id.clone();
                     tokio::spawn(async move {
                         match follow_outbox(&watched, outbox_id, Duration::MAX).await {
-                            Fate::Sent => watched.signal(Signal::WaitingApproval),
+                            Fate::Sent => accepted_proposal(&watched, generation, &queued_id).await,
                             Fate::Refused(why) => {
                                 // a proposal the home refused was never made: it freezes nothing
                                 if let Some(flow) = &watched.land {
                                     flow.withdrawn(&queued_id);
                                 }
-                                watched.signal(Signal::ProposalRefused(why));
+                                watched.signal(Signal::ProposalRefused(generation, why));
                             }
                             Fate::Pending => {}
                         }
@@ -707,19 +715,52 @@ async fn propose_plan(sh: &Arc<Shared>, req: ProposeRequest) -> ProposeAnswer {
                     .unwrap_or_else(|p| p.into_inner())
                     .push(id.clone());
                 sh.signal(Signal::Summary(req.summary.clone()));
-                sh.signal(Signal::WaitingApproval);
+                accepted_proposal(sh, generation, &id).await;
                 ProposeAnswer::Proposed {
                     id,
                     waiting_for: sh.waiting_for(),
                 }
             }
-            None => ProposeAnswer::Refused {
-                reason: "the node gave no receipt".into(),
-            },
+            None => {
+                let reason = "the node gave no receipt".to_owned();
+                sh.signal(Signal::ProposalRefused(generation, reason.clone()));
+                ProposeAnswer::Refused { reason }
+            }
         },
-        Err(e) => ProposeAnswer::Refused {
-            reason: e.to_string(),
+        Err(e) => {
+            let reason = e.to_string();
+            sh.signal(Signal::ProposalRefused(generation, reason.clone()));
+            ProposeAnswer::Refused { reason }
+        }
+    }
+}
+
+/// Read-only presentation hint, never authority to execute. Missing or stale views
+/// do not establish that a human approval is needed, or that execution is allowed.
+async fn approval_still_needed(api: &dyn NodeApi, space: &str, executor: &str, id: &str) -> bool {
+    let mut view = api.view(Query::Effects {
+        space: Some(space.into()),
+        executor: Some(executor.into()),
+        include_done: true,
+        window: Window {
+            from_end: true,
+            limit: 128,
+            ..Window::default()
         },
+    });
+    match tokio::time::timeout(Duration::from_secs(1), view.next()).await {
+        Ok(Some(ViewEvent::Snapshot { rows, .. })) => rows.iter().any(|row| {
+            matches!(row, Row::Effect(e) if e.proposal == id && e.phase == "open"
+                && !e.proposer_suffices && e.approvals.is_empty())
+        }),
+        _ => false,
+    }
+}
+
+async fn accepted_proposal(sh: &Shared, generation: u64, id: &str) {
+    sh.signal(Signal::ProposalAccepted(generation, id.into()));
+    if approval_still_needed(sh.api.as_ref(), &sh.cfg.space, &sh.cfg.executor, id).await {
+        sh.signal(Signal::WaitingApproval(generation, id.into()));
     }
 }
 
@@ -1271,6 +1312,7 @@ async fn run_opened(
         publish_errors: AtomicU64::new(0),
         read_others: Mutex::new(false),
         proposals: Mutex::new(Vec::new()),
+        next_proposal: AtomicU64::new(0),
         budget: OnceLock::new(),
         charged: Mutex::new(0),
         failure: Mutex::new(None),
@@ -1694,7 +1736,7 @@ fn land_watch(shared: Arc<Shared>) -> tokio::task::JoinHandle<()> {
 async fn land_step(
     shared: &Arc<Shared>,
     flow: &Arc<crate::land::Flow>,
-    shown: &mut Option<(String, bool)>,
+    shown: &mut Option<(String, bool, String)>,
     session_over: bool,
 ) {
     if let Err(e) = flow.poll().await {
@@ -1702,8 +1744,12 @@ async fn land_step(
     }
     let line = flow.status_line();
     if line != *shown {
-        if let Some((text, blocked)) = line.clone() {
-            shared.signal(Signal::Land { text, blocked });
+        if let Some((text, blocked, proposal)) = line.clone() {
+            shared.signal(Signal::Land {
+                proposal: Some(proposal),
+                text,
+                blocked,
+            });
         }
         *shown = line;
     }
@@ -1728,6 +1774,7 @@ async fn land_step(
             );
             shared.signal(Signal::Summary(text.clone()));
             shared.signal(Signal::Land {
+                proposal: None,
                 text,
                 blocked: true,
             });
@@ -1895,6 +1942,7 @@ async fn refuse_steer(shared: &Arc<Shared>, seq: u64, author: &str) -> bool {
     );
     shared.signal(Signal::Summary(text.clone()));
     shared.signal(Signal::Land {
+        proposal: None,
         text,
         blocked: true,
     });
@@ -2123,6 +2171,53 @@ pub fn worktree_of(session_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EffectsForStatus(Vec<Row>);
+
+    impl NodeApi for EffectsForStatus {
+        fn call(&self, _: Command) -> BoxFuture<'_, Result<CallResult, NodeError>> {
+            panic!("a presentation hint must not authorize or execute anything")
+        }
+        fn view(&self, query: Query) -> ViewStream {
+            assert!(matches!(query, Query::Effects { .. }));
+            let (sink, stream) = ViewStream::channel();
+            sink.send(ViewEvent::Snapshot {
+                seq: 1,
+                rows: self.0.clone(),
+                total: self.0.len() as u32,
+                offset: 0,
+                next_cursor: None,
+                now_ms: 0,
+                totals: None,
+            });
+            stream
+        }
+    }
+
+    #[tokio::test]
+    async fn proposal_status_distinguishes_required_approval_from_automatic_and_unknown() {
+        let manual: han_node::api::EffectRow = serde_json::from_value(json!({
+            "key":"k", "space":"s", "proposal":"p", "proposer":"@a:b",
+            "executor":"@exec:b", "action":"vcs.land", "plan_digest":"digest",
+            "phase":"open", "approvals":[], "claims":0, "launch_window":30,
+            "repeatable":false, "seq":1, "head":1
+        }))
+        .unwrap();
+        let needs = |e| EffectsForStatus(vec![Row::Effect(e)]);
+        assert!(approval_still_needed(&needs(manual.clone()), "s", "@exec:b", "p").await);
+        let mut automatic = manual.clone();
+        automatic.proposer_suffices = true;
+        assert!(!approval_still_needed(&needs(automatic), "s", "@exec:b", "p").await);
+        let mut approved = manual.clone();
+        approved.approvals.push("@owner:b".into());
+        assert!(!approval_still_needed(&needs(approved), "s", "@exec:b", "p").await);
+        let mut done = manual.clone();
+        done.phase = "done".into();
+        assert!(!approval_still_needed(&needs(done), "s", "@exec:b", "p").await);
+        assert!(!approval_still_needed(&needs(manual), "s", "@exec:b", "other").await);
+        assert!(!approval_still_needed(&EffectsForStatus(vec![]), "s", "@exec:b", "p").await);
+        assert!(!approval_still_needed(&Recorder(Mutex::new(vec![])), "s", "@exec:b", "p").await);
+    }
 
     #[test]
     fn branch_names_follow_the_plan() {

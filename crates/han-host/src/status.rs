@@ -88,13 +88,17 @@ pub enum Signal {
     Tokens(Tokens),
     /// The session's budget and whether the proxy enforces it.
     Budget(BudgetStatus),
-    /// A proposal waits for approval.
-    WaitingApproval,
+    /// A new proposal request began; generations order asynchronous delivery callbacks.
+    ProposalStarted(u64),
+    /// The home accepted a proposal; acceptance is not an execution or approval result.
+    ProposalAccepted(u64, String),
+    /// The local effect view reports an open proposal whose policy still needs an approval.
+    WaitingApproval(u64, String),
     /// A proposal is signed but the home has not accepted it yet (it sits in the node's outbox); nobody can
     /// approve it until it does.
-    ProposalQueued,
+    ProposalQueued(u64),
     /// The home refused a proposal, or delivery gave up; the reason is shown.
-    ProposalRefused(String),
+    ProposalRefused(u64, String),
     /// The proposal was decided or ran; back to work.
     Resumed,
     /// The turn ended normally.
@@ -102,6 +106,8 @@ pub enum Signal {
     /// Where the session's `land` proposals stand in the landing lane (R33), as one line; `blocked` when
     /// someone has to act (rejected, stalled).
     Land {
+        /// The proposal the lane reported, or none for a general workspace notice.
+        proposal: Option<String>,
         /// The line.
         text: String,
         /// Whether it needs the agent or its operator.
@@ -123,8 +129,10 @@ enum Proposal {
     None,
     /// Signed, but the home has not accepted it.
     Queued,
-    /// Accepted; an approver has to decide.
-    Waiting,
+    /// Accepted, awaiting the executor's current authorization and checks.
+    Accepted(String),
+    /// Accepted; the current local view says an approval is still needed.
+    Waiting(String),
     /// Refused, or delivery gave up; why.
     Refused(String),
 }
@@ -152,8 +160,10 @@ pub struct StatusDeriver {
     act_state: SessionState,
     act_step: String,
     proposal: Proposal,
+    proposal_generation: u64,
+    acceptance_blocked: bool,
     /// The lane's word on the session's landed work, shown while the agent is idle.
-    land: Option<(String, bool)>,
+    land: Option<(String, bool, Option<String>)>,
     /// Between a turn's start and end. The agent's tool events outside a turn are stale (read late) and
     /// change nothing: the turn's end is the bridge's word, and it wins.
     turn_active: bool,
@@ -200,6 +210,8 @@ impl StatusDeriver {
             act_state: SessionState::Idle,
             act_step: "starting".into(),
             proposal: Proposal::None,
+            proposal_generation: 0,
+            acceptance_blocked: false,
             land: None,
             turn_active: false,
         }
@@ -216,15 +228,19 @@ impl StatusDeriver {
         } else {
             match &self.proposal {
                 Proposal::None => match &self.land {
-                    Some((text, true)) if self.act_state == SessionState::Idle => {
+                    Some((text, true, _)) if self.act_state == SessionState::Idle => {
                         (SessionState::Blocked, bound(text, MAX_STEP))
                     }
-                    Some((text, false)) if self.act_state == SessionState::Idle => {
+                    Some((text, false, _)) if self.act_state == SessionState::Idle => {
                         (SessionState::Idle, bound(text, MAX_STEP))
                     }
                     _ => (self.act_state, self.act_step.clone()),
                 },
-                Proposal::Waiting => (SessionState::WaitingApproval, self.act_step.clone()),
+                Proposal::Accepted(_) => (
+                    SessionState::Idle,
+                    "proposal accepted: waiting for executor authorization and checks".into(),
+                ),
+                Proposal::Waiting(_) => (SessionState::WaitingApproval, self.act_step.clone()),
                 Proposal::Queued => (SessionState::Blocked, QUEUED_STEP.to_owned()),
                 Proposal::Refused(why) => (
                     SessionState::Blocked,
@@ -288,16 +304,65 @@ impl StatusDeriver {
             Signal::Summary(s) => b.summary = Some(bound(&s, MAX_SUMMARY)),
             Signal::Tokens(t) => b.tokens = Some(t),
             Signal::Budget(x) => b.budget = Some(x),
-            Signal::WaitingApproval => self.proposal = Proposal::Waiting,
-            Signal::ProposalQueued => self.proposal = Proposal::Queued,
-            Signal::Land { text, blocked } => {
-                self.land = Some((text, blocked));
-                // The lane has the proposal, so it was approved: it no longer waits for an approver.
-                if self.proposal == Proposal::Waiting {
+            Signal::ProposalStarted(generation) => {
+                if generation > self.proposal_generation {
+                    self.proposal_generation = generation;
+                    self.acceptance_blocked = false;
                     self.proposal = Proposal::None;
                 }
             }
-            Signal::ProposalRefused(why) => self.proposal = Proposal::Refused(why),
+            Signal::ProposalAccepted(generation, id) => {
+                if generation != self.proposal_generation || self.acceptance_blocked {
+                    return false;
+                }
+                // A fast lane result may arrive before the proposing tool's reply.
+                // Do not overwrite that result, or confuse it with an older proposal.
+                self.proposal = if self
+                    .land
+                    .as_ref()
+                    .is_some_and(|(_, _, p)| p.as_ref() == Some(&id))
+                {
+                    Proposal::None
+                } else {
+                    Proposal::Accepted(id)
+                };
+            }
+            Signal::WaitingApproval(generation, id) => {
+                if generation == self.proposal_generation
+                    && !self.acceptance_blocked
+                    && self.proposal == Proposal::Accepted(id.clone())
+                {
+                    self.proposal = Proposal::Waiting(id);
+                }
+            }
+            Signal::ProposalQueued(generation) => {
+                if generation == self.proposal_generation && !self.acceptance_blocked {
+                    self.proposal = Proposal::Queued;
+                }
+            }
+            Signal::Land {
+                proposal,
+                text,
+                blocked,
+            } => {
+                // The lane is now the source of this proposal's progress, including
+                // any remaining authority problem. Its presence does not prove approval.
+                if matches!(&self.proposal, Proposal::Accepted(id) | Proposal::Waiting(id)
+                    if proposal.is_none() || proposal.as_ref() == Some(id))
+                {
+                    self.proposal = Proposal::None;
+                }
+                if proposal.is_none() && blocked {
+                    self.acceptance_blocked = true;
+                    self.proposal = Proposal::None;
+                }
+                self.land = Some((text, blocked, proposal));
+            }
+            Signal::ProposalRefused(generation, why) => {
+                if generation == self.proposal_generation && !self.acceptance_blocked {
+                    self.proposal = Proposal::Refused(why);
+                }
+            }
             Signal::Resumed => {
                 self.proposal = Proposal::None;
                 if !matches!(self.act_state, SessionState::Failed | SessionState::Done) {
@@ -498,10 +563,92 @@ branch should I
     }
 
     #[test]
+    fn acceptance_never_implies_approval_and_late_replies_cannot_overwrite_lane_progress() {
+        let mut s = d();
+        s.apply(Signal::TurnStarted {
+            step: "propose".into(),
+        });
+        s.apply(Signal::ProposalAccepted(0, "E-1".into()));
+        s.apply(Signal::TurnEnded);
+        assert_eq!(s.state(), SessionState::Idle);
+        assert!(s.snapshot("t").step.contains("waiting for executor"));
+        s.apply(Signal::Land {
+            proposal: Some("E-1".into()),
+            text: "land E-1: testing".into(),
+            blocked: false,
+        });
+        s.apply(Signal::ProposalAccepted(0, "E-1".into()));
+        s.apply(Signal::WaitingApproval(0, "E-1".into()));
+        assert_eq!(s.snapshot("t").step, "land E-1: testing");
+        assert_eq!(s.state(), SessionState::Idle);
+
+        // A new proposal must not inherit the previous proposal's progress.
+        s.apply(Signal::ProposalAccepted(0, "E-2".into()));
+        s.apply(Signal::WaitingApproval(0, "E-1".into()));
+        assert!(s.snapshot("t").step.contains("waiting for executor"));
+        s.apply(Signal::WaitingApproval(0, "E-2".into()));
+        assert_eq!(s.state(), SessionState::WaitingApproval);
+        s.apply(Signal::Land {
+            proposal: Some("E-1".into()),
+            text: "land E-1: confirmed".into(),
+            blocked: false,
+        });
+        assert_eq!(s.state(), SessionState::WaitingApproval);
+    }
+
+    #[test]
+    fn stale_proposal_callbacks_cannot_replace_a_newer_proposal() {
+        let mut s = d();
+        s.apply(Signal::ProposalStarted(1));
+        s.apply(Signal::Land {
+            proposal: Some("E-1".into()),
+            text: "land E-1: testing".into(),
+            blocked: false,
+        });
+        s.apply(Signal::ProposalStarted(2));
+        s.apply(Signal::ProposalAccepted(2, "E-2".into()));
+        s.apply(Signal::WaitingApproval(2, "E-2".into()));
+        for stale in [
+            Signal::ProposalStarted(1),
+            Signal::ProposalAccepted(1, "E-1".into()),
+            Signal::WaitingApproval(1, "E-1".into()),
+            Signal::ProposalQueued(1),
+            Signal::ProposalRefused(1, "late refusal".into()),
+        ] {
+            assert!(!s.apply(stale));
+            assert_eq!(s.state(), SessionState::WaitingApproval);
+        }
+    }
+
+    #[test]
+    fn workspace_failure_survives_late_callbacks_until_a_new_request() {
+        let mut s = d();
+        s.apply(Signal::ProposalStarted(1));
+        s.apply(Signal::Land {
+            proposal: None,
+            text: "workspace kept: finish failed".into(),
+            blocked: true,
+        });
+        for late in [
+            Signal::ProposalAccepted(1, "E-1".into()),
+            Signal::WaitingApproval(1, "E-1".into()),
+            Signal::ProposalQueued(1),
+            Signal::ProposalRefused(1, "late refusal".into()),
+        ] {
+            assert!(!s.apply(late));
+            assert_eq!(s.snapshot("t").step, "workspace kept: finish failed");
+        }
+        s.apply(Signal::ProposalStarted(2));
+        s.apply(Signal::ProposalAccepted(2, "E-2".into()));
+        assert!(s.snapshot("t").step.contains("waiting for executor"));
+    }
+
+    #[test]
     fn waiting_approval_survives_the_end_of_the_turn() {
         let mut s = d();
         s.apply(Signal::TurnStarted { step: "w".into() });
-        s.apply(Signal::WaitingApproval);
+        s.apply(Signal::ProposalAccepted(0, "E-1".into()));
+        s.apply(Signal::WaitingApproval(0, "E-1".into()));
         s.apply(Signal::TurnEnded);
         assert_eq!(s.state(), SessionState::WaitingApproval);
         s.apply(Signal::Resumed);
@@ -512,13 +659,14 @@ branch should I
     fn a_queued_proposal_is_not_waiting_approval_and_a_refusal_shows_its_reason() {
         let mut s = d();
         s.apply(Signal::TurnStarted { step: "w".into() });
-        s.apply(Signal::ProposalQueued);
+        s.apply(Signal::ProposalQueued(0));
         s.apply(Signal::TurnEnded);
         assert_ne!(s.state(), SessionState::WaitingApproval);
         assert_eq!(s.snapshot("t").step, QUEUED_STEP);
-        s.apply(Signal::WaitingApproval);
+        s.apply(Signal::ProposalAccepted(0, "E-1".into()));
+        s.apply(Signal::WaitingApproval(0, "E-1".into()));
         assert_eq!(s.state(), SessionState::WaitingApproval);
-        s.apply(Signal::ProposalRefused("@exec:h has no profile".into()));
+        s.apply(Signal::ProposalRefused(0, "@exec:h has no profile".into()));
         s.apply(Signal::TurnEnded);
         assert_eq!(s.state(), SessionState::Blocked);
         assert!(s.snapshot("t").step.contains("has no profile"));
@@ -528,17 +676,20 @@ branch should I
     fn the_lanes_word_shows_while_the_agent_is_idle_and_needs_someone_when_blocked() {
         let mut s = d();
         s.apply(Signal::TurnStarted { step: "w".into() });
-        s.apply(Signal::WaitingApproval);
+        s.apply(Signal::ProposalAccepted(0, "E-1".into()));
+        s.apply(Signal::WaitingApproval(0, "E-1".into()));
         s.apply(Signal::TurnEnded);
         assert_eq!(s.state(), SessionState::WaitingApproval);
         // the lane has the proposal: it was approved, and the status shows where it stands
         s.apply(Signal::Land {
+            proposal: Some("E-1".into()),
             text: "land E-1: testing".into(),
             blocked: false,
         });
         assert_eq!(s.state(), SessionState::Idle);
         assert_eq!(s.snapshot("t").step, "land E-1: testing");
         s.apply(Signal::Land {
+            proposal: Some("E-1".into()),
             text: "land E-1: rejected (conflict)".into(),
             blocked: true,
         });
@@ -596,12 +747,13 @@ branch should I
         // The bridge's signals, in their own order, ending the turn.
         let bridge = [
             Signal::Summary("push".into()),
-            Signal::ProposalQueued,
-            Signal::WaitingApproval,
+            Signal::ProposalQueued(0),
+            Signal::ProposalAccepted(0, "E-1".into()),
+            Signal::WaitingApproval(0, "E-1".into()),
             Signal::TurnEnded,
         ];
         let all = interleavings(&agent, &bridge);
-        assert_eq!(all.len(), 126);
+        assert_eq!(all.len(), 252);
         let mut shown = None;
         for order in all {
             let mut s = d();
@@ -624,8 +776,8 @@ branch should I
     fn a_late_tool_event_never_revives_a_failed_session_or_a_refused_proposal() {
         let agent = [tool("a"), tool("b")];
         let bridge = [
-            Signal::ProposalQueued,
-            Signal::ProposalRefused("no profile".into()),
+            Signal::ProposalQueued(0),
+            Signal::ProposalRefused(0, "no profile".into()),
             Signal::Failed("the agent exited".into()),
         ];
         let mut shown = None;
