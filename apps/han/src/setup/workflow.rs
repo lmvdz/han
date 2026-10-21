@@ -167,7 +167,7 @@ fn prompt(label: &str, default: &str) -> Res<String> {
     })
 }
 
-async fn snapshot(client: &RpcClient, query: Query) -> Res<Vec<Row>> {
+async fn snapshot(client: &dyn NodeApi, query: Query) -> Res<Vec<Row>> {
     tokio::time::timeout(Duration::from_secs(10), async {
         match client.view(query).next().await {
             Some(ViewEvent::Snapshot { rows, .. }) => Ok(rows),
@@ -179,7 +179,7 @@ async fn snapshot(client: &RpcClient, query: Query) -> Res<Vec<Row>> {
     .map_err(|_| "the node did not answer within 10 seconds")?
 }
 
-async fn verify_space(client: &RpcClient, state: &State, flow: &Flow) -> Res<Vec<String>> {
+async fn verify_space(client: &dyn NodeApi, state: &State, flow: &Flow) -> Res<Vec<String>> {
     client
         .call(Command::SpaceAwait {
             space: flow.space.clone(),
@@ -426,9 +426,31 @@ async fn configure_executor(data: &Path, state: &State, flow: &Flow, plan: &Plan
     Ok(())
 }
 
+async fn accept_space(
+    client: &dyn NodeApi,
+    data: &Path,
+    state: &State,
+    flow: &Flow,
+    new_flow: bool,
+) -> Res<Vec<String>> {
+    let repos = verify_space(client, state, flow).await?;
+    // A rejected existing-team selection must not strand subsequent resumes in this journal.
+    if new_flow {
+        save(data, flow)?;
+    }
+    let config_path = data.join("person/tui.json");
+    let mut config = han_tui::config::Config::load(&config_path);
+    if config.setup_recovery.take().is_some() {
+        config.save(&config_path)?;
+    }
+    Ok(repos)
+}
+
 pub(super) async fn continue_setup(data: &Path, state: &State) -> Res<()> {
     let _lock = super::lock_file(&data.join("workflow.lock"))?;
-    let mut flow = match load(data)? {
+    let saved = load(data)?;
+    let new_flow = saved.is_none();
+    let mut flow = match saved {
         Some(flow) => flow,
         None => {
             let han_tui::SetupExit::Continue { space } = han_tui::run_setup(han_tui::Options {
@@ -440,23 +462,21 @@ pub(super) async fn continue_setup(data: &Path, state: &State) -> Res<()> {
             else {
                 return Ok(());
             };
-            let flow = Flow {
+            Flow {
                 version: 1,
                 space,
                 plan: None,
                 executor_enabled: false,
                 generation: 0,
                 configuration: None,
-            };
-            save(data, &flow)?;
-            flow
+            }
         }
     };
     if !cfg!(target_os = "linux") {
         return Err("guided local agent setup currently requires Linux and bubblewrap. Your team is saved; remote runner pairing is not available yet. Use a prepared Linux runner with the advanced commands".into());
     }
     let client = RpcClient::connect(&default_endpoint(&data.join("person"))).await?;
-    let repos = verify_space(&client, state, &flow).await?;
+    let repos = accept_space(&client, data, state, &flow, new_flow).await?;
     han_host::sandbox::admit_for(
         "bwrap",
         false,
@@ -746,6 +766,90 @@ pub(super) async fn run_executor(data: &Path) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejected_existing_team_keeps_recovery_and_does_not_save_a_workflow() {
+        use han_node::api::{SpaceStatusRow, TrustedSetup};
+        use han_tui::testing::{FakeApi, node_status, snapshot};
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("person/tui.json");
+        let config = han_tui::config::Config {
+            setup_recovery: Some("inspect the original request".into()),
+            ..Default::default()
+        };
+        config.save(&config_path).unwrap();
+        let state = State {
+            version: 1,
+            actor: "@alice:local.example".into(),
+            server: "local.example".into(),
+            file_keys: true,
+            relay: "none".into(),
+            public_key: String::new(),
+        };
+        for (home, can_manage, accepted) in [
+            ("remote.example", true, false),
+            ("local.example", false, false),
+            ("local.example", true, true),
+        ] {
+            let api = FakeApi::new();
+            let space = format!("team:{home}");
+            let row = SpaceStatusRow {
+                key: space.clone(),
+                space: space.clone(),
+                home: home.into(),
+                link: SpaceLink::Live,
+                head: 1,
+                sessions: 0,
+                members: 1,
+                outbox_pending: 0,
+                signals: 0,
+                error: None,
+                trusted_setup: Some(TrustedSetup {
+                    can_manage,
+                    repos: vec!["github:o/r".into()],
+                }),
+            };
+            api.serve(move |query| {
+                Some(snapshot(
+                    match query {
+                        Query::NodeStatus { .. } => vec![node_status("@alice:local.example")],
+                        Query::SpaceStatus { .. } => vec![Row::SpaceStatus(row.clone())],
+                        _ => vec![],
+                    },
+                    1,
+                    0,
+                    None,
+                ))
+            });
+            let flow = Flow {
+                version: 1,
+                space,
+                plan: None,
+                executor_enabled: false,
+                generation: 0,
+                configuration: None,
+            };
+            let result = accept_space(api.as_ref(), dir.path(), &state, &flow, true).await;
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            if accepted {
+                assert_eq!(load(dir.path()).unwrap().unwrap().space, flow.space);
+                assert!(
+                    han_tui::config::Config::load(&config_path)
+                        .setup_recovery
+                        .is_none()
+                );
+            } else {
+                assert!(!dir.path().join("workflow.json").exists());
+                assert_eq!(han_tui::config::Config::load(&config_path), config);
+            }
+            assert!(
+                api.calls()
+                    .iter()
+                    .all(|c| matches!(c, Command::SpaceAwait { .. })),
+                "acceptance performs no provisioning mutation"
+            );
+        }
+    }
 
     fn plan() -> Plan {
         Plan {
