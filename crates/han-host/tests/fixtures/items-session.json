@@ -9,6 +9,10 @@
       {"type": "message", "text": "The key AKIAIOSFODNN7EXAMPLE is in it."},
       {"type": "tool_call", "id": "toolu_r1", "title": "read config.toml", "kind": "read", "status": "in_progress", "locations": ["config.toml"], "rawInput": {"path": "config.toml"}},
       {"type": "tool_update", "id": "toolu_r1", "status": "completed", "output": "key = AKIAIOSFODNN7EXAMPLE\nmode = fast"},
+      {"type": "tool_call", "id": "toolu_delta", "title": "print metadata", "kind": "execute", "status": "in_progress"},
+      {"type": "tool_update", "id": "toolu_delta", "status": "in_progress", "meta": {"terminal_output_delta": {"data": "metadata=no\nkey = AKIAIOSFOD"}}},
+      {"type": "tool_update", "id": "toolu_delta", "status": "in_progress", "meta": {"terminal_output_delta": {"data": "NN7EXAMPLE\ntest result: ok. 3 "}}},
+      {"type": "tool_update", "id": "toolu_delta", "status": "completed", "meta": {"terminal_output_delta": {"data": "passed; 0 failed;\n"}}},
       {"type": "message", "text": "Which branch should I target?\nI can use main or the release branch."},
       {"type": "end", "stopReason": "end_turn"}
     ]},
