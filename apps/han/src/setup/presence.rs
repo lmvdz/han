@@ -4,9 +4,42 @@ use super::Res;
 #[cfg(any(target_os = "linux", test))]
 use std::path::Path;
 
-pub(crate) const POLICY_PATH: &str = "/usr/share/polkit-1/actions/dev.han.approve.policy";
+#[cfg(target_os = "linux")]
+const POLICY_PATH: &str = "/usr/share/polkit-1/actions/dev.han.approve.policy";
 #[cfg(any(target_os = "linux", test))]
 const POLICY: &str = include_str!("../../../../crates/han-presence/polkit/dev.han.approve.policy");
+
+#[cfg(any(target_os = "linux", test))]
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+/// Whether polkit currently reports HAN's action, irrespective of its administrator-chosen file path.
+pub(crate) fn action_registered() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("pkaction")
+            .args(["--action-id", "dev.han.approve"])
+            .output()
+            .is_ok_and(|o| {
+                o.status.success()
+                    && String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.trim() == "dev.han.approve")
+            })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
 
 #[cfg(any(target_os = "linux", test))]
 fn install_at(path: &Path) -> Res<bool> {
@@ -26,10 +59,7 @@ fn install_at(path: &Path) -> Res<bool> {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)?;
+    let mut file = create_private(&temp)?;
     let result = (|| -> Res<bool> {
         file.write_all(POLICY.as_bytes())?;
         #[cfg(target_os = "linux")]
@@ -87,18 +117,7 @@ pub(super) fn prepare() -> Res<()> {
         {
             return Err("Linux confirmation needs polkit: install your distribution's polkit package and authentication agent, then resume the same setup".into());
         }
-        let registered = || {
-            Command::new("pkaction")
-                .args(["--action-id", "dev.han.approve"])
-                .output()
-                .is_ok_and(|o| {
-                    o.status.success()
-                        && String::from_utf8_lossy(&o.stdout)
-                            .lines()
-                            .any(|l| l.trim() == "dev.han.approve")
-                })
-        };
-        if registered() {
+        if action_registered() {
             return Ok(());
         }
         println!(
@@ -114,12 +133,12 @@ pub(super) fn prepare() -> Res<()> {
             }
         }
         for _ in 0..20 {
-            if registered() {
+            if action_registered() {
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        if !registered() {
+        if !action_registered() {
             return Err("the HAN presence action is not registered with polkit; check that polkitd and a desktop authentication agent are running, then resume setup (presence has not been disabled)".into());
         }
     }
@@ -129,6 +148,15 @@ pub(super) fn prepare() -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unpublished_policy_is_private_before_any_content_is_written() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let file = create_private(&dir.path().join("policy.tmp")).unwrap();
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn installation_does_not_follow_a_dangling_policy_symlink() {
