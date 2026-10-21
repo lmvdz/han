@@ -6,6 +6,13 @@ Gated actions (a push to a protected branch, an outside HTTP write, accepting ti
 
 Route: `/inbox`, with optional search parameters `space`, `session` and `effect` (shell.md §2).
 
+Current terminal implementation: the approvals query supplies review candidates, not a complete
+policy eligibility decision. The TUI therefore says eligibility is checked by the home rather than
+promising that a candidate can approve. A node explicitly reporting `headless` cannot open the
+signing panel or submit its confirmation; the panel also rechecks this status before signing.
+The query's existing guest/proposer filters and board `needs_me` hints remain heuristic and do not
+implement the complete eligibility model described below.
+
 ---
 
 ## 1. Terms

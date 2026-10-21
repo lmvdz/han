@@ -2,7 +2,7 @@
 ┌ Board ─────────────────────────────────────────────────────────────────────────────────┐┏ Approvals (1) ━━━━━━━━━━━━━━━━━━━━━━━┓
 │  PERSON     AGENT        STATE · STEP                    CHANGES  OVERLAP    TOK   AGE │┃>git.push · team                      ┃
 │>▾ #41 Board freshness (2)  ⚑ hunk                                                      │┃  by lars-reviewer                    ┃
-│ ● @lars      lars-coder   working: running tests [cargo … 4 files  ⚑ hunk     41k   0s │┃  you can approve                     ┃
+│ ● @lars      lars-coder   working: running tests [cargo … 4 files  ⚑ hunk     41k   0s │┃  eligibility checked by home         ┃
 │ ● @ada       ada-╔ git.push · team ═════════════════════════════════════════════════════════════════════════╗                  ┃
 │ ▾ #52 Login flow ║WHY GATED  push of a han/* branch (space rule)                                            ║                  ┃
 │▌◐ @lars      lars║ACTION     git.push on han                                                                ║                  ┃
@@ -15,7 +15,7 @@
 │                  ║                                                                                          ║                  ┃
 │                  ║APPROVALS  have: none yet                                                                 ║                  ┃
 │                  ║           needed from: @lars:han.example                                                 ║                  ┃
-│                  ║           you can approve                                                                ║                  ┃
+│                  ║           Approval eligibility is checked by the home.                                   ║                  ┃
 │                  ║                                                                                          ║                  ┃
 │                  ║[a] Review & sign approval    [c] Cancel effect    [Esc] Close                            ║                  ┃
 │                  ╚══════════════════════════════════════════════════════════════════════════════════════════╝                  ┃
