@@ -272,6 +272,10 @@ pub enum AgentEvent {
         title: Option<String>,
         /// Text output (content text, terminal output), at most [`MAX_TOOL_OUTPUT`] bytes.
         output: Option<String>,
+        /// Whether the output appends to prior text rather than replacing it.
+        output_append: bool,
+        /// Bytes were omitted by the per-update bound; consumers must not join across the gap.
+        output_truncated: bool,
         /// Raw output.
         raw_output: Option<Value>,
         /// Paths it names.
@@ -543,8 +547,8 @@ fn opt_str(v: &Value, k: &str) -> Option<String> {
 }
 
 /// Text from a tool call update: content text blocks, then terminal output in `_meta`, then a string
-/// `rawOutput`.
-fn tool_output(v: &Value) -> Option<String> {
+/// `rawOutput`. Explicit terminal deltas append; full text content takes precedence.
+fn tool_output(v: &Value) -> (Option<String>, bool, bool) {
     let mut out = String::new();
     if let Some(content) = v["content"].as_array() {
         for c in content {
@@ -561,7 +565,19 @@ fn tool_output(v: &Value) -> Option<String> {
     {
         out.push_str(t);
     }
-    (!out.is_empty()).then(|| truncate(out, MAX_TOOL_OUTPUT))
+    let delta = v["_meta"]["terminal_output_delta"]["data"]
+        .as_str()
+        .filter(|t| !t.is_empty());
+    let append = out.is_empty() && delta.is_some();
+    if append && let Some(t) = delta {
+        out.push_str(t);
+    }
+    let truncated = out.len() > MAX_TOOL_OUTPUT;
+    (
+        (!out.is_empty()).then(|| truncate(out, MAX_TOOL_OUTPUT)),
+        append,
+        truncated,
+    )
 }
 
 /// Maps one `session/update` to events (several updates carry nothing HAN uses: they are dropped).
@@ -586,14 +602,19 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
             raw_input: update.get("rawInput").cloned(),
             locations: locations(update),
         }],
-        "tool_call_update" => vec![AgentEvent::ToolCallUpdate {
-            id: update["toolCallId"].as_str().unwrap_or("").into(),
-            status: opt_str(update, "status"),
-            title: opt_str(update, "title"),
-            output: tool_output(update),
-            raw_output: update.get("rawOutput").cloned(),
-            locations: locations(update),
-        }],
+        "tool_call_update" => {
+            let (output, output_append, output_truncated) = tool_output(update);
+            vec![AgentEvent::ToolCallUpdate {
+                id: update["toolCallId"].as_str().unwrap_or("").into(),
+                status: opt_str(update, "status"),
+                title: opt_str(update, "title"),
+                output,
+                output_append,
+                output_truncated,
+                raw_output: update.get("rawOutput").cloned(),
+                locations: locations(update),
+            }]
+        }
         "plan" => vec![AgentEvent::Plan {
             entries: update["entries"]
                 .as_array()
@@ -1153,5 +1174,37 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn tool_output_distinguishes_snapshots_from_terminal_deltas() {
+        for (value, text, append) in [
+            (
+                json!({"_meta":{"terminal_output_delta":{"data":"chunk"}}}),
+                "chunk",
+                true,
+            ),
+            (
+                json!({"_meta":{"terminal_output":{"data":"legacy"}}}),
+                "legacy",
+                false,
+            ),
+            (
+                json!({"rawOutput":"snapshot", "_meta":{"terminal_output_delta":{"data":"chunk"}}}),
+                "snapshot",
+                false,
+            ),
+            (
+                json!({"rawOutput":{"exit_code":0}, "_meta":{"terminal_output_delta":{"data":"last"}}}),
+                "last",
+                true,
+            ),
+        ] {
+            assert_eq!(tool_output(&value), (Some(text.into()), append, false));
+        }
+        assert_eq!(
+            tool_output(&json!({"status":"completed"})),
+            (None, false, false)
+        );
     }
 }

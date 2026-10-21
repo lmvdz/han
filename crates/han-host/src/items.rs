@@ -62,6 +62,8 @@ struct Tool {
     status: String,
     locations: Vec<String>,
     output: Option<String>,
+    output_streamed: bool,
+    output_cut: bool,
     started_at: String,
     ended_at: Option<String>,
     turn: u32,
@@ -103,6 +105,15 @@ impl ItemFeed {
         self.last_message
             .as_deref()
             .filter(|m| !m.trim().is_empty())
+    }
+
+    /// Complete, contiguous output for observed facts such as test counts.
+    pub(crate) fn completed_tool_output(&self, id: &str) -> Option<&str> {
+        let tool = self.tools.get(id)?;
+        if tool.output_cut || !matches!(tool.status.as_str(), "completed" | "failed") {
+            return None;
+        }
+        tool.output.as_deref()
     }
 
     fn mark(&mut self, id: &str) {
@@ -182,6 +193,8 @@ impl ItemFeed {
             status: "pending".into(),
             locations: Vec::new(),
             output: None,
+            output_streamed: false,
+            output_cut: false,
             started_at: now.to_owned(),
             ended_at: None,
             turn,
@@ -214,6 +227,8 @@ impl ItemFeed {
                 status,
                 title,
                 output,
+                output_append,
+                output_truncated,
                 locations,
                 ..
             } if !id.is_empty() => {
@@ -226,7 +241,23 @@ impl ItemFeed {
                     t.title = s.clone();
                 }
                 if let Some(o) = output {
-                    t.output = Some(o.clone());
+                    t.output_streamed |= *output_append;
+                    if *output_append {
+                        if !t.output_cut {
+                            let previous = t.output.as_deref().unwrap_or("");
+                            if *output_truncated
+                                || previous.len().saturating_add(o.len()) > MAX_TEXT
+                            {
+                                t.output = None;
+                                t.output_cut = true;
+                            } else {
+                                t.output.get_or_insert_with(String::new).push_str(o);
+                            }
+                        }
+                    } else {
+                        t.output_cut = *output_truncated || o.len() > MAX_TEXT;
+                        t.output = (!t.output_cut).then(|| o.clone());
+                    }
                 }
                 if !locations.is_empty() {
                     t.locations = locations.clone();
@@ -278,6 +309,18 @@ fn run_body(id: &str, r: &Run, masker: &Masker) -> Value {
 }
 
 fn tool_body(id: &str, tool_id: &str, t: &Tool, masker: &Masker) -> Value {
+    // A delta may split a credential at any byte boundary. Publish only the complete
+    // assembled tool output, and never publish a prefix cut through an unknown secret.
+    let content = if t.output_cut {
+        vec![json!({"text": "[tool output omitted: exceeds display limit]"})]
+    } else if t.output_streamed && !matches!(t.status.as_str(), "completed" | "failed") {
+        Vec::new()
+    } else {
+        t.output
+            .iter()
+            .map(|o| json!({"text": masked(masker, o, MAX_SENT)}))
+            .collect()
+    };
     let mut v = json!({
         "id": id,
         "turn": t.turn,
@@ -291,11 +334,7 @@ fn tool_body(id: &str, tool_id: &str, t: &Tool, masker: &Masker) -> Value {
             .take(MAX_LOCATIONS)
             .map(|p| json!({"path": masked(masker, p, MAX_PATH)}))
             .collect::<Vec<_>>(),
-        "content": t
-            .output
-            .iter()
-            .map(|o| json!({"text": masked(masker, o, MAX_SENT)}))
-            .collect::<Vec<_>>(),
+        "content": content,
         "started_at": t.started_at,
     });
     if !t.title.is_empty() {
@@ -363,6 +402,127 @@ mod tests {
         serde_json::from_value(v.clone()).expect("the node reads it")
     }
 
+    fn update(f: &mut ItemFeed, value: Value) {
+        for event in crate::acp::map_update(&value) {
+            f.apply(&event, "now");
+        }
+    }
+
+    fn delta(f: &mut ItemFeed, text: &str, status: &str) {
+        update(
+            f,
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "delta",
+            "status": status, "_meta": {"terminal_output_delta": {"data": text}}}),
+        );
+    }
+
+    fn tool_text(f: &mut ItemFeed) -> String {
+        let items = f.take(&masker());
+        let ItemBody::ToolCall { content, .. } = body(&items[0]) else {
+            panic!("{items:?}")
+        };
+        content.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    #[test]
+    fn terminal_deltas_are_assembled_before_publication_and_masking() {
+        let mut f = ItemFeed::new();
+        delta(&mut f, "ok\n", "in_progress");
+        assert_eq!(tool_text(&mut f), "");
+        delta(&mut f, "ok\nhunter2-", "in_progress");
+        assert_eq!(tool_text(&mut f), "", "no partial secret is published");
+        delta(&mut f, "secret\ndone\n", "completed");
+        assert_eq!(tool_text(&mut f), "ok\nok\n[masked:known]\ndone\n");
+        update(
+            &mut f,
+            json!({"sessionUpdate":"tool_call_update", "toolCallId":"delta",
+            "status":"completed", "rawOutput":{"exit_code":0}}),
+        );
+        assert_eq!(tool_text(&mut f), "ok\nok\n[masked:known]\ndone\n");
+    }
+
+    #[test]
+    fn complete_tool_snapshot_replaces_deltas_without_duplicate_output() {
+        let mut f = ItemFeed::new();
+        delta(&mut f, "first\n", "in_progress");
+        update(
+            &mut f,
+            json!({"sessionUpdate":"tool_call_update", "toolCallId":"delta",
+            "status":"completed", "content":[{"content":{"text":"first\nsecond\n"}}],
+            "_meta":{"terminal_output_delta":{"data":"second\n"}}}),
+        );
+        assert_eq!(tool_text(&mut f), "first\nsecond\n");
+    }
+
+    #[test]
+    fn truncated_tool_deltas_never_publish_a_secret_prefix_or_join_across_a_gap() {
+        let mut f = ItemFeed::new();
+        let text = format!(
+            "{}hunter2-secret",
+            "é".repeat(crate::acp::MAX_TOOL_OUTPUT / 2 - 3)
+        );
+        delta(&mut f, &text, "in_progress");
+        assert_eq!(
+            tool_text(&mut f),
+            "[tool output omitted: exceeds display limit]"
+        );
+        delta(&mut f, "later text", "failed");
+        assert_eq!(
+            tool_text(&mut f),
+            "[tool output omitted: exceeds display limit]"
+        );
+    }
+
+    #[test]
+    fn aggregate_tool_output_limit_does_not_publish_partial_secrets() {
+        let mut f = ItemFeed::new();
+        for _ in 0..3 {
+            delta(
+                &mut f,
+                &"x".repeat(crate::acp::MAX_TOOL_OUTPUT),
+                "in_progress",
+            );
+            assert_eq!(tool_text(&mut f), "");
+        }
+        delta(
+            &mut f,
+            &format!("{}hunter2", "x".repeat(crate::acp::MAX_TOOL_OUTPUT - 7)),
+            "in_progress",
+        );
+        assert_eq!(tool_text(&mut f), "");
+        delta(&mut f, "-secret", "completed");
+        assert_eq!(
+            tool_text(&mut f),
+            "[tool output omitted: exceeds display limit]"
+        );
+    }
+
+    #[test]
+    fn safe_tool_snapshot_recovers_from_cut_but_keeps_completion_gate() {
+        let mut f = ItemFeed::new();
+        delta(
+            &mut f,
+            &"x".repeat(crate::acp::MAX_TOOL_OUTPUT + 1),
+            "in_progress",
+        );
+        assert_eq!(
+            tool_text(&mut f),
+            "[tool output omitted: exceeds display limit]"
+        );
+        update(
+            &mut f,
+            json!({"sessionUpdate":"tool_call_update", "toolCallId":"delta",
+            "status":"in_progress", "rawOutput":"complete safe replacement"}),
+        );
+        assert_eq!(tool_text(&mut f), "");
+        update(
+            &mut f,
+            json!({"sessionUpdate":"tool_call_update", "toolCallId":"delta",
+            "status":"completed"}),
+        );
+        assert_eq!(tool_text(&mut f), "complete safe replacement");
+    }
+
     #[test]
     fn chunks_coalesce_per_message_and_a_tool_call_ends_the_message() {
         let m = masker();
@@ -401,6 +561,8 @@ mod tests {
                 status: Some("completed".into()),
                 title: None,
                 output: Some("ok hunter2-secret".into()),
+                output_append: false,
+                output_truncated: false,
                 raw_output: None,
                 locations: vec![],
             },
