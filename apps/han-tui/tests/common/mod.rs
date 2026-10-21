@@ -171,6 +171,7 @@ pub fn node(data: &Shared) -> Arc<FakeApi> {
                             outbox_pending: 0,
                             signals: 0,
                             error: None,
+                            trusted_setup: None,
                         })
                     })
                     .collect(),
@@ -190,6 +191,7 @@ pub fn node(data: &Shared) -> Arc<FakeApi> {
                     outbox_pending: 0,
                     signals: 0,
                     error: None,
+                    trusted_setup: None,
                 })],
                 1,
                 0,

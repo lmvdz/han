@@ -1081,6 +1081,9 @@ impl Lane {
     /// Runs passes every second until `shutdown` turns true.
     pub async fn run(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         loop {
+            if *shutdown.borrow() {
+                return;
+            }
             if let Err(e) = self.pass().await {
                 tracing::warn!("lane pass: {e}");
             }

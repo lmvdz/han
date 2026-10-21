@@ -61,9 +61,30 @@ Startup failures point to `han-team/setup.log`; correct the cause and repeat
 the same setup command. The default home uses a unique reserved local server
 name and the n0 relay. Its ticket is in `han-team/home/home.ticket`. This flow
 sets up a new local home; joining someone else's home still uses registration
-and a home ticket as described below. Agent/executor onboarding, login and
-required checks remain separate steps (5–7). Fresh-user timings and two-person
+and a home ticket as described below. Fresh-user timings and two-person
 acceptance remain unverified; see the [status page](status.md).
+
+After a Trusted team is confirmed, Enter continues to local runner setup on
+Linux with enforced bubblewrap. Setup asks for an agent name, harness (default
+`codex`), one of the team's repositories, landing branch, required GitHub check
+names, and an installed write GitHub App's IDs and private PEM file path. Prepare
+that App using step 7; setup does not create a GitHub App for you. Subscription
+login opens once when the selected agent has no saved login. A separate executor
+process holds the write credentials. Once its live startup is acknowledged,
+the TUI opens a prefilled task form; submitting the form starts the task.
+
+Confirmed choices are retained in `workflow.json`. Repeat the same setup command
+to resume. Queued enrollment is not treated as confirmed. Resuming and starting
+the executor recheck current ownership, the Trusted team policy, and the saved
+configuration; changed permissions or configuration require inspection. A failed
+executor leaves the home and node available and does not silently retry. Inspect
+`executor.log`, correct the cause, then resume explicitly. `han setup stop` asks
+the executor to settle its current pass before stopping the home and node.
+
+This local runner continuation requires Linux, bubblewrap, GitHub, and a
+subscription harness. Windows, remote runner pairing, API-key harness setup,
+and advanced policies use the separate commands in steps 5–7. Joining another
+home does not grant local permission to provision its agents or executor.
 
 After the TUI opens, continue at step 4. For later CLI commands, set `HAN_DATA`
 to your `han-team/person` folder or supply `--data` explicitly. The following
@@ -154,9 +175,9 @@ han agent add coder --operator @me:han.home.arpa --space <space> --home <ticket>
     --home-data home --harness claude --sandbox auto
 ```
 
-It writes the agent's launch settings (`agents.json` in the node's data folder), installs `claude` or `pi` if selected and not already set up (other drivers need `setup-harness` first), makes the agent's key, registers its profile (here, because `--home-data` names the home that runs on this machine), has you confirm it as its operator, and makes it a member of the space. Without `--home-data` it prints, for the home's admin, `han home register @coder:… --public-key=… --operator …`; run on a device that is not the operator's, it prints `han actor confirm @coder:… --operator … --home <ticket>` for the operator. Run `han agent add` again afterwards: it resumes where it stopped and ends with `ready:`.
+It writes the agent's launch settings (`agents.json` in the node's data folder), installs the selected declarative harness if it is not already set up, makes the agent's key, registers its profile (here, because `--home-data` names the home that runs on this machine), has you confirm it as its operator, and makes it a member of the space. Without `--home-data` it prints, for the home's admin, `han home register @coder:… --public-key=… --operator …`; run on a device that is not the operator's, it prints `han actor confirm @coder:… --operator … --home <ticket>` for the operator. Run `han agent add` again afterwards: it resumes where it stopped and ends with `ready:`.
 
-Setup, login, diagnostics and launch share the same [declarative driver](../crates/han-host/drivers/README.md). `han agent setup-harness` accepts a bundled name (`claude` or `pi`), an installed name, or a JSON/TOML driver file. For Codex, install the repository's pinned adapter definition, then select it for the agent:
+Setup, login, diagnostics and launch share the same [declarative driver](../crates/han-host/drivers/README.md). `han agent setup-harness` accepts a bundled name (`claude`, `codex` or `pi`), an installed name, or a JSON/TOML driver file. For Codex, install the repository's pinned adapter definition, then select it for the agent:
 
 ```sh
 han agent setup-harness crates/han-host/drivers/codex.json
@@ -190,7 +211,7 @@ han tui <space>
 
 `--issue` starts the session on the open task for that issue that is addressed to the agent (`han-github` creates one for every agent-ready issue). The issue's title and body reach the agent in that task, as a data block marked untrusted; the agent has no network to fetch them. With no such task the start is refused ("no open task for github:owner/repo#12 ... carries the issue text"); `--task <id>` names a task directly, and its own issue is used.
 
-`--harness` defaults to the driver recorded for the agent: bundled `pi` (proxy-held API key), `claude` (Claude Code through `claude-agent-acp`, on a Claude subscription), or an installed driver such as `codex` (Codex ACP, on a ChatGPT subscription). Subscription token counts may be reported while cost remains **unmeasured**; see [usage accounting](usage-accounting.md). The session runs in a sandbox whose only way out is the egress proxy, and its only way to act on the outside world is `propose`.
+`--harness` defaults to the driver recorded for the agent: bundled `pi` (proxy-held API key), `claude` (Claude Code through `claude-agent-acp`, on a Claude subscription), or `codex` (Codex ACP, on a ChatGPT subscription). Subscription token counts may be reported while cost remains **unmeasured**; see [usage accounting](usage-accounting.md). The session runs in a sandbox whose only way out is the egress proxy, and its only way to act on the outside world is `propose`.
 
 **Build and test inside the sandbox.** An agent has no Rust toolchain unless the node gives it one. `han agent set @coder:<server> --toolchains rust` turns it on for that agent (the file-wide default is the `"toolchains"` list of `agents.json`, in the node's data directory, `%LOCALAPPDATA%\han` on Windows). The agent then gets your `%USERPROFILE%\.rustup` and `.cargo\bin` read-only (on Windows also the MSVC linker and Windows SDK it finds), a cache of its own for downloaded crates, and `crates.io` on its proxy allow-list; `"toolchainPaths": {"rust": {"rustupHome": "...", "cargoBin": "..."}}` points elsewhere. Install the toolchains your repository pins (`rust-toolchain.toml`) first; the sandbox never downloads one. On a Linux runner `sudo han runner setup --toolchain rust --repo <path>` does the installing and writes `toolchainPaths` ([runner.md](runner.md) section 7.2).
 

@@ -349,6 +349,8 @@ pub(crate) struct SpaceModel {
     pub gates: Option<han_core::policy::GatesDoc>,
     /// The approval rules in full, from which Policy reports whether a proposer suffices (P-17).
     pub approval_rules: Vec<han_core::policy::ApprovalRule>,
+    /// Repositories of the exact Trusted team preset, absent for custom policies.
+    pub trusted_setup_repos: Option<Vec<String>>,
     /// Who may steer sessions, by the policy.
     pub steer: Option<SessionLevel>,
     /// Who may watch and who may read sessions, by the policy.
@@ -431,6 +433,7 @@ impl SpaceModel {
             me: me.to_owned(),
             gates: None,
             approval_rules: Vec::new(),
+            trusted_setup_repos: None,
             steer: None,
             watch: None,
             read: None,
@@ -455,6 +458,16 @@ impl SpaceModel {
     }
 
     fn set_policy(&mut self, policy: PolicyDoc) {
+        let repos: Vec<String> = policy
+            .approvals
+            .iter()
+            .filter_map(|rule| rule.repo.clone())
+            .collect();
+        self.trusted_setup_repos = crate::api::trusted_team_policy(&repos)
+            .ok()
+            .and_then(|value| serde_json::from_value::<PolicyDoc>(value).ok())
+            .filter(|preset| preset == &policy)
+            .map(|_| repos);
         self.unit = policy.budget.as_ref().map(|b| b.unit.clone());
         self.budget = policy.budget.map(|b| (b.unit, b.amount));
         self.approval_rules = policy.approvals;
@@ -2019,6 +2032,12 @@ impl SpaceModel {
                 outbox_pending: self.outbox_pending,
                 signals: self.signals,
                 error: self.link_error.clone(),
+                trusted_setup: self.trusted_setup_repos.as_ref().map(|repos| {
+                    crate::api::TrustedSetup {
+                        can_manage: self.roles.get(&self.me) == Some(&Role::Owner),
+                        repos: repos.clone(),
+                    }
+                }),
             }),
         )
     }
@@ -2670,5 +2689,44 @@ mod cost_coverage_tests {
         assert!(mixed_overflow["0"].cost_overflowed);
         assert_eq!(mixed_overflow["0"].unmeasured_sessions, 0);
         assert_eq!(mixed_overflow["0"].subtotals.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod guided_setup_tests {
+    use super::*;
+
+    fn access(model: &SpaceModel) -> Option<crate::api::TrustedSetup> {
+        match model.status_row().1 {
+            crate::api::Row::SpaceStatus(s) => s.trusted_setup,
+            _ => panic!("expected space status"),
+        }
+    }
+
+    #[test]
+    fn guided_setup_tracks_current_policy_and_current_ownership() {
+        let mut model = SpaceModel::new("s", "h", Freshness::default(), "me");
+        assert!(access(&model).is_none());
+        let preset: PolicyDoc = serde_json::from_value(
+            crate::api::trusted_team_policy(&["github:o/r".into()]).unwrap(),
+        )
+        .unwrap();
+        model.set_policy(preset.clone());
+        assert!(!access(&model).unwrap().can_manage);
+        model.roles.insert("me".into(), Role::Owner);
+        let current = access(&model).unwrap();
+        assert!(current.can_manage);
+        assert_eq!(current.repos, vec!["github:o/r"]);
+        model.roles.insert("me".into(), Role::Member);
+        assert!(!access(&model).unwrap().can_manage);
+        let mut changed = preset.clone();
+        changed.launch_window += 1;
+        model.set_policy(changed);
+        assert!(
+            access(&model).is_none(),
+            "similar but edited policies are not the preset"
+        );
+        model.set_policy(preset);
+        assert!(access(&model).is_some());
     }
 }

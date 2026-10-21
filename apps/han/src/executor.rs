@@ -414,6 +414,11 @@ fn github_slug(name: &str) -> Res<Option<String>> {
 }
 
 pub async fn run(args: ExecutorArgs) -> Res<()> {
+    provision(args).await.map(|_| ())
+}
+
+/// Runs the existing provisioning steps and returns unresolved enrollment work to the launcher.
+pub(crate) async fn provision(args: ExecutorArgs) -> Res<crate::enroll::Outcome> {
     let args = match args.cmd {
         ExecutorCmd::Set {
             repo,
@@ -451,7 +456,7 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
             };
             let dir = dir.unwrap_or_else(default_dir);
             println!("{}", set(&dir, &repo, &edit)?);
-            return Ok(());
+            return Ok(crate::enroll::Outcome::default());
         }
         cmd => ExecutorArgs { cmd },
     };
@@ -473,7 +478,7 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
         read_app,
     } = args.cmd
     else {
-        return Ok(());
+        return Err("expected executor add options".into());
     };
     if github_app.is_some() && github_app == read_app {
         return Err(format!(
@@ -650,7 +655,7 @@ pub async fn run(args: ExecutorArgs) -> Res<()> {
             outcome.todo.len()
         );
     }
-    Ok(())
+    Ok(outcome)
 }
 
 fn write_text(path: &Path, text: &str) -> Res<()> {

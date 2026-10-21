@@ -100,6 +100,10 @@ pub struct TaskDraft {
 pub struct App {
     /// Guided create/join flow.
     pub setup: Option<crate::setup::Setup>,
+    /// Whether this TUI was opened by the guided setup launcher.
+    pub guided_setup: bool,
+    /// Explicitly accepted handoff to the launcher after space confirmation.
+    pub setup_continue: Option<String>,
     /// What is remembered between runs.
     pub config: Config,
     /// The space on the board.
@@ -169,6 +173,8 @@ impl App {
             .as_deref()
             .map_or(Group::Issue, |s| config.group_of(s));
         App {
+            guided_setup: false,
+            setup_continue: None,
             setup: config
                 .setup_recovery
                 .as_deref()
@@ -674,6 +680,12 @@ impl App {
                 match result {
                     Ok(CallResult::Space { space }) => {
                         self.config.setup_recovery = None;
+                        if self.guided_setup {
+                            setup.step = crate::setup::Step::Ready;
+                            setup.ready_space = Some(space.clone());
+                            setup.notice.clear();
+                            return self.set_space(space);
+                        }
                         self.setup = None;
                         self.say(Tone::Good, "Space ready. Use :task to start work after configuring your agent and runner.");
                         return self.set_space(space);
@@ -817,6 +829,17 @@ impl App {
             });
         }
         Vec::new()
+    }
+
+    /// Prefill the ordinary task form after the launcher verified its agent and runner.
+    /// This sends nothing; submission remains the user's explicit action.
+    pub fn prepare_task(&mut self, agent: &str, repo: &str) {
+        self.new_task();
+        if let Some(draft) = &mut self.task_draft {
+            draft.fields[0] = LineEdit::with(agent);
+            draft.fields[1] = LineEdit::with(repo);
+            draft.field = 2;
+        }
     }
 
     /// Open tasks known to this space. The query window is bounded to 1,000 entries.
@@ -1023,6 +1046,15 @@ impl App {
             return vec![Action::Quit];
         }
         if let Some(setup) = &mut self.setup {
+            if self.guided_setup
+                && setup.step == crate::setup::Step::Ready
+                && k.code == KeyCode::Enter
+                && let Some(space) = setup.ready_space.clone()
+            {
+                self.setup_continue = Some(space);
+                self.quit = true;
+                return Vec::new();
+            }
             if k.code == KeyCode::Esc && setup.step != crate::setup::Step::Waiting {
                 self.setup = None;
                 return Vec::new();

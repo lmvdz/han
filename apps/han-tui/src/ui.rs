@@ -149,6 +149,11 @@ fn draw_setup(f: &mut Frame, app: &App, area: Rect) {
             "The base policy has no approval rules or risk gates. Review its authority before using it with a runner.".into(),
             "Use han space create-trusted --help for the scoped automatic-landing preset.".into(),
             "Esc closes.".into()],
+        Step::Ready => vec![
+            "Your team space is ready.".into(),
+            "Continue to choose an agent, sign in and configure its runner and checks.".into(),
+            "Enter continues setup · Esc returns to the board".into(),
+        ],
     };
     if !setup.notice.is_empty() {
         text.push(setup.notice.clone());

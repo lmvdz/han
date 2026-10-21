@@ -87,3 +87,78 @@ fn fresh_setup_runs_real_roles_resumes_and_stops_without_replacing_identity() {
         key
     );
 }
+
+#[test]
+fn failed_managed_executor_keeps_person_and_home_available_without_automatic_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path();
+    let _stop = Stop(data);
+    success(han(
+        data,
+        &[
+            "setup",
+            "--person",
+            "alice",
+            "--file-keys",
+            "--relay",
+            "none",
+            "--no-tui",
+        ],
+    ));
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join("setup.json")).unwrap()).unwrap();
+    let server = state["server"].as_str().unwrap();
+    // A retained journal is not authority to serve a space. This valid-looking journal names
+    // a space the person has never joined; startup must fail before opening an executor.
+    let mut flow = serde_json::json!({"version":1, "space":format!("missing:{server}"),
+    "executor_enabled":true, "generation":1, "configuration":{}, "plan":{
+        "agent_name":"coder", "harness":"codex", "repo":"github:o/r",
+        "target_ref":"refs/heads/main", "checks":["ci"], "app_id":1,
+        "installation_id":2, "key_source":data.join("absent.pem"), "read_app":null
+    }});
+    std::fs::write(
+        data.join("workflow.json"),
+        serde_json::to_vec(&flow).unwrap(),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(35);
+    loop {
+        let status = success(han(data, &["setup", "status"]));
+        if status.contains("executor: failed:") {
+            assert!(
+                status.contains(": ready;"),
+                "person remains ready: {status}"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no executor failure reported: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let first = std::fs::read(data.join("executor.log")).unwrap();
+    assert!(!first.is_empty());
+    std::thread::sleep(Duration::from_millis(750));
+    assert_eq!(
+        std::fs::read(data.join("executor.log")).unwrap(),
+        first,
+        "no automatic retry after failure"
+    );
+    assert!(
+        !data.join("executor/state").exists(),
+        "unvalidated role was never opened"
+    );
+    flow["generation"] = serde_json::json!(2);
+    let temp = data.join("workflow.json.tmp");
+    std::fs::write(&temp, serde_json::to_vec(&flow).unwrap()).unwrap();
+    std::fs::rename(temp, data.join("workflow.json")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(35);
+    while std::fs::read(data.join("executor.log")).unwrap().len() == first.len() {
+        assert!(Instant::now() < deadline, "explicit retry did not run");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(success(han(data, &["setup", "status"])).contains(": ready;"));
+    success(han(data, &["setup", "stop"]));
+    assert!(success(han(data, &["setup", "status"])).contains("stopped"));
+}
