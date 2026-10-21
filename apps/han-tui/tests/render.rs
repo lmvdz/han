@@ -177,6 +177,11 @@ async fn the_approvals_pane_and_its_cards() {
     h.keys("<enter>").await;
     let card = h.screen();
     assert_screen("approval_card", &card);
+    assert!(
+        card.contains("Approval eligibility is checked by the home."),
+        "{card}"
+    );
+    assert!(!card.contains("you can approve"), "{card}");
     assert!(card.contains("9f3c 41aa 07be"), "{card}");
     h.keys("a").await;
     let sign = h.screen();

@@ -166,6 +166,16 @@ fn ctrl(k: &KeyEvent, c: char) -> bool {
 }
 
 impl App {
+    /// A known local signing blocker; the home still decides policy eligibility.
+    pub fn approval_block_reason(&self) -> Option<String> {
+        if self.node.as_ref().is_some_and(|node| node.headless) {
+            return Some(
+                "This node is headless and cannot approve. Use your personal node.".into(),
+            );
+        }
+        self.approvals.block_reason(self.me.as_deref())
+    }
+
     /// A new app. `space` is the space to show (else the one last shown, else none).
     pub fn new(config: Config, space: Option<String>, now: Instant) -> App {
         let space = space.or_else(|| config.last_space.clone());
@@ -1536,7 +1546,6 @@ impl App {
     }
 
     fn approvals_key(&mut self, k: KeyEvent, g: bool) -> Vec<Action> {
-        let me = self.me.clone();
         match self.approvals.card.clone() {
             Card::Closed => match k.code {
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -1598,7 +1607,7 @@ impl App {
                 }
                 // The second step: `a` on the full card opens the sign panel.
                 KeyCode::Char('a') => {
-                    match self.approvals.block_reason(me.as_deref()) {
+                    match self.approval_block_reason() {
                         Some(reason) => self.approvals.notice = Some((Tone::Bad, reason)),
                         None => {
                             self.approvals.card = Card::Signing {
@@ -1638,7 +1647,7 @@ impl App {
                     Vec::new()
                 }
                 KeyCode::Enter => {
-                    if let Some(reason) = self.approvals.block_reason(me.as_deref()) {
+                    if let Some(reason) = self.approval_block_reason() {
                         self.approvals.notice = Some((Tone::Bad, reason));
                         return Vec::new();
                     }

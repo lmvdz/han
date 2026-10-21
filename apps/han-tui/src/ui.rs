@@ -1281,8 +1281,10 @@ fn draw_approvals(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::new()
         };
-        let you = if r.can_approve {
-            "you can approve".to_owned()
+        let you = if app.node.as_ref().is_some_and(|node| node.headless) {
+            "this node cannot approve".to_owned()
+        } else if r.can_approve {
+            "eligibility checked by home".to_owned()
         } else if r.approvers.is_empty() {
             "you cannot approve".to_owned()
         } else {
@@ -1464,9 +1466,13 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
         };
         wrapped(if i == 0 { "GUARDS" } else { "" }, &who, &mut lines);
     }
-    let you = a.block_reason(app.me.as_deref());
+    let you = app.approval_block_reason();
     match &you {
-        None => wrapped("", "you can approve", &mut lines),
+        None => wrapped(
+            "",
+            "Approval eligibility is checked by the home.",
+            &mut lines,
+        ),
         Some(reason) => {
             for part in wrap(reason, w.saturating_sub(11).max(8)) {
                 lines.push(Line::from(vec![
@@ -1510,6 +1516,8 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
             lines.push(Line::styled(
                 if *busy {
                     presence_wait().to_owned()
+                } else if you.is_some() {
+                    "(signing unavailable)    [Esc] Back".to_owned()
                 } else {
                     "[Enter] Sign approval    [Esc] Back".to_owned()
                 },

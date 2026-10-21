@@ -64,6 +64,40 @@ fn changed(h: &Harness, session: &str, f: impl FnOnce(&mut BoardRow)) -> Row {
 // ---- approving: two deliberate steps -------------------------------------------------------------------
 
 #[tokio::test]
+async fn headless_node_cannot_open_signing_or_send_an_approval() {
+    let (mut h, api, data) = started((130, 26)).await;
+    pending_approval(&data);
+    h.keys("r").await;
+    h.rt.app.node.as_mut().unwrap().headless = true;
+    h.keys("a").await;
+    assert!(h.screen().contains("this node cannot approve"));
+    h.keys("<enter>a<enter>").await;
+    let screen = h.screen();
+    assert!(
+        screen.contains("This node is headless and cannot approve"),
+        "{screen}"
+    );
+    assert!(!screen.contains("You are signing"), "{screen}");
+    assert!(!screen.contains("[a] Review & sign"), "{screen}");
+    assert!(api.calls().is_empty());
+}
+
+#[tokio::test]
+async fn headless_status_arriving_after_sign_panel_blocks_enter() {
+    let (mut h, api, data) = started((130, 26)).await;
+    pending_approval(&data);
+    h.keys("ra<enter>a").await;
+    assert!(h.screen().contains("[Enter] Sign approval"));
+    // Status can be refreshed while a confirmation panel remains open.
+    h.rt.app.node.as_mut().unwrap().headless = true;
+    let screen = h.screen();
+    assert!(screen.contains("signing unavailable"), "{screen}");
+    assert!(!screen.contains("[Enter] Sign approval"), "{screen}");
+    h.keys("<enter><enter>").await;
+    assert!(api.calls().is_empty());
+}
+
+#[tokio::test]
 async fn approving_takes_two_deliberate_steps_and_no_single_key_signs() {
     let (mut h, api, data) = started((130, 26)).await;
     pending_approval(&data);
