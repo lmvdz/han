@@ -24,16 +24,19 @@ HAN is being built in Rust, in this repository, and its first users are building
 | `han-node` | the per-device daemon: keys, sync, outbox, live views (board, sessions, approvals, overlaps), and the node API over JSON-RPC on a named pipe or Unix socket. A three-node simulation runs in CI (M3) |
 | `han-timeline` | live work timelines, built by a two-team clean room from a behaviour-only spec (T0, T1) |
 | `han-host`, `han-exec`, `han-mcp`, `han-vcs` | agent sessions over ACP in a sandbox (MXC on Windows, bubblewrap on Linux) whose only way out is an egress proxy; agent tools (`propose`, `team_*`); an executor that runs approved effects at most once; git workspaces, changesets and mirroring (M4) |
-| harnesses | pi with an API key, and the official Claude Code client through `claude-agent-acp` on a Claude subscription (M4) |
+| harnesses | [declarative ACP drivers](crates/han-host/drivers/README.md) share setup, login, diagnostics and launch: pi with an API key, Claude Code through `claude-agent-acp` on a Claude subscription, and a pinned Codex adapter with isolated ChatGPT subscription login (verified on Linux bubblewrap) |
 | `han tui` | the live board, the session pane and the approvals inbox in the terminal (M5) |
 | `han-github` | a GitHub App integration: it polls issues with ETags and turns `agent-ready` issues into tasks for a shared agent pool (M5) |
 | releases | cargo-dist installers, `han update --check` against a signed manifest, and a nightly cross-OS CI ([docs/release.md](docs/release.md)) |
 
+Semantic gates and risk tiers (P-17) are implemented; the optional tier-1 machine reviewer is off by default. Per-agent login directories, managed ACP adapter setup, Linux hosts under separate OS users, and executor and node service installation are implemented too ([status](docs/status.md), [runner setup](docs/runner.md)).
+
 **Not there yet:**
 - the GUI;
 - agent-to-agent questions;
-- semantic gates and risk tiers (the spec work is queued, see below);
-- the gaps the dogfood found, which are being fixed now: per-agent login directories, starting the Claude Code driver on a runner, a host per OS user, and services for the executor and the node.
+- two-way GitHub synchronization and chat notifiers;
+- the broader in-flight query and landing designs beyond the implemented lane;
+- verified beta acceptance: fresh-user timing and the multi-person, two-week dogfood with its authorization audit remain unverified. The recorded Codex task landed with manual approval; this automatic-landing trial has no verified success result yet.
 
 ## Try it
 
@@ -92,7 +95,7 @@ The book's [Getting started](docs/getting-started.md) page walks through the sam
 
 ## The specification
 
-> **Design draft (v1, round <!--s:round-->32<!--/s-->).** Spec rounds are paused while the product is built. The next round is queued with semantic gates, risk tiers for landing work, and the open review items. The repository holds:
+> **Design draft (v1, round <!--s:round-->32<!--/s-->).** Spec rounds are paused while the product is built. Semantic gates and risk tiers for landing work have merged ahead of round 33; its independent review and the open review items remain outstanding. The repository holds:
 > - a specification;
 > - an executable reference ([ref/](ref/));
 > - the Rust implementation ([crates/](crates/), [apps/](apps/), [integrations/](integrations/));
