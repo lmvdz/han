@@ -147,6 +147,27 @@ async fn measured_zero_is_distinct_from_missing_cost() {
 }
 
 #[tokio::test]
+async fn proposal_history_does_not_claim_a_pending_approval() {
+    let (mut h, _api, data) = started(WIDE).await;
+    data.lock().unwrap().items.push(han_node::api::ItemRow {
+        key: "000000000001".into(),
+        session: "s1".into(),
+        id: "proposal".into(),
+        seq_in_session: 1,
+        turn: Some(1),
+        updated_ms: han_tui::testing::NOW_MS,
+        item: han_node::api::ItemBody::Decision {
+            effect: "p1".into(),
+            action: "vcs.land".into(),
+        },
+    });
+    h.keys("j<enter>").await;
+    let screen = h.screen();
+    assert!(screen.contains("proposed: vcs.land"), "{screen}");
+    assert!(!screen.contains("waiting for an approval"), "{screen}");
+}
+
+#[tokio::test]
 async fn the_approvals_pane_and_its_cards() {
     let (mut h, _api, data) = started(WIDE).await;
     pending_approval(&data);
