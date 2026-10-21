@@ -92,6 +92,13 @@ subscription harness. Windows, remote runner pairing, API-key harness setup,
 and advanced policies use the separate commands in steps 5–7. Joining another
 home does not grant local permission to provision its agents or executor.
 
+If the bubblewrap probe reports `Permission denied` for the HAN executable,
+install HAN in a location accessible to the runner, such as `/usr/local/bin`,
+and resume `han setup` with the same data folder. Running a candidate binary
+as root from another user's private home directory can cause this refusal.
+Keep that home directory restricted; the remedy is to install the executable,
+not to expose private files. Confirmed setup progress is retained.
+
 After the TUI opens, continue at step 4. For later CLI commands, set `HAN_DATA`
 to your `han-team/person` folder or supply `--data` explicitly. The following
 manual home and node commands are an alternative to `han setup`.

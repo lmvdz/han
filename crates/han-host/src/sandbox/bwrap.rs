@@ -57,7 +57,16 @@ pub(super) fn probe(shim: &super::ShimCommand) -> BackendAvailability {
             available: true,
             detail: format!("{}", bwrap.display()),
         },
-        Err(e) => unavailable(format!("bwrap cannot create namespaces: {e}")),
+        Err(e) => {
+            let hint = if e.contains("Permission denied")
+                && e.contains(shim.program.to_string_lossy().as_ref())
+            {
+                " Install HAN in a location accessible to the runner, such as /usr/local/bin, then resume. Keep private home directories restricted."
+            } else {
+                ""
+            };
+            unavailable(format!("bwrap sandbox probe failed: {e}{hint}"))
+        }
     }
 }
 
