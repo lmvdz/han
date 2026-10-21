@@ -41,7 +41,13 @@ This creates a home, registers your human profile through its local admin
 endpoint, starts your person node, and opens the TUI's space setup form. Your
 device key uses the OS keychain. The home and node run in one managed background
 process and keep running when you leave the TUI. Normal device-presence checks
-remain enabled.
+remain enabled. Before opening guided setup on Linux, HAN checks that polkit
+knows its confirmation action. If needed, administrator authentication installs
+the bundled `auth_self` action through `pkexec`; an administrator can also run
+`sudo han setup install-presence`. Existing administrator policies are preserved.
+The Linux desktop still needs polkit and an authentication agent for confirmations;
+headless startup with `--no-tui` does not install or disable presence. `han doctor`
+reports a missing HAN action separately from a missing polkit executable.
 
 The default state folder is `han-team` in the current directory. Repeating the
 command with the same folder resumes the saved identity. Use `--data <folder>`
