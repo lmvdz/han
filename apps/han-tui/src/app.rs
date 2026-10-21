@@ -1045,6 +1045,19 @@ impl App {
             self.quit = true;
             return vec![Action::Quit];
         }
+        if k.code == KeyCode::Enter
+            && let Some(space) = self
+                .setup
+                .as_ref()
+                .filter(|s| s.existing && s.step == crate::setup::Step::Ready)
+                .and_then(|s| s.ready_space.as_deref())
+            && let Some(why) = self.existing_setup_error(space)
+        {
+            if let Some(setup) = &mut self.setup {
+                setup.notice = why.into();
+            }
+            return Vec::new();
+        }
         if let Some(setup) = &mut self.setup {
             if self.guided_setup
                 && setup.step == crate::setup::Step::Ready
@@ -1740,6 +1753,73 @@ impl App {
         }
     }
 
+    fn existing_setup_error(&self, space: &str) -> Option<&'static str> {
+        if !self.guided_setup {
+            return Some(
+                "Open han setup with this data folder to continue agent and runner setup.",
+            );
+        }
+        if self.conn != Conn::Up || self.space.as_deref() != Some(space) {
+            return Some(
+                "Reconnect and explicitly select the intended team with :space before continuing.",
+            );
+        }
+        if !self
+            .node
+            .as_ref()
+            .is_some_and(|n| n.outbox_pending == 0 && n.problems.is_empty())
+        {
+            return Some(
+                "Wait for pending writes and resolve node problems before continuing setup.",
+            );
+        }
+        let Some(status) = self.space_status.as_ref().filter(|s| s.space == space) else {
+            return Some("Wait for the selected team's current status before continuing.");
+        };
+        if status.link != han_node::api::SpaceLink::Live || status.outbox_pending != 0 {
+            return Some(
+                "The selected team must be live with no pending writes before continuing.",
+            );
+        }
+        if !status.trusted_setup.as_ref().is_some_and(|t| t.can_manage) {
+            return Some(
+                "Guided runner setup needs current ownership and the unchanged Trusted team policy.",
+            );
+        }
+        None
+    }
+
+    fn existing_setup(&mut self) -> Vec<Action> {
+        let Some(space) = self.space.clone() else {
+            self.say(
+                Tone::Bad,
+                "Select the existing team with :space <space id> first.",
+            );
+            return Vec::new();
+        };
+        if let Some(why) = self.existing_setup_error(&space) {
+            self.say(Tone::Bad, why);
+            return Vec::new();
+        }
+        let status = self.space_status.as_ref().expect("eligibility checked");
+        let mut setup = crate::setup::Setup::new(self.config.setup_recovery.as_deref());
+        setup.step = crate::setup::Step::Ready;
+        setup.ready_space = Some(space);
+        setup.existing = true;
+        setup.notice = format!(
+            "Existing team on {}. Repositories: {}. The launcher rechecks eligibility before configuring anything.",
+            status.home,
+            status
+                .trusted_setup
+                .as_ref()
+                .expect("eligibility checked")
+                .repos
+                .join(", ")
+        );
+        self.setup = Some(setup);
+        Vec::new()
+    }
+
     /// Runs a line of the `:` palette.
     pub fn run_command(&mut self, line: &str) -> Vec<Action> {
         let line = line.trim().trim_start_matches(':');
@@ -1752,6 +1832,7 @@ impl App {
                 ));
                 Vec::new()
             }
+            "setup-existing" => self.existing_setup(),
             "setup-reset" => {
                 self.config.setup_recovery = None;
                 self.setup = Some(crate::setup::Setup::new(None));

@@ -428,7 +428,9 @@ async fn configure_executor(data: &Path, state: &State, flow: &Flow, plan: &Plan
 
 pub(super) async fn continue_setup(data: &Path, state: &State) -> Res<()> {
     let _lock = super::lock_file(&data.join("workflow.lock"))?;
-    let mut flow = match load(data)? {
+    let saved = load(data)?;
+    let new_flow = saved.is_none();
+    let mut flow = match saved {
         Some(flow) => flow,
         None => {
             let han_tui::SetupExit::Continue { space } = han_tui::run_setup(han_tui::Options {
@@ -440,16 +442,14 @@ pub(super) async fn continue_setup(data: &Path, state: &State) -> Res<()> {
             else {
                 return Ok(());
             };
-            let flow = Flow {
+            Flow {
                 version: 1,
                 space,
                 plan: None,
                 executor_enabled: false,
                 generation: 0,
                 configuration: None,
-            };
-            save(data, &flow)?;
-            flow
+            }
         }
     };
     if !cfg!(target_os = "linux") {
@@ -457,6 +457,15 @@ pub(super) async fn continue_setup(data: &Path, state: &State) -> Res<()> {
     }
     let client = RpcClient::connect(&default_endpoint(&data.join("person"))).await?;
     let repos = verify_space(&client, state, &flow).await?;
+    // A rejected existing-team selection must not strand subsequent resumes in this journal.
+    if new_flow {
+        save(data, &flow)?;
+    }
+    let config_path = data.join("person/tui.json");
+    let mut config = han_tui::config::Config::load(&config_path);
+    if config.setup_recovery.take().is_some() {
+        config.save(&config_path)?;
+    }
     han_host::sandbox::admit_for(
         "bwrap",
         false,

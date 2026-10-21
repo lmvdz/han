@@ -154,9 +154,14 @@ Use the repository identifier your executor uses, exactly; wildcards are not
 accepted. A queued creation prints its space and outbox id rather than success.
 The TUI saves a recovery notice before sending setup. After an uncertain or
 queued result, inspect `han space list` and `han outbox list`; do not create the
-space again. A TUI restart retains the notice. Once you have checked the result,
-`:setup-reset` clears the notice and opens a new form. Invite tickets are not
-saved in TUI preferences.
+space again. A TUI restart retains the notice. Once the original team is live and
+its creation is sent, resume `han setup` with the same data folder. Press Esc,
+select it with `:space <space id>`, then type `:setup-existing`. Review the exact
+team and press Enter to continue agent and runner setup. This requires current
+ownership of an unchanged Trusted team; the launcher rechecks eligibility before
+saving the choice. A rejected choice keeps the recovery notice. Use `:setup-reset`
+only when you intend to start a new setup operation. Invite tickets are not saved
+in TUI preferences.
 
 For advanced custom permissions, the existing base-policy command is:
 
