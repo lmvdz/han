@@ -9,7 +9,7 @@
 //! A script is `{agent: {name, version}, modes?: {current, available}, mcpHttp?, turns: [{steps: [...]}]}`;
 //! prompt N runs turn N (past the end: an empty `end_turn`). Steps (`type`):
 //! `message {text}`, `thought {text}`, `tool_call {id, title, kind?, status?, rawInput?, locations?}`,
-//! `tool_update {id, status?, title?, output?, rawInput?, rawOutput?, meta?}`, `write_file {path, content}`,
+//! `tool_update {id, status?, title?, output?, rawOutput?, meta?}`, `write_file {path, content}`,
 //! `edit_file {path, find, replace}`, `delete_file {path}` (relative paths, done for real in the cwd),
 //! `plan {entries: [{content, status}]}`, `usage {used, size, cost?}`, `request_permission {id, title, kind?,
 //! rawInput?, locations?, on_allow?: [steps], on_reject?: [steps]}`, `mcp_call {id, server, tool, args}`
@@ -116,8 +116,6 @@ enum Step {
         title: Option<String>,
         #[serde(default)]
         output: Option<String>,
-        #[serde(default, rename = "rawInput")]
-        raw_input: Option<Value>,
         #[serde(default, rename = "rawOutput")]
         raw_output: Option<Value>,
         #[serde(default)]
@@ -348,7 +346,6 @@ fn run_steps<'a>(
                     status,
                     title,
                     output,
-                    raw_input,
                     raw_output,
                     meta,
                 } => {
@@ -362,9 +359,6 @@ fn run_steps<'a>(
                     if let Some(o) = output {
                         u["content"] =
                             json!([{"type": "content", "content": {"type": "text", "text": o}}]);
-                    }
-                    if let Some(r) = raw_input {
-                        u["rawInput"] = r.clone();
                     }
                     if let Some(r) = raw_output {
                         u["rawOutput"] = r.clone();

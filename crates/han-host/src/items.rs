@@ -447,7 +447,7 @@ mod tests {
         update(
             &mut f,
             json!({"sessionUpdate":"tool_call_update", "toolCallId":"mcp",
-            "status":"completed", "rawInput":{"server":"han", "tool":"team_read"},
+                "status":"completed",
             "rawOutput":{"result":{"content":[{"type":"text",
                 "text":format!("{}hunter2-secret", "x".repeat(crate::acp::MAX_TOOL_OUTPUT - 7))}]}, "error":null}}),
         );
