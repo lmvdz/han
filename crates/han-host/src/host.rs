@@ -382,10 +382,9 @@ impl Shared {
 
     /// Who must approve, as text.
     fn waiting_for(&self) -> String {
-        self.cfg
-            .operator
-            .clone()
-            .unwrap_or_else(|| "an approver".into())
+        // Acceptance alone does not establish the current approver, or even that
+        // an approval is required. The executor checks policy and guards.
+        "executor policy checks, including any required approvals".into()
     }
 
     /// The plan of a proposal, built by the host (never by the agent): git pushes carry the committed

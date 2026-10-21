@@ -73,7 +73,7 @@ pub enum ProposeAnswer {
     Proposed {
         /// The proposal's entry id.
         id: String,
-        /// Who must approve, as text.
+        /// What remains to be evaluated, as text; acceptance does not establish an approver.
         waiting_for: String,
     },
     /// Signed, but the home has not accepted it yet (it waits in the node's outbox): nobody can approve it

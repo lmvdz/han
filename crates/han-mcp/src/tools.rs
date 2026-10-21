@@ -239,7 +239,7 @@ impl HanTools {
         match answer {
             ProposeAnswer::Proposed { id, waiting_for } => {
                 let text = format!(
-                    "Proposed as {id}, waiting for {waiting_for}. It has not run; it runs only after approval."
+                    "Proposed as {id}, waiting for {waiting_for}. Acceptance does not confirm execution. The executor enforces current policy, guards and required checks; a policy may permit automatic execution without a per-change approval. For landing progress, use land_status."
                 );
                 let mut r = CallToolResult::success(vec![ContentBlock::text(text)]);
                 r.structured_content =

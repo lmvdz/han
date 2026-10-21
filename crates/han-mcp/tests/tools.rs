@@ -195,7 +195,7 @@ impl HostBridge for FakeBridge {
             } else {
                 ProposeAnswer::Proposed {
                     id: "E-1".into(),
-                    waiting_for: "@lars:a.localhost".into(),
+                    waiting_for: "executor policy checks, including any required approvals".into(),
                 }
             }
         })
@@ -349,7 +349,7 @@ async fn summary_is_required_on_every_tool() {
 }
 
 #[tokio::test]
-async fn propose_goes_to_the_host_and_says_it_has_not_run() {
+async fn propose_reports_acceptance_without_claiming_approval_or_execution() {
     let rig = rig().await;
     let effect = json!({"method": "POST", "url": "https://hooks.example.com/build", "body": "{}"});
     let r = call(
@@ -360,7 +360,10 @@ async fn propose_goes_to_the_host_and_says_it_has_not_run() {
     .await;
     assert_ne!(r.is_error, Some(true));
     let text = serde_json::to_string(&r.content).unwrap();
-    assert!(text.contains("Proposed as E-1, waiting for @lars:a.localhost. It has not run"));
+    assert!(text.contains("Proposed as E-1, waiting for executor policy checks"));
+    assert!(text.contains("Acceptance does not confirm execution"));
+    assert!(text.contains("without a per-change approval"));
+    assert!(!text.contains("runs only after approval"));
     {
         let calls = rig.bridge.calls.lock().unwrap();
         assert_eq!(calls.used, vec![("propose".into(), "notify CI".into())]);
