@@ -52,23 +52,35 @@ pub struct ExecArgs {
 }
 
 pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_ready(args, None).await
+}
+
+pub(crate) async fn run_with_ready(
+    args: ExecArgs,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config: ExecConfig = serde_json::from_slice(&std::fs::read(&args.config)?)?;
     let key_name = args
         .key_name
         .clone()
         .unwrap_or_else(|| rolenode::key_name(&args.actor));
-    let role = rolenode::start(
+    let node_data = args.data.join("node");
+    let starting = rolenode::start(
         &args.actor,
         &args.key_id,
         &key_name,
         &args.keys,
-        &args.data.join("node"),
+        &node_data,
         &args.relay,
         &args.home,
         &args.space,
         ConnectionClass::Executor,
-    )
-    .await?;
+    );
+    let role = tokio::select! {
+        biased;
+        _ = crate::shutdown::requested() => return Ok(()),
+        result = starting => result?,
+    };
     let github = match &config.github {
         Some(app) => Some(Arc::new(han_exec::github::GithubMinter::from_app(app)?)),
         None => None,
@@ -121,20 +133,59 @@ pub async fn run(args: ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(SystemElapsed::new()),
     )?);
     let lane = lane_checks.map(|c| Lane::new(exec.clone(), c, Arc::new(SystemWall)));
+    if let Some(ready) = ready {
+        ready
+            .send(())
+            .map_err(|_| "executor readiness receiver closed")?;
+    }
     let (stop, rx) = tokio::sync::watch::channel(false);
     let runner = async { exec.run(rx.clone()).await };
     let landing = async {
         match &lane {
             Some(l) => l.run(rx.clone()).await,
-            None => std::future::pending().await,
+            None => {
+                let mut stopped = rx.clone();
+                while !*stopped.borrow_and_update() {
+                    if stopped.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
         }
     };
-    tokio::select! {
-        r = runner => r?,
-        () = landing => {}
-        _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); }
-    }
+    tokio::pin!(runner, landing);
+    let mut runner_done = false;
+    let mut landing_done = false;
+    let result = tokio::select! {
+        biased;
+        _ = crate::shutdown::requested() => Ok(()),
+        r = &mut runner => { runner_done = true; r.map_err(|e| e.to_string()) },
+        () = &mut landing => { landing_done = true; Ok(()) }
+    };
+    let _ = stop.send(true);
+    // Keep the transport alive while an in-flight pass records its outcome.
+    let drained = tokio::time::timeout(Duration::from_secs(7), async {
+        let r = async {
+            if !runner_done {
+                (&mut runner).await.map_err(|e| e.to_string())
+            } else {
+                Ok(())
+            }
+        };
+        let l = async {
+            if !landing_done {
+                (&mut landing).await;
+            }
+        };
+        let (r, ()) = tokio::join!(r, l);
+        r
+    })
+    .await;
     role.node.shutdown();
     role.transport.shutdown().await;
+    result?;
+    drained.map_err(
+        |_| "executor stop exceeded 7 seconds; inspect retained ledger before restarting",
+    )??;
     Ok(())
 }

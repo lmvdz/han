@@ -590,22 +590,26 @@ pub async fn confirm_cmd(
 }
 
 /// The options of `han agent add`.
-struct Add {
-    name: String,
-    operator: String,
-    server: Option<String>,
-    os_user: Option<String>,
-    sandbox: Option<String>,
-    allow_advisory: bool,
-    harness: Option<String>,
-    model_key_file: Option<PathBuf>,
-    space: Option<String>,
-    home_data: Option<PathBuf>,
-    home: Option<HomeRef>,
+pub(crate) struct Add {
+    pub name: String,
+    pub operator: String,
+    pub server: Option<String>,
+    pub os_user: Option<String>,
+    pub sandbox: Option<String>,
+    pub allow_advisory: bool,
+    pub harness: Option<String>,
+    pub model_key_file: Option<PathBuf>,
+    pub space: Option<String>,
+    pub home_data: Option<PathBuf>,
+    pub home: Option<HomeRef>,
 }
 
 /// `han agent add`.
-async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
+pub(crate) async fn add(
+    client: &RpcClient,
+    data: &Path,
+    mut a: Add,
+) -> Res<crate::enroll::Outcome> {
     let server = match (&a.server, a.operator.rsplit_once(':')) {
         (Some(s), _) => s.clone(),
         (None, Some((_, s))) => s.to_owned(),
@@ -613,6 +617,22 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
     };
     let actor = format!("@{}:{server}", a.name);
     println!("agent {actor} (operator {})", a.operator);
+
+    // Resolve aliases and supplied driver files through the same contract as setup/login.
+    // Install before recording the canonical name so a custom file remains available to setup.
+    if let Some(h) = &a.harness {
+        let driver = crate::harness::driver(data, h)?;
+        if crate::harness::is_set_up(data, &driver.name)? {
+            println!("  unchanged: the {} harness is set up", driver.name);
+        } else {
+            let r = crate::harness::setup(data, h, None, None)?;
+            println!(
+                "  changed:   installed {} {} for {}",
+                r.package, r.version, driver.name
+            );
+        }
+        a.harness = Some(driver.name);
+    }
 
     // 1. launch settings, before the key: an OS-user agent's key lives in that user's state directory
     let changed = crate::harness::record_settings(
@@ -634,20 +654,6 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
         );
     } else {
         println!("  unchanged: launch settings");
-    }
-
-    // 2. the harness, when it is one `han` installs
-    if let Some(h) = a
-        .harness
-        .as_deref()
-        .filter(|h| matches!(*h, "claude" | "pi"))
-    {
-        if crate::harness::is_set_up(data, h)? {
-            println!("  unchanged: the {h} harness is set up");
-        } else {
-            let r = crate::harness::setup(data, h, None, None)?;
-            println!("  changed:   installed {} {} for {h}", r.package, r.version);
-        }
     }
 
     // 3. the key
@@ -685,7 +691,7 @@ async fn add(client: &RpcClient, data: &Path, a: Add) -> Res<()> {
             outcome.todo.len()
         );
     }
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]

@@ -32,6 +32,55 @@ fn draft() -> App {
 }
 
 #[test]
+fn launcher_handoff_requires_a_confirmed_space_and_explicit_continue() {
+    let mut app = draft();
+    app.guided_setup = true;
+    enter(&mut app);
+    let actions = enter(&mut app);
+    let Action::SetupCall { id, .. } = actions[0] else {
+        panic!("call")
+    };
+    assert!(app.setup_continue.is_none());
+    assert!(!app.quit);
+    app.update(Msg::Called {
+        id,
+        result: Ok(CallResult::Space {
+            space: "new:a.localhost".into(),
+        }),
+    });
+    assert_eq!(app.setup.as_ref().unwrap().step, Step::Ready);
+    assert!(app.setup_continue.is_none());
+    assert!(!app.quit);
+    enter(&mut app);
+    assert_eq!(app.setup_continue.as_deref(), Some("new:a.localhost"));
+    assert!(app.quit);
+}
+
+#[test]
+fn launcher_never_hands_off_a_queued_or_lost_creation() {
+    for result in [
+        Err(NodeError::unavailable("lost response")),
+        Ok(CallResult::Queued {
+            space: "new:a.localhost".into(),
+            outbox_id: 1,
+            id: "entry".into(),
+        }),
+    ] {
+        let mut app = draft();
+        app.guided_setup = true;
+        enter(&mut app);
+        let actions = enter(&mut app);
+        let Action::SetupCall { id, .. } = actions[0] else {
+            panic!("call")
+        };
+        app.update(Msg::Called { id, result });
+        enter(&mut app);
+        assert!(app.setup_continue.is_none());
+        assert!(!app.quit);
+    }
+}
+
+#[test]
 fn preview_precedes_creation_and_uncertain_results_survive_restart() {
     let mut app = draft();
     assert!(enter(&mut app).is_empty());

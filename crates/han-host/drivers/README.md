@@ -5,10 +5,10 @@ diagnostics and launch read the same installed definition. An adapter does not n
 a new protocol method, a registry special case, or a provider-specific login command
 in HAN's CLI.
 
-From the repository root, install the Codex example:
+Install the bundled Codex descriptor by name (or supply a custom driver file):
 
 ```sh
-han agent setup-harness crates/han-host/drivers/codex.json --data <node-data> --dir <adapter-install>
+han agent setup-harness codex --data <node-data> --dir <adapter-install>
 han agent set <actor> --harness codex --data <node-data>
 han agent login <actor> --data <node-data>
 han agent login <actor> --check --data <node-data>
@@ -22,7 +22,7 @@ login; `--check` does not prove current account access or remaining quota.
 
 Setup installs the pinned npm adapter, verifies its npm integrity, and saves
 `driver.json` beside the installation. The registry points to that snapshot. Later
-`setup-harness codex` uses the installed definition. Driver files are trusted
+`setup-harness codex` uses the installed definition before the bundled default. Driver files are trusted
 operator configuration: their installation and login commands run outside the
 agent sandbox. Do not accept them from an agent as a way to widen its permissions.
 

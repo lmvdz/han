@@ -858,6 +858,15 @@ pub enum SpaceLink {
     Misconfigured,
 }
 
+/// Setup information for a space whose current policy exactly matches the Trusted team preset.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct TrustedSetup {
+    /// Whether this node's actor currently owns the space and can enroll its runner actors.
+    pub can_manage: bool,
+    /// Exact repositories selected by the policy; these are not grants to other repositories.
+    pub repos: Vec<String>,
+}
+
 /// How a space is doing on this device.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct SpaceStatusRow {
@@ -883,6 +892,10 @@ pub struct SpaceStatusRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub error: Option<String>,
+    /// Present only for the exact Trusted team preset. Recheck a live view before provisioning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trusted_setup: Option<TrustedSetup>,
 }
 
 /// Tokens and cost of a session, or the total of a space.

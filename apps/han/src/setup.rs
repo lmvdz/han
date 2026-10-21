@@ -17,6 +17,8 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, Buf
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
+mod workflow;
+
 /// Options for the guided local bootstrap.
 #[derive(Args)]
 pub struct SetupArgs {
@@ -51,6 +53,9 @@ enum SetupCmd {
     /// Run both roles in one managed process (used by the launcher).
     #[command(hide = true)]
     Serve,
+    /// Run the separate executor child while its managed parent's input pipe stays open.
+    #[command(hide = true)]
+    ServeExecutor,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +75,7 @@ struct Status {
     actor: String,
     ready: bool,
     stopping: bool,
+    executor: workflow::Runtime,
 }
 
 fn load(data: &Path) -> Res<State> {
@@ -257,7 +263,11 @@ async fn node_ready(data: &Path, actor: &str) -> bool {
     .unwrap_or(false)
 }
 
-async fn serve_control(data: &Path, state: &State) -> Res<()> {
+async fn serve_control(
+    data: &Path,
+    state: &State,
+    executor: &tokio::sync::watch::Receiver<workflow::Runtime>,
+) -> Res<()> {
     use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
     let listener = listen_local(&control_endpoint(data))?;
     loop {
@@ -279,6 +289,7 @@ async fn serve_control(data: &Path, state: &State) -> Res<()> {
             actor: state.actor.clone(),
             ready: node_ready(data, &state.actor).await,
             stopping,
+            executor: executor.borrow().clone(),
         };
         let _ = send
             .write_all(format!("{}\n", serde_json::to_string(&status)?).as_bytes())
@@ -380,25 +391,45 @@ async fn serve(data: &Path) -> Res<()> {
             .await
             .map_err(|e| e.to_string())
     });
+    let (executor_status, executor_view) =
+        tokio::sync::watch::channel(workflow::Runtime::default());
+    let (executor_stop, executor_stopping) = tokio::sync::watch::channel(false);
+    let executor_data = data.to_path_buf();
+    let mut executor = tokio::spawn(async move {
+        workflow::supervise_executor(&executor_data, executor_status, executor_stopping)
+            .await
+            .map_err(|e| e.to_string())
+    });
     let grace = Duration::from_secs(10);
     tokio::select! {
         result = &mut home => {
             crate::shutdown::request();
             let _ = tokio::time::timeout(grace, &mut node).await;
+            let _ = tokio::time::timeout(grace, &mut executor).await;
             role_result(result)
         }
         result = &mut node => {
             crate::shutdown::request();
             let _ = tokio::time::timeout(grace, &mut home).await;
+            let _ = tokio::time::timeout(grace, &mut executor).await;
             role_result(result)
         }
-        result = serve_control(data, &state) => {
+        result = &mut executor => {
+            crate::shutdown::request();
+            let _ = tokio::time::timeout(grace, async { tokio::join!(&mut home, &mut node) }).await;
+            role_result(result)
+        }
+        result = serve_control(data, &state, &executor_view) => {
+            // Settle executor work while the home can still accept outcomes.
+            let _ = executor_stop.send(true);
+            let executor_result = tokio::time::timeout(grace, &mut executor).await;
             crate::shutdown::request();
             tokio::time::timeout(grace, async {
                 let (home, node) = tokio::join!(&mut home, &mut node);
                 role_result(home)?;
                 role_result(node)
             }).await.map_err(|_| "setup shutdown exceeded 10 seconds; state is retained")??;
+            role_result(executor_result.map_err(|_| "executor shutdown exceeded 10 seconds")?)?;
             result
         }
     }
@@ -413,13 +444,19 @@ pub async fn run(args: SetupArgs) -> Res<()> {
     let data = std::path::absolute(&args.data)?;
     match args.cmd {
         Some(SetupCmd::Serve) => return Box::pin(serve(&data)).await,
+        Some(SetupCmd::ServeExecutor) => return Box::pin(workflow::run_executor(&data)).await,
         Some(SetupCmd::Status) => {
             let state = load(&data)?;
             match request(&data, "status").await {
                 Ok(status) => println!(
-                    "{}: {}",
+                    "{}: {}; executor: {}",
                     status.actor,
-                    if status.ready { "ready" } else { "starting" }
+                    if status.ready { "ready" } else { "starting" },
+                    if status.executor.detail.is_empty() {
+                        "not configured"
+                    } else {
+                        &status.executor.detail
+                    }
                 ),
                 Err(_) if running(&data)? => println!(
                     "{}: starting or not responding; inspect {}",
@@ -436,7 +473,7 @@ pub async fn run(args: SetupArgs) -> Res<()> {
         }
         Some(SetupCmd::Stop) => {
             let status = request(&data, "stop").await?;
-            let deadline = Instant::now() + Duration::from_secs(15);
+            let deadline = Instant::now() + Duration::from_secs(25);
             while running(&data)? {
                 if Instant::now() >= deadline {
                     return Err("stop requested but shutdown is not confirmed; inspect setup.log before restarting".into());
@@ -516,16 +553,9 @@ pub async fn run(args: SetupArgs) -> Res<()> {
     println!("Home and person node ready. They keep running when you leave the TUI.");
     println!("Open: han tui --data {}", data.join("person").display());
     println!("Stop: han setup stop --data {}", data.display());
-    println!(
-        "Next: :setup creates or joins a space. Agent login and runner setup follow separately."
-    );
+    println!("Next: create or join a space, then continue to agent and runner setup.");
     if !args.no_tui {
-        han_tui::run_setup(han_tui::Options {
-            space: None,
-            data: data.join("person"),
-            endpoint: None,
-        })
-        .await?;
+        Box::pin(workflow::continue_setup(&data, &state)).await?;
     }
     Ok(())
 }

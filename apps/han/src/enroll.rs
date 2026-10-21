@@ -205,7 +205,11 @@ pub async fn run(e: &Enroll<'_>) -> Res<Outcome> {
                 .await
             {
                 Ok(CallResult::Done) => same(&format!("{} is a member of {space}", e.actor)),
-                Ok(_) => changed(&format!("{} is now a member of {space}", e.actor)),
+                Ok(CallResult::Receipt { .. }) => changed(&format!("{} is now a member of {space}", e.actor)),
+                Ok(CallResult::Queued { outbox_id, .. }) => {
+                    out.todo.push(format!("membership is queued in outbox {outbox_id}; wait for delivery or inspect it before resuming"));
+                }
+                Ok(other) => return Err(format!("membership result is not confirmed ({other:?}); inspect the space before resuming").into()),
                 Err(NodeError::Denied { .. }) => todo(
                     &mut out,
                     &format!("an owner of {space}"),
@@ -299,7 +303,13 @@ pub async fn confirm(
         .await
     {
         Ok(CallResult::Done) => Ok(false),
-        Ok(_) => Ok(true),
+        Ok(CallResult::Receipt { .. }) => Ok(true),
+        Ok(CallResult::Queued { outbox_id, .. }) => Err(Pending::Other(format!(
+            "operator confirmation is queued in outbox {outbox_id}; wait for delivery or inspect it before resuming"
+        ))),
+        Ok(other) => Err(Pending::Other(format!(
+            "operator confirmation is not confirmed ({other:?}); inspect the profile before resuming"
+        ))),
         Err(e) => Err(Pending::Other(e.to_string())),
     }
 }
