@@ -442,6 +442,22 @@ mod tests {
     }
 
     #[test]
+    fn oversized_mcp_result_is_omitted_instead_of_publishing_a_secret_prefix() {
+        let mut f = ItemFeed::new();
+        update(
+            &mut f,
+            json!({"sessionUpdate":"tool_call_update", "toolCallId":"mcp",
+            "status":"completed", "rawInput":{"server":"han", "tool":"team_read"},
+            "rawOutput":{"result":{"content":[{"type":"text",
+                "text":format!("{}hunter2-secret", "x".repeat(crate::acp::MAX_TOOL_OUTPUT - 7))}]}, "error":null}}),
+        );
+        assert_eq!(
+            tool_text(&mut f),
+            "[tool output omitted: exceeds display limit]"
+        );
+    }
+
+    #[test]
     fn complete_tool_snapshot_replaces_deltas_without_duplicate_output() {
         let mut f = ItemFeed::new();
         delta(&mut f, "first\n", "in_progress");

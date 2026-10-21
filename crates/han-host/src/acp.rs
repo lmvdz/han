@@ -546,8 +546,9 @@ fn opt_str(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(str::to_owned)
 }
 
-/// Text from a tool call update: content text blocks, then terminal output in `_meta`, then a string
-/// `rawOutput`. Explicit terminal deltas append; full text content takes precedence.
+/// Text from a tool call update: content text blocks, then terminal output in `_meta`, then
+/// `rawOutput` strings or text results/errors in the Codex MCP envelope. Explicit terminal
+/// deltas append; full text content takes precedence. MCP progress messages are not result deltas.
 fn tool_output(v: &Value) -> (Option<String>, bool, bool) {
     let mut out = String::new();
     if let Some(content) = v["content"].as_array() {
@@ -564,6 +565,26 @@ fn tool_output(v: &Value) -> (Option<String>, bool, bool) {
         && let Some(t) = v["rawOutput"].as_str()
     {
         out.push_str(t);
+    }
+    if out.is_empty() && v["rawInput"]["server"].is_string() && v["rawInput"]["tool"].is_string() {
+        // Codex sends MCP completion as an opaque envelope, without the start event's MCP
+        // marker. Only display its declared text blocks and error message, never arbitrary
+        // provider fields, structured content, embedded resources or binary payloads.
+        if let Some(content) = v["rawOutput"]["result"]["content"].as_array() {
+            for block in content {
+                if block["type"] == "text"
+                    && let Some(text) = block["text"].as_str()
+                {
+                    out.push_str(text);
+                }
+            }
+        }
+        if let Some(message) = v["rawOutput"]["error"]["message"].as_str() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(message);
+        }
     }
     let delta = v["_meta"]["terminal_output_delta"]["data"]
         .as_str()
@@ -1206,5 +1227,56 @@ mod tests {
             tool_output(&json!({"status":"completed"})),
             (None, false, false)
         );
+    }
+
+    #[test]
+    fn mcp_completion_text_is_a_snapshot_and_preserves_failed_status() {
+        let mut update = json!({"sessionUpdate":"tool_call_update", "toolCallId":"mcp1",
+            "status":"failed", "rawInput":{"server":"han", "tool":"propose"},
+            "rawOutput":{"result":{"content":[
+                {"type":"text", "text":"partial result"},
+                {"type":"image", "data":"private binary", "text":"not text"},
+                {"type":"resource", "resource":{"text":"private resource"}}
+            ], "structuredContent":{"private":"structured"}},
+            "error":{"message":"permission refused", "data":"private diagnostic"}},
+            "_meta":{"mcp_output_delta":{"data":"progress is not result text"}}});
+        assert_eq!(
+            tool_output(&update),
+            (
+                Some("partial result\npermission refused".into()),
+                false,
+                false
+            )
+        );
+        assert!(matches!(&map_update(&update)[0],
+            AgentEvent::ToolCallUpdate { status: Some(status), output: Some(output), output_append: false, .. }
+            if status == "failed" && output == "partial result\npermission refused"));
+        update["content"] =
+            json!([{"type":"content", "content":{"type":"text", "text":"rendered"}}]);
+        assert_eq!(
+            tool_output(&update),
+            (Some("rendered".into()), false, false)
+        );
+        update.as_object_mut().unwrap().remove("content");
+        update["rawOutput"] =
+            json!({"result":{"content":[{"type":"image", "data":"opaque"}]}, "error":null});
+        assert_eq!(tool_output(&update), (None, false, false));
+        update["rawOutput"] = json!({"result":null, "error":{"message":"error only"}});
+        assert_eq!(
+            tool_output(&update),
+            (Some("error only".into()), false, false)
+        );
+        update["rawInput"] = json!({});
+        assert_eq!(tool_output(&update), (None, false, false));
+    }
+
+    #[test]
+    fn mcp_completion_text_uses_the_output_bound() {
+        let update = json!({"rawInput":{"server":"han", "tool":"team_read"},
+            "rawOutput":{"result":{"content":[{"type":"text", "text":"x".repeat(MAX_TOOL_OUTPUT + 1)}]}, "error":null}});
+        let (text, append, truncated) = tool_output(&update);
+        assert!(text.is_some());
+        assert!(!append);
+        assert!(truncated);
     }
 }
