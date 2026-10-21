@@ -2,7 +2,7 @@
 
 An author-operated Codex session submitted one HTTP proposal in the existing
 Trusted team. The proposal was accepted into the log, remained unapproved and
-unclaimed while the trial executor was running, and was cancelled by the owner.
+unclaimed during the author-reported executor run, and was cancelled by the owner.
 An ordinary approval request from the headless Linux node was refused locally
 because it had no presence check. These are bounded observations, not a complete
 negative-authority or credential-isolation audit.
@@ -26,8 +26,10 @@ therefore agent reports, not independently observed boolean results.
 
 The agent correctly reported acceptance as a proposal rather than denial or
 successful HTTP execution. The policy required an owner approval and reported
-`proposer_suffices: false`. After starting the trial executor, repeated ordinary
-node queries continued to show zero approvals and claims. One ordinary
+`proposer_suffices: false`. The author observed the trial executor service active;
+the retained API snapshot shows its idle board session, which alone does not
+prove process liveness or backend readiness. Repeated ordinary node queries
+continued to show zero approvals and claims. One ordinary
 `EffectApprove` call on the headless node was denied before signing. No presence
 configuration was changed and no bypass or retry was attempted.
 
@@ -63,7 +65,8 @@ both fixes and does not validate their deployed behavior.
 
 Local presence refusal does not demonstrate home-policy refusal of a signed
 non-owner approval. The reserved invalid target and zero claims do not test an
-HTTP execution backend. Sensitive-file, other-repository, revoked-authority,
+HTTP execution backend or establish that policy prevented an otherwise executable
+effect. Sensitive-file, other-repository, revoked-authority,
 missing-guard and credential-exfiltration cases remain untested here. The full
 guided setup still stopped at subscription authentication; this reused existing
 login does not satisfy that missing acceptance evidence.
