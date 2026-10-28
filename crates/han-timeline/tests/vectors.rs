@@ -8,8 +8,8 @@ use han_timeline::envelope::{self, Compression, KeySigner, Signer as _};
 use han_timeline::{
     Anchor, At, Batch, BatchId, Bias, Change, CharId, Conflict, ConflictKind, ConflictRecord,
     CopyInsert, Directory, History, HistoryKind, IdRange, Insert, InsertionId, KeyInfo,
-    MemoryStore, MergeDraft, MergeOp, ObjectId, Op, OpId, ReplicaId, Resolution, ResolutionKind,
-    Scope, Value, Verdict, Version,
+    MemoryStore, MergeDraft, MergeOp, NotePlace, ObjectId, Op, OpId, OverlapEntry, OverlapSide,
+    ReplicaId, Resolution, ResolutionKind, Scope, Value, Verdict, Version,
 };
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -171,6 +171,11 @@ impl Labels {
                             ("obj", Json::String(s)) => {
                                 Value::object_ref(&self.op(s)).as_map().unwrap()["obj"].clone()
                             }
+                            // A note anchor's character label (extensions README).
+                            ("c", Json::String(s)) => match self.char_label(s) {
+                                Some(c) => Value::Text(c.to_string()),
+                                None => Value::Text(s.clone()),
+                            },
                             _ => self.value(v),
                         };
                         (k.clone(), v)
@@ -178,6 +183,13 @@ impl Labels {
                     .collect::<BTreeMap<_, _>>(),
             ),
         }
+    }
+
+    /// A character label `4@A#0:2` with a known replica label, if `s` is one.
+    fn char_label(&self, s: &str) -> Option<CharId> {
+        let (op, rest) = s.split_once('#')?;
+        let (_, r) = op.split_once('@')?;
+        (self.replicas.contains_key(r) && rest.contains(':')).then(|| self.char_id(s))
     }
 
     fn value_json(&self, v: &Value) -> Json {
@@ -426,6 +438,16 @@ impl Labels {
 // ---------------------------------------------------------------------------------------------
 // Running behaviour vectors
 
+/// Expectations of the extension vectors that disagree with the profile text, each asked of
+/// Team A in `crates/han-timeline/SPEC-QUESTIONS.md`: (vector, expectation key, question).
+/// A listed key must keep failing until the vector or the profile is revised; every other key
+/// of the vector is still checked.
+const DISPUTED: &[(&str, &str, &str)] = &[
+    ("71-overlap-region-converged", "plans", "Q11"),
+    ("72-overlap-rename-and-edit-is-file-only", "overlap", "Q12"),
+    ("72-overlap-rename-and-edit-is-file-only", "plans", "Q12"),
+];
+
 struct Run<'a> {
     labels: &'a Labels,
     v: &'a Json,
@@ -482,11 +504,36 @@ impl Run<'_> {
         }
     }
 
+    /// Checks every key of an `expect` step and reports all that fail, not just the first. A
+    /// key listed in [`DISPUTED`] must fail, and is then not counted.
     fn expect(&mut self, e: &Json) {
+        let vector = self.v["name"].as_str().unwrap();
+        let mut failed = Vec::new();
+        for (key, want) in e.as_object().unwrap() {
+            let disputed = DISPUTED.iter().find(|(v, k, _)| *v == vector && k == key);
+            let check = std::panic::AssertUnwindSafe(|| self.expect_key(key, want));
+            match (std::panic::catch_unwind(check), disputed) {
+                (Err(_), Some(_)) | (Ok(()), None) => {}
+                (Ok(()), Some((_, _, q))) => failed.push(format!(
+                    "{}: `{key}` now passes: drop it from DISPUTED ({q})",
+                    self.name
+                )),
+                (Err(e), None) => failed.push(
+                    e.downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_default(),
+                ),
+            }
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+
+    fn expect_key(&self, key: &str, want: &Json) {
         let ctx = &self.name;
         let l = self.labels;
-        for (key, want) in e.as_object().unwrap() {
-            match key.as_str() {
+        {
+            match key {
                 "pending" => assert_eq!(
                     self.names(self.history.held_back()),
                     Self::set(want),
@@ -610,6 +657,68 @@ impl Run<'_> {
                         .collect();
                     assert_eq!(got, want.iter().collect::<Vec<_>>(), "{ctx}: answer");
                     assert!(!answer.more);
+                }
+                // §21 – 23 (extensions/README.md).
+                "touch" => {
+                    for t in want.as_array().unwrap() {
+                        self.check_touch(t);
+                    }
+                }
+                "no_touch_set" => {
+                    for t in want.as_array().unwrap() {
+                        let t = l.op(t.as_str().unwrap());
+                        assert_eq!(
+                            self.history.touch_set(&t, None),
+                            Ok(None),
+                            "{ctx}: touch set of {t}"
+                        );
+                    }
+                }
+                "overlap" => {
+                    for o in want.as_array().unwrap() {
+                        self.check_overlap(o);
+                    }
+                }
+                "marks" => {
+                    for m in want.as_array().unwrap() {
+                        let t = l.op(m["timeline"].as_str().unwrap());
+                        let got: serde_json::Map<String, Json> = self
+                            .history
+                            .turn_marks(&t)
+                            .into_iter()
+                            .map(|(n, cp)| (n.to_string(), version_json(l, &cp.version)))
+                            .collect();
+                        assert_eq!(Json::Object(got), m["turns"], "{ctx}: marks of {t}");
+                    }
+                }
+                "turn_of" => {
+                    for t in want.as_array().unwrap() {
+                        let state = self.history.state(&self.at(&t["at"])).unwrap();
+                        let obj = l.object(&t["object"]);
+                        for p in t["positions"].as_array().unwrap() {
+                            let pos = p["pos"].as_u64().unwrap() as usize;
+                            let got = state.turn_of(&obj, pos).unwrap();
+                            let want = han_timeline::TurnOf {
+                                turn: p["turn"].as_u64().unwrap(),
+                                in_progress: p.get("in_progress").is_some_and(|x| x == true),
+                            };
+                            assert_eq!(got, want, "{ctx}: turn of {pos}");
+                        }
+                    }
+                }
+                "ignored_marks" => {
+                    let main = self.history.main().unwrap();
+                    let state = self.history.state(&At::Timeline(main)).unwrap();
+                    assert_eq!(
+                        Json::from(state.transcript_marks().ignored),
+                        *want,
+                        "{ctx}: ignored marks"
+                    );
+                }
+                "notes" => {
+                    for n in want.as_array().unwrap() {
+                        self.check_notes(n);
+                    }
                 }
                 k => panic!("{ctx}: unknown expectation {k}"),
             }
@@ -784,6 +893,284 @@ impl Run<'_> {
                 .unwrap_or_else(|e| panic!("{ctx}: recording {r}: {e}: {draft:#?}"));
         }
     }
+
+    /// What TL-135 forbids a read to change: heads, the inventory, the integrated batches.
+    fn snapshot(
+        &self,
+    ) -> (
+        Vec<han_timeline::TimelineInfo>,
+        han_timeline::Inventory,
+        usize,
+    ) {
+        (
+            self.history.timelines(),
+            self.history.inventory(),
+            self.history.envelopes().count(),
+        )
+    }
+
+    fn check_touch(&self, t: &Json) {
+        let ctx = &self.name;
+        let l = self.labels;
+        let timeline = l.op(t["timeline"].as_str().unwrap());
+        let before = self.snapshot();
+        let set = self
+            .history
+            .touch_set(&timeline, None)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{ctx}: {timeline} has no touch set"));
+        assert!(
+            self.snapshot() == before,
+            "{ctx}: touch set changed the history"
+        );
+        assert_eq!(
+            touch_json(l, &set),
+            t["entries"],
+            "{ctx}: touch set of {timeline}"
+        );
+        assert_eq!(
+            hex(&set.digest()),
+            t["digest"].as_str().unwrap(),
+            "{ctx}: touch digest of {timeline}"
+        );
+        assert_eq!(
+            set.truncated,
+            t.get("truncated").is_some_and(|x| x == true),
+            "{ctx}: truncated"
+        );
+    }
+
+    fn check_overlap(&self, o: &Json) {
+        let ctx = &self.name;
+        let l = self.labels;
+        let a = l.op(o["a"].as_str().unwrap());
+        let b = l.op(o["b"].as_str().unwrap());
+        let before = self.snapshot();
+        let ov = self.history.overlap(&a, &b).unwrap();
+        let rev = self.history.overlap(&b, &a).unwrap();
+        assert!(
+            self.snapshot() == before,
+            "{ctx}: overlap changed the history"
+        );
+        assert_eq!(overlap_json(l, &ov), o["entries"], "{ctx}: overlap {a} {b}");
+        assert_eq!(
+            hex(&ov.digest()),
+            o["digest"].as_str().unwrap(),
+            "{ctx}: overlap digest"
+        );
+        assert_eq!(
+            ov.truncated,
+            o.get("truncated").is_some_and(|x| x == true),
+            "{ctx}: truncated"
+        );
+        // Symmetry (TL-133): swapping the timelines swaps `a`/`b` and `deleted_by`.
+        let swapped: Vec<_> = ov.entries.iter().map(swap_entry).collect();
+        assert_eq!(rev.entries, swapped, "{ctx}: overlap is not symmetric");
+        // TL-134: the conflicting entries are the plan's conflicts, mapped.
+        assert_eq!(
+            tl134_conflicts(&self.history, l, &a, &b),
+            overlap_json(l, &ov)
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(&ov.entries)
+                .filter(|(_, e)| e.is_conflict())
+                .map(|(j, _)| j.to_string())
+                .collect::<BTreeSet<_>>(),
+            "{ctx}: TL-134"
+        );
+    }
+
+    fn check_notes(&self, n: &Json) {
+        let ctx = &self.name;
+        let state = self.history.state(&self.at(&n["at"])).unwrap();
+        let notes = state.notes();
+        let want = n["notes"].as_array().unwrap();
+        let keys: Vec<&str> = notes.notes.iter().map(|x| x.key.as_str()).collect();
+        let want_keys: Vec<&str> = want.iter().map(|x| x["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, want_keys, "{ctx}: notes at {}", n["at"]);
+        for (got, want) in notes.notes.iter().zip(want) {
+            let got = note_json(got);
+            for (k, v) in want.as_object().unwrap() {
+                assert_eq!(&got[k], v, "{ctx}: note {} member {k}", want["key"]);
+            }
+        }
+        if let Some(ignored) = n.get("ignored") {
+            assert_eq!(&Json::from(notes.ignored), ignored, "{ctx}: ignored notes");
+        }
+    }
+}
+
+fn version_json(l: &Labels, v: &Version) -> Json {
+    Json::Array(v.heads().iter().map(|h| json!(l.op_label(h))).collect())
+}
+
+fn touch_json(l: &Labels, set: &han_timeline::TouchSet) -> Json {
+    let ranges = |rs: &[(u64, u64)]| Json::Array(rs.iter().map(|(a, b)| json!([a, b])).collect());
+    Json::Array(
+        set.entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "object": l.op_label(&e.object),
+                    "base_path": e.base_path,
+                    "head_path": e.head_path,
+                    "change": e.change.names(),
+                    "base_lines": ranges(&e.base_lines),
+                    "head_lines": ranges(&e.head_lines),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn overlap_json(l: &Labels, ov: &han_timeline::Overlap) -> Json {
+    Json::Array(
+        ov.entries
+            .iter()
+            .map(|e| overlap_entry_json(l, e))
+            .collect(),
+    )
+}
+
+fn overlap_entry_json(l: &Labels, e: &OverlapEntry) -> Json {
+    let mut j = json!({"object": l.object_label(e.object()), "class": e.class()});
+    let m = j.as_object_mut().unwrap();
+    match e {
+        OverlapEntry::Region {
+            lines, converged, ..
+        } => {
+            m.insert("lines".into(), json!([lines.0, lines.1]));
+            m.insert("converged".into(), json!(converged));
+        }
+        OverlapEntry::ModifyDelete {
+            path, deleted_by, ..
+        } => {
+            m.insert("path".into(), json!(path));
+            m.insert(
+                "deleted_by".into(),
+                json!(match deleted_by {
+                    OverlapSide::A => "a",
+                    OverlapSide::B => "b",
+                }),
+            );
+        }
+        OverlapEntry::Rename { a, b, .. } => {
+            m.insert("a".into(), json!(a));
+            m.insert("b".into(), json!(b));
+        }
+        OverlapEntry::Path { paths, .. } => {
+            m.insert("paths".into(), json!([paths.0, paths.1]));
+        }
+        OverlapEntry::MapKey { key, .. } => {
+            m.insert("key".into(), json!(key));
+        }
+        OverlapEntry::File { .. } | OverlapEntry::Register { .. } => {}
+    }
+    j
+}
+
+fn swap_entry(e: &OverlapEntry) -> OverlapEntry {
+    match e.clone() {
+        OverlapEntry::ModifyDelete {
+            object,
+            path,
+            deleted_by,
+        } => OverlapEntry::ModifyDelete {
+            object,
+            path,
+            deleted_by: match deleted_by {
+                OverlapSide::A => OverlapSide::B,
+                OverlapSide::B => OverlapSide::A,
+            },
+        },
+        OverlapEntry::Rename { object, a, b } => OverlapEntry::Rename { object, a: b, b: a },
+        other => other,
+    }
+}
+
+/// The conflicts of the plan that merges `b` into `a`, written as overlap entries under the
+/// TL-134 mapping.
+fn tl134_conflicts<S: han_timeline::Store>(
+    h: &History<S>,
+    l: &Labels,
+    a: &OpId,
+    b: &OpId,
+) -> BTreeSet<String> {
+    let plan = match h.plan_merge(a, b) {
+        Ok(p) => p,
+        Err(han_timeline::Error::UpToDate) => return BTreeSet::new(),
+        Err(e) => panic!("plan {a} {b}: {e}"),
+    };
+    let base = h.state(&At::Version(plan.base.clone())).unwrap();
+    plan.conflicts
+        .iter()
+        .map(|c| {
+            let entry = match c {
+                Conflict::Text(hunk) => OverlapEntry::Region {
+                    object: hunk.object.clone(),
+                    lines: hunk.lines,
+                    converged: false,
+                },
+                Conflict::ModifyDelete {
+                    object,
+                    key,
+                    deleted_by,
+                } => OverlapEntry::ModifyDelete {
+                    object: ObjectId::Op(base.map_value(object, key).unwrap().obj_field().unwrap()),
+                    path: key.clone(),
+                    deleted_by: match deleted_by {
+                        han_timeline::Side::Target => OverlapSide::A,
+                        han_timeline::Side::Incoming => OverlapSide::B,
+                    },
+                },
+                Conflict::Rename {
+                    content,
+                    target,
+                    incoming,
+                    ..
+                } => OverlapEntry::Rename {
+                    object: ObjectId::Op(content.clone()),
+                    a: target.clone(),
+                    b: incoming.clone(),
+                },
+                Conflict::Path { object, paths } => OverlapEntry::Path {
+                    object: object.clone(),
+                    paths: paths.clone(),
+                },
+                Conflict::Map { object, key, .. } => OverlapEntry::MapKey {
+                    object: object.clone(),
+                    key: key.clone(),
+                },
+                Conflict::Register { object, .. } => OverlapEntry::Register {
+                    object: object.clone(),
+                },
+            };
+            overlap_entry_json(l, &entry).to_string()
+        })
+        .collect()
+}
+
+fn note_json(n: &han_timeline::Note) -> Json {
+    let mut j = json!({
+        "key": n.key,
+        "kind": n.draft.kind.as_str(),
+        "resolved": n.resolved,
+        "resolved_conflict": n.resolved_conflict,
+        "parent_missing": n.parent_missing,
+        "reply_to": n.draft.reply_to,
+    });
+    let m = j.as_object_mut().unwrap();
+    let (status, from, to) = match n.place {
+        NotePlace::Placed { from, to } => ("placed", json!(from), json!(to)),
+        NotePlace::Collapsed(p) => ("collapsed", json!(p), json!(p)),
+        NotePlace::Orphaned => ("orphaned", Json::Null, Json::Null),
+        NotePlace::Unresolved => ("unresolved", Json::Null, Json::Null),
+    };
+    m.insert("status".into(), json!(status));
+    m.insert("from".into(), from);
+    m.insert("to".into(), to);
+    j
 }
 
 fn ranges_of(j: &Json) -> BTreeMap<String, Vec<(u64, u64)>> {
@@ -862,7 +1249,6 @@ fn run_vector(path: &std::path::Path) {
             dir: &dir,
             dropped: BTreeSet::new(),
         };
-        let _ = r.v;
         for step in run["steps"].as_array().unwrap() {
             if step.get("deliver").is_some() {
                 r.deliver(step);
@@ -895,9 +1281,10 @@ fn run_vector(path: &std::path::Path) {
     }
 }
 
-#[test]
-fn behaviour_vectors() {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(vectors_dir())
+/// Runs every `NN-*.json` vector directly in `dir` (not its subfolders); `VECTOR` filters by
+/// file name.
+fn run_dir(dir: PathBuf, at_least: usize) {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| {
@@ -907,7 +1294,7 @@ fn behaviour_vectors() {
         .collect();
     paths.sort();
     assert!(
-        paths.len() >= 54,
+        paths.len() >= at_least,
         "expected every vector, found {}",
         paths.len()
     );
@@ -933,6 +1320,18 @@ fn behaviour_vectors() {
         failed.len(),
         failed.join("\n\n")
     );
+}
+
+/// The vectors of the profile's main body (`extensions/` is not read here).
+#[test]
+fn behaviour_vectors() {
+    run_dir(vectors_dir(), 65);
+}
+
+/// Vectors 68 – 87 of §21 – 23, which stay in `extensions/` until Team A confirms them.
+#[test]
+fn extension_vectors() {
+    run_dir(vectors_dir().join("extensions"), 20);
 }
 
 // ---------------------------------------------------------------------------------------------
