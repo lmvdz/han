@@ -156,3 +156,80 @@ fn concurrent_versions_and_their_join() {
     let with_past = Version::new(vec![g.ops[1].clone(), wa.ops[0].clone(), wb.ops[0].clone()]);
     assert_eq!(ha.version(&At::Version(with_past)).unwrap(), both);
 }
+
+/// A version spanning a merge and the timeline it imported from (a combined merge base, say)
+/// materialises the same whatever was read before it (TL-60): the import's object must not be
+/// replaced by its original create op when a cached state already holds the import.
+#[test]
+fn a_version_across_an_import_does_not_depend_on_what_was_read_first() {
+    let a = signer("@alice:a.example", "laptop");
+    let (mut h, _) = History::create(
+        MemoryStore::default(),
+        SPACE,
+        &a,
+        0,
+        HistoryKind::Data,
+        None,
+        vec![Op::RegisterCreate {
+            value: Value::Int(0),
+        }],
+    )
+    .unwrap();
+    let main = h.main().unwrap();
+    let s1 = h.fork(&a, 0, &main, None, "s1").unwrap().ops[0].clone();
+    let made = h
+        .write(
+            &a,
+            0,
+            &s1,
+            vec![
+                Op::TextCreate {
+                    text: "abc".into(),
+                    transcript: false,
+                },
+                Op::RegisterCreate {
+                    value: Value::Int(5),
+                },
+                Op::MapCreate { tree: false },
+            ],
+            None,
+        )
+        .unwrap();
+    let [text, reg, map] = [0, 1, 2].map(|i| ObjectId::Op(made.ops[i].clone()));
+    let plan = h.plan_merge(&main, &s1).unwrap();
+    h.merge(&a, 0, &plan.resolve(&[]).unwrap(), None).unwrap();
+    // Main changes all three imported objects.
+    let at = At::Timeline(main.clone());
+    let edit = h.plan_edit(&at, &text, 3, 0, "X").unwrap().unwrap();
+    h.write(
+        &a,
+        0,
+        &main,
+        vec![
+            edit,
+            Op::RegisterSet {
+                target: reg.clone(),
+                value: Value::Int(9),
+            },
+            Op::MapSet {
+                target: map.clone(),
+                key: "k".into(),
+                value: Value::Int(1),
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    let both = Version::new(
+        [h.head(&main).unwrap(), h.head(&s1).unwrap()]
+            .iter()
+            .flat_map(|v| v.heads().to_vec())
+            .collect(),
+    );
+    // Read main's head first, so the combined version can start from it.
+    h.state(&at).unwrap();
+    let state = h.state(&At::Version(both)).unwrap();
+    assert_eq!(state.text(&text).as_deref(), Some("abcX"));
+    assert_eq!(state.register(&reg), Some(&Value::Int(9)));
+    assert_eq!(state.map_value(&map, "k"), Some(&Value::Int(1)));
+}
