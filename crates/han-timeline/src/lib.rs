@@ -14,6 +14,7 @@ mod state;
 mod store;
 mod sync;
 mod text;
+mod touch;
 mod validate;
 mod value;
 
@@ -32,4 +33,8 @@ pub use state::{ObjectState, State, TreeConflicts};
 pub use store::{Directory, KeyInfo, MemoryStore, Scope, Store};
 pub use sync::{Answer, Hello, Inventory};
 pub use text::{Anchor, Bias, SharedText};
+pub use touch::{
+    MAX_TOUCH_ENTRIES, MAX_TOUCH_RANGES, Overlap, OverlapEntry, OverlapSide, TouchChange,
+    TouchEntry, TouchSet,
+};
 pub use value::Value;

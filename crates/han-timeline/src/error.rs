@@ -149,6 +149,9 @@ pub enum Error {
     /// A version names an op this history does not hold.
     #[error("unknown_op")]
     UnknownOp,
+    /// A touch set of main asked for without a base (TL-132).
+    #[error("needs_base")]
+    NeedsBase,
     /// A local write that the history itself rejects.
     #[error("rejected: {0}")]
     Rejected(Reason),
