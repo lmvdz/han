@@ -442,11 +442,7 @@ impl Labels {
 /// Team A in `crates/han-timeline/SPEC-QUESTIONS.md`: (vector, expectation key, question).
 /// A listed key must keep failing until the vector or the profile is revised; every other key
 /// of the vector is still checked.
-const DISPUTED: &[(&str, &str, &str)] = &[
-    ("71-overlap-region-converged", "plans", "Q11"),
-    ("72-overlap-rename-and-edit-is-file-only", "overlap", "Q12"),
-    ("72-overlap-rename-and-edit-is-file-only", "plans", "Q12"),
-];
+const DISPUTED: &[(&str, &str, &str)] = &[];
 
 struct Run<'a> {
     labels: &'a Labels,

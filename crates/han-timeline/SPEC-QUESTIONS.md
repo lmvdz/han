@@ -36,9 +36,29 @@ implementation follows the text.
 ## Revision 2026-10 (TL-49, TL-64, §21 – 23)
 
 Vectors 01 – 67 pass unchanged; TL-49 and TL-64 needed no engine change. Vectors 68 – 87 run in
-`tests/vectors.rs` (`extension_vectors`, from `extensions/`, not moved). Three expectation keys
-of two vectors disagree with the profile text. The harness lists them in `DISPUTED` and checks
-that they still fail, so a revision shows up. Every other key of those vectors passes.
+`tests/vectors.rs` (`extension_vectors`, from `extensions/`, not moved).
+
+**Answered by the revision "answers to Q11-Q25"** (spec commit `f337995`), and implemented:
+
+| Question | Answer in the profile | Engine |
+|---|---|---|
+| Q11 | vector 71 revised: `up_to_date` (TL-71) | unchanged; vector passes |
+| Q12 | TL-87: modify/delete only when the removing side refers to the object by no path; a rename is not a removal | planner fixed; vector 72 passes |
+| Q13 | fix accepted; Team A will add a vector | regression test kept (`tests/time_travel.rs`) |
+| Q14 | TL-133: `modify_delete` and `rename` are what TL-87 reports for `B` into `A`; `rename` and `path` may differ when swapped | symmetry test exempts them (see Q26) |
+| Q15 | TL-134a | implemented, with "up to date" as TL-70 throughout (see Q26) |
+| Q16 | TL-87: visible text or register value | unchanged |
+| Q17, Q18 | TL-130 `mode`/`eol` and `edited` | unchanged |
+| Q19 | §18 lists `needs_base`, `unknown_mark` | documented in `Error` |
+| Q20 | TL-137 | unchanged |
+| Q21 | TL-142 text forms, TL-143 skipped marks and the last mark | unchanged |
+| Q22 | TL-151: crossed anchors collapse | unchanged |
+| Q23 | TL-153: any other value is false | unchanged |
+| Q24 | TL-154: a present but ignored parent is not missing | unchanged |
+| Q25 | TL-156 counting and writer refusals | unchanged |
+
+The `DISPUTED` list in the harness is empty; vectors 68 – 87 pass in full. The original
+questions follow for the record.
 
 ### Q11. Vector 71: a plan whose only cluster converged is up to date (suspected vector bug)
 
@@ -163,4 +183,30 @@ key adds no note. The writer also refuses a note that readers would ignore: `mal
 `too_large`, `unknown_anchor` for anchors absent at the head, and `out_of_range` for reversed
 anchors.
 
-Questions Q11 – Q25 are open.
+Q11 – Q25 are answered (above).
+
+## Revision "answers to Q11-Q25"
+
+### Q26. `file` entries cannot be symmetric when `rename` entries are not
+
+TL-133 now says swapping `A` and `B` "changes no `region`, `file`, `map_key` or `register`
+entry", while `rename` and `path` entries MAY differ. But a `file` entry appears "only for an
+object that has no other entry". So when a `rename` for object `X` shows in one direction only,
+the other direction has no entry for `X` and, `X` being touched by both, gets a `file` entry.
+The two sentences cannot both hold. In `tests/overlap.rs` (60 seeds) this happened 92 times;
+every other asymmetry was a `rename` or `path` entry, and no `region`, `map_key`, `register`
+or `modify_delete` entry ever differed.
+
+Reading kept: the `file` class definition (touched by both, no other entry in this overlap).
+The symmetry test exempts a `file` entry exactly when its object has a `rename` entry in
+either direction. Proposed fix: add "and a `file` entry standing for an object whose `rename`
+entry differs" to the exceptions, or define `file` by the absence of other entries in both
+directions.
+
+A related reading of TL-134a: its first clause says "up to date (TL-70)", and the engine reads
+"can be planned" and "both are up to date" in the same TL-70 sense (the closure test, not an
+empty plan under TL-71). Otherwise, when `A` holds all of `B` and the plan of `A` into `B` is
+merely empty, `(A, B)` would be empty while `(B, A)` shows converged `region` entries, which
+TL-133 forbids. Please confirm.
+
+Q26 is open.

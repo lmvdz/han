@@ -614,16 +614,26 @@ impl<S: Store> History<S> {
 
     /// The overlap of timelines `a` and `b` (TL-133): the conflicts of the plan that merges `b`
     /// into `a` (TL-134), its converged clusters, and in a worktree history the content objects
-    /// both touch over the merge base. When that merge is up to date but the merge of `a` into
-    /// `b` can be planned, that plan is read with the sides swapped, so that TL-134 holds for
-    /// the pair in whichever order it is asked. Errors: `merge_self`, `unknown_timeline`.
+    /// both touch over the merge base. When `a` already holds all of `b` (up to date, TL-70)
+    /// but `b` does not hold all of `a`, the plan merging `a` into `b` is read with the sides
+    /// swapped; when each holds all of the other the overlap is empty (TL-134a). Errors:
+    /// `merge_self`, `unknown_timeline`.
     pub fn overlap(&self, a: &OpId, b: &OpId) -> Result<Overlap, Error> {
-        let (planned, swapped) = match self.planned_merge(a, b)? {
-            Some(p) => (p, false),
-            None => match self.planned_merge(b, a)? {
-                Some(p) => (p, true),
-                None => (self.plan_core(a, b)?, false),
-            },
+        if a == b {
+            return Err(Error::MergeSelf);
+        }
+        let (planned, swapped) = if !self.holds_all_of(a, b)? {
+            (self.plan_core(a, b)?, false)
+        } else if !self.holds_all_of(b, a)? {
+            (self.plan_core(b, a)?, true)
+        } else {
+            let ha = self.graph.head(a).ok_or(Error::UnknownTimeline)?;
+            let hb = self.graph.head(b).ok_or(Error::UnknownTimeline)?;
+            return Ok(Overlap {
+                base: self.graph.version_of(&self.merge_base(ha, hb)),
+                entries: Vec::new(),
+                truncated: false,
+            });
         };
         let side = |s: Side| {
             if (s == Side::Target) != swapped {

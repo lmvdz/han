@@ -579,14 +579,15 @@ fn touch_lines(base: &State, head: &State, o: &ObjectId) -> (Vec<(u64, u64)>, Ve
 // ---------------------------------------------------------------------------------------------
 // Checks
 
-/// The conflicts of the merge that can be planned between `a` and `b`, as overlap entries of
-/// `(a, b)` under the TL-134 mapping: the plan that merges `b` into `a` or, when that one is
-/// up to date, the plan that merges `a` into `b` with the sides swapped (TL-133 symmetry).
-fn mapped_conflicts(h: &History, a: &OpId, b: &OpId) -> Vec<OverlapEntry> {
+/// The conflicts the overlap of `(a, b)` may have under TL-134 and TL-134a, as overlap
+/// entries: the plan that merges `b` into `a`; when that merge is up to date, the plan that
+/// merges `a` into `b` with the sides swapped if `a` holds all of `b` (TL-70), else none (an
+/// empty plan). The closure test is not public, so both readings of that case are offered.
+fn mapped_conflicts(h: &History, a: &OpId, b: &OpId) -> Vec<Vec<OverlapEntry>> {
     let (plan, swapped) = match (h.plan_merge(a, b), h.plan_merge(b, a)) {
         (Ok(p), _) => (p, false),
         (Err(Error::UpToDate), Ok(p)) => (p, true),
-        (Err(Error::UpToDate), Err(Error::UpToDate)) => return Vec::new(),
+        (Err(Error::UpToDate), Err(Error::UpToDate)) => return vec![Vec::new()],
         (x, y) => panic!("plan {a} {b}: {:?} {:?}", x.err(), y.err()),
     };
     let base = h.state(&At::Version(plan.base.clone())).unwrap();
@@ -637,7 +638,11 @@ fn mapped_conflicts(h: &History, a: &OpId, b: &OpId) -> Vec<OverlapEntry> {
         .map(|e| if swapped { swap(&e) } else { e })
         .collect();
     out.sort_by_key(|e| format!("{e:?}"));
-    out
+    if swapped {
+        vec![out, Vec::new()]
+    } else {
+        vec![out]
+    }
 }
 
 fn swap(e: &OverlapEntry) -> OverlapEntry {
@@ -695,60 +700,6 @@ fn expect(
     }
 }
 
-/// Paths per content object referred to by tree paths in `state`.
-fn paths_by_object(state: &State) -> BTreeMap<OpId, BTreeSet<String>> {
-    let mut out: BTreeMap<OpId, BTreeSet<String>> = BTreeMap::new();
-    for o in state.object_ids() {
-        if let Some(han_timeline::ObjectState::Map {
-            tree: true,
-            entries,
-        }) = state.object(o)
-        {
-            for (p, v) in entries {
-                if let Some(id) = v[0].1.obj_field() {
-                    out.entry(id).or_default().insert(p);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// TL-133's rename rule: applying B's path changes (remove P0 − PB, add PB − P0) to PA gives
-/// more paths than PA and than PB.
-fn tl133_renames(
-    base: &State,
-    sa: &State,
-    sb: &State,
-) -> BTreeSet<(ObjectId, Vec<String>, Vec<String>)> {
-    let (p0, pa, pb) = (
-        paths_by_object(base),
-        paths_by_object(sa),
-        paths_by_object(sb),
-    );
-    let empty = BTreeSet::new();
-    let ids: BTreeSet<&OpId> = p0.keys().chain(pa.keys()).chain(pb.keys()).collect();
-    ids.into_iter()
-        .filter_map(|id| {
-            let (z, a, b) = (
-                p0.get(id).unwrap_or(&empty),
-                pa.get(id).unwrap_or(&empty),
-                pb.get(id).unwrap_or(&empty),
-            );
-            let removed: BTreeSet<&String> = z.difference(b).collect();
-            let mut after: BTreeSet<&String> = a.iter().filter(|p| !removed.contains(p)).collect();
-            after.extend(b.difference(z));
-            (after.len() > a.len() && after.len() > b.len()).then(|| {
-                (
-                    ObjectId::Op(id.clone()),
-                    a.iter().cloned().collect(),
-                    b.iter().cloned().collect(),
-                )
-            })
-        })
-        .collect()
-}
-
 fn check(h: &History, kind: HistoryKind, stats: &mut BTreeMap<&'static str, usize>) {
     let ts: Vec<OpId> = h.timelines().into_iter().map(|t| t.id).collect();
     let before = (h.timelines(), h.inventory(), h.envelopes().count());
@@ -764,7 +715,11 @@ fn check(h: &History, kind: HistoryKind, stats: &mut BTreeMap<&'static str, usiz
                 .cloned()
                 .collect();
             conflicts.sort_by_key(|e| format!("{e:?}"));
-            assert_eq!(conflicts, mapped_conflicts(h, a, b), "TL-134 for {a} {b}");
+            let allowed = mapped_conflicts(h, a, b);
+            assert!(
+                allowed.contains(&conflicts),
+                "TL-134 for {a} {b}: {conflicts:?} not in {allowed:?}"
+            );
             // Region entries are the clusters both sides meet in, by an independent reading.
             let base = h.state(&At::Version(ov.base.clone())).unwrap();
             let sa = h.state(&At::Timeline(a.clone())).unwrap();
@@ -791,10 +746,11 @@ fn check(h: &History, kind: HistoryKind, stats: &mut BTreeMap<&'static str, usiz
                 })
                 .collect();
             assert_eq!(got, want, "regions of {a} {b}");
-            // Symmetry (TL-133). The planner judges renames and path clashes after its clean
-            // changes, where a key conflict keeps the target's entry (TL-87), so those entries
-            // (and a `file` entry standing in for a missing rename) can differ by direction
-            // when both merges can be planned: SPEC-QUESTIONS Q14. All else is symmetric.
+            // Symmetry (TL-133): swapping the timelines swaps `a`/`b` and `deleted_by`; only
+            // `rename` and `path` entries, judged by TL-87 after the clean changes, may differ.
+            // A `file` entry stands for an object with no other entry, so an object whose
+            // `rename` shows in one direction only has a `file` entry in the other
+            // (SPEC-QUESTIONS Q26); every other entry is symmetric.
             let rev = h.overlap(b, a).unwrap();
             let swapped: Vec<OverlapEntry> = ov.entries.iter().map(swap).collect();
             let renamed: BTreeSet<&ObjectId> = swapped
@@ -818,34 +774,19 @@ fn check(h: &History, kind: HistoryKind, stats: &mut BTreeMap<&'static str, usiz
                 stats,
                 "asymmetric",
                 || {
+                    let (x, y) = (strict(&swapped), strict(&rev.entries));
+                    let only = |p: &[OverlapEntry], q: &[OverlapEntry]| -> Vec<OverlapEntry> {
+                        p.iter().filter(|e| !q.contains(e)).cloned().collect()
+                    };
                     format!(
-                        "symmetry of {a} {b}:\n {:?}\n {:?}",
-                        ov.entries, rev.entries
+                        "symmetry of {a} {b}: only in ({a},{b}) swapped {:?}; only in ({b},{a}) {:?}",
+                        only(&x, &y),
+                        only(&y, &x)
                     )
                 },
             );
             if rev.entries != swapped {
-                assert!(
-                    h.plan_merge(a, b).is_ok() && h.plan_merge(b, a).is_ok(),
-                    "asymmetry of {a} {b} where one merge is up to date"
-                );
                 *stats.entry("rename_or_path_asymmetric").or_default() += 1;
-            }
-            // TL-133's own rename count, against the planner's (Q14): counted, not asserted.
-            if kind == HistoryKind::Worktree {
-                let got: BTreeSet<(ObjectId, Vec<String>, Vec<String>)> = ov
-                    .entries
-                    .iter()
-                    .filter_map(|e| match e {
-                        OverlapEntry::Rename { object, a, b } => {
-                            Some((object.clone(), a.clone(), b.clone()))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                if got != tl133_renames(&base, &sa, &sb) {
-                    *stats.entry("rename_rule_differs").or_default() += 1;
-                }
             }
             if kind != HistoryKind::Worktree {
                 assert!(ov.entries.iter().all(|e| matches!(

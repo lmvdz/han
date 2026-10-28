@@ -116,7 +116,11 @@ pub struct Report {
     pub others: Vec<(BatchId, Verdict)>,
 }
 
-/// Local errors (§18), never on the wire, plus storage failures.
+/// Local errors (§18), never on the wire, plus storage failures. The §18 codes are the
+/// `Display` texts: `out_of_range`, `sealed`, `unknown_object`, `unknown_timeline`,
+/// `ambiguous_name`, `unknown_anchor`, `merge_self`, `unresolved`, `up_to_date`, `too_many`,
+/// `needs_base` and `unknown_mark`; `unknown_op`, `rejected`, format and store errors are this
+/// engine's own.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum Error {
     /// An edit outside the text.
@@ -149,10 +153,10 @@ pub enum Error {
     /// A version names an op this history does not hold.
     #[error("unknown_op")]
     UnknownOp,
-    /// A touch set of main asked for without a base (TL-132).
+    /// A touch set of main asked for without a base (§18, TL-132).
     #[error("needs_base")]
     NeedsBase,
-    /// No turn mark with this number on the timeline (TL-141).
+    /// A rewind to a turn with no mark on the timeline (§18, TL-141).
     #[error("unknown_mark")]
     UnknownMark,
     /// A note over the writer limits (TL-156).

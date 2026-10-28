@@ -941,6 +941,15 @@ fn by_content(paths: &BTreeMap<String, Value>) -> BTreeMap<OpId, Vec<String>> {
 /// Clean map changes: key → value, `None` deletes.
 type CleanKeys = BTreeMap<String, Option<Value>>;
 
+/// Whether some path of `tree` in `state` refers to content object `obj`.
+fn refers_to(state: &State, tree: &ObjectId, obj: &OpId) -> bool {
+    state.map(tree).is_some_and(|m| {
+        m.keys
+            .values()
+            .any(|v| v.first().and_then(|(_, e)| e.obj_field()).as_ref() == Some(obj))
+    })
+}
+
 fn plan_map(
     object: &ObjectId,
     tree: bool,
@@ -961,11 +970,22 @@ fn plan_map(
         let t = visible(st, object, &key);
         let s = visible(si, object, &key);
         if tree && b.is_some() {
+            // A side removed `p` only when it refers to `p`'s base object by no path at all: a
+            // rename is not a removal (TL-87).
+            let gone = |state: &State| {
+                b.as_ref()
+                    .and_then(Value::obj_field)
+                    .is_some_and(|o| !refers_to(state, object, &o))
+            };
             let deleted_by = match (&t, &s) {
-                (None, Some(_)) if content(si, s.as_ref()) != content(sb, b.as_ref()) => {
+                (None, Some(_))
+                    if gone(st) && content(si, s.as_ref()) != content(sb, b.as_ref()) =>
+                {
                     Some(Side::Target)
                 }
-                (Some(_), None) if content(st, t.as_ref()) != content(sb, b.as_ref()) => {
+                (Some(_), None)
+                    if gone(si) && content(st, t.as_ref()) != content(sb, b.as_ref()) =>
+                {
                     Some(Side::Incoming)
                 }
                 _ => None,
@@ -1111,13 +1131,7 @@ impl<S: Store> History<S> {
         if into == from {
             return Err(Error::MergeSelf);
         }
-        let ht = self.graph.head(into).ok_or(Error::UnknownTimeline)?;
-        let hi = self.graph.head(from).ok_or(Error::UnknownTimeline)?;
-        if self
-            .graph
-            .closure(hi, false)
-            .is_subset(&self.graph.closure(ht, true))
-        {
+        if self.holds_all_of(into, from)? {
             return Ok(None);
         }
         let planned = self.plan_core(into, from)?;
@@ -1126,6 +1140,17 @@ impl<S: Store> History<S> {
             return Ok(None);
         }
         Ok(Some(planned))
+    }
+
+    /// Whether `into` already holds everything of `from`: closure⁺(head `into`) contains
+    /// closure(head `from`), so merging `from` into `into` is up to date (TL-70).
+    pub(crate) fn holds_all_of(&self, into: &OpId, from: &OpId) -> Result<bool, Error> {
+        let ht = self.graph.head(into).ok_or(Error::UnknownTimeline)?;
+        let hi = self.graph.head(from).ok_or(Error::UnknownTimeline)?;
+        Ok(self
+            .graph
+            .closure(hi, false)
+            .is_subset(&self.graph.closure(ht, true)))
     }
 
     /// The planner itself, without the up-to-date checks: the plan of merging `from` into
