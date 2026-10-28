@@ -232,4 +232,28 @@ addition, as in `tests/time_travel.rs`: after `merge`, a batch on main (`1@A`, p
 `new\nx` in every read order. On the old engine it would read `new\n` when main's head is read
 first; that is what the analogous test in `tests/time_travel.rs` showed before the fix.
 
-Q27 is open.
+**Answered** by vector 88's revision (commit `d45f518`), which adds exactly that edit. The
+revised vector passes.
+
+### Q28. Revised vector 88 still passes on the engine without the Q13 fix
+
+My prediction under Q27 ("it would read `new\n` when main's head is read first") was wrong
+for this vector's shape. Checked by reverting `aa9249d`'s change to `state.rs`: all three runs
+still pass, then the fix was restored. The cause is which cached state the old engine started
+from. When it materialises the join `["4@B", "6@A"]` it starts from the largest cached state
+whose heads lie inside the join. Validating `merge` caches s1's head `[4@B]`, whose closure
+(`1@A`, `2@A`, `3@B`, `4@B`) is larger than main's (`1@A`, `5@A`, `6@A`). So the join starts
+from s1's state and applies `5@A` and `6@A` in order, and no create op ever lands on an
+existing import. The bug needs a start state that holds the import and lacks the create.
+
+A throwaway test that rebuilt the vector's histories through the API showed the old engine
+reading the join as `new\n` (instead of `new\nx`) once main's closure is the larger one. I
+appended two `checkpoint` ops to the `edit` batch: `7@A` and `8@A`, join `["4@B", "8@A"]`. The
+fixed engine reads `new\nx` in both shapes. Proposed revision: those two checkpoints (or any two
+more ops on main after the merge), with the join at `["4@B", "8@A"]`.
+
+This depends on how one implementation caches (TL-123 allows any cache that matches replay), so
+no vector detects the bug in every implementation. Larger main and s1 sides in two vectors
+would cover both choices. `tests/time_travel.rs` keeps the engine's own regression test.
+
+Q28 is open.
