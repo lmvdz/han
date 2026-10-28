@@ -152,6 +152,9 @@ pub enum Error {
     /// A touch set of main asked for without a base (TL-132).
     #[error("needs_base")]
     NeedsBase,
+    /// No turn mark with this number on the timeline (TL-141).
+    #[error("unknown_mark")]
+    UnknownMark,
     /// A local write that the history itself rejects.
     #[error("rejected: {0}")]
     Rejected(Reason),

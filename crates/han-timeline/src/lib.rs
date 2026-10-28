@@ -8,6 +8,7 @@ mod graph;
 mod history;
 mod ids;
 mod local;
+mod marks;
 mod merge;
 mod op;
 mod state;
@@ -24,6 +25,7 @@ pub use history::{At, Checkpoint, FaultProof, History, TimelineInfo, Written};
 pub use ids::{
     BatchId, CharId, HistoryId, IdRange, InsertionId, ObjectId, OpId, ReplicaId, Version,
 };
+pub use marks::{TranscriptMarks, TurnMark, TurnOf};
 pub use merge::{Conflict, MergeDraft, MergePlan, Resolution, Side, TextHunk};
 pub use op::{
     Batch, Change, ConflictKind, ConflictRecord, CopyInsert, HistoryKind, Insert, MergeOp, Op,
