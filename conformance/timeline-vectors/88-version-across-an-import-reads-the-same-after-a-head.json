@@ -1,7 +1,7 @@
 {
  "format": "han-timeline-vector/1",
  "name": "88-version-across-an-import-reads-the-same-after-a-head",
- "description": "A merge imports an object under its own id while the timeline that created it is also in the closure of a version: the state at that join version is the same whether it is read first, or after a timeline head that already held the import, and the object is created once",
+ "description": "A merge imports an object under its own id, and a later edit on main is anchored on the merge's copy. The state at the join version of that edit and the creating timeline must read the same in every read order: the object's own create op, applied after the import, must not replace the copy that the edit builds on",
  "rules": [
   "TL-60",
   "TL-71",
@@ -129,6 +129,27 @@
      "conflicts": []
     }
    ]
+  },
+  "edit": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@B",
+     "deletes": [],
+     "inserts": [
+      [
+       "5@A#0:3",
+       "x"
+      ]
+     ]
+    }
+   ]
   }
  },
  "runs": [
@@ -147,13 +168,16 @@
      "deliver": "merge"
     },
     {
+     "deliver": "edit"
+    },
+    {
      "expect": {
       "states": [
        {
         "at": "1@A",
         "objects": {
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -166,7 +190,7 @@
        {
         "at": [
          "4@B",
-         "5@A"
+         "6@A"
         ],
         "objects": {
          "root": {
@@ -188,7 +212,7 @@
           }
          },
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -215,7 +239,7 @@
        {
         "at": [
          "4@B",
-         "5@A"
+         "6@A"
         ],
         "objects": {
          "root": {
@@ -237,7 +261,7 @@
           }
          },
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -261,12 +285,15 @@
      "deliver": "merge"
     },
     {
+     "deliver": "edit"
+    },
+    {
      "expect": {
       "states": [
        {
         "at": [
          "4@B",
-         "5@A"
+         "6@A"
         ],
         "objects": {
          "root": {
@@ -288,7 +315,7 @@
           }
          },
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -302,7 +329,7 @@
         "at": "1@A",
         "objects": {
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -315,7 +342,7 @@
        {
         "at": [
          "4@B",
-         "5@A"
+         "6@A"
         ],
         "objects": {
          "root": {
@@ -337,7 +364,7 @@
           }
          },
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -359,6 +386,9 @@
     },
     {
      "deliver": "merge"
+    },
+    {
+     "deliver": "edit"
     },
     {
      "expect": {
@@ -380,7 +410,7 @@
        {
         "at": [
          "4@B",
-         "5@A"
+         "6@A"
         ],
         "objects": {
          "root": {
@@ -402,7 +432,7 @@
           }
          },
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
@@ -416,7 +446,7 @@
         "at": "1@A",
         "objects": {
          "3@B": {
-          "text": "new\n"
+          "text": "new\nx"
          }
         }
        }
