@@ -209,4 +209,9 @@ empty plan under TL-71). Otherwise, when `A` holds all of `B` and the plan of `A
 merely empty, `(A, B)` would be empty while `(B, A)` shows converged `region` entries, which
 TL-133 forbids. Please confirm.
 
-Q26 is open.
+**Answered** by the revision "answer to Q26" (spec commit `41f1252`): TL-133 now exempts `rename`
+and `path` entries and a `file` entry for the object of a one-sided `rename`, and TL-134a
+defines "up to date" as the TL-70 closure test. Both match the engine; `tests/overlap.rs`
+exempts exactly those entries from its symmetry check.
+
+No questions are open.

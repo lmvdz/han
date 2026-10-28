@@ -746,11 +746,10 @@ fn check(h: &History, kind: HistoryKind, stats: &mut BTreeMap<&'static str, usiz
                 })
                 .collect();
             assert_eq!(got, want, "regions of {a} {b}");
-            // Symmetry (TL-133): swapping the timelines swaps `a`/`b` and `deleted_by`; only
-            // `rename` and `path` entries, judged by TL-87 after the clean changes, may differ.
-            // A `file` entry stands for an object with no other entry, so an object whose
-            // `rename` shows in one direction only has a `file` entry in the other
-            // (SPEC-QUESTIONS Q26); every other entry is symmetric.
+            // Symmetry (TL-133): swapping the timelines swaps `a`/`b` and `deleted_by`. Exempt
+            // exactly: `rename` and `path` entries (TL-87 judges them after the clean changes),
+            // and a `file` entry whose object has a `rename` entry in either direction (it
+            // stands in for a one-sided rename). Every other entry must be symmetric.
             let rev = h.overlap(b, a).unwrap();
             let swapped: Vec<OverlapEntry> = ov.entries.iter().map(swap).collect();
             let renamed: BTreeSet<&ObjectId> = swapped
