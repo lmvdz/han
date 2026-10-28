@@ -1016,6 +1016,7 @@ impl<S: Store> History<S> {
         lane: u32,
         parents: Version,
         timeline: Option<OpId>,
+        step: Option<String>,
         make: impl FnOnce(&OpId) -> Vec<Op>,
     ) -> Result<Written, Error> {
         let start = self.next_counter(signer)?;
@@ -1034,7 +1035,7 @@ impl<S: Store> History<S> {
             timeline,
             ops,
             time: None,
-            step: None,
+            step,
         };
         let (envelope, raw) = envelope::seal_raw(
             &self.space,
@@ -1103,6 +1104,6 @@ impl<S: Store> History<S> {
             history_kind: None,
             session: None,
         };
-        self.write_with(signer, lane, parents, None, |_| vec![op])
+        self.write_with(signer, lane, parents, None, None, |_| vec![op])
     }
 }

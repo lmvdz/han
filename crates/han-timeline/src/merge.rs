@@ -1281,7 +1281,7 @@ impl<S: Store> History<S> {
     ) -> Result<Written, Error> {
         let head = self.head(&draft.target).ok_or(Error::UnknownTimeline)?;
         let target = draft.target.clone();
-        self.write_with(signer, lane, head, Some(target), |id| {
+        self.write_with(signer, lane, head, Some(target), None, |id| {
             let mut op = draft.op_with_id(id);
             op.effect = effect;
             vec![Op::Merge(Box::new(op))]

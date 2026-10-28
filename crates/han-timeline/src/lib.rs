@@ -10,6 +10,7 @@ mod ids;
 mod local;
 mod marks;
 mod merge;
+mod notes;
 mod op;
 mod state;
 mod store;
@@ -27,6 +28,10 @@ pub use ids::{
 };
 pub use marks::{TranscriptMarks, TurnMark, TurnOf};
 pub use merge::{Conflict, MergeDraft, MergePlan, Resolution, Side, TextHunk};
+pub use notes::{
+    MAX_NOTE_BODY, MAX_NOTE_KEY, MAX_NOTES_PER_HISTORY, MAX_NOTES_PER_OBJECT, NOTE_PREFIX, Note,
+    NoteDraft, NoteKind, NotePlace, Notes, RESOLVED_PREFIX,
+};
 pub use op::{
     Batch, Change, ConflictKind, ConflictRecord, CopyInsert, HistoryKind, Insert, MergeOp, Op,
     ResolutionKind,

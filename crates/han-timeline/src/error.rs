@@ -155,6 +155,9 @@ pub enum Error {
     /// No turn mark with this number on the timeline (TL-141).
     #[error("unknown_mark")]
     UnknownMark,
+    /// A note over the writer limits (TL-156).
+    #[error("too_many")]
+    TooMany,
     /// A local write that the history itself rejects.
     #[error("rejected: {0}")]
     Rejected(Reason),
