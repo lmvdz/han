@@ -1,11 +1,13 @@
 {
  "format": "han-timeline-vector/1",
  "name": "71-overlap-region-converged",
- "description": "Both make the same change to the same line: the region entry is converged and the plan has no hunk",
+ "description": "Both make the same change to the same line: the region entry is converged, and the merge plan has nothing to do, so it is up to date (TL-71)",
  "rules": [
   "TL-131",
   "TL-133",
-  "TL-134"
+  "TL-134",
+  "TL-71",
+  "TL-72"
  ],
  "replicas": {
   "A": [
@@ -262,11 +264,7 @@
        {
         "into": "8@A",
         "from": "8@C",
-        "kind": "merge",
-        "base": [
-         "7@A"
-        ],
-        "conflicts": []
+        "kind": "up_to_date"
        }
       ]
      }
@@ -368,11 +366,7 @@
        {
         "into": "8@A",
         "from": "8@C",
-        "kind": "merge",
-        "base": [
-         "7@A"
-        ],
-        "conflicts": []
+        "kind": "up_to_date"
        }
       ]
      }
