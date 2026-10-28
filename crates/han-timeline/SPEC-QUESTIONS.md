@@ -35,8 +35,9 @@ implementation follows the text.
 
 ## Revision 2026-10 (TL-49, TL-64, §21 – 23)
 
-Vectors 01 – 67 pass unchanged; TL-49 and TL-64 needed no engine change. Vectors 68 – 87 run in
-`tests/vectors.rs` (`extension_vectors`, from `extensions/`, not moved).
+Vectors 01 – 67 pass unchanged; TL-49 and TL-64 needed no engine change. Vectors 68 – 87 first
+ran from `extensions/`; Team A has since moved them up (with vector 88), and
+`behaviour_vectors` runs all of 01 – 88.
 
 **Answered by the revision "answers to Q11-Q25"** (spec commit `f337995`), and implemented:
 
@@ -214,4 +215,21 @@ and `path` entries and a `file` entry for the object of a one-sided `rename`, an
 defines "up to date" as the TL-70 closure test. Both match the engine; `tests/overlap.rs`
 exempts exactly those entries from its symmetry check.
 
-No questions are open.
+Q26 is answered.
+
+## Vectors 68 – 88 moved up
+
+### Q27. Vector 88 does not detect the bug it pins (a suggestion, not a failure)
+
+Vector 88 passes, and its expectations are right by TL-60 and TL-45. It also passes on the
+engine before the Q13 fix (checked by reverting `aa9249d`'s change to `state.rs`): in run 0,
+main's cached head holds the merge's copy of `3@B`, and the original `text.create 3@B` applied
+after it replaced the object, but the replacement reads `new\n` just as the import did, and
+nothing in the vector builds on the import. The bug shows only when something does. Proposed
+addition, as in `tests/time_travel.rs`: after `merge`, a batch on main (`1@A`, parents
+`["5@A"]`) with `text.edit` of `3@B` inserting `"x"` anchored on the merge's copy of the LF,
+`5@A#0:3` (the merge's only insert, TL-41). The state at `["4@B", "6@A"]` must then read
+`new\nx` in every read order. On the old engine it would read `new\n` when main's head is read
+first; that is what the analogous test in `tests/time_travel.rs` showed before the fix.
+
+Q27 is open.

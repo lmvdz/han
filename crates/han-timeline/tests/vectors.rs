@@ -171,7 +171,7 @@ impl Labels {
                             ("obj", Json::String(s)) => {
                                 Value::object_ref(&self.op(s)).as_map().unwrap()["obj"].clone()
                             }
-                            // A note anchor's character label (extensions README).
+                            // A note anchor's character label (README, vectors 68 – 88).
                             ("c", Json::String(s)) => match self.char_label(s) {
                                 Some(c) => Value::Text(c.to_string()),
                                 None => Value::Text(s.clone()),
@@ -438,7 +438,7 @@ impl Labels {
 // ---------------------------------------------------------------------------------------------
 // Running behaviour vectors
 
-/// Expectations of the extension vectors that disagree with the profile text, each asked of
+/// Expectations of vectors that disagree with the profile text, each asked of
 /// Team A in `crates/han-timeline/SPEC-QUESTIONS.md`: (vector, expectation key, question).
 /// A listed key must keep failing until the vector or the profile is revised; every other key
 /// of the vector is still checked.
@@ -654,7 +654,7 @@ impl Run<'_> {
                     assert_eq!(got, want.iter().collect::<Vec<_>>(), "{ctx}: answer");
                     assert!(!answer.more);
                 }
-                // §21 – 23 (extensions/README.md).
+                // §21 – 23 (vectors 68 – 87).
                 "touch" => {
                     for t in want.as_array().unwrap() {
                         self.check_touch(t);
@@ -1277,10 +1277,16 @@ fn run_vector(path: &std::path::Path) {
     }
 }
 
-/// Runs every `NN-*.json` vector directly in `dir` (not its subfolders); `VECTOR` filters by
-/// file name.
-fn run_dir(dir: PathBuf, at_least: usize) {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+/// Every behaviour vector: `01` – `88` except the unallocated `64` and `65`.
+fn expected_numbers() -> Vec<u32> {
+    (1..=88).filter(|n| !matches!(n, 64 | 65)).collect()
+}
+
+/// Runs every `NN-*.json` behaviour vector, each run on a fresh receiver with its steps (reads
+/// included) in the order written; `VECTOR` filters by file name.
+#[test]
+fn behaviour_vectors() {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(vectors_dir())
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| {
@@ -1289,11 +1295,14 @@ fn run_dir(dir: PathBuf, at_least: usize) {
         })
         .collect();
     paths.sort();
-    assert!(
-        paths.len() >= at_least,
-        "expected every vector, found {}",
-        paths.len()
-    );
+    let numbers: Vec<u32> = paths
+        .iter()
+        .map(|p| {
+            let n = p.file_name().unwrap().to_string_lossy();
+            n.split('-').next().unwrap().parse().unwrap()
+        })
+        .collect();
+    assert_eq!(numbers, expected_numbers(), "the set of behaviour vectors");
     let only = std::env::var("VECTOR").ok();
     let mut failed = Vec::new();
     for p in &paths {
@@ -1316,18 +1325,6 @@ fn run_dir(dir: PathBuf, at_least: usize) {
         failed.len(),
         failed.join("\n\n")
     );
-}
-
-/// The vectors of the profile's main body (`extensions/` is not read here).
-#[test]
-fn behaviour_vectors() {
-    run_dir(vectors_dir(), 65);
-}
-
-/// Vectors 68 – 87 of §21 – 23, which stay in `extensions/` until Team A confirms them.
-#[test]
-fn extension_vectors() {
-    run_dir(vectors_dir().join("extensions"), 20);
 }
 
 // ---------------------------------------------------------------------------------------------

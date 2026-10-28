@@ -114,8 +114,8 @@ let _ = digest;
 
 ## Tests and benchmarks
 
-- `cargo test -p han-timeline` runs every vector in `conformance/timeline-vectors/`, and
-  `extensions/` (vectors 68 – 87) in a test of its own, plus:
+- `cargo test -p han-timeline` runs every vector in `conformance/timeline-vectors/` (01 – 88;
+  64 and 65 are unallocated), plus:
   - randomized convergence and sync tests;
   - overlap-equals-planning property tests (`tests/overlap.rs`);
   - touch-set limits, marks and notes on generated histories (`tests/extensions.rs`);
