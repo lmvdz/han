@@ -6,6 +6,8 @@ This document states behaviour only: the data model, identifiers, versions, oper
 
 Normative words MUST / MUST NOT / SHOULD / MAY follow BCP 14. Rules are numbered `TL-xx`; retired numbers are not reused. §19 lists the design choices this profile makes where a choice was open.
 
+**Revision (2026-10).** §21–23 add derived views and conventions over objects the profile already has: touch sets and overlap, turn marks, and notes. They add no op kind, change no existing rule and make a receiver reject nothing new, so the profile remains `han.timeline/1` (as for TL-49 and TL-64). A directory-move conflict was considered and is held (§20).
+
 ## Contents
 
 1. Overview
@@ -27,7 +29,10 @@ Normative words MUST / MUST NOT / SHOULD / MAY follow BCP 14. Rules are numbered
 17. Limits
 18. Reason codes and local errors
 19. Design choices
-20. Open items
+20. Not in /1, and decided items
+21. Touch sets and overlap
+22. Turn marks and rewind
+23. Notes
 
 ## 1. Overview
 
@@ -186,6 +191,11 @@ Resolving: `start` is 0; `end` is the length; `(c, left)` is the number of visib
 
 **TL-48 Shape of `text.edit`.** `deletes` ranges MUST be non-empty and MUST NOT overlap one another; `inserts` MUST be non-empty strings, and no two inserts of one op may name the same anchor. At least one of `deletes` and `inserts` MUST be non-empty. The deletes apply first, then the inserts in index order. The same rules apply to each text change of a merge op (TL-73), except that a change with `create: true` may be empty (an imported empty text).
 
+**TL-49 Edits from an older view.** The following acceptance criteria clarify TL-17 and TL-47:
+1. An implementation that plans edits at a selected version `v` MUST interpret positions, lengths and range bounds in the visible text at `v` (TL-40); for the same edit input at `v`, the recorded operation MUST be the same whatever other operations the replica holds.
+2. When that edit is recorded with parent version `v`, integration MUST preserve its named characters and anchor as defined by TL-42–44, including when a concurrent edit has deleted the anchor; concurrent inserted characters outside its named delete ranges MUST survive unless hidden by TL-45 or TL-52.
+3. This criterion restates TL-17 for character references in text edits: a character reference absent from the op's parent state MUST be rejected (`invalid_op`) even when the receiver holds that character through another concurrent op, except for the earlier inserts of the same op allowed by TL-42.
+
 ## 9. Seals (session transcripts only)
 
 HAN requires that a session transcript record, for audit, exactly what an agent sent and what it received (PLAN.md §6.5): once a turn has happened, a reviewer must be able to rely on the transcript showing that text and nothing else, whatever edits other replicas make at the same time. A **seal** provides this. It applies to a range of a transcript and fixes it, from then on and in every replica, to the text its author had at that moment. This is a deliberate exception to the rule that no concurrent edit is lost, so it is confined to transcripts.
@@ -223,6 +233,11 @@ Implementations MAY expose the digest to compare replicas cheaply; vectors pin i
 **TL-62 Conflicts in a state.** A state reports: map keys in conflict (TL-36) and tree conflicts (TL-86). Registers and texts never report conflicts in a state; texts conflict only in merge plans (§11).
 
 **TL-63 Log.** The ops of closure(`v`) in ascending op id order are a valid causal order (TL-04); an implementation that lists a history SHOULD use it.
+
+**TL-64 Historical reads and deletion of earlier insertions.** Reading an earlier version and editing the present have distinct observable effects:
+1. Materialising a version or navigating to a checkpoint MUST NOT add an op, change any timeline head or change the sync inventory; the state at each selected version MUST be unchanged after interleaved reads.
+2. An edit that deletes characters an earlier edit inserted on a timeline is an ordinary new edit subject to the existing validity and seal rules (TL-17, TL-47, TL-53); it MUST NOT remove earlier ops or replace the timeline head with an earlier version.
+3. A new edit that deletes an earlier insertion MUST leave concurrent insertions outside its named delete ranges subject to normal visibility (TL-44–45, TL-52), including insertions anchored on the characters it deletes; materialising the version before that new edit MUST still show the earlier insertion.
 
 ## 11. Merges
 
@@ -464,6 +479,9 @@ Both peers send a hello and answer the other's. A peer that got `more: true` sen
 | text file in a tree | ≤ 1 MiB (larger is binary, TL-84) |
 | hello inventory | ≤ 4,096 replicas, ≤ 65,536 ranges |
 | answer | ≤ the hello's `maxBytes` (default 4 MiB), except a single envelope |
+| touch set (reader limit) | ≤ 4,096 entries, ≤ 1,024 line ranges per list (TL-137) |
+| note body | 1 … 16,384 bytes; note key 1 … 128 bytes (a note's root key adds a prefix, so at most 1,024 bytes, TL-38); never a reason to reject a batch (TL-151) |
+| notes (writer limit) | ≤ 2,048 per content object, ≤ 65,536 per history (TL-156) |
 
 ## 18. Reason codes and local errors
 
@@ -486,7 +504,7 @@ Rejections of peer data (§14), returned per envelope:
 | `timeline` | TL-20–23, TL-27 |
 | `invalid_op` | an op is invalid at its parent |
 
-Local errors (never on the wire): `out_of_range`, `sealed`, `unknown_object`, `unknown_timeline`, `ambiguous_name`, `unknown_anchor`, `merge_self`, `unresolved`, `up_to_date`.
+Local errors (never on the wire): `out_of_range`, `sealed`, `unknown_object`, `unknown_timeline`, `ambiguous_name`, `unknown_anchor`, `merge_self`, `unresolved`, `up_to_date`, `too_many`.
 
 ## 19. Design choices
 
@@ -525,6 +543,101 @@ Where a design choice was open, this profile decides as follows.
 - identity-preserving moves beyond rename (text moved between files keeps no identity);
 - undo as an op (undo is an ordinary edit);
 - submodule contents (a submodule is its commit id, TL-83);
-- a raw-CR text mode, so that files with mixed line endings can be text (they are binary in /1, TL-84).
+- a raw-CR text mode, so that files with mixed line endings can be text (they are binary in /1, TL-84);
+- directory-move conflicts (a file added under a directory that the other side moved elsewhere merges silently into the old directory today): a new conflict kind would change what a receiver must accept in recorded merges (TL-73, TL-74), so it waits for a decision on the version of this profile.
 
 Decided: a fork has one source and never combines timelines (TL-22); changes on neighbouring lines stay clean (TL-72, §19 item 8).
+
+## 21. Touch sets and overlap
+
+Where two timelines will collide must be known while the work happens, not at merge time. A **touch set** says what one timeline changed; an **overlap** says where two timelines meet. Both are pure functions of the ops a replica holds: they read no clock, no disk and no peer.
+
+**TL-130 Touch set.** In a worktree history, for a timeline `T` and a base version `b`, the touch set of `T` over `b` has one **entry** per content object (TL-83) whose reference or content differs between the state at `b` and the state at head `T`. An object is **present** at a version when a tree path refers to it. Entries are keyed by object id, never by path, so a file renamed and edited is one entry (TL-85); a file whose content object was replaced under one path (TL-85) is two entries, the old object `deleted` and the new one `created`. An entry carries:
+- `object`;
+- `base_path` and `head_path`: the least path (compared as bytes) that refers to the object at `b` and at head `T`, or null when it is not present there;
+- `change`: the set of `created` (absent at `b`, present at head), `deleted` (the reverse), `renamed` (present at both with different path sets), `mode` or `eol` (an attribute of a path differs), `edited` (a text file with at least one edit between its base and head text as TL-72 steps 1–2 define them, identity-based, whether or not the visible text differs), `binary_changed` (a content object that is a register whose value differs: a binary file's BlobRef, a symlink target or a submodule commit);
+- `base_lines` and `head_lines`: lists of line ranges (TL-131), empty unless the file is a text file and is `edited`, `created` or `deleted`.
+
+A transcript is never in a touch set (TL-83). Entries are in ascending object id order. A history that is not a worktree history has no touch set (TL-138).
+
+**TL-131 Line ranges.** For a text file present as text at both ends, take the edits of head `T` against the base text as TL-72 steps 1–2 define them (identity-based; the longest order-consistent subsequence is kept), the line range each edit touches (step 3), and group them into **clusters** by the "meet" rule of step 4 (edits of one side meet one another under the same rule). A cluster's **base range** is its region `[a, b)` in base lines (0-based, `b` exclusive; empty `[x, x)` for a pure insertion between lines). Ranges whose edits do not meet stay separate even when they abut (§19 item 8). Its **head range** is `[a', a' + k)`: `k` is the line count of the cluster's head region text (TL-72 step 5, lines split after each LF; the last line may lack one; empty text has none), and `a'` is the number of LFs in the head text that precede the cluster's head region, that is, that precede its first character or, when the head region text is empty, the gap where it would be: right after the last visible head character that step 2 keeps and that lies in a base line before `a`, or the start of the text when there is none. `base_lines` lists the base ranges, `head_lines` the head ranges, both in ascending order. A text file that is `created` has `base_lines` empty and `head_lines` `[[0, n]]` for its `n` lines; a `deleted` one has `base_lines` `[[0, m]]` and `head_lines` empty; both are empty when the count is 0.
+
+**TL-132 Default base.** When no base is given, `b` is the fork version of `T` (TL-22) or, if `T` has merged other work, the merge base of `T` with its source timeline (TL-70). For main a base MUST be given.
+
+**TL-133 Overlap.** Let `A` and `B` be two timelines of one history, and `b` their merge base (TL-70; it is symmetric). The **overlap** of `A` and `B` is a list of entries, in ascending object id order, then by the class order below, then by key or path in byte order. In a worktree history the touch sets of `A` and `B` over `b` (TL-130–131) are computed; an object is **touched by both** when both have an entry for it. Classes:
+
+| Class | Entry fields | When |
+|---|---|---|
+| `region` | `object`, `lines`, `converged` | the object is a text, not a transcript, that exists in the states at both heads, and an edit of `A` and an edit of `B` (TL-72 steps 1–2, against the text at `b`) meet in a cluster (step 4), whether or not any tree path refers to the object, in any kind of history that has merges: one entry per such cluster; `lines` is its base range `[a, b)`; `converged` is true when the two region texts are equal strings (step 6), else false |
+| `modify_delete` | `object`, `path`, `deleted_by` | a tree path `p` that refers to the object at `b` is absent at the head of one side `X` while at the head of the other side the path is present and the object's content differs from its content at `b` (a TL-72 edit of a text, or a different register value) (TL-87). `object` is the content object `p` referred to at `b`; `path` is `p`; `deleted_by` is `a` or `b`, the side `X` |
+| `rename` | `object`, `a`, `b` | with `P0`, `PA`, `PB` the sets of tree paths that refer to the object at `b`, at head `A` and at head `B`, applying the changes of `B` to the paths of `A` (remove `P0 − PB`, add `PB − P0`) gives more paths than `PA` has and more than `PB` has (TL-87); `a` and `b` are `PA` and `PB`, ascending |
+| `file` | `object` | in a worktree history, the object is touched by both and has none of the entries above |
+| `path` | `object` (the tree map), `paths` | a path clash that neither side had would arise (TL-86, TL-87); `paths` is `[p, q]` as the planner reports it |
+| `map_key` | `object`, `key` | a key of a map whose visible values at `b`, at head `A` and at head `B` are `x`, `y`, `z` with `y ≠ x`, `z ≠ x` and `y ≠ z`, where an absent key counts as a value (TL-71); on a tree map, only a key that TL-87 does not report as one of its own kinds |
+| `register` | `object` | the same, for a register |
+
+For one object the entries come in the order: its `region` entries by ascending `lines`, then `modify_delete`, then `rename`. `file` appears only for an object that has no other entry. Objects touched by only one side and not named above have no entry. `A` and `B` are **disjoint** when the overlap is empty. Overlap is symmetric: swapping `A` and `B` swaps `a` with `b` and the sense of `deleted_by` and changes nothing else.
+
+**TL-134 Overlap equals planning.** For any two timelines `A` and `B` between which a merge can be planned, the `region` entries with `converged` false, and every `modify_delete`, `rename`, `path`, `map_key` and `register` entry, are exactly the conflicts of the plan that merges `B` into `A` (TL-71, TL-87), with `A` as target and `B` as incoming, under this mapping: a text hunk is a `region` entry with the same content object and the same base range; a modify/delete conflict is `modify_delete` with the same path, `deleted_by` `target` ↔ `a` and `incoming` ↔ `b`; a rename conflict is `rename` with `target` ↔ `a` and `incoming` ↔ `b`; a path conflict is `path` with the same two paths; a map conflict is `map_key` and a register conflict is `register`, with the same object (and key). `region` entries with `converged` true are exactly the clusters that step 6 calls converged. `file` entries are never conflicts. An implementation MUST NOT let the two disagree.
+
+**TL-135 No side effects.** Computing a touch set or an overlap MUST NOT add an op, change a head or change the sync inventory (as TL-64.1), and the result MUST be identical on every replica that holds the same ops, whatever order they arrived in.
+
+**TL-136 Digests.** The **touch digest** is `SHA-256("han-timeline-touch-v1\n" ‖ dCBOR(entries))` (TL-90), `entries` being one array per touch-set entry, `[object id, base_path, head_path, change bits, base_lines, head_lines]`: object id as in TL-61; paths as text or null; `change bits` the sum of `created` 1, `deleted` 2, `renamed` 4, `mode` 8, `eol` 16, `edited` 32, `binary_changed` 64; ranges as arrays `[a, b]`. The **overlap digest** is `SHA-256("han-timeline-overlap-v1\n" ‖ dCBOR(entries))`, one array per overlap entry, `[object id, class code, converged, detail]`, class codes `region` 1, `file` 2, `modify_delete` 3, `rename` 4, `path` 5, `map_key` 6, `register` 7; `converged` a boolean for `region` and null otherwise; `detail`: for `region` the range `[a, b]`; for `modify_delete` `[path, 1 or 2]` (`a` 1, `b` 2); for `rename` `[a, b]` (the two path lists); for `path` the two paths; for `map_key` `[key]`; for `file` and `register` an empty array.
+
+**TL-137 Limits.** A touch set has at most 4,096 entries and an entry at most 1,024 ranges per list. Past either limit the function returns the first entries in object id order (or the first ranges in order) and marks the result `truncated`. An overlap computed from a truncated touch set is `truncated` too; a reader MUST then treat the absence of an entry as unknown, never as disjoint.
+
+**TL-138 Scope and status projection.** A history that is not a worktree history (TL-27) has no touch set; its overlap has `region`, `map_key` and `register` entries. A host that publishes `han.status/1` for a session SHOULD fill `files[]` from the touch set of the session's timeline over its default base (TL-132): one item per text file that is `edited` or `deleted`, with `path` its head path (its base path when deleted) and one `[start, len]` in `hunks` per base range, `start` the 1-based first base line (`a + 1`, also for an empty range, where `len` is 0) and `len` the range's length; a `deleted` file gives `[[1, m]]`. Created and binary files are listed with an empty `hunks`.
+
+## 22. Turn marks and rewind
+
+A reviewer, or the operator, must be able to ask what a session's worktree looked like when the agent finished turn `n`, and to continue from there. The worktree history and the transcript history are separate (TL-89), so each side records a **mark**. Marks are conventions over checkpoints and a map: a receiver rejects nothing because a mark is absent, late or odd (TL-146).
+
+**TL-140 Turn index.** A session's turns are numbered from 1 in the order they start. A turn runs from an input to the agent's stop. A failed or aborted turn keeps its number, and gaps in the marks of a session are normal.
+
+**TL-141 Mark in the worktree history.** After the host has recorded every mirror batch of turn `n` (TL-85), it SHOULD record on the session's timeline a `checkpoint` (TL-25) whose label is the text `turn:` followed by `n` in decimal without leading zeros. The checkpoint version is the state at the end of the turn; a turn that changed nothing is still marked. When a timeline has several checkpoints with one such label (for example two writers), a lookup uses the one with the greatest op id. The checkpoints of a timeline are those on it (TL-25): a fork has none of its source's marks, and a lookup on a fork never falls back to the source.
+
+**TL-142 Mark in the transcript history.** After TL-141 the session's actor MAY write to the root map of the transcript history (TL-31, TL-89) the key `turn:` followed by `n` (a positive decimal number without leading zeros), with a map value having at least these members, each of the type shown (other members are ignored):
+- `h`: the worktree history id, a text of 64 lowercase hex characters;
+- `t`: the session timeline id, a text in the text form of an op id (TL-06);
+- `v`: the checkpoint version, an array of texts in the text form of op ids;
+- `end`: the last character of the turn, a text in the text form of a character id: its op id's text form, `#`, the insertion index, `:`, the offset.
+
+Only the writers TL-89 and TL-103 allow write there.
+
+**TL-143 Turn of a position.** Let `e(n)` be the number of visible characters at or before the character `end` of mark `n` in the transcript (the resolution of the anchor `(end, left)`, TL-46). The **turn of visible character `i`** (0-based) is the least `n` with `i < e(n)`. A character after the last mark belongs to the **turn in progress**, the last mark's number plus one, which has no mark yet.
+
+**TL-144 Rewind as a view.** Showing session `S` as it was at the end of turn `n` is materialising the state at the mark's version (TL-60), a read that obeys TL-64.1.
+
+**TL-145 Rewind as a fork.** Continuing from turn `n` is forking the session timeline at the mark's version (TL-26) into a new timeline named `rewind:`, `n`, `:` and the source timeline's name (cut at a scalar boundary to fit TL-20). The original timeline, its head, and the transcript are untouched; seals (§9) are unaffected.
+
+**TL-146 Advisory and separate.** Marks carry no authority (Policy never reads them), and no receiver rejects a batch because a mark is missing, duplicated or malformed. A reader ignores a transcript mark whose key is not of the form of TL-142 or whose value lacks a member of TL-142 or has one of the wrong type or form (a text `h` that is not 64 lowercase hex characters, a `t`, `v` or `end` that does not parse), and reports it as ignored. A mark that parses but whose worktree history, timeline or version, or whose `end` character, the reader does not hold, is **unresolved**, not an error. Holding one history does not entitle a replica to the other (TL-89, architecture.md P-15, T-07): a mark reveals only ids, and a replica MUST NOT fetch a history it is not entitled to because a mark names it.
+
+**TL-147 Restoring a working copy.** Writing the state at a mark back to a live worktree is not defined by this profile. A host that offers it MUST authorise it as a steer of the session (architecture.md P-15), and the worktree history MUST show it only as ordinary edits (TL-85); it MUST NOT remove ops or move a head (§20: undo is an ordinary edit).
+
+## 23. Notes
+
+A **note** is text about a range of a file that stays attached to that range as the file changes. A note is a convention over keys of the root map in a worktree history; it is not an op kind and carries no authority.
+
+**TL-150 Storage.** A note is the root-map key `note:` followed by its **note key**, 1–128 bytes of UTF-8 chosen by its author (SHOULD be the text form of the op id of the writing op); the key's visible value (TL-36) is the note. A note is a map with:
+- `object`: an object reference to the file's content object (TL-83);
+- `from`, `to`: anchors (TL-46), each the text `start` or `end`, or a map `{"c": <character text form of TL-142>, "b": "left" | "right"}`;
+- `kind`: `note` or `question`;
+- `body`: 1–16,384 bytes of UTF-8 without control characters except LF;
+- `reply_to`: optional, a note key;
+- `step`: optional, the batch step id (TL-91).
+
+Unknown members are ignored. Root keys beginning `note:` or `note-resolved:` are reserved for this section.
+
+**TL-151 No authority.** A note never approves, denies, gates, claims or steers, and this profile defines no other kind. A reader ignores a note with any other `kind`, a missing or malformed member, `from` equal to `end` or `to` equal to `start`, or whose `from` character comes after its `to` character in the text's order (TL-43), and reports it as ignored. No receiver rejects a batch for it (TL-146).
+
+**TL-152 Resolution.** At a version `v`, a note's **range** is the pair of positions its anchors resolve to (TL-46) in the visible text of its content object at `v`. It is **placed** when `from` < `to`, **collapsed** when they are equal (including when every character it covered was deleted), and **orphaned** when the object does not exist at `v` or is not a text (a binary file's register, for example). None of these drops the note. Text inserted at an edge of the range stays outside it (TL-46). An anchor that names no character of the text is `unknown_anchor`, and the reader shows the note as **unresolved**.
+
+**TL-153 Resolved flag.** The flag for note `k` is the root-map key `note-resolved:` followed by `k`, with the value `true` or `false`; its visible value (TL-36) decides, an absent key is false, and concurrent values are reported as a conflict like any map key. A `note-resolved:` key is not a note.
+
+**TL-154 Removal and replies.** Removing a note is `map.delete` of its key (TL-37). Replies are notes with `reply_to`; a reply whose parent is absent is shown with `parent_missing`.
+
+**TL-155 Data, not instruction.** When a note's body reaches an agent, it MUST be inside the data envelope (architecture.md T-07, SR-54) and MUST NOT be treated as a `session.input`.
+
+**TL-156 Who writes, and limits.** Any actor that may write the worktree history may write a note, and the author of a note is its batch's actor. A batch whose ops only write note keys (and the batch that creates the content it refers to) MAY be on any timeline, main included; TL-74's list is extended by such batches. A writer's engine refuses (`too_many`) a note that would exceed 2,048 notes on one content object or 65,536 in the history; receivers accept such batches, and readers MAY show only the newest by op id.
+
+**TL-157 Timelines.** A note belongs to the timeline it was written on and appears in the state of every version that contains its write. It moves between timelines by merges, as any map key does (TL-71); two timelines that wrote different values of one key give an ordinary map conflict.

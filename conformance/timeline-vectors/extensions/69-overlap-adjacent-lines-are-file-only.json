@@ -1,0 +1,373 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "69-overlap-adjacent-lines-are-file-only",
+ "description": "Edits on neighbouring lines of one file abut but do not meet: the overlap says only that both touch the file",
+ "rules": [
+  "TL-131",
+  "TL-133",
+  "TL-134"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "fork1": {
+   "replica": "A",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "fork2": {
+   "replica": "C",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s2",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1e": {
+   "replica": "B",
+   "start": 9,
+   "parents": [
+    "8@A"
+   ],
+   "timeline": "8@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [
+      [
+       "4@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "X"
+      ]
+     ]
+    }
+   ]
+  },
+  "s2e": {
+   "replica": "C",
+   "start": 9,
+   "parents": [
+    "8@C"
+   ],
+   "timeline": "8@C",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [
+      [
+       "4@A#0",
+       4,
+       5
+      ]
+     ],
+     "inserts": [
+      [
+       "4@A#0:3",
+       "C"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "fork2"
+    },
+    {
+     "deliver": "s1e"
+    },
+    {
+     "deliver": "s2e"
+    },
+    {
+     "expect": {
+      "touch": [
+       {
+        "timeline": "8@A",
+        "entries": [
+         {
+          "object": "4@A",
+          "base_path": "src/a.txt",
+          "head_path": "src/a.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            1,
+            2
+           ]
+          ],
+          "head_lines": [
+           [
+            1,
+            2
+           ]
+          ]
+         }
+        ],
+        "digest": "f72de2b1eaa42f5880ef7607f91aabf031f515d4cf010d3bd338f203eb59630e"
+       },
+       {
+        "timeline": "8@C",
+        "entries": [
+         {
+          "object": "4@A",
+          "base_path": "src/a.txt",
+          "head_path": "src/a.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            2,
+            3
+           ]
+          ],
+          "head_lines": [
+           [
+            2,
+            3
+           ]
+          ]
+         }
+        ],
+        "digest": "ae27a4af25b1f28db73ce7e920f18eda0d0925da16cddbde1de6e0617ba1dd02"
+       }
+      ],
+      "overlap": [
+       {
+        "a": "8@A",
+        "b": "8@C",
+        "entries": [
+         {
+          "object": "4@A",
+          "class": "file"
+         }
+        ],
+        "digest": "6a730a4cbf834c0111f026be905dcfe9a6cc8f824ec597c26b3e89ae9d116a15"
+       }
+      ],
+      "plans": [
+       {
+        "into": "8@A",
+        "from": "8@C",
+        "kind": "merge",
+        "base": [
+         "7@A"
+        ],
+        "conflicts": []
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "s2e"
+    },
+    {
+     "deliver": "s1e"
+    },
+    {
+     "deliver": "fork2"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "touch": [
+       {
+        "timeline": "8@A",
+        "entries": [
+         {
+          "object": "4@A",
+          "base_path": "src/a.txt",
+          "head_path": "src/a.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            1,
+            2
+           ]
+          ],
+          "head_lines": [
+           [
+            1,
+            2
+           ]
+          ]
+         }
+        ],
+        "digest": "f72de2b1eaa42f5880ef7607f91aabf031f515d4cf010d3bd338f203eb59630e"
+       },
+       {
+        "timeline": "8@C",
+        "entries": [
+         {
+          "object": "4@A",
+          "base_path": "src/a.txt",
+          "head_path": "src/a.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            2,
+            3
+           ]
+          ],
+          "head_lines": [
+           [
+            2,
+            3
+           ]
+          ]
+         }
+        ],
+        "digest": "ae27a4af25b1f28db73ce7e920f18eda0d0925da16cddbde1de6e0617ba1dd02"
+       }
+      ],
+      "overlap": [
+       {
+        "a": "8@A",
+        "b": "8@C",
+        "entries": [
+         {
+          "object": "4@A",
+          "class": "file"
+         }
+        ],
+        "digest": "6a730a4cbf834c0111f026be905dcfe9a6cc8f824ec597c26b3e89ae9d116a15"
+       }
+      ],
+      "plans": [
+       {
+        "into": "8@A",
+        "from": "8@C",
+        "kind": "merge",
+        "base": [
+         "7@A"
+        ],
+        "conflicts": []
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

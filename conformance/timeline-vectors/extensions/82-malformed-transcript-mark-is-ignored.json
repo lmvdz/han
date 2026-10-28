@@ -1,0 +1,182 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "82-malformed-transcript-mark-is-ignored",
+ "description": "A mark whose value is not exactly the TL-142 shape is ignored and reported, never an error; the other marks still resolve",
+ "rules": [
+  "TL-142",
+  "TL-146"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "transcript",
+     "session": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    },
+    {
+     "kind": "text.create",
+     "text": "q1\na1\nq2\na2\n",
+     "transcript": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "turn:1",
+     "value": {
+      "h": "abababababababababababababababababababababababababababababababab",
+      "t": "8@@alice:a.example/laptop/0",
+      "v": [
+       "9@@bob:b.example/desk/0"
+      ],
+      "end": "2@@alice:a.example/laptop/0#0:5"
+     }
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "turn:2",
+     "value": {
+      "h": "abababababababababababababababababababababababababababababababab",
+      "t": "8@@alice:a.example/laptop/0",
+      "v": [
+       "9@@bob:b.example/desk/0"
+      ],
+      "end": "2@@alice:a.example/laptop/0#0:11"
+     }
+    }
+   ]
+  },
+  "t3": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:11",
+       "q3\n"
+      ]
+     ]
+    }
+   ]
+  },
+  "bad": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "turn:9",
+     "value": {
+      "h": "NOT-HEX",
+      "t": "x",
+      "v": [],
+      "end": "y"
+     }
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "t3"
+    },
+    {
+     "deliver": "bad"
+    },
+    {
+     "expect": {
+      "ignored_marks": [
+       "turn:9"
+      ],
+      "turn_of": [
+       {
+        "object": "2@A",
+        "at": "1@A",
+        "positions": [
+         {
+          "pos": 6,
+          "turn": 2
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "bad"
+    },
+    {
+     "deliver": "t3"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "ignored_marks": [
+       "turn:9"
+      ],
+      "turn_of": [
+       {
+        "object": "2@A",
+        "at": "1@A",
+        "positions": [
+         {
+          "pos": 6,
+          "turn": 2
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

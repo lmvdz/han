@@ -11,7 +11,7 @@ Test vectors for [`spec/profiles/han.timeline-1.md`](../../spec/profiles/han.tim
 - `replicas`: labels for replica ids `[actor, key, lane]` (TL-01). Every vector uses `A` = `@alice:a.example/laptop/0`, `B` = `@bob:b.example/desk/0`, `C` = `@alice:a.example/phone/0`, so the replica order (TL-02) is **A < C < B**.
 - `writers`: when present, the replica labels whose batches are authorised (TL-103); batches of any other replica are unauthorised. When absent, every batch is authorised.
 - `hold_limit`: when present, the receiver holds back at most this many batches (TL-102); otherwise it never drops one.
-- `batches`: named batches in decoded form, `{replica, start, parents, timeline, ops}` (TL-91). Behaviour vectors assume every batch arrives in a valid envelope with a valid signature from a key in its actor's profile (TL-101 steps 1–3 and 5 pass); `envelopes.json` tests those steps.
+- `batches`: named batches in decoded form, `{replica, start, parents, timeline, ops}` (TL-91); the genesis batch is named `b0`. Behaviour vectors assume every batch arrives in a valid envelope with a valid signature from a key in its actor's profile (TL-101 steps 1–3 and 5 pass); `envelopes.json` tests those steps.
 - `runs`: each run starts a **fresh receiver** that holds nothing, then executes its `steps` in order. Several runs over the same batches in different orders must reach the same expectations.
 
 ### Notation
@@ -140,4 +140,21 @@ Keys: each private key is the 32-byte Ed25519 seed `sha256(UTF-8 seed)`; `public
 | 61-merge-move-across-two-clusters | each region rewritten on its own; a move split across an empty and a line cluster |
 | 62-merge-runs-chain-at-one-anchor | runs that would share an anchor chain; a merge naming one anchor twice is invalid |
 | 63-merge-empty-region-anchors-by-position | an empty target region is placed at its gap by position, not through a moved copy |
+| 66-edits-use-the-authored-view | TL-49: an older view fixes scalar offsets, deletes and anchors; concurrent text survives; references absent at the parent are rejected; all 24 delivery permutations |
+| 67-history-reads-and-recorded-reversals | TL-64: historical reads preserve heads and inventory; reversing an insertion with an ordinary edit preserves concurrent text and earlier versions |
 | envelopes.json E1–E11 | envelope bytes, the history id from the genesis batch id, batch ids, signatures, replica tables, bad signatures, non-deterministic CBOR, zstd without size, hello and answer bytes, an empty history on a non-genesis batch, an unknown key, and a merge digest (TL-74) with the this-op marker (`digest_preimage`, `merge_digest`) |
+
+## Older views and recorded reversals
+
+TL-49 and TL-64 clarify existing rules; the profile remains `han.timeline/1` because operation meanings, encoding, ordering and existing results are unchanged.
+
+| Acceptance criterion | Coverage |
+|---|---|
+| TL-49.1: when selected-version planning is supported, positions refer to that version, counting scalar values | 66: the same planned replacement before and after concurrent changes; a supplementary character; bounds judged at the selected version |
+| TL-49.2: concurrent insertions survive named deletion, including deletion of the anchor | 66: replacement and removal of its anchor, in every delivery order |
+| TL-49.3: TL-17 restated for text-edit character references | 66: a reference to a concurrent insertion is rejected with `invalid_op` |
+| TL-64.1: history reads leave heads and inventory intact | 67: alternating past, current and concurrent-version reads, with heads and inventory checked after each; checkpoint version checked |
+| TL-64.2: deleting characters an earlier edit inserted is a new ordinary edit | 67: the deleting op remains in the head and inventory; existing 14 and 34 also cover seal and parent-state validity constraints |
+| TL-64.3: a reversal preserves concurrent insertions and earlier states | 67: an insertion beneath the deleted character survives, and the earlier version still contains that character |
+
+Behaviour expectations are hand-authored input/output data; `ref/` has generators for other vector families but no timeline generator. The existing check is `cargo test --locked -p han-timeline --test vectors`, also invoked by `ref/run_all.py` and included in CI's workspace tests. Numbers 64 and 65 are unallocated in this revision's base; new vectors start at 66.

@@ -1,0 +1,1156 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "67-history-reads-and-recorded-reversals",
+ "description": "Historical reads preserve heads and inventory; an ordinary edit reversing an insertion preserves a concurrent child insertion and all past states",
+ "rules": [
+  "TL-64",
+  "TL-25",
+  "TL-44",
+  "TL-60",
+  "TL-121"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "mn",
+     "transcript": false
+    }
+   ]
+  },
+  "checkpoint": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": "before"
+    }
+   ]
+  },
+  "insert": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:0",
+       "X"
+      ]
+     ]
+    }
+   ]
+  },
+  "reverse": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "4@A#0",
+       0,
+       1
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  },
+  "peer": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "4@A#0:0",
+       "Y"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "checkpoint"
+    },
+    {
+     "deliver": "insert"
+    },
+    {
+     "deliver": "reverse"
+    },
+    {
+     "deliver": "peer"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "before",
+          "version": [
+           "2@A"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mXn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mXYn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "plan_edits": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 1,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "4@A#0",
+           0,
+           1
+          ]
+         ],
+         "inserts": []
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "before",
+          "version": [
+           "2@A"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "checkpoint"
+    },
+    {
+     "deliver": "insert"
+    },
+    {
+     "deliver": "peer"
+    },
+    {
+     "deliver": "reverse"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "before",
+          "version": [
+           "2@A"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mXn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mXYn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "plan_edits": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 1,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "4@A#0",
+           0,
+           1
+          ]
+         ],
+         "inserts": []
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "before",
+          "version": [
+           "2@A"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "peer"
+    },
+    {
+     "deliver": "reverse"
+    },
+    {
+     "deliver": "insert"
+    },
+    {
+     "deliver": "checkpoint"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "before",
+          "version": [
+           "2@A"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mXn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mXYn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "5@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "mn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      }
+     }
+    },
+    {
+     "expect": {
+      "plan_edits": [
+       {
+        "at": [
+         "4@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 1,
+        "text": "",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "4@A#0",
+           0,
+           1
+          ]
+         ],
+         "inserts": []
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "5@A",
+        "5@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         5
+        ]
+       ],
+       "B": [
+        [
+         5,
+         5
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "mYn"
+         }
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "1@A",
+        "list": [
+         {
+          "id": "3@A",
+          "label": "before",
+          "version": [
+           "2@A"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

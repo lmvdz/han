@@ -1,0 +1,1360 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "66-edits-use-the-authored-view",
+ "description": "An older view fixes scalar offsets and character references; concurrent text survives replacement and deletion of the anchor; references absent at the parent are invalid",
+ "rules": [
+  "TL-49",
+  "TL-17",
+  "TL-40",
+  "TL-42",
+  "TL-44",
+  "TL-47"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "text.create",
+     "text": "w😀xyz",
+     "transcript": false
+    }
+   ]
+  },
+  "prefix": {
+   "replica": "A",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "2@A#0:0",
+       "!"
+      ]
+     ]
+    }
+   ]
+  },
+  "replace": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       1,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "2@A#0:0",
+       "Q"
+      ]
+     ]
+    }
+   ]
+  },
+  "remove_anchor": {
+   "replica": "C",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [
+      [
+       "2@A#0",
+       0,
+       1
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  },
+  "foreign_reference": {
+   "replica": "B",
+   "start": 4,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "2@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "3@A#0:0",
+       "?"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "plan_edits": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 2,
+        "text": "Q",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           1,
+           3
+          ]
+         ],
+         "inserts": [
+          [
+           "2@A#0:0",
+           "Q"
+          ]
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "prefix"
+    },
+    {
+     "deliver": "remove_anchor"
+    },
+    {
+     "expect": {
+      "plan_edits": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 2,
+        "text": "Q",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           1,
+           3
+          ]
+         ],
+         "inserts": [
+          [
+           "2@A#0:0",
+           "Q"
+          ]
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "replace"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         3
+        ]
+       ],
+       "B": [
+        [
+         3,
+         3
+        ]
+       ],
+       "C": [
+        [
+         3,
+         3
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "w😀xyz"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "w!😀xyz"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "wQyz"
+         }
+        }
+       }
+      ],
+      "plan_edits": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 2,
+        "text": "Q",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           1,
+           3
+          ]
+         ],
+         "inserts": [
+          [
+           "2@A#0:0",
+           "Q"
+          ]
+         ]
+        }
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "object": "2@A",
+        "pos": 5,
+        "delete": 1,
+        "text": "",
+        "error": "out_of_range"
+       }
+      ]
+     }
+    },
+    {
+     "deliver": "foreign_reference",
+     "result": "rejected:invalid_op"
+    },
+    {
+     "expect": {
+      "heads": {
+       "1@A": [
+        "3@A",
+        "3@C",
+        "3@B"
+       ]
+      },
+      "inventory": {
+       "A": [
+        [
+         1,
+         3
+        ]
+       ],
+       "B": [
+        [
+         3,
+         3
+        ]
+       ],
+       "C": [
+        [
+         3,
+         3
+        ]
+       ]
+      },
+      "pending": [],
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "2@A": {
+          "text": "Q!yz"
+         }
+        }
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "w😀xyz"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@A"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "w!😀xyz"
+         }
+        }
+       },
+       {
+        "at": [
+         "3@B"
+        ],
+        "objects": {
+         "2@A": {
+          "text": "wQyz"
+         }
+        }
+       }
+      ],
+      "plan_edits": [
+       {
+        "at": [
+         "2@A"
+        ],
+        "object": "2@A",
+        "pos": 1,
+        "delete": 2,
+        "text": "Q",
+        "op": {
+         "kind": "text.edit",
+         "target": "2@A",
+         "deletes": [
+          [
+           "2@A#0",
+           1,
+           3
+          ]
+         ],
+         "inserts": [
+          [
+           "2@A#0:0",
+           "Q"
+          ]
+         ]
+        }
+       },
+       {
+        "at": [
+         "2@A"
+        ],
+        "object": "2@A",
+        "pos": 5,
+        "delete": 1,
+        "text": "",
+        "error": "out_of_range"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
