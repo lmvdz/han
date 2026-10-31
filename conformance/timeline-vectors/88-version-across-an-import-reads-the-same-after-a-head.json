@@ -1,7 +1,7 @@
 {
  "format": "han-timeline-vector/1",
  "name": "88-version-across-an-import-reads-the-same-after-a-head",
- "description": "A merge imports an object under its own id, and a later edit on main is anchored on the merge's copy. The state at the join version of that edit and the creating timeline must read the same in every read order: the object's own create op, applied after the import, must not replace the copy that the edit builds on",
+ "description": "A merge imports an object under its own id, and a later edit on main is anchored on the merge's copy. The state at the join version of that edit and the creating timeline must read the same in every read order: the object's own create op, applied after the import, must not replace the copy that the edit builds on. Two checkpoints after the edit make main's head the largest cached state inside the join, so a reader that starts from the largest cached state must apply the creating timeline's own create op after the import",
  "rules": [
   "TL-60",
   "TL-71",
@@ -150,6 +150,24 @@
      ]
     }
    ]
+  },
+  "marks": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "6@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": "c1"
+    },
+    {
+     "kind": "checkpoint",
+     "label": "c2"
+    }
+   ]
   }
  },
  "runs": [
@@ -171,6 +189,9 @@
      "deliver": "edit"
     },
     {
+     "deliver": "marks"
+    },
+    {
      "expect": {
       "states": [
        {
@@ -190,7 +211,7 @@
        {
         "at": [
          "4@B",
-         "6@A"
+         "8@A"
         ],
         "objects": {
          "root": {
@@ -239,7 +260,7 @@
        {
         "at": [
          "4@B",
-         "6@A"
+         "8@A"
         ],
         "objects": {
          "root": {
@@ -288,12 +309,15 @@
      "deliver": "edit"
     },
     {
+     "deliver": "marks"
+    },
+    {
      "expect": {
       "states": [
        {
         "at": [
          "4@B",
-         "6@A"
+         "8@A"
         ],
         "objects": {
          "root": {
@@ -342,7 +366,7 @@
        {
         "at": [
          "4@B",
-         "6@A"
+         "8@A"
         ],
         "objects": {
          "root": {
@@ -391,6 +415,9 @@
      "deliver": "edit"
     },
     {
+     "deliver": "marks"
+    },
+    {
      "expect": {
       "states": [
        {
@@ -410,7 +437,7 @@
        {
         "at": [
          "4@B",
-         "6@A"
+         "8@A"
         ],
         "objects": {
          "root": {
