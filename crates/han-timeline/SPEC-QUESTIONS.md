@@ -256,4 +256,9 @@ This depends on how one implementation caches (TL-123 allows any cache that matc
 no vector detects the bug in every implementation. Larger main and s1 sides in two vectors
 would cover both choices. `tests/time_travel.rs` keeps the engine's own regression test.
 
-Q28 is open.
+**Answered** by vector 88's revision (commit `a6ce3b9`): a `marks` batch of two checkpoints on
+main after the edit, join `["4@B", "8@A"]`. Checked by reverting `aa9249d`'s change to
+`state.rs`: run 0 (main's head read first) fails, both join reads giving `new\n` instead of
+`new\nx`. With the fix restored, `src/` has no diff and all three runs pass.
+
+No questions are open.
