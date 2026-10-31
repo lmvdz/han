@@ -320,36 +320,49 @@ impl State {
     }
 
     /// Applies op `id`. `seen` says which current map values the op had seen.
+    ///
+    /// Ops may arrive here out of op id order: a materialisation may start from a cached state
+    /// that already holds a merge which imported an object (`create: true`), and then apply the
+    /// object's own create op from the other timeline. A create therefore never replaces an
+    /// existing object; it adds what it would have contributed (TL-60).
     pub(crate) fn apply(&mut self, id: &OpId, op: &Op, seen: &Seen<'_>) {
         let obj = ObjectId::Op(id.clone());
         match op {
             Op::TimelineCreate { .. } | Op::Checkpoint { .. } => {}
             Op::RegisterCreate { value } => {
-                self.objects.insert(
-                    obj,
-                    Obj::Register(RegisterObj {
-                        value: value.clone(),
-                        writer: id.clone(),
-                    }),
-                );
+                if self.contains(&obj) {
+                    self.write_register(&obj, id, value);
+                } else {
+                    self.objects.insert(
+                        obj,
+                        Obj::Register(RegisterObj {
+                            value: value.clone(),
+                            writer: id.clone(),
+                        }),
+                    );
+                }
             }
             Op::RegisterSet { target, value } => self.write_register(target, id, value),
             Op::MapCreate { tree } => {
-                self.objects.insert(
-                    obj,
+                self.objects.entry(obj).or_insert_with(|| {
                     Obj::Map(Arc::new(MapObj {
                         tree: *tree,
                         keys: BTreeMap::new(),
-                    })),
-                );
+                    }))
+                });
             }
             Op::MapSet { target, key, value } => {
                 self.observe_key(target, key, id, Some(value), seen)
             }
             Op::MapDelete { target, key } => self.observe_key(target, key, id, None, seen),
             Op::TextCreate { text, transcript } => {
-                let mut t = TextObj::new(*transcript);
-                if !text.is_empty() {
+                if !self.contains(&obj) {
+                    self.objects
+                        .insert(obj.clone(), Obj::Text(Arc::new(TextObj::new(*transcript))));
+                }
+                if !text.is_empty()
+                    && let Some(t) = self.text_mut(&obj)
+                {
                     t.insert(
                         InsertionId {
                             op: id.clone(),
@@ -360,7 +373,6 @@ impl State {
                         None,
                     );
                 }
-                self.objects.insert(obj, Obj::Text(Arc::new(t)));
             }
             Op::TextEdit {
                 target,

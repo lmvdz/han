@@ -1,0 +1,265 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "85-note-resolved-flag-conflict",
+ "description": "Two people set the resolved flag differently at once: the greatest write is visible and the conflict is reported; a write that saw both ends the conflict",
+ "rules": [
+  "TL-36",
+  "TL-153"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "n1": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:n1",
+     "value": {
+      "object": {
+       "obj": "4@A"
+      },
+      "from": {
+       "c": "4@A#0:2",
+       "b": "right"
+      },
+      "to": {
+       "c": "4@A#0:3",
+       "b": "left"
+      },
+      "kind": "note",
+      "body": "why b?"
+     }
+    }
+   ]
+  },
+  "r1": {
+   "replica": "B",
+   "start": 9,
+   "parents": [
+    "8@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note-resolved:n1",
+     "value": true
+    }
+   ]
+  },
+  "r2": {
+   "replica": "C",
+   "start": 9,
+   "parents": [
+    "8@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note-resolved:n1",
+     "value": false
+    }
+   ]
+  },
+  "r3": {
+   "replica": "A",
+   "start": 10,
+   "parents": [
+    "9@C",
+    "9@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note-resolved:n1",
+     "value": false
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "r1"
+    },
+    {
+     "deliver": "r2"
+    },
+    {
+     "deliver": "r3"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "9@C",
+         "9@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "resolved": true,
+          "resolved_conflict": true
+         }
+        ]
+       },
+       {
+        "at": [
+         "10@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "resolved": false,
+          "resolved_conflict": false
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "r3"
+    },
+    {
+     "deliver": "r2"
+    },
+    {
+     "deliver": "r1"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "9@C",
+         "9@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "resolved": true,
+          "resolved_conflict": true
+         }
+        ]
+       },
+       {
+        "at": [
+         "10@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "resolved": false,
+          "resolved_conflict": false
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

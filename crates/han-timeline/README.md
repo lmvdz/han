@@ -108,11 +108,17 @@ let _ = digest;
 | `History::state`, `head`, `version`, `timelines`, `checkpoints` | read any version |
 | `History::hello`, `answer`, `receive_answer` | two-message anti-entropy sync |
 | `State` | observable objects, anchors, map and tree conflicts, the state digest; `text_shared` reads a text without copying it (holding the result keeps that version's text in memory) |
+| `History::touch_set`, `overlap` → [`TouchSet`], [`Overlap`] | what a timeline changed over a base, and where two timelines meet (§21); pure reads with digests, built from the merge planner so overlap equals planning (TL-134) |
+| `History::turn_marks`, `rewind`, `rewind_fork`, `mark_turn`, `resolves_mark`; `State::transcript_marks`, `turn_of` | turn marks, rewinding a session as a view or a fork, and the turn of a transcript position (§22) |
+| `State::notes`, `History::write_note` | notes on file ranges, resolved by anchors, and the writer with its limits (§23) |
 
 ## Tests and benchmarks
 
-- `cargo test -p han-timeline` runs every vector in `conformance/timeline-vectors/`, plus:
+- `cargo test -p han-timeline` runs every vector in `conformance/timeline-vectors/` (01 – 88;
+  64 and 65 are unallocated), plus:
   - randomized convergence and sync tests;
+  - overlap-equals-planning property tests (`tests/overlap.rs`);
+  - touch-set limits, marks and notes on generated histories (`tests/extensions.rs`);
   - authorisation tests;
   - time-travel tests;
   - durable-store tests.

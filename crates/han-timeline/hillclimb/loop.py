@@ -29,9 +29,13 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-WORK = os.path.join(REPO, "target", "hillclimb")
+# One folder per climb; set CLIMB_DIR to start a new one next to earlier ones.
+WORK = os.path.join(REPO, os.environ.get("CLIMB_DIR", os.path.join("target", "hillclimb")))
 WT = os.path.join(WORK, "wt")
 STATE = os.path.join(WORK, "state.json")
+# The benchmark binary of the best kept code: every candidate is measured against it, run for
+# run, so both see the same machine load.
+BEST_EXE = os.path.join(WORK, "best_bench.exe" if sys.platform == "win32" else "best_bench")
 BRANCH = "climb/run"
 ALLOWED = "crates/han-timeline/src/"
 CODEX_MODEL = os.environ.get("CLIMB_CODEX_MODEL", "gpt-6.1-sol")
@@ -121,10 +125,16 @@ def save(state):
         json.dump(state, f, indent=1)
 
 
-def score(runs=5, gate=True):
+def score(runs=5, gate=True, ref=None, exe=None, sets=None):
     cmd = [sys.executable, os.path.join(HERE, "score.py"), "--repo", WT, "--runs", str(runs)]
     if not gate:
         cmd.append("--no-gate")
+    if ref:
+        cmd += ["--ref", ref]
+    if exe:
+        cmd += ["--exe", exe]
+    if sets:
+        cmd += ["--sets", sets]
     code, out, err = sh(cmd)
     if code != 0:
         return {"error": (out + err)[-4000:]}
@@ -158,6 +168,12 @@ def init(args):
         "best": base["sets"],
         "noise": noise,
         "threshold": max(args.min_gain, 2 * noise),
+        "metric_noise": {
+            m: abs(v - again["sets"]["validation"]["metrics"][m])
+            / min(v, again["sets"]["validation"]["metrics"][m])
+            for m, v in base["sets"]["validation"]["metrics"].items()
+            if m in again["sets"]["validation"]["metrics"]
+        },
         "rounds": [],
     }
     save(state)
@@ -342,8 +358,110 @@ def revert():
     git("clean", "-fdq")
 
 
+def save_best_exe(result):
+    """Keeps the bench binary of the code just scored as the reference for later rounds."""
+    shutil.copyfile(result["exe"], BEST_EXE)
+
+
+def metric_noise(runs):
+    """Per validation metric, how far the best build drifts against itself, run for run."""
+    if not os.path.exists(BEST_EXE):
+        save_best_exe(score(runs=1, gate=False, sets="train"))
+    r = score(runs=runs, gate=False, ref=BEST_EXE, exe=BEST_EXE, sets="validation")
+    return {m: abs(v - 1) for m, v in r["sets"]["validation"]["ratios"].items()}
+
+
+def judge(state, *ratios):
+    """Metrics that beat the reference beyond their noise, and metrics that lost to it beyond
+    their noise, in every one of the given candidate / reference ratio sets (validation)."""
+    noise = state.get("metric_noise", {})
+    gains, losses = [], []
+    for m in ratios[0]:
+        if not all(m in r for r in ratios):
+            continue
+        tol = noise.get(m, 0.05)
+        values = [r[m] for r in ratios]
+        if max(values) < 1 - max(0.10, 3 * tol):
+            gains.append((m, 100 * (max(values) - 1)))
+        if min(values) > 1 + max(0.15, 3 * tol):
+            losses.append((m, 100 * (min(values) - 1)))
+    return gains, losses
+
+
+def evaluate(state, rec, p, n, runs, rdir):
+    """Gate and score the change in the worktree; keep it (commit) or not. Sets rec's outcome."""
+    sh(["cargo", "fmt", "-p", "han-timeline"], cwd=WT)
+    with open(os.path.join(rdir, "diff.patch"), "w", encoding="utf-8") as f:
+        f.write(git("diff"))
+    s = score(runs=runs, gate=True, ref=BEST_EXE)
+    with open(os.path.join(rdir, "score.json"), "w", encoding="utf-8") as f:
+        json.dump(s, f, indent=1)
+    if "sets" not in s:
+        rec["outcome"] = "gate failed: " + s.get("gate", {}).get("step", s.get("error", "?")[:200])
+        return
+    v = s["sets"]["validation"]
+    # Against the reference measured alongside, not against numbers from an earlier hour.
+    rec["delta_pct"] = 100 * (v["score"] / v["ref_score"] - 1)
+    rec["scores"] = {k: x["score"] for k, x in s["sets"].items()}
+    first = v["ratios"]
+    gains, losses = judge(state, first)
+    if gains:
+        # Confirm with a second paired measurement: a gain or a loss counts only if both show
+        # it (a single measurement on a busy machine can show a 15% loss in code not touched).
+        again = score(runs=runs, gate=False, ref=BEST_EXE, exe=s["exe"], sets="validation")
+        a = again["sets"]["validation"]
+        second = a["ratios"]
+        rec["confirm_pct"] = 100 * (a["score"] / a["ref_score"] - 1)
+        gains, _ = judge(state, first, second)
+        losses = judge(state, first, second)[1]
+    rec["gains"] = gains
+    rec["losses"] = losses
+    if losses:
+        rec["outcome"] = "regression: " + ", ".join(f"{m} {d:+.0f}%" for m, d in losses)[:200]
+        return
+    if not gains:
+        rec["outcome"] = "no gain"
+        return
+    git("add", "-A")
+    # Only measured facts go into the history; the planner's reasoning (which is
+    # estimation) stays in the round folder.
+    sets = "\n".join(
+        f"- {k}: {x['ref_score']:.1f} -> {x['score']:.1f} us "
+        f"({100 * (x['score'] / x['ref_score'] - 1):+.1f}%)"
+        for k, x in s["sets"].items()
+    )
+    metrics = "\n".join(f"- {m}: {d:+.1f}%" for m, d in gains)
+    msg = (
+        f"han-timeline: {p['title'].removeprefix('han-timeline: ')}\n\n"
+        f"{p['idea']}\n\n"
+        f"Hill-climb round {n}. Improved beyond their noise against the previous best, "
+        f"measured run for run in two paired measurements (validation set, best of {runs} "
+        f"runs; the correctness gate passed):\n"
+        f"{metrics}\n\n"
+        f"Set scores (geometric mean of per-op times):\n{sets}\n\n"
+        "Measured by crates/han-timeline/hillclimb/score.py.\n\n"
+        # HAN's commits carry no attribution; this is the only trailer.
+        "Clean-Room: B\n"
+    )
+    sh(["git", "commit", "-q", "-F", "-"], cwd=WT, input=msg)
+    save_best_exe(s)
+    state["best"] = s["sets"]
+    state["head"] = git("rev-parse", "HEAD").strip()
+    rec["outcome"] = "kept"
+
+
+def report_round(rec):
+    extra = f" ({rec['delta_pct']:+.1f}% overall)" if "delta_pct" in rec else ""
+    if rec.get("gains"):
+        extra += "; " + ", ".join(f"{m[:40]} {d:+.0f}%" for m, d in rec["gains"])
+    print(f"  -> {rec['outcome']}{extra}", flush=True)
+
+
 def run(args):
     state = load()
+    if "metric_noise" not in state:
+        state["metric_noise"] = metric_noise(args.runs)
+        save(state)
     misses = 0
     for _ in range(args.rounds):
         n = len(state["rounds"]) + 1
@@ -373,52 +491,7 @@ def run(args):
             elif any(not path.startswith(ALLOWED) for path in paths):
                 rec["outcome"] = "refused: edited outside " + ALLOWED
             else:
-                sh(["cargo", "fmt", "-p", "han-timeline"], cwd=WT)
-                with open(os.path.join(rdir, "diff.patch"), "w", encoding="utf-8") as f:
-                    f.write(git("diff"))
-                s = score(runs=args.runs, gate=True)
-                with open(os.path.join(rdir, "score.json"), "w", encoding="utf-8") as f:
-                    json.dump(s, f, indent=1)
-                if "sets" not in s:
-                    rec["outcome"] = "gate failed: " + s.get("gate", {}).get("step", s.get("error", "?")[:200])
-                else:
-                    old = state["best"]["validation"]["score"]
-                    new = s["sets"]["validation"]["score"]
-                    delta = (old - new) / old
-                    rec["delta_pct"] = -100 * delta
-                    rec["scores"] = {k: v["score"] for k, v in s["sets"].items()}
-                    if delta > state["threshold"]:
-                        # Confirm a win with a second measurement before keeping it.
-                        again = score(runs=args.runs, gate=False)
-                        new2 = again["sets"]["validation"]["score"]
-                        rec["confirm_pct"] = -100 * (old - new2) / old
-                        if (old - new2) / old <= state["threshold"]:
-                            delta = 0.0
-                    if delta > state["threshold"]:
-                        git("add", "-A")
-                        # Only measured facts go into the history; the planner's reasoning
-                        # (which is estimation) stays in the round folder.
-                        lines = "\n".join(
-                            f"- {k}: {state['best'][k]['score']:.1f} -> {v['score']:.1f} us "
-                            f"({100 * (v['score'] - state['best'][k]['score']) / state['best'][k]['score']:+.1f}%)"
-                            for k, v in s["sets"].items()
-                        )
-                        msg = (
-                            f"han-timeline: {p['title'].removeprefix('han-timeline: ')}\n\n"
-                            f"{p['idea']}\n\n"
-                            f"Hill-climb round {n}. Benchmark scores (geometric mean of per-op "
-                            f"times, best of {args.runs} runs; the correctness gate passed):\n"
-                            f"{lines}\n\n"
-                            "Measured by crates/han-timeline/hillclimb/score.py.\n\n"
-                            # HAN's commits carry no attribution; this is the only trailer.
-                            "Clean-Room: B\n"
-                        )
-                        sh(["git", "commit", "-q", "-F", "-"], cwd=WT, input=msg)
-                        state["best"] = s["sets"]
-                        state["head"] = git("rev-parse", "HEAD").strip()
-                        rec["outcome"] = "kept"
-                    else:
-                        rec["outcome"] = "no gain"
+                evaluate(state, rec, p, n, args.runs, rdir)
         except Exception as e:  # a failed round is recorded, not fatal
             rec["outcome"] = f"error: {e}"[:500]
         if rec["outcome"] != "kept":
@@ -429,16 +502,53 @@ def run(args):
         rec["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         state["rounds"].append(rec)
         save(state)
-        print(f"  -> {rec['outcome']}" + (f" ({rec['delta_pct']:+.1f}%)" if "delta_pct" in rec else ""))
+        report_round(rec)
         if misses >= args.patience:
             print(f"stopping: {misses} rounds in a row without a gain")
             break
     status(args)
 
 
+def recheck(args):
+    """Re-applies a past round's diff and judges it again under the current rule."""
+    state = load()
+    rec = next(r for r in state["rounds"] if r["round"] == args.round)
+    rdir = os.path.join(WORK, "rounds", f"{args.round:03d}")
+    with open(os.path.join(rdir, "director.json"), encoding="utf-8") as f:
+        reply = json.load(f)
+    p = reply.get("structured_output") or {}
+    p.setdefault("title", rec.get("title", "?"))
+    p.setdefault("idea", rec.get("idea", ""))
+    if "metric_noise" not in state:
+        state["metric_noise"] = metric_noise(args.runs)
+    revert()
+    code, out, err = sh(["git", "apply", os.path.join(rdir, "diff.patch")], cwd=WT)
+    if code != 0:
+        raise SystemExit(f"cannot apply round {args.round}'s diff: {err}")
+    rec["rechecked"] = rec.get("outcome")
+    evaluate(state, rec, p, args.round, args.runs, rdir)
+    if rec["outcome"] != "kept":
+        revert()
+    save(state)
+    report_round(rec)
+
+
+def noise_cmd(args):
+    state = load()
+    # Rebuild the reference from the worktree's current (best) code first.
+    save_best_exe(score(runs=1, gate=False, sets="train"))
+    state["metric_noise"] = metric_noise(args.runs)
+    save(state)
+    for m, v in sorted(state["metric_noise"].items(), key=lambda kv: -kv[1]):
+        print(f"  {100 * v:5.1f}%  {m}")
+
+
 def status(_args):
     state = load()
-    print(f"noise {100 * state['noise']:.1f}%, keep threshold {100 * state['threshold']:.1f}%")
+    print(
+        "keep rule: a validation metric improves by more than max(10%, 3x its noise) in two "
+        "paired measurements, and none gets worse by more than max(15%, 3x its noise) in both"
+    )
     for name in ("train", "validation", "test"):
         b, c = state["baseline"][name]["score"], state["best"][name]["score"]
         print(f"{name:<11} baseline {b:9.1f}  best {c:9.1f}  ({100 * (c - b) / b:+.1f}%)")
@@ -459,8 +569,13 @@ def main():
     r.add_argument("--patience", type=int, default=3)
     r.add_argument("--runs", type=int, default=5)
     sub.add_parser("status")
+    c = sub.add_parser("recheck")
+    c.add_argument("round", type=int)
+    c.add_argument("--runs", type=int, default=5)
+    z = sub.add_parser("noise")
+    z.add_argument("--runs", type=int, default=5)
     a = ap.parse_args()
-    {"init": init, "run": run, "status": status}[a.cmd](a)
+    {"init": init, "run": run, "status": status, "recheck": recheck, "noise": noise_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":

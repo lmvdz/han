@@ -1,0 +1,486 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "88-version-across-an-import-reads-the-same-after-a-head",
+ "description": "A merge imports an object under its own id, and a later edit on main is anchored on the merge's copy. The state at the join version of that edit and the creating timeline must read the same in every read order: the object's own create op, applied after the import, must not replace the copy that the edit builds on. Two checkpoints after the edit make main's head the largest cached state inside the join, so a reader that starts from the largest cached state must apply the creating timeline's own create op after the import",
+ "rules": [
+  "TL-60",
+  "TL-71",
+  "TL-73",
+  "TL-45"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    }
+   ]
+  },
+  "fork": {
+   "replica": "A",
+   "start": 2,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1": {
+   "replica": "B",
+   "start": 3,
+   "parents": [
+    "2@A"
+   ],
+   "timeline": "2@A",
+   "ops": [
+    {
+     "kind": "text.create",
+     "text": "new\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "doc",
+     "value": {
+      "obj": "3@B"
+     }
+    }
+   ]
+  },
+  "merge": {
+   "replica": "A",
+   "start": 5,
+   "parents": [
+    "1@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "merge",
+     "source": "2@A",
+     "incoming": [
+      "4@B"
+     ],
+     "base": [
+      "1@A"
+     ],
+     "changes": [
+      {
+       "type": "map",
+       "object": "root",
+       "create": false,
+       "tree": false,
+       "sets": [
+        [
+         "doc",
+         {
+          "obj": "3@B"
+         }
+        ]
+       ],
+       "deletes": []
+      },
+      {
+       "type": "text",
+       "object": "3@B",
+       "create": true,
+       "transcript": false,
+       "deletes": [],
+       "inserts": [
+        [
+         null,
+         "new\n",
+         "3@B#0:0"
+        ]
+       ]
+      }
+     ],
+     "conflicts": []
+    }
+   ]
+  },
+  "edit": {
+   "replica": "A",
+   "start": 6,
+   "parents": [
+    "5@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "3@B",
+     "deletes": [],
+     "inserts": [
+      [
+       "5@A#0:3",
+       "x"
+      ]
+     ]
+    }
+   ]
+  },
+  "marks": {
+   "replica": "A",
+   "start": 7,
+   "parents": [
+    "6@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": "c1"
+    },
+    {
+     "kind": "checkpoint",
+     "label": "c2"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "merge"
+    },
+    {
+     "deliver": "edit"
+    },
+    {
+     "deliver": "marks"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@B",
+         "8@A"
+        ],
+        "objects": {
+         "root": {
+          "entries": {
+           "doc": [
+            [
+             "5@A",
+             {
+              "obj": "3@B"
+             }
+            ],
+            [
+             "4@B",
+             {
+              "obj": "3@B"
+             }
+            ]
+           ]
+          }
+         },
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "2@A",
+        "objects": {
+         "3@B": {
+          "text": "new\n"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@B",
+         "8@A"
+        ],
+        "objects": {
+         "root": {
+          "entries": {
+           "doc": [
+            [
+             "5@A",
+             {
+              "obj": "3@B"
+             }
+            ],
+            [
+             "4@B",
+             {
+              "obj": "3@B"
+             }
+            ]
+           ]
+          }
+         },
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "merge"
+    },
+    {
+     "deliver": "edit"
+    },
+    {
+     "deliver": "marks"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@B",
+         "8@A"
+        ],
+        "objects": {
+         "root": {
+          "entries": {
+           "doc": [
+            [
+             "5@A",
+             {
+              "obj": "3@B"
+             }
+            ],
+            [
+             "4@B",
+             {
+              "obj": "3@B"
+             }
+            ]
+           ]
+          }
+         },
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@B",
+         "8@A"
+        ],
+        "objects": {
+         "root": {
+          "entries": {
+           "doc": [
+            [
+             "5@A",
+             {
+              "obj": "3@B"
+             }
+            ],
+            [
+             "4@B",
+             {
+              "obj": "3@B"
+             }
+            ]
+           ]
+          }
+         },
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork"
+    },
+    {
+     "deliver": "s1"
+    },
+    {
+     "deliver": "merge"
+    },
+    {
+     "deliver": "edit"
+    },
+    {
+     "deliver": "marks"
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "2@A",
+        "objects": {
+         "3@B": {
+          "text": "new\n"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": [
+         "4@B",
+         "8@A"
+        ],
+        "objects": {
+         "root": {
+          "entries": {
+           "doc": [
+            [
+             "5@A",
+             {
+              "obj": "3@B"
+             }
+            ],
+            [
+             "4@B",
+             {
+              "obj": "3@B"
+             }
+            ]
+           ]
+          }
+         },
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    },
+    {
+     "expect": {
+      "states": [
+       {
+        "at": "1@A",
+        "objects": {
+         "3@B": {
+          "text": "new\nx"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
