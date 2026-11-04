@@ -2,6 +2,7 @@
 
 use super::Res;
 #[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 use han_proc::NoWindow as _;
 use std::path::Path;
 
