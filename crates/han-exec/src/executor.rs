@@ -852,10 +852,16 @@ impl Executor {
         &self,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), ExecError> {
+        if *shutdown.borrow() {
+            return Ok(());
+        }
         self.recover().await?;
         let mut stream = self.api.view(self.query());
         let mut mirror = ViewMirror::new();
         loop {
+            if *shutdown.borrow() {
+                return Ok(());
+            }
             let rows = effect_rows(mirror.rows());
             if let Err(e) = self.step_rows(&rows).await {
                 tracing::warn!("executor pass: {e}");

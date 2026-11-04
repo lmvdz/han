@@ -115,6 +115,10 @@ pub async fn start(
     let mut config = NodeConfig::new(actor);
     config.key_id = key_id.to_owned();
     config.data_dir = Some(PathBuf::from(data));
+    config.initial_home = match home {
+        HomeRef::Ticket(ticket) => Some(ticket.clone()),
+        HomeRef::Server(_) => None,
+    };
     let node = Node::start(NodeParts {
         config,
         transport: transport.clone(),

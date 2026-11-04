@@ -100,6 +100,10 @@ pub struct TaskDraft {
 pub struct App {
     /// Guided create/join flow.
     pub setup: Option<crate::setup::Setup>,
+    /// Whether this TUI was opened by the guided setup launcher.
+    pub guided_setup: bool,
+    /// Explicitly accepted handoff to the launcher after space confirmation.
+    pub setup_continue: Option<String>,
     /// What is remembered between runs.
     pub config: Config,
     /// The space on the board.
@@ -162,6 +166,16 @@ fn ctrl(k: &KeyEvent, c: char) -> bool {
 }
 
 impl App {
+    /// A known local signing blocker; the home still decides policy eligibility.
+    pub fn approval_block_reason(&self) -> Option<String> {
+        if self.node.as_ref().is_some_and(|node| node.headless) {
+            return Some(
+                "This node is headless and cannot approve. Use your personal node.".into(),
+            );
+        }
+        self.approvals.block_reason(self.me.as_deref())
+    }
+
     /// A new app. `space` is the space to show (else the one last shown, else none).
     pub fn new(config: Config, space: Option<String>, now: Instant) -> App {
         let space = space.or_else(|| config.last_space.clone());
@@ -169,6 +183,8 @@ impl App {
             .as_deref()
             .map_or(Group::Issue, |s| config.group_of(s));
         App {
+            guided_setup: false,
+            setup_continue: None,
             setup: config
                 .setup_recovery
                 .as_deref()
@@ -674,6 +690,12 @@ impl App {
                 match result {
                     Ok(CallResult::Space { space }) => {
                         self.config.setup_recovery = None;
+                        if self.guided_setup {
+                            setup.step = crate::setup::Step::Ready;
+                            setup.ready_space = Some(space.clone());
+                            setup.notice.clear();
+                            return self.set_space(space);
+                        }
                         self.setup = None;
                         self.say(Tone::Good, "Space ready. Use :task to start work after configuring your agent and runner.");
                         return self.set_space(space);
@@ -817,6 +839,17 @@ impl App {
             });
         }
         Vec::new()
+    }
+
+    /// Prefill the ordinary task form after the launcher verified its agent and runner.
+    /// This sends nothing; submission remains the user's explicit action.
+    pub fn prepare_task(&mut self, agent: &str, repo: &str) {
+        self.new_task();
+        if let Some(draft) = &mut self.task_draft {
+            draft.fields[0] = LineEdit::with(agent);
+            draft.fields[1] = LineEdit::with(repo);
+            draft.field = 2;
+        }
     }
 
     /// Open tasks known to this space. The query window is bounded to 1,000 entries.
@@ -1022,7 +1055,29 @@ impl App {
             self.quit = true;
             return vec![Action::Quit];
         }
+        if k.code == KeyCode::Enter
+            && let Some(space) = self
+                .setup
+                .as_ref()
+                .filter(|s| s.existing && s.step == crate::setup::Step::Ready)
+                .and_then(|s| s.ready_space.as_deref())
+            && let Some(why) = self.existing_setup_error(space)
+        {
+            if let Some(setup) = &mut self.setup {
+                setup.notice = why.into();
+            }
+            return Vec::new();
+        }
         if let Some(setup) = &mut self.setup {
+            if self.guided_setup
+                && setup.step == crate::setup::Step::Ready
+                && k.code == KeyCode::Enter
+                && let Some(space) = setup.ready_space.clone()
+            {
+                self.setup_continue = Some(space);
+                self.quit = true;
+                return Vec::new();
+            }
             if k.code == KeyCode::Esc && setup.step != crate::setup::Step::Waiting {
                 self.setup = None;
                 return Vec::new();
@@ -1491,7 +1546,6 @@ impl App {
     }
 
     fn approvals_key(&mut self, k: KeyEvent, g: bool) -> Vec<Action> {
-        let me = self.me.clone();
         match self.approvals.card.clone() {
             Card::Closed => match k.code {
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -1553,7 +1607,7 @@ impl App {
                 }
                 // The second step: `a` on the full card opens the sign panel.
                 KeyCode::Char('a') => {
-                    match self.approvals.block_reason(me.as_deref()) {
+                    match self.approval_block_reason() {
                         Some(reason) => self.approvals.notice = Some((Tone::Bad, reason)),
                         None => {
                             self.approvals.card = Card::Signing {
@@ -1593,7 +1647,7 @@ impl App {
                     Vec::new()
                 }
                 KeyCode::Enter => {
-                    if let Some(reason) = self.approvals.block_reason(me.as_deref()) {
+                    if let Some(reason) = self.approval_block_reason() {
                         self.approvals.notice = Some((Tone::Bad, reason));
                         return Vec::new();
                     }
@@ -1708,6 +1762,73 @@ impl App {
         }
     }
 
+    fn existing_setup_error(&self, space: &str) -> Option<&'static str> {
+        if !self.guided_setup {
+            return Some(
+                "Open han setup with this data folder to continue agent and runner setup.",
+            );
+        }
+        if self.conn != Conn::Up || self.space.as_deref() != Some(space) {
+            return Some(
+                "Reconnect and explicitly select the intended team with :space before continuing.",
+            );
+        }
+        if !self
+            .node
+            .as_ref()
+            .is_some_and(|n| n.outbox_pending == 0 && n.problems.is_empty())
+        {
+            return Some(
+                "Wait for pending writes and resolve node problems before continuing setup.",
+            );
+        }
+        let Some(status) = self.space_status.as_ref().filter(|s| s.space == space) else {
+            return Some("Wait for the selected team's current status before continuing.");
+        };
+        if status.link != han_node::api::SpaceLink::Live || status.outbox_pending != 0 {
+            return Some(
+                "The selected team must be live with no pending writes before continuing.",
+            );
+        }
+        if !status.trusted_setup.as_ref().is_some_and(|t| t.can_manage) {
+            return Some(
+                "Guided runner setup needs current ownership and the unchanged Trusted team policy.",
+            );
+        }
+        None
+    }
+
+    fn existing_setup(&mut self) -> Vec<Action> {
+        let Some(space) = self.space.clone() else {
+            self.say(
+                Tone::Bad,
+                "Select the existing team with :space <space id> first.",
+            );
+            return Vec::new();
+        };
+        if let Some(why) = self.existing_setup_error(&space) {
+            self.say(Tone::Bad, why);
+            return Vec::new();
+        }
+        let status = self.space_status.as_ref().expect("eligibility checked");
+        let mut setup = crate::setup::Setup::new(self.config.setup_recovery.as_deref());
+        setup.step = crate::setup::Step::Ready;
+        setup.ready_space = Some(space);
+        setup.existing = true;
+        setup.notice = format!(
+            "Existing team on {}. Repositories: {}. The launcher rechecks eligibility before configuring anything.",
+            status.home,
+            status
+                .trusted_setup
+                .as_ref()
+                .expect("eligibility checked")
+                .repos
+                .join(", ")
+        );
+        self.setup = Some(setup);
+        Vec::new()
+    }
+
     /// Runs a line of the `:` palette.
     pub fn run_command(&mut self, line: &str) -> Vec<Action> {
         let line = line.trim().trim_start_matches(':');
@@ -1720,6 +1841,7 @@ impl App {
                 ));
                 Vec::new()
             }
+            "setup-existing" => self.existing_setup(),
             "setup-reset" => {
                 self.config.setup_recovery = None;
                 self.setup = Some(crate::setup::Setup::new(None));

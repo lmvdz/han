@@ -1741,6 +1741,16 @@ budget?: TaskBudget, };
 
 export type SpaceLink = "connecting" | "live" | "offline" | "rejected" | "misconfigured";
 
+export type TrustedSetup = { 
+/**
+ * Whether this node's actor currently owns the space and can enroll its runner actors.
+ */
+can_manage: boolean, 
+/**
+ * Exact repositories selected by the policy; these are not grants to other repositories.
+ */
+repos: Array<string>, };
+
 export type SpaceStatusRow = { 
 /**
  * The space.
@@ -1781,7 +1791,11 @@ signals: number,
 /**
  * Why the space was rejected or is offline.
  */
-error?: string, };
+error?: string, 
+/**
+ * Present only for the exact Trusted team preset. Recheck a live view before provisioning.
+ */
+trusted_setup?: TrustedSetup, };
 
 export type CostRow = { 
 /**

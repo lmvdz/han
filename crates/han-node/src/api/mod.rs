@@ -40,7 +40,7 @@ pub use rows::{
     OverlapSummary, PatchStatus, PlanItem, RECENT_ERRORS, RoleInfo, Row, SUMMARY_FIELDS,
     SUMMARY_TEXT, Sandbox, SandboxBackend, SessionRights, SessionRow, SessionState, SpaceLink,
     SpaceStatusRow, StateCounts, StatusBody, TaskBudget, TaskRow, Tests, TimelinePointRow, Tokens,
-    ViewEvent, ViewMirror, WhoRow,
+    TrustedSetup, ViewEvent, ViewMirror, WhoRow,
 };
 pub use stream::{BoxFuture, ClassApi, MAX_BACKLOG, NodeApi, ViewSink, ViewStream};
 

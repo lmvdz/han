@@ -157,6 +157,10 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
         row.step,
         "waiting for input: Which branch should I target? I can use main or the release branch."
     );
+    let tests = row
+        .tests
+        .expect("test counts use the complete delta output");
+    assert_eq!((tests.pass, tests.fail), (3, 0));
 
     // The Session view's items: the thought, the messages, the tool call and its output.
     let items = || -> Vec<han_node::api::ItemRow> {
@@ -248,6 +252,60 @@ async fn the_agents_messages_thoughts_and_tool_calls_reach_the_node_masked() {
     assert_eq!(tool.2, ToolStatus::Completed);
     assert_eq!(tool.3[0].text, "key = [masked:aws-access-key]\nmode = fast");
     assert!(!tool.3[0].masked.is_empty());
+    let delta = items
+        .iter()
+        .find_map(|i| match &i.item {
+            ItemBody::ToolCall {
+                tool_call_id,
+                status,
+                content,
+                ..
+            } if tool_call_id == "toolu_delta" => Some((*status, content)),
+            _ => None,
+        })
+        .expect("terminal delta output reaches the node");
+    assert_eq!(delta.0, ToolStatus::Completed);
+    assert_eq!(
+        delta.1[0].text,
+        "metadata=no\nkey = [masked:aws-access-key]\ntest result: ok. 3 passed; 0 failed;\n"
+    );
+    assert!(!delta.1[0].masked.is_empty());
+
+    // The real Codex adapter removes unchanged rawInput from completion updates.
+    // Identity is sent only at start; the result envelope must stand on its own.
+    for (id, expected_status, expected_text) in [
+        (
+            "mcp_receipt",
+            ToolStatus::Completed,
+            "Proposal received: fixture-id; key=[masked:aws-access-key]",
+        ),
+        (
+            "mcp_error",
+            ToolStatus::Failed,
+            "Read refused; key=[masked:aws-access-key]",
+        ),
+    ] {
+        let (status, content) = items
+            .iter()
+            .find_map(|i| match &i.item {
+                ItemBody::ToolCall {
+                    tool_call_id,
+                    status,
+                    content,
+                    ..
+                } if tool_call_id == id => Some((*status, content)),
+                _ => None,
+            })
+            .expect("MCP result reaches the node");
+        assert_eq!(status, expected_status);
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].text, expected_text);
+        assert!(!content[0].masked.is_empty());
+    }
+    assert!(
+        !dump.contains("do not publish"),
+        "opaque MCP fields reached the node"
+    );
 
     // The first prompt: the framing in the text, the ask in a data block after it.
     let first = log_lines(&log)

@@ -5,10 +5,10 @@ diagnostics and launch read the same installed definition. An adapter does not n
 a new protocol method, a registry special case, or a provider-specific login command
 in HAN's CLI.
 
-From the repository root, install the Codex example:
+Install the bundled Codex descriptor by name (or supply a custom driver file):
 
 ```sh
-han agent setup-harness crates/han-host/drivers/codex.json --data <node-data> --dir <adapter-install>
+han agent setup-harness codex --data <node-data> --dir <adapter-install>
 han agent set <actor> --harness codex --data <node-data>
 han agent login <actor> --data <node-data>
 han agent login <actor> --check --data <node-data>
@@ -22,7 +22,7 @@ login; `--check` does not prove current account access or remaining quota.
 
 Setup installs the pinned npm adapter, verifies its npm integrity, and saves
 `driver.json` beside the installation. The registry points to that snapshot. Later
-`setup-harness codex` uses the installed definition. Driver files are trusted
+`setup-harness codex` uses the installed definition before the bundled default. Driver files are trusted
 operator configuration: their installation and login commands run outside the
 agent sandbox. Do not accept them from an agent as a way to widen its permissions.
 
@@ -78,6 +78,20 @@ The example refuses a pre-existing workspace `.codex` directory and login-level
 configuration, hooks, skills and plugins. This prevents silently inheriting those
 configuration sources at admission. Repository instructions remain untrusted
 input; this does not make agent-generated commands trustworthy.
+
+### Shared tool results
+
+Completed Codex terminal output and MCP result text are available in the shared
+session. MCP completion updates expose text content and error messages, with the
+same masking and size limits as other tool output. A proposal receipt records a
+request; it does not mean the effect executed or landed. The adapter's reported
+tool status is preserved.
+
+Terminal deltas are assembled and masked before publication when the tool ends.
+MCP progress messages are not result fragments and are not appended. Structured
+MCP data, embedded resources and binary payloads are not rendered. This handling
+covers completion updates; completed calls replayed only as initial `tool_call`
+events still do not expose their output.
 
 ### Live evidence
 

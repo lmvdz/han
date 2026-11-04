@@ -30,23 +30,50 @@ pub struct Options {
 
 /// Runs the TUI until the user quits.
 pub async fn run(opts: Options) -> io::Result<()> {
-    run_inner(opts, false).await
+    run_inner(opts, false, None).await.map(|_| ())
 }
 
-/// Opens the setup form on a fresh device, or the last selected space when resuming.
-pub async fn run_setup(opts: Options) -> io::Result<()> {
-    run_inner(opts, true).await
+/// Explicit result of the guided setup screen. Quitting grants no further action.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SetupExit {
+    /// The user left the TUI without requesting more setup.
+    Quit,
+    /// Continue configuring an agent for a confirmed space.
+    Continue {
+        /// The space confirmed by the node.
+        space: String,
+    },
 }
 
-async fn run_inner(opts: Options, setup: bool) -> io::Result<()> {
+/// Opens guided setup. A remembered board selection is not a request to provision a runner.
+pub async fn run_setup(opts: Options) -> io::Result<SetupExit> {
+    run_inner(opts, true, None).await
+}
+
+/// Opens the existing task form with a verified agent and repository selected, without submitting it.
+pub async fn run_task(opts: Options, agent: String, repo: String) -> io::Result<()> {
+    run_inner(opts, false, Some((agent, repo)))
+        .await
+        .map(|_| ())
+}
+
+async fn run_inner(
+    opts: Options,
+    setup: bool,
+    task: Option<(String, String)>,
+) -> io::Result<SetupExit> {
     let endpoint = opts
         .endpoint
         .unwrap_or_else(|| default_endpoint(&opts.data));
     let config_path = opts.data.join("tui.json");
     let config = Config::load(&config_path);
     let mut app = App::new(config, opts.space, Instant::now());
-    if setup && app.space.is_none() {
+    app.guided_setup = setup;
+    if setup && app.setup.is_none() {
         app.run_command("setup");
+    }
+    if let Some((agent, repo)) = task {
+        app.prepare_task(&agent, &repo);
     }
     let connector = Arc::new(RpcConnector { endpoint });
     let mut rt = Runtime::new(app, None, Some(connector), Some(config_path));
@@ -77,12 +104,15 @@ async fn run_inner(opts: Options, setup: bool) -> io::Result<()> {
             break Err(e);
         }
         let Some(msg) = rt.recv().await else {
-            break Ok(());
+            break Ok(SetupExit::Quit);
         };
         rt.handle(msg);
         rt.drain();
         if rt.app.quit {
-            break Ok(());
+            break Ok(match rt.app.setup_continue.take() {
+                Some(space) => SetupExit::Continue { space },
+                None => SetupExit::Quit,
+            });
         }
     };
     stop.store(true, Ordering::Relaxed);

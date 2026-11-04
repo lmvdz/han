@@ -53,9 +53,10 @@ han setup --person me
 ```
 
 Setup saves its identity and state in `han-team` and resumes when run again.
-`han setup stop` stops the managed home and node while keeping their state.
-Agent login, executor configuration and required checks follow in the
-[getting started guide](docs/getting-started.md). For the commands below, set
+`han setup stop` stops the managed roles while keeping their state. On Linux,
+continue after creating a Trusted team to configure a local agent, subscription
+login, GitHub checks and an executor. This needs bubblewrap and an installed
+write GitHub App; see the [getting started guide](docs/getting-started.md). For the commands below, set
 `HAN_DATA=han-team/person`.
 
 Alternatively, run a home and node manually. `--file-keys` keeps the keys in the data folder; leave it out to use the OS keychain. `HAN_DATA` names the node's data folder for every later command.

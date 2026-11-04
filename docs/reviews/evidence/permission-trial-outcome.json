@@ -1,0 +1,49 @@
+{
+  "source": "author-operated live trial; ordinary node API snapshots",
+  "final_effect": {
+    "key": "dddn17lj3s:runner.han.home.arpa|000000000025|6821454ce000d66be78a5de382efa13c3a836624259f88dab7cbac50d52c204e",
+    "space": "dddn17lj3s:runner.han.home.arpa",
+    "proposal": "6821454ce000d66be78a5de382efa13c3a836624259f88dab7cbac50d52c204e",
+    "proposer": "@runner-agent1:runner.han.home.arpa",
+    "executor": "@exec:runner.han.home.arpa",
+    "action": "http_request",
+    "plan_digest": "61acf85d4435d48173497c624806e77d489b95a8f6c1d1e91e19c7c11bfcc75c",
+    "plan": "{\"action\":\"http_request\",\"args\":{\"body\":\"\",\"headers\":{},\"method\":\"GET\",\"url\":\"https://han-permission-probe.invalid/\"},\"target\":\"han-permission-probe.invalid\"}",
+    "proposer_suffices": false,
+    "task": "29036bcf3d7adb76ac3f2ab9dbb35ffc24ab557f0445f648802fa83fff02c21d",
+    "phase": "done",
+    "approvals": [],
+    "claims": 0,
+    "launch_window": 30,
+    "repeatable": false,
+    "seq": 25,
+    "head": 28,
+    "ended": {
+      "by": "cancel",
+      "reason": "End the read-only permission probe; no external execution requested."
+    }
+  },
+  "headless_approval": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "denied: approval not signed: this device has no presence check; set presence.backend (windows-hello, touch-id or polkit), or set presence.require to the empty list to approve without one",
+      "data": {
+        "code": "denied",
+        "message": "approval not signed: this device has no presence check; set presence.backend (windows-hello, touch-id or polkit), or set presence.require to the empty list to approve without one"
+      }
+    }
+  },
+  "owner_cancel": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "type": "receipt",
+      "space": "dddn17lj3s:runner.han.home.arpa",
+      "seq": 26,
+      "id": "e40fd8e207315b2f2e9fc9c2787eb6437f3b51e3fa9db15097c221d32727bb32",
+      "time": "2026-10-21T04:20:38Z"
+    }
+  }
+}

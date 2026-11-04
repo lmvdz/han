@@ -433,3 +433,34 @@ async fn the_gate_waits_for_an_approval_unless_policy_says_the_proposer_suffices
         GateDecision::Run
     );
 }
+
+#[tokio::test]
+async fn already_stopped_run_does_not_recover_or_start_work() {
+    let counter = Counter::new();
+    let rig = Rig::new(vec![counter.clone()]);
+    let p = rig.node.propose(&count_plan(1));
+    rig.node.approve(&p);
+    *counter.fault.lock().unwrap() = RunFault::After;
+    {
+        let ex = rig.executor();
+        assert!(or_crash(ex.step()).await.is_none());
+    }
+    assert!(rig.node.state().outcomes.is_empty());
+    let ex = rig.executor();
+    let (_tx, rx) = tokio::sync::watch::channel(true);
+    tokio::time::timeout(std::time::Duration::from_millis(100), ex.run(rx))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        rig.node.state().outcomes.is_empty(),
+        "shutdown must not initiate recovery writes"
+    );
+    assert_eq!(counter.runs.load(Ordering::SeqCst), 1);
+    ex.recover().await.unwrap();
+    assert_eq!(
+        rig.node.state().outcomes.len(),
+        1,
+        "explicit restart can still recover"
+    );
+}

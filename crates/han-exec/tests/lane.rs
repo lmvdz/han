@@ -3056,3 +3056,24 @@ async fn in_a_budgeted_space_a_revert_whose_culprit_task_is_closed_escalates_wit
     );
     assert!(reverts(&rig).is_empty());
 }
+
+#[tokio::test]
+async fn already_stopped_lane_does_not_discover_or_claim_pending_work() {
+    let rig = Rig::new();
+    rig.checks.fast(green());
+    let head = rig.w.change("change", "a.txt", "edited\n");
+    let p = rig.node.propose(&rig.plan(&head, json!({})));
+    rig.node.approve(&p);
+    let (_exec, lane) = rig.boot();
+    let (_tx, rx) = tokio::sync::watch::channel(true);
+    tokio::time::timeout(Duration::from_millis(100), lane.run(rx))
+        .await
+        .unwrap();
+    assert_eq!(rig.node.claims(), 0);
+    assert!(lane.changes().unwrap().is_empty());
+    lane.pass().await.unwrap();
+    assert!(
+        rig.node.claims() > 0,
+        "the pending work is real and claimable on explicit restart"
+    );
+}

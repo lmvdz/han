@@ -300,6 +300,18 @@ SR §10 asks for isolation between sessions, and between sessions and the runner
   in PLAN §6.4 and SR-88 (tag `tag:han-runner`, only `autogroup:internet` through the exit node, no route to
   members' devices).
 
+**Tool output in the session stream.** ACP `terminal_output_delta` updates are
+appended in order, including the last chunk of a completed or failed tool. The
+host publishes their text only after the tool finishes so masking sees the whole
+result rather than separate pieces of a credential. Status and title updates
+remain live. If a chunk exceeds 4 KiB or accumulated text exceeds 16 KiB, that
+output is omitted with an explicit display-limit notice; later chunks are not
+joined across missing bytes. A full output snapshot replaces accumulated chunks.
+The board derives test counts from the same complete, contiguous output and does
+not infer them from a final fragment or omitted output.
+This does not change the existing message-stream or ordinary snapshot behavior,
+except that oversized tool snapshots also receive the omission notice.
+
 ### 7.1 The root-level setup, once: `sudo han runner setup`
 
 The node never needs root at run time. It starts a host as another user through a **systemd template unit** and a polkit rule that lets the node's user start and stop exactly those units. Everything that needs root is one command, and it is the only `han` command that does:

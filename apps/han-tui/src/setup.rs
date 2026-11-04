@@ -22,6 +22,8 @@ pub enum Step {
     Recovery,
     /// Explain the existing custom policy tools.
     Advanced,
+    /// The space is confirmed; the launcher can continue agent and runner setup.
+    Ready,
 }
 
 /// The in-memory setup draft. Tickets are never persisted in TUI preferences.
@@ -39,6 +41,10 @@ pub struct Setup {
     pub command: Option<Command>,
     /// Preview scroll offset.
     pub scroll: u16,
+    /// A confirmed space, never inferred from an uncertain or queued response.
+    pub ready_space: Option<String>,
+    /// An explicit existing-space handoff whose eligibility is checked again on Enter.
+    pub existing: bool,
 }
 
 impl Setup {
@@ -55,6 +61,8 @@ impl Setup {
             notice: recovery.unwrap_or_default().into(),
             command: None,
             scroll: 0,
+            ready_space: None,
+            existing: false,
         }
     }
 

@@ -75,7 +75,7 @@ pub enum LogKind {
     File,
     /// A turn begins or ends.
     Turn,
-    /// The agent waits on an approval.
+    /// The agent proposed an effect; authorization and execution are separate state.
     Decision,
     /// An item this version cannot read.
     Unsupported,
@@ -139,10 +139,7 @@ fn item_line(body: &ItemBody) -> Option<(LogKind, String)> {
             removed,
             ..
         } => (LogKind::File, format!("{path} +{added} -{removed}")),
-        ItemBody::Decision { action, .. } => (
-            LogKind::Decision,
-            format!("waiting for an approval: {action}"),
-        ),
+        ItemBody::Decision { action, .. } => (LogKind::Decision, format!("proposed: {action}")),
         ItemBody::TurnStart { turn, driver, .. } => (
             LogKind::Turn,
             format!(

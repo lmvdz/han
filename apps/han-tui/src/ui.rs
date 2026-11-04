@@ -143,12 +143,19 @@ fn draw_setup(f: &mut Frame, app: &App, area: Rect) {
             "The request will not be repeated automatically.".into()],
         Step::Recovery => vec!["Inspect the previous operation before starting another.".into(),
             "Esc closes. Use :space to inspect followed spaces, and han outbox list to inspect pending writes.".into(),
-            "Once you have checked the result, :setup-reset starts a fresh setup.".into()],
+            "For a delivered existing team: Esc, then :space <space id>, then :setup-existing in han setup.".into(),
+            "Only use :setup-reset when you intend to start a new setup operation.".into()],
         Step::Advanced => vec!["Custom permissions".into(),
             "Use han space create for the base policy, then han space policy <space> <file> for custom rules.".into(),
             "The base policy has no approval rules or risk gates. Review its authority before using it with a runner.".into(),
             "Use han space create-trusted --help for the scoped automatic-landing preset.".into(),
             "Esc closes.".into()],
+        Step::Ready => vec![
+            if setup.existing { "Continue setup for this existing team.".into() } else { "Your team space is ready.".into() },
+            format!("Team: {}", setup.ready_space.as_deref().unwrap_or("unknown")),
+            "Continue to choose an agent, sign in and configure its runner and checks.".into(),
+            "Enter continues setup · Esc returns to the board".into(),
+        ],
     };
     if !setup.notice.is_empty() {
         text.push(setup.notice.clone());
@@ -1274,8 +1281,10 @@ fn draw_approvals(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::new()
         };
-        let you = if r.can_approve {
-            "you can approve".to_owned()
+        let you = if app.node.as_ref().is_some_and(|node| node.headless) {
+            "this node cannot approve".to_owned()
+        } else if r.can_approve {
+            "eligibility checked by home".to_owned()
         } else if r.approvers.is_empty() {
             "you cannot approve".to_owned()
         } else {
@@ -1457,9 +1466,13 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
         };
         wrapped(if i == 0 { "GUARDS" } else { "" }, &who, &mut lines);
     }
-    let you = a.block_reason(app.me.as_deref());
+    let you = app.approval_block_reason();
     match &you {
-        None => wrapped("", "you can approve", &mut lines),
+        None => wrapped(
+            "",
+            "Approval eligibility is checked by the home.",
+            &mut lines,
+        ),
         Some(reason) => {
             for part in wrap(reason, w.saturating_sub(11).max(8)) {
                 lines.push(Line::from(vec![
@@ -1503,6 +1516,8 @@ fn draw_card(f: &mut Frame, app: &App, body: Rect) {
             lines.push(Line::styled(
                 if *busy {
                     presence_wait().to_owned()
+                } else if you.is_some() {
+                    "(signing unavailable)    [Esc] Back".to_owned()
                 } else {
                     "[Enter] Sign approval    [Esc] Back".to_owned()
                 },

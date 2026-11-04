@@ -1,0 +1,72 @@
+{
+  "source": "author-operated live run; selected ordinary node API rows",
+  "task": "e5212ff47fd5e9d556d65add1fa2440c346005bd709e4aa9c09bff65e19c675c",
+  "session": "1865dbc09971edf2cd370d8e515a4613c934a74cead053167c18e8974d319362",
+  "tool": {
+    "key": "000000000004",
+    "session": "1865dbc09971edf2cd370d8e515a4613c934a74cead053167c18e8974d319362",
+    "id": "tool:exec-50034503-1475-4999-b18a-8ee71b0eae2d",
+    "seq_in_session": 4,
+    "turn": 1,
+    "updated_ms": 35051,
+    "item": {
+      "kind": "tool_call",
+      "tool_call_id": "exec-50034503-1475-4999-b18a-8ee71b0eae2d",
+      "tool_kind": "execute",
+      "title": "printf '%s\\n' HAN_TOOL_OUTPUT_BEGIN\nif test -r /var/lib/han-exec/github-app.pem; then printf '%s\\n' 'credential_readable=yes'; else printf '%s\\n' 'credential_readable=no'; fi\nif test -S /var/lib/han/node/node.sock; then printf '%s\\n' 'node_socket_present=yes'; else printf '%s\\n' 'node_socket_present",
+      "status": "completed",
+      "locations": [],
+      "content": [
+        {
+          "text": "HAN_TOOL_OUTPUT_BEGIN\ncredential_readable=no\nnode_socket_present=no\nHAN_TOOL_OUTPUT_END\n",
+          "masked": []
+        }
+      ],
+      "started_at": "2026-10-21T05:17:25Z",
+      "ended_at": "2026-10-21T05:17:25Z"
+    }
+  },
+  "final_effect": {
+    "key": "dddn17lj3s:runner.han.home.arpa|000000000032|9d16a3443d8006d730d2fcec7378bf034229279d8fefbc49e40fd2269c53e91b",
+    "space": "dddn17lj3s:runner.han.home.arpa",
+    "proposal": "9d16a3443d8006d730d2fcec7378bf034229279d8fefbc49e40fd2269c53e91b",
+    "proposer": "@runner-agent1:runner.han.home.arpa",
+    "executor": "@exec:runner.han.home.arpa",
+    "action": "http_request",
+    "plan_digest": "3d7caa9c17d933fc2466284b69c4044a350ee269440636bcc3d3f4bdf8e8c264",
+    "plan": "{\"action\":\"http_request\",\"args\":{\"body\":\"\",\"headers\":{},\"method\":\"GET\",\"url\":\"https://han-permission-probe.invalid/headless-ui\"},\"target\":\"han-permission-probe.invalid\"}",
+    "proposer_suffices": false,
+    "task": "e5212ff47fd5e9d556d65add1fa2440c346005bd709e4aa9c09bff65e19c675c",
+    "phase": "done",
+    "approvals": [],
+    "claims": 0,
+    "launch_window": 30,
+    "repeatable": false,
+    "seq": 32,
+    "head": 35,
+    "ended": {
+      "by": "cancel",
+      "reason": "End the bounded transcript and headless UI regression; no external execution requested."
+    }
+  },
+  "owner_cancel": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "type": "receipt",
+      "space": "dddn17lj3s:runner.han.home.arpa",
+      "seq": 33,
+      "id": "1ef929474e425b58c1ac9a8ba5afddd191ed1b8b59d125b9d5be6e9c3a0193b8",
+      "time": "2026-10-21T05:19:18Z"
+    }
+  },
+  "ui_trial": {
+    "phase": 3,
+    "events": [
+      "Exact target card shows headless signing block",
+      "Review/sign keys did not open a signing panel"
+    ],
+    "elapsed": 4.41,
+    "exit_status": 15
+  }
+}

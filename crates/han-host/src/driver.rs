@@ -398,11 +398,15 @@ impl DriverConfig {
     }
 }
 
-/// The shipped drivers: `pi` and `claude`.
+/// The shipped drivers: `pi`, `claude` and `codex`.
 pub fn builtin(name: &str) -> Option<DriverConfig> {
     match name {
         "pi" => Some(pi()),
         "claude" | "claude-code" => Some(claude()),
+        "codex" => Some(
+            DriverConfig::from_json(include_str!("../drivers/codex.json"))
+                .expect("the shipped Codex driver is valid"),
+        ),
         _ => None,
     }
 }
@@ -855,6 +859,16 @@ pub fn pi_session_error(dir: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_codex_is_the_shipped_data_descriptor() {
+        let named = builtin("codex").expect("guided setup can resolve its default harness");
+        let file = DriverConfig::from_json(include_str!("../drivers/codex.json")).unwrap();
+        assert_eq!(
+            serde_json::to_value(named).unwrap(),
+            serde_json::to_value(file).unwrap()
+        );
+    }
 
     #[test]
     fn no_shipped_driver_allows_a_registry_a_toolchain_owns() {

@@ -2,7 +2,7 @@
 ┌ Board ─────────────────────────────────────────────────────────────────────────────────┐┏ Approvals (1) ━━━━━━━━━━━━━━━━━━━━━━━┓
 │  PERSON     AGENT╔ git.push · team ═════════════════════════════════════════════════════════════════════════╗                  ┃
 │>▾ #41 Board fresh║WHY GATED  push of a han/* branch (space rule)                                            ║                  ┃
-│ ● @lars      lars║ACTION     git.push on han                                                                ║                  ┃
+│ ● @lars      lars║ACTION     git.push on han                                                                ║d by home         ┃
 │ ● @ada       ada-║CHANGES    branch: "han/auth"                                                             ║                  ┃
 │ ▾ #52 Login flow ║DIGEST     9f3c 41aa 07be d2e1 aabb ccdd eeff 0011 2233 4455 6677 8899 aabb ccdd eeff     ║                  ┃
 │▌◐ @lars      lars║           0011  (plan matches digest)                                                    ║                  ┃
@@ -12,7 +12,7 @@
 │ ○ @lars      lars║                                                                                          ║                  ┃
 │ ▾ No issue (1)   ║APPROVALS  have: none yet                                                                 ║                  ┃
 │ ✗ @bo        bo-s║           needed from: @lars:han.example                                                 ║                  ┃
-│                  ║           you can approve                                                                ║                  ┃
+│                  ║           Approval eligibility is checked by the home.                                   ║                  ┃
 │                  ║                                                                                          ║                  ┃
 │                  ║─ sign ─────────────────────────────────────────────────────────────────────────────────  ║                  ┃
 │                  ║You are signing an approval of:                                                           ║                  ┃

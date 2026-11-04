@@ -12,7 +12,7 @@ use clap::{Args, Subcommand};
 use han_host::sandbox::ShimCommand;
 use han_net::wellknown::Fetcher;
 use han_net::{IrohOptions, IrohTransport, Transport};
-use han_node::api::{Command, ConnectionClass, NodeApi};
+use han_node::api::{ConnectionClass, NodeApi};
 use han_node::keys::{DEVICE_KEY, FileKeyStore, KeyStore, KeyringStore};
 use han_node::rpc::{default_endpoint, role_endpoint, serve_roles};
 use han_node::supervisor::ProcessSpawner;
@@ -352,6 +352,14 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = NodeConfig::new(actor);
     config.key_id = args.key_id;
     config.data_dir = Some(args.data.clone());
+    // Install the supplied ticket before Node::start can dial an older saved pin.
+    config.initial_home = match args.home {
+        Some(HomeRef::Ticket(ticket)) => Some(ticket),
+        Some(HomeRef::Server(_)) => {
+            return Err("--home is a home ticket (han1home.…): a ServerName needs no pin".into());
+        }
+        None => None,
+    };
     let spawner = ProcessSpawner::new(std::env::current_exe()?)
         .with_host_endpoint(role_endpoint(&endpoint, ConnectionClass::Host));
     // Hosts in `han-agent@` units outlive this node: take back the ones still running.
@@ -368,17 +376,6 @@ async fn serve_node(args: NodeOpts) -> Result<(), Box<dyn std::error::Error>> {
         // and are started only where the agent's sandbox works (the gate says why not).
         supervisor: Arc::new(GatedSpawner::new(spawner, ShimCommand::of_current_exe()?)),
     })?;
-
-    // A home named by ticket is kept in the data directory, so a restart needs no flag.
-    match args.home {
-        Some(HomeRef::Ticket(ticket)) => {
-            node.call(Command::HomePin { ticket }).await?;
-        }
-        Some(HomeRef::Server(_)) => {
-            return Err("--home is a home ticket (han1home.…): a ServerName needs no pin".into());
-        }
-        None => {}
-    }
 
     let server = serve_roles(Arc::new(node.clone()), &endpoint)?;
     log_line(

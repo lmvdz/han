@@ -272,6 +272,10 @@ pub enum AgentEvent {
         title: Option<String>,
         /// Text output (content text, terminal output), at most [`MAX_TOOL_OUTPUT`] bytes.
         output: Option<String>,
+        /// Whether the output appends to prior text rather than replacing it.
+        output_append: bool,
+        /// Bytes were omitted by the per-update bound; consumers must not join across the gap.
+        output_truncated: bool,
         /// Raw output.
         raw_output: Option<Value>,
         /// Paths it names.
@@ -542,9 +546,10 @@ fn opt_str(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(str::to_owned)
 }
 
-/// Text from a tool call update: content text blocks, then terminal output in `_meta`, then a string
-/// `rawOutput`.
-fn tool_output(v: &Value) -> Option<String> {
+/// Text from a tool call update: content text blocks, then terminal output in `_meta`, then
+/// `rawOutput` strings or text results/errors in the Codex MCP envelope. Explicit terminal
+/// deltas append; full text content takes precedence. MCP progress messages are not result deltas.
+fn tool_output(v: &Value) -> (Option<String>, bool, bool) {
     let mut out = String::new();
     if let Some(content) = v["content"].as_array() {
         for c in content {
@@ -561,7 +566,43 @@ fn tool_output(v: &Value) -> Option<String> {
     {
         out.push_str(t);
     }
-    (!out.is_empty()).then(|| truncate(out, MAX_TOOL_OUTPUT))
+    if out.is_empty()
+        && v["rawOutput"].get("result").is_some()
+        && v["rawOutput"].get("error").is_some()
+    {
+        // Codex sends MCP completion as an opaque envelope. Its reporting layer removes
+        // unchanged rawInput, so completion need not repeat the start event's identity.
+        // Only display declared text blocks and error messages, never arbitrary
+        // provider fields, structured content, embedded resources or binary payloads.
+        if let Some(content) = v["rawOutput"]["result"]["content"].as_array() {
+            for block in content {
+                if block["type"] == "text"
+                    && let Some(text) = block["text"].as_str()
+                {
+                    out.push_str(text);
+                }
+            }
+        }
+        if let Some(message) = v["rawOutput"]["error"]["message"].as_str() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(message);
+        }
+    }
+    let delta = v["_meta"]["terminal_output_delta"]["data"]
+        .as_str()
+        .filter(|t| !t.is_empty());
+    let append = out.is_empty() && delta.is_some();
+    if append && let Some(t) = delta {
+        out.push_str(t);
+    }
+    let truncated = out.len() > MAX_TOOL_OUTPUT;
+    (
+        (!out.is_empty()).then(|| truncate(out, MAX_TOOL_OUTPUT)),
+        append,
+        truncated,
+    )
 }
 
 /// Maps one `session/update` to events (several updates carry nothing HAN uses: they are dropped).
@@ -586,14 +627,19 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
             raw_input: update.get("rawInput").cloned(),
             locations: locations(update),
         }],
-        "tool_call_update" => vec![AgentEvent::ToolCallUpdate {
-            id: update["toolCallId"].as_str().unwrap_or("").into(),
-            status: opt_str(update, "status"),
-            title: opt_str(update, "title"),
-            output: tool_output(update),
-            raw_output: update.get("rawOutput").cloned(),
-            locations: locations(update),
-        }],
+        "tool_call_update" => {
+            let (output, output_append, output_truncated) = tool_output(update);
+            vec![AgentEvent::ToolCallUpdate {
+                id: update["toolCallId"].as_str().unwrap_or("").into(),
+                status: opt_str(update, "status"),
+                title: opt_str(update, "title"),
+                output,
+                output_append,
+                output_truncated,
+                raw_output: update.get("rawOutput").cloned(),
+                locations: locations(update),
+            }]
+        }
         "plan" => vec![AgentEvent::Plan {
             entries: update["entries"]
                 .as_array()
@@ -1153,5 +1199,87 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn tool_output_distinguishes_snapshots_from_terminal_deltas() {
+        for (value, text, append) in [
+            (
+                json!({"_meta":{"terminal_output_delta":{"data":"chunk"}}}),
+                "chunk",
+                true,
+            ),
+            (
+                json!({"_meta":{"terminal_output":{"data":"legacy"}}}),
+                "legacy",
+                false,
+            ),
+            (
+                json!({"rawOutput":"snapshot", "_meta":{"terminal_output_delta":{"data":"chunk"}}}),
+                "snapshot",
+                false,
+            ),
+            (
+                json!({"rawOutput":{"exit_code":0}, "_meta":{"terminal_output_delta":{"data":"last"}}}),
+                "last",
+                true,
+            ),
+        ] {
+            assert_eq!(tool_output(&value), (Some(text.into()), append, false));
+        }
+        assert_eq!(
+            tool_output(&json!({"status":"completed"})),
+            (None, false, false)
+        );
+    }
+
+    #[test]
+    fn mcp_completion_text_is_a_snapshot_and_preserves_failed_status() {
+        let mut update = json!({"sessionUpdate":"tool_call_update", "toolCallId":"mcp1",
+            "status":"failed",
+            "rawOutput":{"result":{"content":[
+                {"type":"text", "text":"partial result"},
+                {"type":"image", "data":"private binary", "text":"not text"},
+                {"type":"resource", "resource":{"text":"private resource"}}
+            ], "structuredContent":{"private":"structured"}},
+            "error":{"message":"permission refused", "data":"private diagnostic"}},
+            "_meta":{"mcp_output_delta":{"data":"progress is not result text"}}});
+        assert_eq!(
+            tool_output(&update),
+            (
+                Some("partial result\npermission refused".into()),
+                false,
+                false
+            )
+        );
+        assert!(matches!(&map_update(&update)[0],
+            AgentEvent::ToolCallUpdate { status: Some(status), output: Some(output), output_append: false, .. }
+            if status == "failed" && output == "partial result\npermission refused"));
+        update["content"] =
+            json!([{"type":"content", "content":{"type":"text", "text":"rendered"}}]);
+        assert_eq!(
+            tool_output(&update),
+            (Some("rendered".into()), false, false)
+        );
+        update.as_object_mut().unwrap().remove("content");
+        update["rawOutput"] =
+            json!({"result":{"content":[{"type":"image", "data":"opaque"}]}, "error":null});
+        assert_eq!(tool_output(&update), (None, false, false));
+        update["rawOutput"] = json!({"result":null, "error":{"message":"error only"}});
+        assert_eq!(
+            tool_output(&update),
+            (Some("error only".into()), false, false)
+        );
+        update["rawOutput"] = json!({"error":{"message":"not the result/error envelope"}});
+        assert_eq!(tool_output(&update), (None, false, false));
+    }
+
+    #[test]
+    fn mcp_completion_text_uses_the_output_bound() {
+        let update = json!({"rawOutput":{"result":{"content":[{"type":"text", "text":"x".repeat(MAX_TOOL_OUTPUT + 1)}]}, "error":null}});
+        let (text, append, truncated) = tool_output(&update);
+        assert!(text.is_some());
+        assert!(!append);
+        assert!(truncated);
     }
 }

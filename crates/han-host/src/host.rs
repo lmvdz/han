@@ -1496,7 +1496,7 @@ async fn run_opened(
                                     // last message is complete and the step can show its start.
                                     while let Some(Some(ev)) = events.next().now_or_never() {
                                         feed.apply(&ev, &now_text());
-                                        for s in signals_of(&shared, mirror.as_deref(), ev) {
+                                        for s in signals_of(&shared, mirror.as_deref(), &feed, ev) {
                                             dirty |= shared.apply(s);
                                         }
                                     }
@@ -1517,7 +1517,7 @@ async fn run_opened(
                     ev = events.next() => match ev {
                         Some(ev) => {
                             feed.apply(&ev, &now_text());
-                            for s in signals_of(&shared, mirror.as_deref(), ev) {
+                            for s in signals_of(&shared, mirror.as_deref(), &feed, ev) {
                                 dirty |= shared.apply(s);
                             }
                         }
@@ -2082,6 +2082,7 @@ const PUBLISHER_DRAIN: Duration = Duration::from_secs(30);
 fn signals_of(
     shared: &Arc<Shared>,
     mirror: Option<&crate::glue::MirrorHandle>,
+    feed: &ItemFeed,
     ev: AgentEvent,
 ) -> Vec<Signal> {
     match ev {
@@ -2094,10 +2095,7 @@ fn signals_of(
             vec![Signal::Tool { title, kind }]
         }
         AgentEvent::ToolCallUpdate {
-            status,
-            output,
-            title,
-            ..
+            id, status, title, ..
         } => {
             let mut out = Vec::new();
             if let Some(t) = title {
@@ -2110,7 +2108,9 @@ fn signals_of(
                 if let Some(m) = mirror {
                     m.set_step(None);
                 }
-                out.push(Signal::ToolDone { output });
+                out.push(Signal::ToolDone {
+                    output: feed.completed_tool_output(&id).map(str::to_owned),
+                });
                 // The diff shells out to `git`: off the async loop, and off the event order too (the files
                 // arrive as their own signal when the diff is done, so the next events are not held up).
                 let shared = shared.clone();
