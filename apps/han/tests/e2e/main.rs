@@ -204,6 +204,64 @@ async fn the_agents_output_appears_as_session_items() {
     );
 }
 
+/// The texts of the agent's messages in a session's items.
+async fn agent_messages(c: &han_node::rpc::RpcClient, session: &str) -> Vec<String> {
+    rows(
+        c,
+        Query::Session {
+            id: session.to_owned(),
+            part: SessionPart::Items,
+            window: Window::default(),
+        },
+    )
+    .await
+    .into_iter()
+    .filter_map(|r| match r {
+        Row::Item(i) => Some(i.item),
+        _ => None,
+    })
+    .filter_map(|b| match b {
+        ItemBody::Message {
+            role: MessageRole::Agent,
+            text,
+            ..
+        } => Some(text),
+        _ => None,
+    })
+    .collect()
+}
+
+/// Bug: the agent's messages vanished from the Session view when the node restarted (items were held in memory
+/// only, and a stream has no backlog), leaving the `status` items and the step's 80 characters. The full
+/// message is still there after a restart, and a late watcher gets it too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "end to end: run with --ignored (the nightly full workflow does)"]
+async fn the_agents_messages_survive_a_node_restart() {
+    let s = Stack::up("simple", &[]);
+    let c = s.client().await;
+    s.start_agent();
+    let row = s
+        .board_until(&c, "the first turn to finish", 120, idle)
+        .await;
+    let session = row.session.clone();
+    until("the message to arrive", 60, || async {
+        agent_messages(&c, &session)
+            .await
+            .iter()
+            .any(|t| t.contains("I read the task"))
+    })
+    .await;
+    let before = agent_messages(&c, &session).await;
+    drop(c);
+
+    s.dev(&["restart", "node"]);
+    let c = s.client().await;
+    until("the message after the restart", 90, || async {
+        agent_messages(&c, &session).await == before
+    })
+    .await;
+}
+
 /// Bug: a host that was killed (SIGTERM, a stop timeout) never closed its session, and the board went on showing
 /// it `idle` until silence made it stale. The node sees the host go and marks the session ended: `failed`, with
 /// the reason "host exited".

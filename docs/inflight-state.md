@@ -128,7 +128,7 @@ As of 2026-10-15.
 | Trust | observed (host) for `tool_call` and `file_change`; the node makes `status`, `input` and `decision` itself, from the status item and the log |
 | Shape | `han.item/1` `{id, turn?, kind, ...}` with kinds `message`, `reasoning`, `plan`, `tool_call`, `file_change`, `turn_start`, `turn_end` (spec/ui/data.md Q-DAT-3) |
 | Carrier, right | stream; watch, with `reasoning` and tool content needing read |
-| Index | in memory, 10,000 items per session; no backlog |
+| Index | in memory and in `node.db`, 10,000 items per session; reloaded when the node starts; no backlog from the home |
 | Queries | `Session{id, part: items}` |
 
 ### Planned facts (round 33)

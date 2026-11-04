@@ -11,11 +11,11 @@ use han_core::json::Value;
 use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
 
-use crate::api::StatusBody;
+use crate::api::{ItemBody, StatusBody};
 use crate::home::HomeAddr;
 
 /// The storage format version this crate writes. A file with a higher one is refused.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Why storage failed.
 #[derive(Debug, thiserror::Error)]
@@ -83,8 +83,33 @@ INSERT INTO meta (key, value) VALUES ('format', '1');";
 const V2: &str = "ALTER TABLE outbox ADD COLUMN code TEXT;
 UPDATE meta SET value = '2' WHERE key = 'format';";
 
+/// V3: the host items of a session (messages, thoughts, tool calls) survive a restart of the node. The rowid is
+/// the order in which the node first saw the item; an update keeps it.
+const V3: &str = "CREATE TABLE items (
+    space   TEXT NOT NULL,
+    session TEXT NOT NULL,
+    id      TEXT NOT NULL,
+    turn    INTEGER,
+    body    TEXT NOT NULL,
+    PRIMARY KEY (space, session, id)
+);
+UPDATE meta SET value = '3' WHERE key = 'format';";
+
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(V1), M::up(V2)])
+    Migrations::new(vec![M::up(V1), M::up(V2), M::up(V3)])
+}
+
+/// A host item of a session, as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredItem {
+    /// The session.
+    pub session: String,
+    /// The item's id.
+    pub id: String,
+    /// The turn it belongs to.
+    pub turn: Option<u32>,
+    /// Its latest body.
+    pub body: ItemBody,
 }
 
 /// A followed space, as stored.
@@ -305,6 +330,62 @@ impl NodeDb {
         let mut out = Vec::new();
         for row in rows {
             out.push(serde_json::from_str(&row?)?);
+        }
+        Ok(out)
+    }
+
+    // ───────────────────────── items ─────────────────────────
+
+    /// Keeps a host item of a session, replacing the body of the one with this id, and forgets the session's
+    /// oldest beyond `keep`.
+    pub fn put_item(
+        &self,
+        space: &str,
+        session: &str,
+        id: &str,
+        turn: Option<u32>,
+        body: &ItemBody,
+        keep: usize,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO items (space, session, id, turn, body) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (space, session, id) DO UPDATE SET turn = ?4, body = ?5",
+            params![space, session, id, turn, serde_json::to_string(body)?],
+        )?;
+        conn.execute(
+            "DELETE FROM items WHERE space = ?1 AND session = ?2 AND rowid NOT IN
+             (SELECT rowid FROM items WHERE space = ?1 AND session = ?2 ORDER BY rowid DESC LIMIT ?3)",
+            params![space, session, i64::try_from(keep).unwrap_or(i64::MAX)],
+        )?;
+        Ok(())
+    }
+
+    /// The stored host items of `space`, oldest first.
+    pub fn items(&self, space: &str) -> Result<Vec<StoredItem>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT session, id, turn, body FROM items WHERE space = ?1 ORDER BY rowid")?;
+        let rows = stmt.query_map([space], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<u32>>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (session, id, turn, body) = row?;
+            // A body this version cannot read is skipped, not fatal: the log and the statuses still load.
+            if let Ok(body) = serde_json::from_str(&body) {
+                out.push(StoredItem {
+                    session,
+                    id,
+                    turn,
+                    body,
+                });
+            }
         }
         Ok(out)
     }

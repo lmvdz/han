@@ -429,6 +429,21 @@ impl Engine {
         changed
     }
 
+    /// Puts back an item the node stored before it restarted. It is not activity: the session's liveness is
+    /// what the log and the last status say, not the time the node came up.
+    pub fn restore_item(
+        &mut self,
+        space: &str,
+        session: &str,
+        id: String,
+        turn: Option<u32>,
+        body: ItemBody,
+    ) {
+        if let Some(m) = self.spaces.get_mut(space) {
+            m.push_item(session, id, turn, body, 0, false);
+        }
+    }
+
     /// Plugs in the timeline engine behind `Timeline`, `Patches` and `ChangeSet`.
     pub fn set_timeline(&mut self, source: Arc<dyn TimelineSource>) {
         self.timeline = source;
