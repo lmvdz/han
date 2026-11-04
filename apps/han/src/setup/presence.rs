@@ -2,6 +2,8 @@
 
 use super::Res;
 #[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
+use han_proc::NoWindow as _;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]
@@ -26,6 +28,7 @@ pub(crate) fn action_registered() -> bool {
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("pkaction")
+            .no_window()
             .args(["--action-id", "dev.han.approve"])
             .output()
             .is_ok_and(|o| {
@@ -79,6 +82,7 @@ fn install_at(path: &Path) -> Res<bool> {
 #[cfg(target_os = "linux")]
 fn is_root() -> bool {
     std::process::Command::new("id")
+        .no_window()
         .arg("-u")
         .output()
         .is_ok_and(|o| o.status.success() && o.stdout == b"0\n")
@@ -111,6 +115,7 @@ pub(super) fn prepare() -> Res<()> {
     {
         use std::process::Command;
         if !Command::new("pkcheck")
+            .no_window()
             .arg("--version")
             .output()
             .is_ok_and(|o| o.status.success())
@@ -126,7 +131,7 @@ pub(super) fn prepare() -> Res<()> {
         if is_root() {
             install()?;
         } else {
-            let status = Command::new("pkexec").arg(std::env::current_exe()?).args(["setup", "install-presence"]).status()
+            let status = Command::new("pkexec").no_window().arg(std::env::current_exe()?).args(["setup", "install-presence"]).status()
                 .map_err(|e| format!("cannot request administrator authentication: {e}; install the action with sudo han setup install-presence, then resume setup"))?;
             if !status.success() {
                 return Err("presence-action installation was not confirmed; resume on a Linux desktop with a polkit authentication agent, or ask its administrator to run sudo han setup install-presence".into());
