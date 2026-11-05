@@ -1,0 +1,200 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "84-note-on-binary-is-orphaned",
+ "description": "A note whose content object is a binary file (a register, no text) is orphaned and still listed",
+ "rules": [
+  "TL-152"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "bin": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "register.create",
+     "value": {
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "type": "application/octet-stream"
+     }
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "img.bin",
+     "value": {
+      "obj": "8@B",
+      "mode": "100644"
+     }
+    }
+   ]
+  },
+  "n": {
+   "replica": "B",
+   "start": 10,
+   "parents": [
+    "9@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:nb",
+     "value": {
+      "object": {
+       "obj": "8@B"
+      },
+      "from": "start",
+      "to": "end",
+      "kind": "question",
+      "body": "why empty?"
+     }
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "bin"
+    },
+    {
+     "deliver": "n"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "10@B"
+        ],
+        "notes": [
+         {
+          "key": "nb",
+          "status": "orphaned",
+          "kind": "question",
+          "resolved": false
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "n"
+    },
+    {
+     "deliver": "bin"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "10@B"
+        ],
+        "notes": [
+         {
+          "key": "nb",
+          "status": "orphaned",
+          "kind": "question",
+          "resolved": false
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

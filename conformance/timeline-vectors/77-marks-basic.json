@@ -1,0 +1,312 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "77-marks-basic",
+ "description": "Each turn ends with a checkpoint labelled turn:N; a turn that changed nothing is still marked; lookups give the checkpoint version",
+ "rules": [
+  "TL-25",
+  "TL-140",
+  "TL-141"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "fork1": {
+   "replica": "A",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "t1": {
+   "replica": "B",
+   "start": 9,
+   "parents": [
+    "8@A"
+   ],
+   "timeline": "8@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [
+      [
+       "4@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "X"
+      ]
+     ]
+    },
+    {
+     "kind": "checkpoint",
+     "label": "turn:1"
+    }
+   ]
+  },
+  "t2": {
+   "replica": "B",
+   "start": 11,
+   "parents": [
+    "10@B"
+   ],
+   "timeline": "8@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [
+      [
+       "9@B#0",
+       0,
+       1
+      ]
+     ],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "Y"
+      ]
+     ]
+    },
+    {
+     "kind": "checkpoint",
+     "label": "turn:2"
+    }
+   ]
+  },
+  "t3": {
+   "replica": "B",
+   "start": 13,
+   "parents": [
+    "12@B"
+   ],
+   "timeline": "8@A",
+   "ops": [
+    {
+     "kind": "checkpoint",
+     "label": "turn:3"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "t1"
+    },
+    {
+     "deliver": "t2"
+    },
+    {
+     "deliver": "t3"
+    },
+    {
+     "expect": {
+      "marks": [
+       {
+        "timeline": "8@A",
+        "turns": {
+         "1": [
+          "9@B"
+         ],
+         "2": [
+          "11@B"
+         ],
+         "3": [
+          "12@B"
+         ]
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "8@A",
+        "list": [
+         {
+          "id": "10@B",
+          "label": "turn:1",
+          "version": [
+           "9@B"
+          ]
+         },
+         {
+          "id": "12@B",
+          "label": "turn:2",
+          "version": [
+           "11@B"
+          ]
+         },
+         {
+          "id": "13@B",
+          "label": "turn:3",
+          "version": [
+           "12@B"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "t3"
+    },
+    {
+     "deliver": "t2"
+    },
+    {
+     "deliver": "t1"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "marks": [
+       {
+        "timeline": "8@A",
+        "turns": {
+         "1": [
+          "9@B"
+         ],
+         "2": [
+          "11@B"
+         ],
+         "3": [
+          "12@B"
+         ]
+        }
+       }
+      ],
+      "checkpoints": [
+       {
+        "timeline": "8@A",
+        "list": [
+         {
+          "id": "10@B",
+          "label": "turn:1",
+          "version": [
+           "9@B"
+          ]
+         },
+         {
+          "id": "12@B",
+          "label": "turn:2",
+          "version": [
+           "11@B"
+          ]
+         },
+         {
+          "id": "13@B",
+          "label": "turn:3",
+          "version": [
+           "12@B"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

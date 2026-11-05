@@ -1,0 +1,203 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "86-note-with-unknown-kind-is-ignored",
+ "description": "A note of any kind other than note or question is ignored and reported; the batch is still accepted and the valid note still resolves",
+ "rules": [
+  "TL-151"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "n1": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:n1",
+     "value": {
+      "object": {
+       "obj": "4@A"
+      },
+      "from": {
+       "c": "4@A#0:2",
+       "b": "right"
+      },
+      "to": {
+       "c": "4@A#0:3",
+       "b": "left"
+      },
+      "kind": "note",
+      "body": "why b?"
+     }
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:n2",
+     "value": {
+      "object": {
+       "obj": "4@A"
+      },
+      "from": {
+       "c": "4@A#0:2",
+       "b": "right"
+      },
+      "to": {
+       "c": "4@A#0:3",
+       "b": "left"
+      },
+      "kind": "approval",
+      "body": "ship it"
+     }
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "9@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ],
+        "ignored": [
+         "n2"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "9@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ],
+        "ignored": [
+         "n2"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

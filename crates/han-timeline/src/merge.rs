@@ -10,6 +10,7 @@ use crate::cbor::Cbor;
 use crate::codec::{full_id, merge_digest_parts};
 use crate::envelope::Signer;
 use crate::error::Error;
+use crate::graph::Pos;
 use crate::history::{History, Written};
 use crate::ids::{CharId, HistoryId, IdRange, InsertionId, ObjectId, OpId, ReplicaId, Version};
 use crate::op::{Change, ConflictKind, ConflictRecord, CopyInsert, MergeOp, Op, ResolutionKind};
@@ -324,14 +325,14 @@ impl MergeDraft {
 // Text planning (TL-72)
 
 #[derive(Clone, Debug)]
-struct Elem {
-    canon: CharId,
-    ch: char,
-    local: Local,
+pub(crate) struct Elem {
+    pub canon: CharId,
+    pub ch: char,
+    pub local: Local,
 }
 
 /// Canonical ids of the visible characters in order, the first of each canonical id.
-fn sequence(t: Option<&TextObj>) -> Vec<Elem> {
+pub(crate) fn sequence(t: Option<&TextObj>) -> Vec<Elem> {
     let Some(t) = t else { return Vec::new() };
     let lay = t.layout();
     let mut seen = HashSet::new();
@@ -350,14 +351,116 @@ fn sequence(t: Option<&TextObj>) -> Vec<Elem> {
 }
 
 #[derive(Clone, Debug)]
-struct Edit {
-    side: Side,
+pub(crate) struct Edit {
+    pub side: Side,
     /// The first base position the edit covers.
-    p: usize,
+    pub p: usize,
     /// Side positions inserted.
-    x: (usize, usize),
+    pub x: (usize, usize),
     /// Lines touched [a, b).
-    lines: (usize, usize),
+    pub lines: (usize, usize),
+}
+
+/// The line tables of a base sequence (TL-72 step 3).
+pub(crate) struct Lines {
+    /// LFs before each base position, `0 ..= len`.
+    lf_before: Vec<usize>,
+    /// The base position where each line starts.
+    line_start: Vec<usize>,
+}
+
+impl Lines {
+    pub(crate) fn of(base: &[Elem]) -> Self {
+        let mut lf_before = Vec::with_capacity(base.len() + 1);
+        let mut line_start = vec![0usize];
+        let mut n = 0;
+        lf_before.push(0);
+        for (i, e) in base.iter().enumerate() {
+            if e.ch == '\n' {
+                n += 1;
+                line_start.push(i + 1);
+            }
+            lf_before.push(n);
+        }
+        Lines {
+            lf_before,
+            line_start,
+        }
+    }
+
+    /// line(i): the LFs before base position `i`.
+    pub(crate) fn line(&self, i: usize) -> usize {
+        self.lf_before[i]
+    }
+
+    /// The base position where line `l` starts (the base length past the last line).
+    pub(crate) fn start(&self, l: usize) -> usize {
+        self.line_start
+            .get(l)
+            .copied()
+            .unwrap_or(self.lf_before.len() - 1)
+    }
+}
+
+/// The clusters of `edits` under "meet" (TL-72 step 4): `(a, b, members)` for region
+/// `[a, b)`, in plan order.
+pub(crate) fn clusters(edits: &[Edit]) -> Vec<(usize, usize, Vec<usize>)> {
+    let mut parent: Vec<usize> = (0..edits.len()).collect();
+    for a in 0..edits.len() {
+        for b in a + 1..edits.len() {
+            if meet(&edits[a], &edits[b]) {
+                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                if ra != rb {
+                    parent[ra] = rb;
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..edits.len() {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    let mut out: Vec<(usize, usize, Vec<usize>)> = groups
+        .into_values()
+        .map(|members| {
+            let a = members.iter().map(|&m| edits[m].lines.0).min().unwrap_or(0);
+            let b = members.iter().map(|&m| edits[m].lines.1).max().unwrap_or(0);
+            (a, b, members)
+        })
+        .collect();
+    out.sort_by_key(|(a, b, members)| (*a, *b, members.iter().map(|m| edits[*m].p).min()));
+    out
+}
+
+/// A side's region characters (TL-72 step 5): its kept base characters in lines `[a, b)` and
+/// what its edits among `members` inserted, as indexes into its sequence, in its order.
+pub(crate) fn region_chars(
+    edits: &[Edit],
+    bx: &[Option<usize>],
+    want: Side,
+    lines: &Lines,
+    (a, b): (usize, usize),
+    members: &[usize],
+) -> Vec<usize> {
+    let (from, to) = (lines.start(a), lines.start(b).max(lines.start(a)));
+    let mut xs: Vec<usize> = (from..to).filter_map(|bi| bx[bi]).collect();
+    for &m in members {
+        if edits[m].side == want {
+            xs.extend(edits[m].x.0..edits[m].x.1);
+        }
+    }
+    xs.sort_unstable();
+    xs.dedup();
+    xs
+}
+
+/// A cluster with edits of both sides (TL-72 step 6): a hunk or converged.
+#[derive(Clone, Debug)]
+pub(crate) struct Meet {
+    pub object: ObjectId,
+    pub lines: (u64, u64),
+    pub converged: bool,
 }
 
 /// The kept characters of a side (TL-72 step 2): of the shared characters `(base, side)` in
@@ -398,7 +501,7 @@ fn kept_subsequence(shared: &[(usize, usize)]) -> Vec<(usize, usize)> {
 
 /// The edits of one side against the base (TL-72 steps 2 – 3), and base index → side index
 /// for the characters it kept.
-fn edits_of(
+pub(crate) fn edits_of(
     side: Side,
     base: &[Elem],
     base_index: &HashMap<&CharId, usize>,
@@ -503,14 +606,14 @@ impl<'a> TargetText<'a> {
     }
 }
 
-/// Plans one text present in both target and incoming (TL-72 steps 1 – 6). Pushes conflicts.
+/// Plans one text present in both target and incoming (TL-72 steps 1 – 6). Pushes conflicts,
+/// and every cluster with edits of both sides to `meets`.
 fn plan_text(
     object: &ObjectId,
     path: Option<String>,
-    sb: Option<&TextObj>,
-    st: &Arc<TextObj>,
-    si: &TextObj,
+    (sb, st, si): (Option<&TextObj>, &Arc<TextObj>, &TextObj),
     conflicts: &mut Vec<Conflict>,
+    meets: &mut Vec<Meet>,
 ) -> Option<TextPlan> {
     let base = sequence(sb);
     let tseq = sequence(Some(st));
@@ -520,25 +623,9 @@ fn plan_text(
         .enumerate()
         .map(|(i, e)| (&e.canon, i))
         .collect();
-    // line(i): LFs before base position i.
-    let mut lf_before = Vec::with_capacity(base.len() + 1);
-    let mut n = 0;
-    lf_before.push(0);
-    for e in &base {
-        if e.ch == '\n' {
-            n += 1;
-        }
-        lf_before.push(n);
-    }
-    let line = |i: usize| lf_before[i];
+    let lines = Lines::of(&base);
+    let line = |i: usize| lines.line(i);
     let base_char = |i: usize| base[i].ch;
-    let mut line_start = vec![0usize];
-    for (i, e) in base.iter().enumerate() {
-        if e.ch == '\n' {
-            line_start.push(i + 1);
-        }
-    }
-    let line_pos = |l: usize| line_start.get(l).copied().unwrap_or(base.len());
 
     let (t_edits, t_bx) = edits_of(Side::Target, &base, &base_index, &tseq, &line, &base_char);
     // Where each target character's line range ends: a kept character's base line + 1, an
@@ -567,63 +654,28 @@ fn plan_text(
         }
     }
     let edits: Vec<Edit> = t_edits.into_iter().chain(i_edits).collect();
-    let mut parent: Vec<usize> = (0..edits.len()).collect();
-    for a in 0..edits.len() {
-        for b in a + 1..edits.len() {
-            if meet(&edits[a], &edits[b]) {
-                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                if ra != rb {
-                    parent[ra] = rb;
-                }
-            }
-        }
-    }
-    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for i in 0..edits.len() {
-        let r = find(&mut parent, i);
-        groups.entry(r).or_default().push(i);
-    }
-    let mut clusters: Vec<(usize, usize, Vec<usize>)> = groups
-        .into_values()
-        .map(|members| {
-            let a = members.iter().map(|&m| edits[m].lines.0).min().unwrap_or(0);
-            let b = members.iter().map(|&m| edits[m].lines.1).max().unwrap_or(0);
-            (a, b, members)
-        })
-        .collect();
-    clusters.sort_by_key(|(a, b, members)| (*a, *b, members.iter().map(|m| edits[*m].p).min()));
-
-    // A side's region characters (step 5): its kept base characters in the region's lines and
-    // what its edits in the cluster inserted, in its order.
-    let region = |bx: &[Option<usize>], want: Side, a: usize, b: usize, members: &[usize]| {
-        let mut xs: Vec<usize> = (line_pos(a)..line_pos(b).max(line_pos(a)))
-            .filter_map(|bi| bx[bi])
-            .collect();
-        for &m in members {
-            if edits[m].side == want {
-                xs.extend(edits[m].x.0..edits[m].x.1);
-            }
-        }
-        xs.sort_unstable();
-        xs.dedup();
-        xs
-    };
     let text_of = |seq: &[Elem], idx: &[usize]| idx.iter().map(|&i| seq[i].ch).collect::<String>();
 
     let mut regions = Vec::new();
-    for (a, b, members) in clusters {
+    for (a, b, members) in clusters(&edits) {
         let has_t = members.iter().any(|&m| edits[m].side == Side::Target);
         let has_i = members.iter().any(|&m| edits[m].side == Side::Incoming);
         if !has_i {
             continue;
         }
-        let t = region(&t_bx, Side::Target, a, b, &members);
-        let i = region(&i_bx, Side::Incoming, a, b, &members);
-        let base_range = (line_pos(a), line_pos(b).max(line_pos(a)));
+        let t = region_chars(&edits, &t_bx, Side::Target, &lines, (a, b), &members);
+        let i = region_chars(&edits, &i_bx, Side::Incoming, &lines, (a, b), &members);
+        let base_range = (lines.start(a), lines.start(b).max(lines.start(a)));
         let mut conflict = None;
         if has_t {
             let (t_text, i_text) = (text_of(&tseq, &t), text_of(&iseq, &i));
-            if t_text == i_text {
+            let converged = t_text == i_text;
+            meets.push(Meet {
+                object: object.clone(),
+                lines: (a as u64, b as u64),
+                converged,
+            });
+            if converged {
                 continue;
             }
             conflict = Some(conflicts.len());
@@ -889,6 +941,15 @@ fn by_content(paths: &BTreeMap<String, Value>) -> BTreeMap<OpId, Vec<String>> {
 /// Clean map changes: key → value, `None` deletes.
 type CleanKeys = BTreeMap<String, Option<Value>>;
 
+/// Whether some path of `tree` in `state` refers to content object `obj`.
+fn refers_to(state: &State, tree: &ObjectId, obj: &OpId) -> bool {
+    state.map(tree).is_some_and(|m| {
+        m.keys
+            .values()
+            .any(|v| v.first().and_then(|(_, e)| e.obj_field()).as_ref() == Some(obj))
+    })
+}
+
 fn plan_map(
     object: &ObjectId,
     tree: bool,
@@ -909,11 +970,22 @@ fn plan_map(
         let t = visible(st, object, &key);
         let s = visible(si, object, &key);
         if tree && b.is_some() {
+            // A side removed `p` only when it refers to `p`'s base object by no path at all: a
+            // rename is not a removal (TL-87).
+            let gone = |state: &State| {
+                b.as_ref()
+                    .and_then(Value::obj_field)
+                    .is_some_and(|o| !refers_to(state, object, &o))
+            };
             let deleted_by = match (&t, &s) {
-                (None, Some(_)) if content(si, s.as_ref()) != content(sb, b.as_ref()) => {
+                (None, Some(_))
+                    if gone(st) && content(si, s.as_ref()) != content(sb, b.as_ref()) =>
+                {
                     Some(Side::Target)
                 }
-                (Some(_), None) if content(st, t.as_ref()) != content(sb, b.as_ref()) => {
+                (Some(_), None)
+                    if gone(si) && content(st, t.as_ref()) != content(sb, b.as_ref()) =>
+                {
                     Some(Side::Incoming)
                 }
                 _ => None,
@@ -1034,10 +1106,56 @@ fn path_of(state: &State, object: &ObjectId) -> Option<String> {
 // ---------------------------------------------------------------------------------------------
 // Planning and resolving
 
+/// The planner's full output, shared by merge planning and overlap (TL-134).
+pub(crate) struct Planned {
+    pub plan: MergePlan,
+    /// Every cluster with edits of both sides, hunks and converged ones, in plan order.
+    pub meets: Vec<Meet>,
+    pub target_heads: Vec<Pos>,
+    pub incoming_heads: Vec<Pos>,
+    pub base: Arc<State>,
+}
+
 impl<S: Store> History<S> {
     /// Plans merging timeline `from` into timeline `into` (TL-70 – TL-72, TL-87). An empty
     /// plan is `up_to_date`.
     pub fn plan_merge(&self, into: &OpId, from: &OpId) -> Result<MergePlan, Error> {
+        self.planned_merge(into, from)?
+            .map(|p| p.plan)
+            .ok_or(Error::UpToDate)
+    }
+
+    /// The planner's output for merging `from` into `into`, or `None` when that merge is up to
+    /// date: `into` already holds everything of `from` (TL-70), or the plan is empty (TL-71).
+    pub(crate) fn planned_merge(&self, into: &OpId, from: &OpId) -> Result<Option<Planned>, Error> {
+        if into == from {
+            return Err(Error::MergeSelf);
+        }
+        if self.holds_all_of(into, from)? {
+            return Ok(None);
+        }
+        let planned = self.plan_core(into, from)?;
+        let plan = &planned.plan;
+        if plan.conflicts.is_empty() && plan.resolve(&[])?.op.changes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(planned))
+    }
+
+    /// Whether `into` already holds everything of `from`: closure⁺(head `into`) contains
+    /// closure(head `from`), so merging `from` into `into` is up to date (TL-70).
+    pub(crate) fn holds_all_of(&self, into: &OpId, from: &OpId) -> Result<bool, Error> {
+        let ht = self.graph.head(into).ok_or(Error::UnknownTimeline)?;
+        let hi = self.graph.head(from).ok_or(Error::UnknownTimeline)?;
+        Ok(self
+            .graph
+            .closure(hi, false)
+            .is_subset(&self.graph.closure(ht, true)))
+    }
+
+    /// The planner itself, without the up-to-date checks: the plan of merging `from` into
+    /// `into` over their merge base (TL-70 – TL-72, TL-87), and every cluster both sides meet in.
+    pub(crate) fn plan_core(&self, into: &OpId, from: &OpId) -> Result<Planned, Error> {
         if into == from {
             return Err(Error::MergeSelf);
         }
@@ -1051,17 +1169,13 @@ impl<S: Store> History<S> {
             .head(from)
             .ok_or(Error::UnknownTimeline)?
             .to_vec();
-        let ct = self.graph.closure(&ht, true);
-        if self.graph.closure(&hi, false).is_subset(&ct) {
-            return Err(Error::UpToDate);
-        }
-        let ci = self.graph.closure(&hi, true);
-        let base_heads = self.graph.frontier(&ct.intersect(&ci));
+        let base_heads = self.merge_base(&ht, &hi);
         let st = self.materialise(&ht).1;
         let si = self.materialise(&hi).1;
         let sb = self.materialise(&base_heads).1;
 
         let mut conflicts = Vec::new();
+        let mut meets = Vec::new();
         let mut objects = Vec::new();
         for (id, obj) in &si.objects {
             let Some(target_obj) = st.objects.get(id) else {
@@ -1127,7 +1241,8 @@ impl<S: Store> History<S> {
                 }
                 (Obj::Text(t), Obj::Text(s)) => {
                     let path = path_of(&st, id).or_else(|| path_of(&si, id));
-                    if let Some(plan) = plan_text(id, path, sb.text_obj(id), t, s, &mut conflicts) {
+                    let texts = (sb.text_obj(id), t, &**s);
+                    if let Some(plan) = plan_text(id, path, texts, &mut conflicts, &mut meets) {
                         objects.push(ObjectPlan::Text {
                             object: id.clone(),
                             create: false,
@@ -1147,10 +1262,21 @@ impl<S: Store> History<S> {
             conflicts,
             objects,
         };
-        if plan.conflicts.is_empty() && plan.resolve(&[])?.op.changes.is_empty() {
-            return Err(Error::UpToDate);
-        }
-        Ok(plan)
+        Ok(Planned {
+            plan,
+            meets,
+            target_heads: ht,
+            incoming_heads: hi,
+            base: sb,
+        })
+    }
+
+    /// The merge base of two heads (TL-70): the frontier of the intersection of their
+    /// extended closures. It is symmetric.
+    pub(crate) fn merge_base(&self, a: &[Pos], b: &[Pos]) -> Vec<Pos> {
+        let ca = self.graph.closure(a, true);
+        let cb = self.graph.closure(b, true);
+        self.graph.frontier(&ca.intersect(&cb))
     }
 
     /// The state the target would have after recording `draft` (for review).
@@ -1180,7 +1306,7 @@ impl<S: Store> History<S> {
     ) -> Result<Written, Error> {
         let head = self.head(&draft.target).ok_or(Error::UnknownTimeline)?;
         let target = draft.target.clone();
-        self.write_with(signer, lane, head, Some(target), |id| {
+        self.write_with(signer, lane, head, Some(target), None, |id| {
             let mut op = draft.op_with_id(id);
             op.effect = effect;
             vec![Op::Merge(Box::new(op))]

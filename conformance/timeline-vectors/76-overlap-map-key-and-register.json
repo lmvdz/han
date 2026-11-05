@@ -1,0 +1,278 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "76-overlap-map-key-and-register",
+ "description": "In a data history two timelines write one map key and one register differently: map_key and register entries equal to the plan's conflicts; a data history has no touch set",
+ "rules": [
+  "TL-71",
+  "TL-133",
+  "TL-134",
+  "TL-138"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "data"
+    },
+    {
+     "kind": "map.create",
+     "tree": false
+    },
+    {
+     "kind": "register.create",
+     "value": 0
+    }
+   ]
+  },
+  "fork1": {
+   "replica": "A",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "fork2": {
+   "replica": "C",
+   "start": 4,
+   "parents": [
+    "3@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s2",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1e": {
+   "replica": "B",
+   "start": 5,
+   "parents": [
+    "4@A"
+   ],
+   "timeline": "4@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "k",
+     "value": 1
+    },
+    {
+     "kind": "register.set",
+     "target": "3@A",
+     "value": 1
+    }
+   ]
+  },
+  "s2e": {
+   "replica": "C",
+   "start": 5,
+   "parents": [
+    "4@C"
+   ],
+   "timeline": "4@C",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "k",
+     "value": 2
+    },
+    {
+     "kind": "register.set",
+     "target": "3@A",
+     "value": 2
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "fork2"
+    },
+    {
+     "deliver": "s1e"
+    },
+    {
+     "deliver": "s2e"
+    },
+    {
+     "expect": {
+      "overlap": [
+       {
+        "a": "4@A",
+        "b": "4@C",
+        "entries": [
+         {
+          "object": "2@A",
+          "class": "map_key",
+          "key": "k"
+         },
+         {
+          "object": "3@A",
+          "class": "register"
+         }
+        ],
+        "digest": "6d90cd1c1d2d2c8155d6514d69cf593e44f428b1b7a1124297c60e1604b9d5ad"
+       }
+      ],
+      "plans": [
+       {
+        "into": "4@A",
+        "from": "4@C",
+        "kind": "merge",
+        "base": [
+         "3@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "map",
+          "object": "2@A",
+          "key": "k",
+          "base": null,
+          "target": {
+           "value": 1
+          },
+          "incoming": {
+           "value": 2
+          }
+         },
+         {
+          "kind": "register",
+          "object": "3@A",
+          "base": 0,
+          "target": 1,
+          "incoming": 2
+         }
+        ]
+       }
+      ],
+      "no_touch_set": [
+       "4@A",
+       "4@C"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "s2e"
+    },
+    {
+     "deliver": "s1e"
+    },
+    {
+     "deliver": "fork2"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "overlap": [
+       {
+        "a": "4@A",
+        "b": "4@C",
+        "entries": [
+         {
+          "object": "2@A",
+          "class": "map_key",
+          "key": "k"
+         },
+         {
+          "object": "3@A",
+          "class": "register"
+         }
+        ],
+        "digest": "6d90cd1c1d2d2c8155d6514d69cf593e44f428b1b7a1124297c60e1604b9d5ad"
+       }
+      ],
+      "plans": [
+       {
+        "into": "4@A",
+        "from": "4@C",
+        "kind": "merge",
+        "base": [
+         "3@A"
+        ],
+        "conflicts": [
+         {
+          "kind": "map",
+          "object": "2@A",
+          "key": "k",
+          "base": null,
+          "target": {
+           "value": 1
+          },
+          "incoming": {
+           "value": 2
+          }
+         },
+         {
+          "kind": "register",
+          "object": "3@A",
+          "base": 0,
+          "target": 1,
+          "incoming": 2
+         }
+        ]
+       }
+      ],
+      "no_touch_set": [
+       "4@A",
+       "4@C"
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

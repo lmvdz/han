@@ -54,6 +54,31 @@ impl OpId {
     pub fn new(counter: u64, replica: Replica) -> Self {
         OpId { counter, replica }
     }
+
+    /// Parses the text form of TL-06, `counter "@" actor "/" key "/" lane`, with canonical
+    /// decimals (no sign, no leading zeros) and the counter in `1 ..= MAX_SAFE`. The lane and
+    /// the key are the last two `/`-separated parts (a KeyId has no `/`), the actor the rest.
+    pub fn parse(s: &str) -> Option<OpId> {
+        let (counter, replica) = s.split_once('@')?;
+        let counter = decimal(counter).filter(|c| (1..=MAX_SAFE).contains(c))?;
+        let (rest, lane) = replica.rsplit_once('/')?;
+        let (actor, key) = rest.rsplit_once('/')?;
+        let lane = u32::try_from(decimal(lane)?).ok()?;
+        if actor.is_empty() || key.is_empty() {
+            return None;
+        }
+        Some(OpId::new(
+            counter,
+            Arc::new(ReplicaId::new(actor, key, lane)),
+        ))
+    }
+}
+
+/// A canonical decimal: digits only, no leading zero unless it is `0`.
+fn decimal(s: &str) -> Option<u64> {
+    let canonical =
+        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    canonical.then(|| s.parse().ok()).flatten()
 }
 
 impl fmt::Display for OpId {
@@ -97,6 +122,32 @@ pub struct CharId {
     pub insertion: InsertionId,
     /// Its offset in the insertion, counted in Unicode scalar values.
     pub offset: u32,
+}
+
+impl CharId {
+    /// Parses the text form of TL-142: an op id's text form, `#`, the insertion index, `:`,
+    /// the offset.
+    pub fn parse(s: &str) -> Option<CharId> {
+        let (op, rest) = s.rsplit_once('#')?;
+        let (index, offset) = rest.split_once(':')?;
+        Some(CharId {
+            insertion: InsertionId {
+                op: OpId::parse(op)?,
+                index: u32::try_from(decimal(index)?).ok()?,
+            },
+            offset: u32::try_from(decimal(offset)?).ok()?,
+        })
+    }
+}
+
+impl fmt::Display for CharId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}#{}:{}",
+            self.insertion.op, self.insertion.index, self.offset
+        )
+    }
 }
 
 /// An identity range `[insertion, from, to)` of characters (TL-44, TL-51).

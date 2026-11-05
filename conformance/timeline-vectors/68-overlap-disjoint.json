@@ -1,0 +1,366 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "68-overlap-disjoint",
+ "description": "Two timelines edit different files: each touch set lists its own file, the overlap is empty, the merge plan has no conflicts",
+ "rules": [
+  "TL-130",
+  "TL-131",
+  "TL-133",
+  "TL-134",
+  "TL-135",
+  "TL-136"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "fork1": {
+   "replica": "A",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s1",
+     "source": "1@A"
+    }
+   ]
+  },
+  "fork2": {
+   "replica": "C",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "s2",
+     "source": "1@A"
+    }
+   ]
+  },
+  "s1e": {
+   "replica": "B",
+   "start": 9,
+   "parents": [
+    "8@A"
+   ],
+   "timeline": "8@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [
+      [
+       "4@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "X"
+      ]
+     ]
+    }
+   ]
+  },
+  "s2e": {
+   "replica": "C",
+   "start": 9,
+   "parents": [
+    "8@C"
+   ],
+   "timeline": "8@C",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "6@A",
+     "deletes": [
+      [
+       "6@A#0",
+       2,
+       3
+      ]
+     ],
+     "inserts": [
+      [
+       "6@A#0:1",
+       "Q"
+      ]
+     ]
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "fork2"
+    },
+    {
+     "deliver": "s1e"
+    },
+    {
+     "deliver": "s2e"
+    },
+    {
+     "expect": {
+      "touch": [
+       {
+        "timeline": "8@A",
+        "entries": [
+         {
+          "object": "4@A",
+          "base_path": "src/a.txt",
+          "head_path": "src/a.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            1,
+            2
+           ]
+          ],
+          "head_lines": [
+           [
+            1,
+            2
+           ]
+          ]
+         }
+        ],
+        "digest": "f72de2b1eaa42f5880ef7607f91aabf031f515d4cf010d3bd338f203eb59630e"
+       },
+       {
+        "timeline": "8@C",
+        "entries": [
+         {
+          "object": "6@A",
+          "base_path": "src/z.txt",
+          "head_path": "src/z.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            1,
+            2
+           ]
+          ],
+          "head_lines": [
+           [
+            1,
+            2
+           ]
+          ]
+         }
+        ],
+        "digest": "28aff66c3e7eb84e7cd958dac372bde40d02c7256cfdea5e06422966028fb7ac"
+       }
+      ],
+      "overlap": [
+       {
+        "a": "8@A",
+        "b": "8@C",
+        "entries": [],
+        "digest": "319b8d25aaa1d3a69e88ea7e79a61ce5647d9d695f238d9f240297c51bbc2f40"
+       }
+      ],
+      "plans": [
+       {
+        "into": "8@A",
+        "from": "8@C",
+        "kind": "merge",
+        "base": [
+         "7@A"
+        ],
+        "conflicts": []
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "s2e"
+    },
+    {
+     "deliver": "s1e"
+    },
+    {
+     "deliver": "fork2"
+    },
+    {
+     "deliver": "fork1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "touch": [
+       {
+        "timeline": "8@A",
+        "entries": [
+         {
+          "object": "4@A",
+          "base_path": "src/a.txt",
+          "head_path": "src/a.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            1,
+            2
+           ]
+          ],
+          "head_lines": [
+           [
+            1,
+            2
+           ]
+          ]
+         }
+        ],
+        "digest": "f72de2b1eaa42f5880ef7607f91aabf031f515d4cf010d3bd338f203eb59630e"
+       },
+       {
+        "timeline": "8@C",
+        "entries": [
+         {
+          "object": "6@A",
+          "base_path": "src/z.txt",
+          "head_path": "src/z.txt",
+          "change": [
+           "edited"
+          ],
+          "base_lines": [
+           [
+            1,
+            2
+           ]
+          ],
+          "head_lines": [
+           [
+            1,
+            2
+           ]
+          ]
+         }
+        ],
+        "digest": "28aff66c3e7eb84e7cd958dac372bde40d02c7256cfdea5e06422966028fb7ac"
+       }
+      ],
+      "overlap": [
+       {
+        "a": "8@A",
+        "b": "8@C",
+        "entries": [],
+        "digest": "319b8d25aaa1d3a69e88ea7e79a61ce5647d9d695f238d9f240297c51bbc2f40"
+       }
+      ],
+      "plans": [
+       {
+        "into": "8@A",
+        "from": "8@C",
+        "kind": "merge",
+        "base": [
+         "7@A"
+        ],
+        "conflicts": []
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

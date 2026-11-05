@@ -1,0 +1,289 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "87-note-reply-and-removal",
+ "description": "A reply names its parent; removing the parent leaves the reply, shown with parent_missing",
+ "rules": [
+  "TL-154"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "n1": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:n1",
+     "value": {
+      "object": {
+       "obj": "4@A"
+      },
+      "from": {
+       "c": "4@A#0:2",
+       "b": "right"
+      },
+      "to": {
+       "c": "4@A#0:3",
+       "b": "left"
+      },
+      "kind": "note",
+      "body": "why b?"
+     }
+    }
+   ]
+  },
+  "rp": {
+   "replica": "B",
+   "start": 9,
+   "parents": [
+    "8@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:n2",
+     "value": {
+      "object": {
+       "obj": "4@A"
+      },
+      "from": {
+       "c": "4@A#0:2",
+       "b": "right"
+      },
+      "to": {
+       "c": "4@A#0:3",
+       "b": "left"
+      },
+      "kind": "note",
+      "body": "because",
+      "reply_to": "n1"
+     }
+    }
+   ]
+  },
+  "rm": {
+   "replica": "B",
+   "start": 10,
+   "parents": [
+    "9@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.delete",
+     "target": "root",
+     "key": "note:n1"
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "rp"
+    },
+    {
+     "deliver": "rm"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "9@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         },
+         {
+          "key": "n2",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false,
+          "reply_to": "n1",
+          "parent_missing": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "10@B"
+        ],
+        "notes": [
+         {
+          "key": "n2",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false,
+          "reply_to": "n1",
+          "parent_missing": true
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "rm"
+    },
+    {
+     "deliver": "rp"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "9@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         },
+         {
+          "key": "n2",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false,
+          "reply_to": "n1",
+          "parent_missing": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "10@B"
+        ],
+        "notes": [
+         {
+          "key": "n2",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false,
+          "reply_to": "n1",
+          "parent_missing": true
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

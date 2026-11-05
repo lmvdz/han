@@ -1,0 +1,470 @@
+{
+ "format": "han-timeline-vector/1",
+ "name": "83-note-survives-edits",
+ "description": "A note stays on its text: an insert before shifts it, an insert inside widens it, text inserted at either edge stays outside, deleting everything collapses it without dropping it",
+ "rules": [
+  "TL-46",
+  "TL-150",
+  "TL-152"
+ ],
+ "replicas": {
+  "A": [
+   "@alice:a.example",
+   "laptop",
+   0
+  ],
+  "B": [
+   "@bob:b.example",
+   "desk",
+   0
+  ],
+  "C": [
+   "@alice:a.example",
+   "phone",
+   0
+  ]
+ },
+ "batches": {
+  "b0": {
+   "replica": "A",
+   "start": 1,
+   "parents": [],
+   "timeline": null,
+   "ops": [
+    {
+     "kind": "timeline.create",
+     "name": "main",
+     "source": null,
+     "historyKind": "worktree"
+    },
+    {
+     "kind": "map.create",
+     "tree": true
+    },
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "tree",
+     "value": {
+      "obj": "2@A"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "a\nb\nc\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/a.txt",
+     "value": {
+      "obj": "4@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    },
+    {
+     "kind": "text.create",
+     "text": "p\nq\n",
+     "transcript": false
+    },
+    {
+     "kind": "map.set",
+     "target": "2@A",
+     "key": "src/z.txt",
+     "value": {
+      "obj": "6@A",
+      "mode": "100644",
+      "eol": "lf"
+     }
+    }
+   ]
+  },
+  "n1": {
+   "replica": "B",
+   "start": 8,
+   "parents": [
+    "7@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "map.set",
+     "target": "root",
+     "key": "note:n1",
+     "value": {
+      "object": {
+       "obj": "4@A"
+      },
+      "from": {
+       "c": "4@A#0:2",
+       "b": "right"
+      },
+      "to": {
+       "c": "4@A#0:3",
+       "b": "left"
+      },
+      "kind": "note",
+      "body": "why b?"
+     }
+    }
+   ]
+  },
+  "e1": {
+   "replica": "A",
+   "start": 9,
+   "parents": [
+    "8@B"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [],
+     "inserts": [
+      [
+       null,
+       "ZZ"
+      ]
+     ]
+    }
+   ]
+  },
+  "e2": {
+   "replica": "A",
+   "start": 10,
+   "parents": [
+    "9@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "4@A#0:2",
+       "!"
+      ]
+     ]
+    }
+   ]
+  },
+  "e3": {
+   "replica": "A",
+   "start": 11,
+   "parents": [
+    "10@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "4@A#0:1",
+       "#"
+      ]
+     ]
+    }
+   ]
+  },
+  "e4": {
+   "replica": "A",
+   "start": 12,
+   "parents": [
+    "11@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [],
+     "inserts": [
+      [
+       "4@A#0:3",
+       "$"
+      ]
+     ]
+    }
+   ]
+  },
+  "e5": {
+   "replica": "A",
+   "start": 13,
+   "parents": [
+    "12@A"
+   ],
+   "timeline": "1@A",
+   "ops": [
+    {
+     "kind": "text.edit",
+     "target": "4@A",
+     "deletes": [
+      [
+       "4@A#0",
+       2,
+       4
+      ],
+      [
+       "10@A#0",
+       0,
+       1
+      ]
+     ],
+     "inserts": []
+    }
+   ]
+  }
+ },
+ "runs": [
+  {
+   "steps": [
+    {
+     "deliver": "b0"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "e1"
+    },
+    {
+     "deliver": "e2"
+    },
+    {
+     "deliver": "e3"
+    },
+    {
+     "deliver": "e4"
+    },
+    {
+     "deliver": "e5"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "8@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "9@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 4,
+          "to": 6,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "10@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 4,
+          "to": 7,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "11@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 5,
+          "to": 8,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "12@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 5,
+          "to": 8,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "13@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 5,
+          "to": 5,
+          "status": "collapsed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "steps": [
+    {
+     "deliver": "e5"
+    },
+    {
+     "deliver": "e4"
+    },
+    {
+     "deliver": "e3"
+    },
+    {
+     "deliver": "e2"
+    },
+    {
+     "deliver": "e1"
+    },
+    {
+     "deliver": "n1"
+    },
+    {
+     "deliver": "b0"
+    },
+    {
+     "expect": {
+      "notes": [
+       {
+        "at": [
+         "8@B"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 2,
+          "to": 4,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "9@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 4,
+          "to": 6,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "10@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 4,
+          "to": 7,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "11@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 5,
+          "to": 8,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "12@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 5,
+          "to": 8,
+          "status": "placed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       },
+       {
+        "at": [
+         "13@A"
+        ],
+        "notes": [
+         {
+          "key": "n1",
+          "from": 5,
+          "to": 5,
+          "status": "collapsed",
+          "kind": "note",
+          "resolved": false
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}
